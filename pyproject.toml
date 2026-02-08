@@ -10,8 +10,11 @@ dependencies = [
     "ollama",
     "httpx",
     "pydantic-settings",
-    # Data
+    # Data / ORM
+    "sqlmodel",
     "aiosqlite",
+    "greenlet",
+    "alembic",
     # Scheduling
     "apscheduler>=3.10",
     # CLI

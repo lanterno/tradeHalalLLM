@@ -42,8 +42,8 @@ class TradingBot:
         logger.info("Initializing trading bot...")
 
         # Database
-        db = await init_db(str(self.settings.db_path))
-        repo = Repository(db)
+        engine = await init_db(str(self.settings.db_path))
+        repo = Repository(engine)
 
         # Broker connection (Alpaca via MCP)
         await self._mcp_client.connect()

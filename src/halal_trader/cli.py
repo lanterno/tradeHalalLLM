@@ -103,8 +103,8 @@ def history(limit: int) -> None:
         from halal_trader.db.repository import Repository
 
         settings = get_settings()
-        db = await init_db(str(settings.db_path))
-        repo = Repository(db)
+        engine = await init_db(str(settings.db_path))
+        repo = Repository(engine)
 
         try:
             # Recent trades
@@ -115,7 +115,7 @@ def history(limit: int) -> None:
             pnl_history = await repo.get_pnl_history(limit=14)
             _print_pnl(pnl_history)
         finally:
-            await db.close()
+            await engine.dispose()
 
     asyncio.run(_history())
 
