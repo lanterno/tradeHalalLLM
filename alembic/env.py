@@ -10,7 +10,15 @@ from alembic import context
 from sqlmodel import SQLModel
 
 # Import all models so SQLModel.metadata is populated for autogenerate.
-from halal_trader.db.models import DailyPnl, HalalCache, LlmDecision, Trade  # noqa: F401
+from halal_trader.db.models import (  # noqa: F401
+    CryptoDailyPnl,
+    CryptoHalalCache,
+    CryptoTrade,
+    DailyPnl,
+    HalalCache,
+    LlmDecision,
+    Trade,
+)
 
 # ── Alembic config ──────────────────────────────────────────────
 config = context.config

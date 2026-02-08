@@ -4,8 +4,7 @@ from enum import Enum
 
 from pydantic import BaseModel, Field
 
-
-# ── Broker Data ────────────────────────────────────────────────
+# ── Broker Data (Stocks) ──────────────────────────────────────
 
 
 class Account(BaseModel):
@@ -42,6 +41,37 @@ class MarketClock(BaseModel):
     next_close: str = ""
 
 
+# ── Crypto Broker Data ─────────────────────────────────────────
+
+
+class CryptoAccount(BaseModel):
+    """Crypto exchange account snapshot."""
+
+    total_balance_usdt: float = 0.0
+    available_balance_usdt: float = 0.0
+    in_order_usdt: float = 0.0
+
+
+class CryptoBalance(BaseModel):
+    """Balance for a single crypto asset."""
+
+    asset: str
+    free: float = 0.0
+    locked: float = 0.0
+
+
+class Kline(BaseModel):
+    """A single candlestick (kline) bar."""
+
+    open_time: int
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float
+    close_time: int
+
+
 # ── Trading Decisions ───────────────────────────────────────────
 
 
@@ -52,7 +82,7 @@ class TradeAction(str, Enum):
 
 
 class TradeDecision(BaseModel):
-    """A single trading decision produced by the LLM."""
+    """A single trading decision produced by the LLM (stocks)."""
 
     action: TradeAction
     symbol: str
@@ -80,4 +110,40 @@ class TradingPlan(BaseModel):
 
     @property
     def holds(self) -> list[TradeDecision]:
+        return [d for d in self.decisions if d.action == TradeAction.HOLD]
+
+
+# ── Crypto Trading Decisions ──────────────────────────────────
+
+
+class CryptoTradeDecision(BaseModel):
+    """A single trading decision produced by the LLM (crypto)."""
+
+    action: TradeAction
+    symbol: str = Field(description="Trading pair, e.g. BTCUSDT")
+    quantity: float = Field(ge=0.0, description="Fractional quantity to trade")
+    confidence: float = Field(ge=0.0, le=1.0, description="0-1 confidence score")
+    reasoning: str = Field(description="Brief explanation of the decision")
+    entry_price: float | None = Field(default=None, description="Suggested entry price")
+    target_price: float | None = Field(default=None, description="Expected target price")
+    stop_loss: float | None = Field(default=None, description="Suggested stop-loss price")
+
+
+class CryptoTradingPlan(BaseModel):
+    """The complete crypto trading plan returned by the LLM for one cycle."""
+
+    decisions: list[CryptoTradeDecision] = Field(default_factory=list)
+    market_outlook: str = Field(default="", description="Overall crypto market assessment")
+    risk_notes: str = Field(default="", description="Risk factors identified")
+
+    @property
+    def buys(self) -> list[CryptoTradeDecision]:
+        return [d for d in self.decisions if d.action == TradeAction.BUY]
+
+    @property
+    def sells(self) -> list[CryptoTradeDecision]:
+        return [d for d in self.decisions if d.action == TradeAction.SELL]
+
+    @property
+    def holds(self) -> list[CryptoTradeDecision]:
         return [d for d in self.decisions if d.action == TradeAction.HOLD]

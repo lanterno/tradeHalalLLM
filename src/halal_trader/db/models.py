@@ -5,6 +5,8 @@ from datetime import UTC, datetime
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlmodel import Field, SQLModel
 
+# ── Stock Tables ────────────────────────────────────────────────
+
 
 class Trade(SQLModel, table=True):
     """Record of a single trade (buy or sell)."""
@@ -61,6 +63,53 @@ class LlmDecision(SQLModel, table=True):
     parsed_action: str | None = None  # stored as JSON string
     symbols: str | None = None  # stored as JSON string
     execution_ms: int | None = None
+
+
+# ── Crypto Tables ──────────────────────────────────────────────
+
+
+class CryptoTrade(SQLModel, table=True):
+    """Record of a single crypto trade."""
+
+    __tablename__ = "crypto_trades"
+
+    id: int | None = Field(default=None, primary_key=True)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    pair: str  # e.g. 'BTCUSDT'
+    side: str  # 'buy' or 'sell'
+    quantity: float
+    price: float | None = None
+    order_id: str | None = None
+    exchange: str = Field(default="binance")
+    status: str = Field(default="pending")
+    llm_reasoning: str | None = None
+
+
+class CryptoDailyPnl(SQLModel, table=True):
+    """Daily crypto profit-and-loss snapshot."""
+
+    __tablename__ = "crypto_daily_pnl"
+
+    id: int | None = Field(default=None, primary_key=True)
+    date: str = Field(unique=True)
+    starting_equity: float
+    ending_equity: float | None = None
+    realized_pnl: float = Field(default=0)
+    return_pct: float | None = None
+    trades_count: int = Field(default=0)
+
+
+class CryptoHalalCache(SQLModel, table=True):
+    """Cached Shariah-compliance status for a crypto token."""
+
+    __tablename__ = "crypto_halal_cache"
+
+    symbol: str = Field(primary_key=True)  # e.g. 'BTC', 'ETH'
+    compliance: str  # 'halal', 'not_halal', 'doubtful'
+    category: str | None = None  # e.g. 'layer-1', 'defi', 'meme'
+    market_cap: float | None = None
+    screening_criteria: str | None = None  # JSON string of criteria met/failed
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
 async def init_db(db_path: str) -> AsyncEngine:

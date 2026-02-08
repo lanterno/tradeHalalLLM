@@ -8,7 +8,15 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from halal_trader.db.models import DailyPnl, HalalCache, LlmDecision, Trade
+from halal_trader.db.models import (
+    CryptoDailyPnl,
+    CryptoHalalCache,
+    CryptoTrade,
+    DailyPnl,
+    HalalCache,
+    LlmDecision,
+    Trade,
+)
 
 
 class Repository:
@@ -17,7 +25,7 @@ class Repository:
     def __init__(self, engine: AsyncEngine) -> None:
         self._engine = engine
 
-    # ── Trades ──────────────────────────────────────────────────
+    # ── Stock Trades ───────────────────────────────────────────
 
     async def record_trade(
         self,
@@ -79,7 +87,7 @@ class Repository:
             results = await session.exec(statement)
             return [trade.model_dump() for trade in results.all()]
 
-    # ── Daily P&L ───────────────────────────────────────────────
+    # ── Stock Daily P&L ────────────────────────────────────────
 
     async def start_day(self, starting_equity: float) -> None:
         today = date.today().isoformat()
@@ -124,7 +132,7 @@ class Repository:
             results = await session.exec(statement)
             return [row.model_dump() for row in results.all()]
 
-    # ── Halal Cache ─────────────────────────────────────────────
+    # ── Halal Cache (Stocks) ───────────────────────────────────
 
     async def cache_halal_status(
         self, symbol: str, compliance: str, detail: str | None = None
@@ -167,7 +175,7 @@ class Repository:
             results = await session.exec(statement)
             return len(results.all()) > 0
 
-    # ── LLM Decisions ───────────────────────────────────────────
+    # ── LLM Decisions (shared) ──────────────────────────────────
 
     async def record_decision(
         self,
@@ -193,3 +201,165 @@ class Repository:
             await session.commit()
             await session.refresh(decision)
             return decision.id  # type: ignore[return-value]
+
+    # ── Crypto Trades ──────────────────────────────────────────
+
+    async def record_crypto_trade(
+        self,
+        pair: str,
+        side: str,
+        quantity: float,
+        price: float | None = None,
+        order_id: str | None = None,
+        exchange: str = "binance",
+        status: str = "pending",
+        llm_reasoning: str | None = None,
+    ) -> int:
+        trade = CryptoTrade(
+            pair=pair,
+            side=side,
+            quantity=quantity,
+            price=price,
+            order_id=order_id,
+            exchange=exchange,
+            status=status,
+            llm_reasoning=llm_reasoning,
+        )
+        async with AsyncSession(self._engine) as session:
+            session.add(trade)
+            await session.commit()
+            await session.refresh(trade)
+            return trade.id  # type: ignore[return-value]
+
+    async def update_crypto_trade_status(
+        self, trade_id: int, status: str, price: float | None = None
+    ) -> None:
+        async with AsyncSession(self._engine) as session:
+            trade = await session.get(CryptoTrade, trade_id)
+            if trade is None:
+                return
+            trade.status = status
+            if price is not None:
+                trade.price = price
+            session.add(trade)
+            await session.commit()
+
+    async def get_today_crypto_trades(self) -> list[dict[str, Any]]:
+        today = date.today().isoformat()
+        async with AsyncSession(self._engine) as session:
+            statement = (
+                select(CryptoTrade)
+                .where(CryptoTrade.timestamp >= datetime.fromisoformat(today))
+                .where(CryptoTrade.timestamp < datetime.fromisoformat(today) + timedelta(days=1))
+                .order_by(CryptoTrade.timestamp.desc())  # type: ignore[union-attr]
+            )
+            results = await session.exec(statement)
+            return [trade.model_dump() for trade in results.all()]
+
+    async def get_recent_crypto_trades(self, limit: int = 50) -> list[dict[str, Any]]:
+        async with AsyncSession(self._engine) as session:
+            statement = (
+                select(CryptoTrade)
+                .order_by(CryptoTrade.timestamp.desc())  # type: ignore[union-attr]
+                .limit(limit)
+            )
+            results = await session.exec(statement)
+            return [trade.model_dump() for trade in results.all()]
+
+    # ── Crypto Daily P&L ───────────────────────────────────────
+
+    async def start_crypto_day(self, starting_equity: float) -> None:
+        today = date.today().isoformat()
+        async with AsyncSession(self._engine) as session:
+            statement = select(CryptoDailyPnl).where(CryptoDailyPnl.date == today)
+            result = await session.exec(statement)
+            existing = result.first()
+            if existing is None:
+                row = CryptoDailyPnl(date=today, starting_equity=starting_equity)
+                session.add(row)
+                await session.commit()
+
+    async def end_crypto_day(
+        self, ending_equity: float, realized_pnl: float, trades_count: int
+    ) -> None:
+        today = date.today().isoformat()
+        async with AsyncSession(self._engine) as session:
+            statement = select(CryptoDailyPnl).where(CryptoDailyPnl.date == today)
+            result = await session.exec(statement)
+            row = result.first()
+            if row is None:
+                starting = ending_equity
+            else:
+                starting = row.starting_equity
+
+            return_pct = (ending_equity - starting) / starting if starting else 0
+
+            if row is not None:
+                row.ending_equity = ending_equity
+                row.realized_pnl = realized_pnl
+                row.return_pct = return_pct
+                row.trades_count = trades_count
+                session.add(row)
+                await session.commit()
+
+    async def get_crypto_pnl_history(self, limit: int = 30) -> list[dict[str, Any]]:
+        async with AsyncSession(self._engine) as session:
+            statement = (
+                select(CryptoDailyPnl)
+                .order_by(CryptoDailyPnl.date.desc())  # type: ignore[union-attr]
+                .limit(limit)
+            )
+            results = await session.exec(statement)
+            return [row.model_dump() for row in results.all()]
+
+    # ── Crypto Halal Cache ─────────────────────────────────────
+
+    async def cache_crypto_halal_status(
+        self,
+        symbol: str,
+        compliance: str,
+        category: str | None = None,
+        market_cap: float | None = None,
+        screening_criteria: str | None = None,
+    ) -> None:
+        async with AsyncSession(self._engine) as session:
+            statement = select(CryptoHalalCache).where(CryptoHalalCache.symbol == symbol)
+            result = await session.exec(statement)
+            existing = result.first()
+            if existing is not None:
+                existing.compliance = compliance
+                existing.category = category
+                existing.market_cap = market_cap
+                existing.screening_criteria = screening_criteria
+                existing.updated_at = datetime.now(UTC)
+                session.add(existing)
+            else:
+                row = CryptoHalalCache(
+                    symbol=symbol,
+                    compliance=compliance,
+                    category=category,
+                    market_cap=market_cap,
+                    screening_criteria=screening_criteria,
+                )
+                session.add(row)
+            await session.commit()
+
+    async def get_crypto_halal_status(self, symbol: str) -> str | None:
+        async with AsyncSession(self._engine) as session:
+            statement = select(CryptoHalalCache).where(CryptoHalalCache.symbol == symbol)
+            result = await session.exec(statement)
+            row = result.first()
+            return row.compliance if row else None
+
+    async def get_crypto_halal_symbols(self) -> list[str]:
+        async with AsyncSession(self._engine) as session:
+            statement = select(CryptoHalalCache).where(CryptoHalalCache.compliance == "halal")
+            results = await session.exec(statement)
+            return [row.symbol for row in results.all()]
+
+    async def is_crypto_cache_fresh(self, max_age_hours: int = 24) -> bool:
+        cutoff = datetime.now(UTC) - timedelta(hours=max_age_hours)
+        async with AsyncSession(self._engine) as session:
+            statement = select(CryptoHalalCache).where(CryptoHalalCache.updated_at > cutoff)
+            results = await session.exec(statement)
+            return len(results.all()) > 0

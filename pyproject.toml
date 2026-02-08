@@ -1,7 +1,7 @@
 [project]
 name = "halal-trader"
-version = "0.1.0"
-description = "LLM-powered halal day-trading bot using Alpaca MCP server"
+version = "0.2.0"
+description = "LLM-powered halal day-trading bot — stocks (Alpaca) and crypto (Binance)"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
@@ -23,6 +23,9 @@ dependencies = [
     # Optional cloud LLM providers
     "openai",
     "anthropic",
+    # Crypto trading
+    "python-binance",
+    "numpy",
 ]
 
 [project.optional-dependencies]

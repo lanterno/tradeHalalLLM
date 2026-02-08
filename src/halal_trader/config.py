@@ -29,10 +29,22 @@ class Settings(BaseSettings):
         default=True, description="Use paper trading (True) or live (False)"
     )
 
+    # ── Binance API ────────────────────────────────────────────
+    binance_api_key: str = Field(default="", description="Binance API key")
+    binance_secret_key: str = Field(default="", description="Binance API secret")
+    binance_testnet: bool = Field(
+        default=True, description="Use Binance testnet (True) or production (False)"
+    )
+
     # ── Zoya API ───────────────────────────────────────────────
     zoya_api_key: str = Field(default="", description="Zoya API key for halal screening")
     zoya_use_sandbox: bool = Field(
         default=False, description="Use Zoya sandbox environment (free, randomized data)"
+    )
+
+    # ── CoinGecko API ──────────────────────────────────────────
+    coingecko_api_key: str = Field(
+        default="", description="CoinGecko API key (optional, for higher rate limits)"
     )
 
     # ── LLM ─────────────────────────────────────────────────────
@@ -44,7 +56,7 @@ class Settings(BaseSettings):
     openai_api_key: str | None = Field(default=None, description="OpenAI API key")
     anthropic_api_key: str | None = Field(default=None, description="Anthropic API key")
 
-    # ── Trading Parameters ──────────────────────────────────────
+    # ── Stock Trading Parameters ────────────────────────────────
     trading_interval_minutes: int = Field(default=15, description="Minutes between analysis cycles")
     daily_return_target: float = Field(default=0.01, description="Target daily return (1% = 0.01)")
     max_position_pct: float = Field(default=0.20, description="Max portfolio % per position")
@@ -52,6 +64,30 @@ class Settings(BaseSettings):
         default=0.02, description="Max daily loss before halting (2% = 0.02)"
     )
     max_simultaneous_positions: int = Field(default=5, description="Max number of open positions")
+
+    # ── Crypto Trading Parameters ──────────────────────────────
+    crypto_trading_interval_seconds: int = Field(
+        default=60, description="Seconds between crypto analysis cycles"
+    )
+    crypto_pairs: list[str] = Field(
+        default=["BTCUSDT", "ETHUSDT", "SOLUSDT", "ADAUSDT"],
+        description="Crypto trading pairs to monitor",
+    )
+    crypto_max_position_pct: float = Field(
+        default=0.25, description="Max portfolio % per crypto position"
+    )
+    crypto_daily_loss_limit: float = Field(
+        default=0.03, description="Max daily crypto loss before halting (3% = 0.03)"
+    )
+    crypto_daily_return_target: float = Field(
+        default=0.01, description="Target daily crypto return (1% = 0.01)"
+    )
+    crypto_max_simultaneous_positions: int = Field(
+        default=4, description="Max number of open crypto positions"
+    )
+    crypto_min_market_cap: float = Field(
+        default=1_000_000_000, description="Minimum market cap for halal screening ($1B)"
+    )
 
     # ── Database ────────────────────────────────────────────────
     db_path: Path = Field(default=Path("halal_trader.db"), description="SQLite database path")
