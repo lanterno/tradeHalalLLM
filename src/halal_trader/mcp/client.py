@@ -9,6 +9,7 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 from halal_trader.config import get_settings
+from halal_trader.domain.models import Account, MarketClock, Position
 
 logger = logging.getLogger(__name__)
 
@@ -89,16 +90,32 @@ class AlpacaMCPClient:
         combined = "\n".join(str(c) for c in contents)
         try:
             return json.loads(combined)
-        except (json.JSONDecodeError, TypeError):
+        except json.JSONDecodeError, TypeError:
             return combined
 
     # ── Convenience wrappers ────────────────────────────────────
 
-    async def get_account_info(self) -> dict[str, Any]:
-        return await self.call_tool("get_account_info")
+    async def get_account_info(self) -> Account:
+        raw = await self.call_tool("get_account_info")
+        if isinstance(raw, dict):
+            return Account(
+                equity=float(raw.get("equity", 0) or 0),
+                buying_power=float(raw.get("buying_power", 0) or 0),
+                cash=float(raw.get("cash", 0) or 0),
+                portfolio_value=float(raw.get("portfolio_value", 0) or 0),
+                status=str(raw.get("status", "")),
+            )
+        return Account()
 
-    async def get_clock(self) -> dict[str, Any]:
-        return await self.call_tool("get_clock")
+    async def get_clock(self) -> MarketClock:
+        raw = await self.call_tool("get_clock")
+        if isinstance(raw, dict):
+            return MarketClock(
+                is_open=bool(raw.get("is_open", False)),
+                next_open=str(raw.get("next_open", "")),
+                next_close=str(raw.get("next_close", "")),
+            )
+        return MarketClock()
 
     async def get_calendar(self, start: str | None = None, end: str | None = None) -> Any:
         """Get the market calendar (trading days and hours).
@@ -114,8 +131,24 @@ class AlpacaMCPClient:
             args["end"] = end
         return await self.call_tool("get_calendar", args or None)
 
-    async def get_all_positions(self) -> Any:
-        return await self.call_tool("get_all_positions")
+    async def get_all_positions(self) -> list[Position]:
+        raw = await self.call_tool("get_all_positions")
+        if isinstance(raw, list):
+            positions = []
+            for p in raw:
+                if isinstance(p, dict):
+                    positions.append(
+                        Position(
+                            symbol=str(p.get("symbol", "")),
+                            qty=float(p.get("qty", 0) or 0),
+                            avg_entry_price=float(p.get("avg_entry_price", 0) or 0),
+                            current_price=float(p.get("current_price", 0) or 0),
+                            unrealized_pl=float(p.get("unrealized_pl", 0) or 0),
+                            unrealized_plpc=float(p.get("unrealized_plpc", 0) or 0),
+                        )
+                    )
+            return positions
+        return []
 
     async def get_stock_snapshot(self, symbols: str) -> Any:
         """Get a comprehensive snapshot for one or more symbols (comma-separated)."""

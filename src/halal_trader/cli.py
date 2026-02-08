@@ -160,16 +160,18 @@ def _print_config() -> None:
 
 
 def _print_account(account: object) -> None:
-    if isinstance(account, dict):
+    from halal_trader.domain.models import Account
+
+    if isinstance(account, Account):
         table = Table(title="Account", show_header=True, header_style="bold cyan")
         table.add_column("Field", style="dim")
         table.add_column("Value", justify="right")
 
-        table.add_row("Equity", f"${float(account.get('equity', 0)):,.2f}")
-        table.add_row("Buying Power", f"${float(account.get('buying_power', 0)):,.2f}")
-        table.add_row("Cash", f"${float(account.get('cash', 0)):,.2f}")
-        table.add_row("Portfolio Value", f"${float(account.get('portfolio_value', 0)):,.2f}")
-        table.add_row("Status", str(account.get("status", "")))
+        table.add_row("Equity", f"${account.equity:,.2f}")
+        table.add_row("Buying Power", f"${account.buying_power:,.2f}")
+        table.add_row("Cash", f"${account.cash:,.2f}")
+        table.add_row("Portfolio Value", f"${account.portfolio_value:,.2f}")
+        table.add_row("Status", account.status)
 
         console.print(table)
     else:
@@ -177,6 +179,8 @@ def _print_account(account: object) -> None:
 
 
 def _print_positions(positions: object) -> None:
+    from halal_trader.domain.models import Position
+
     if isinstance(positions, list) and positions:
         table = Table(title="Open Positions", show_header=True, header_style="bold cyan")
         table.add_column("Symbol")
@@ -187,17 +191,15 @@ def _print_positions(positions: object) -> None:
         table.add_column("P&L %", justify="right")
 
         for p in positions:
-            if isinstance(p, dict):
-                pnl = float(p.get("unrealized_pl", 0))
-                pnl_pct = float(p.get("unrealized_plpc", 0))
-                style = "green" if pnl >= 0 else "red"
+            if isinstance(p, Position):
+                style = "green" if p.unrealized_pl >= 0 else "red"
                 table.add_row(
-                    str(p.get("symbol", "")),
-                    str(p.get("qty", "")),
-                    f"${float(p.get('avg_entry_price', 0)):,.2f}",
-                    f"${float(p.get('current_price', 0)):,.2f}",
-                    Text(f"${pnl:+,.2f}", style=style),
-                    Text(f"{pnl_pct:+.2%}", style=style),
+                    p.symbol,
+                    str(p.qty),
+                    f"${p.avg_entry_price:,.2f}",
+                    f"${p.current_price:,.2f}",
+                    Text(f"${p.unrealized_pl:+,.2f}", style=style),
+                    Text(f"{p.unrealized_plpc:+.2%}", style=style),
                 )
 
         console.print(table)
@@ -206,14 +208,17 @@ def _print_positions(positions: object) -> None:
 
 
 def _print_clock(clock: object) -> None:
-    if isinstance(clock, dict):
-        is_open = clock.get("is_open", False)
-        status_text = "[bold green]OPEN[/bold green]" if is_open else "[bold red]CLOSED[/bold red]"
+    from halal_trader.domain.models import MarketClock
+
+    if isinstance(clock, MarketClock):
+        status_text = (
+            "[bold green]OPEN[/bold green]" if clock.is_open else "[bold red]CLOSED[/bold red]"
+        )
         console.print(f"\nMarket: {status_text}")
-        if not is_open:
-            console.print(f"  Next open: {clock.get('next_open', 'N/A')}")
+        if not clock.is_open:
+            console.print(f"  Next open: {clock.next_open or 'N/A'}")
         else:
-            console.print(f"  Closes at: {clock.get('next_close', 'N/A')}")
+            console.print(f"  Closes at: {clock.next_close or 'N/A'}")
     else:
         console.print(Panel(str(clock), title="Market Clock"))
 

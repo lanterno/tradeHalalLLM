@@ -5,6 +5,43 @@ from enum import Enum
 from pydantic import BaseModel, Field
 
 
+# ── Broker Data ────────────────────────────────────────────────
+
+
+class Account(BaseModel):
+    """Brokerage account snapshot."""
+
+    equity: float = 0.0
+    buying_power: float = 0.0
+    cash: float = 0.0
+    portfolio_value: float = 0.0
+    status: str = ""
+
+    @property
+    def effective_equity(self) -> float:
+        """Best available equity figure, preferring ``equity`` over ``portfolio_value``."""
+        return self.equity or self.portfolio_value
+
+
+class Position(BaseModel):
+    """A single open position."""
+
+    symbol: str
+    qty: float = 0.0
+    avg_entry_price: float = 0.0
+    current_price: float = 0.0
+    unrealized_pl: float = 0.0
+    unrealized_plpc: float = 0.0
+
+
+class MarketClock(BaseModel):
+    """Market clock status."""
+
+    is_open: bool = False
+    next_open: str = ""
+    next_close: str = ""
+
+
 # ── Trading Decisions ───────────────────────────────────────────
 
 

@@ -3,7 +3,6 @@
 import logging
 from typing import Any
 
-from halal_trader.config import get_settings
 from halal_trader.domain.models import TradeDecision, TradingPlan
 from halal_trader.domain.ports import Broker, TradeRepository
 
@@ -13,9 +12,18 @@ logger = logging.getLogger(__name__)
 class TradeExecutor:
     """Executes trading decisions via the broker."""
 
-    def __init__(self, broker: Broker, repo: TradeRepository) -> None:
+    def __init__(
+        self,
+        broker: Broker,
+        repo: TradeRepository,
+        *,
+        max_position_pct: float,
+        max_simultaneous_positions: int,
+    ) -> None:
         self._broker = broker
         self._repo = repo
+        self._max_position_pct = max_position_pct
+        self._max_simultaneous_positions = max_simultaneous_positions
 
     async def execute_plan(self, plan: TradingPlan) -> list[dict[str, Any]]:
         """Execute all decisions in a TradingPlan, returning execution results."""
@@ -27,14 +35,13 @@ class TradeExecutor:
             results.append(result)
 
         # Then execute buys (respecting max simultaneous positions)
-        settings = get_settings()
         current_positions = await self._broker.get_all_positions()
-        open_count = len(current_positions) if isinstance(current_positions, list) else 0
+        open_count = len(current_positions)
 
         for decision in plan.buys:
-            if open_count >= settings.max_simultaneous_positions:
+            if open_count >= self._max_simultaneous_positions:
                 msg = (
-                    f"Max simultaneous positions ({settings.max_simultaneous_positions}) "
+                    f"Max simultaneous positions ({self._max_simultaneous_positions}) "
                     f"reached — skipping BUY {decision.symbol}"
                 )
                 logger.warning(msg)
@@ -56,33 +63,28 @@ class TradeExecutor:
 
     async def _execute_buy(self, decision: TradeDecision) -> dict[str, Any]:
         """Execute a buy order."""
-        settings = get_settings()
-
         # Validate: check buying power before placing order
         account = await self._broker.get_account_info()
-        buying_power = float(account.get("buying_power", 0)) if isinstance(account, dict) else 0
 
         # Get current price estimate
         snapshot = await self._broker.get_stock_snapshot(decision.symbol)
         estimated_price = self._extract_price(snapshot, decision.symbol)
         estimated_cost = estimated_price * decision.quantity
 
-        if estimated_cost > buying_power:
+        if estimated_cost > account.buying_power:
             msg = (
                 f"Insufficient buying power for {decision.symbol}: "
-                f"need ${estimated_cost:,.2f}, have ${buying_power:,.2f}"
+                f"need ${estimated_cost:,.2f}, have ${account.buying_power:,.2f}"
             )
             logger.warning(msg)
             return {"symbol": decision.symbol, "action": "buy", "status": "rejected", "reason": msg}
 
         # Check position size limit
-        portfolio_value = (
-            float(account.get("portfolio_value", 0)) if isinstance(account, dict) else 0
-        )
-        if portfolio_value > 0 and (estimated_cost / portfolio_value) > settings.max_position_pct:
-            msg = (
-                f"Position size for {decision.symbol} exceeds {settings.max_position_pct:.0%} limit"
-            )
+        if (
+            account.portfolio_value > 0
+            and (estimated_cost / account.portfolio_value) > self._max_position_pct
+        ):
+            msg = f"Position size for {decision.symbol} exceeds {self._max_position_pct:.0%} limit"
             logger.warning(msg)
             return {"symbol": decision.symbol, "action": "buy", "status": "rejected", "reason": msg}
 

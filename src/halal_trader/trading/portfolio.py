@@ -3,23 +3,34 @@
 import logging
 from typing import Any
 
+from halal_trader.domain.models import Position
 from halal_trader.domain.ports import Broker, TradeRepository
 
 logger = logging.getLogger(__name__)
+
+# Fallback equity when no real data is available (paper-trading safety net).
+_DEFAULT_EQUITY = 100_000.0
 
 
 class PortfolioTracker:
     """Tracks portfolio state and daily P&L via broker + local DB."""
 
-    def __init__(self, broker: Broker, repo: TradeRepository) -> None:
+    def __init__(
+        self,
+        broker: Broker,
+        repo: TradeRepository,
+        *,
+        daily_loss_limit: float,
+    ) -> None:
         self._broker = broker
         self._repo = repo
+        self._daily_loss_limit = daily_loss_limit
         self._starting_equity: float | None = None
 
     async def record_day_start(self) -> float:
         """Record the starting equity for today. Returns starting equity."""
         account = await self._broker.get_account_info()
-        equity = self._extract_equity(account)
+        equity = account.effective_equity or _DEFAULT_EQUITY
         self._starting_equity = equity
         await self._repo.start_day(equity)
         logger.info("Day started with equity: $%.2f", equity)
@@ -28,7 +39,7 @@ class PortfolioTracker:
     async def record_day_end(self) -> dict[str, Any]:
         """Record end-of-day stats. Returns summary dict."""
         account = await self._broker.get_account_info()
-        equity = self._extract_equity(account)
+        equity = account.effective_equity or _DEFAULT_EQUITY
         trades = await self._repo.get_today_trades()
         trades_count = len(trades)
 
@@ -62,39 +73,25 @@ class PortfolioTracker:
     async def get_current_pnl(self) -> float:
         """Get the current unrealized + realized P&L for today."""
         account = await self._broker.get_account_info()
-        equity = self._extract_equity(account)
+        equity = account.effective_equity or _DEFAULT_EQUITY
         starting = self._starting_equity or equity
         return equity - starting
 
-    async def get_positions_summary(self) -> list[dict[str, Any]]:
+    async def get_positions_summary(self) -> list[Position]:
         """Get a summary of all current positions."""
-        raw = await self._broker.get_all_positions()
-        if isinstance(raw, list):
-            return raw
-        if isinstance(raw, str):
-            return [{"raw": raw}]
-        return []
+        return await self._broker.get_all_positions()
 
     async def should_halt_trading(self) -> bool:
         """Check if daily loss limit has been breached."""
-        from halal_trader.config import get_settings
-
-        settings = get_settings()
         pnl = await self.get_current_pnl()
-        starting = self._starting_equity or 100000
+        starting = self._starting_equity or _DEFAULT_EQUITY
         loss_pct = abs(pnl) / starting if pnl < 0 else 0
 
-        if loss_pct >= settings.daily_loss_limit:
+        if loss_pct >= self._daily_loss_limit:
             logger.warning(
                 "Daily loss limit breached: %.2f%% (limit: %.2f%%)",
                 loss_pct * 100,
-                settings.daily_loss_limit * 100,
+                self._daily_loss_limit * 100,
             )
             return True
         return False
-
-    def _extract_equity(self, account: Any) -> float:
-        """Extract equity value from account info response."""
-        if isinstance(account, dict):
-            return float(account.get("equity", 0) or account.get("portfolio_value", 0) or 100000)
-        return 100000.0

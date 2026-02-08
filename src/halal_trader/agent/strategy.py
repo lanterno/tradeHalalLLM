@@ -5,8 +5,7 @@ import logging
 import time
 from typing import Any
 
-from halal_trader.config import get_settings
-from halal_trader.domain.models import TradingPlan
+from halal_trader.domain.models import Account, Position, TradingPlan
 from halal_trader.domain.ports import LLMProvider, TradeRepository
 
 logger = logging.getLogger(__name__)
@@ -80,16 +79,16 @@ Remember: optimize for 1%+ daily return with proper risk management.
 """
 
 
-def _format_positions(positions: list[dict[str, Any]]) -> str:
+def _format_positions(positions: list[Position]) -> str:
     if not positions:
         return "No open positions."
     lines = []
     for p in positions:
         lines.append(
-            f"  {p.get('symbol', '?')}: {p.get('qty', 0)} shares @ "
-            f"${p.get('avg_entry_price', 0):.2f} | "
-            f"Current: ${p.get('current_price', 0):.2f} | "
-            f"P&L: ${p.get('unrealized_pl', 0):+.2f} ({p.get('unrealized_plpc', 0):+.2%})"
+            f"  {p.symbol}: {p.qty} shares @ "
+            f"${p.avg_entry_price:.2f} | "
+            f"Current: ${p.current_price:.2f} | "
+            f"P&L: ${p.unrealized_pl:+.2f} ({p.unrealized_plpc:+.2%})"
         )
     return "\n".join(lines)
 
@@ -138,14 +137,29 @@ def _format_bars(bars: dict[str, Any]) -> str:
 class TradingStrategy:
     """Orchestrates the LLM to produce a TradingPlan from market data."""
 
-    def __init__(self, llm: LLMProvider, repo: TradeRepository) -> None:
+    def __init__(
+        self,
+        llm: LLMProvider,
+        repo: TradeRepository,
+        *,
+        llm_provider_name: str,
+        max_position_pct: float,
+        daily_loss_limit: float,
+        daily_return_target: float,
+        max_simultaneous_positions: int,
+    ) -> None:
         self._llm = llm
         self._repo = repo
+        self._llm_provider_name = llm_provider_name
+        self._max_position_pct = max_position_pct
+        self._daily_loss_limit = daily_loss_limit
+        self._daily_return_target = daily_return_target
+        self._max_simultaneous_positions = max_simultaneous_positions
 
     async def analyze(
         self,
-        account: dict[str, Any],
-        positions: list[dict[str, Any]],
+        account: Account,
+        positions: list[Position],
         halal_symbols: list[str],
         snapshots: dict[str, Any],
         bars: dict[str, Any],
@@ -157,24 +171,20 @@ class TradingStrategy:
         Args:
             sentiment_text: Pre-formatted sentiment analysis from FinGPT (optional).
         """
-        settings = get_settings()
-
-        portfolio_value = float(
-            account.get("portfolio_value", 0) or account.get("equity", 0) or 100000
-        )
+        portfolio_value = account.portfolio_value or account.equity or 100000
         today_pnl_pct = today_pnl / portfolio_value if portfolio_value else 0
 
         system = SYSTEM_PROMPT.format(
-            max_position_pct=settings.max_position_pct,
-            daily_loss_limit=settings.daily_loss_limit,
-            daily_return_target=settings.daily_return_target,
-            max_positions=settings.max_simultaneous_positions,
+            max_position_pct=self._max_position_pct,
+            daily_loss_limit=self._daily_loss_limit,
+            daily_return_target=self._daily_return_target,
+            max_positions=self._max_simultaneous_positions,
         )
 
         user_prompt = USER_PROMPT_TEMPLATE.format(
-            buying_power=float(account.get("buying_power", 0)),
+            buying_power=account.buying_power,
             portfolio_value=portfolio_value,
-            cash=float(account.get("cash", 0)),
+            cash=account.cash,
             today_pnl=today_pnl,
             today_pnl_pct=today_pnl_pct,
             positions_text=_format_positions(positions),
@@ -193,10 +203,10 @@ class TradingStrategy:
 
             # Audit trail
             await self._repo.record_decision(
-                provider=settings.llm_provider.value,
+                provider=self._llm_provider_name,
                 model=self._llm.model,
                 prompt_summary=f"Analyzed {len(halal_symbols)} halal symbols, "
-                f"{len(positions)} positions, buying_power=${account.get('buying_power', 0)}",
+                f"{len(positions)} positions, buying_power=${account.buying_power}",
                 raw_response=json.dumps(raw),
                 parsed_action={
                     "buys": len(plan.buys),
@@ -220,7 +230,7 @@ class TradingStrategy:
             elapsed_ms = int((time.monotonic() - t0) * 1000)
             logger.error("LLM analysis failed after %dms: %s", elapsed_ms, e)
             await self._repo.record_decision(
-                provider=settings.llm_provider.value,
+                provider=self._llm_provider_name,
                 model=self._llm.model,
                 prompt_summary="FAILED analysis",
                 raw_response=str(e),
