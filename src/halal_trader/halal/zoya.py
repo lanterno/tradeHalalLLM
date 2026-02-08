@@ -1,7 +1,5 @@
 """Zoya GraphQL API client for Shariah compliance screening."""
 
-from __future__ import annotations
-
 import logging
 from typing import Any
 
@@ -27,22 +25,6 @@ query GetReport($symbol: String!) {
       name
       status
       reportDate
-    }
-  }
-}
-"""
-
-_REPORTS_QUERY = """
-query ListReports($input: BasicReportsInput) {
-  basicCompliance {
-    reports(input: $input) {
-      items {
-        symbol
-        name
-        status
-        reportDate
-      }
-      nextToken
     }
   }
 }

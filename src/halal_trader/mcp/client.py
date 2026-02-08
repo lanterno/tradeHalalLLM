@@ -1,7 +1,5 @@
 """MCP client that spawns and connects to the Alpaca MCP server."""
 
-from __future__ import annotations
-
 import json
 import logging
 from contextlib import AsyncExitStack
@@ -67,19 +65,6 @@ class AlpacaMCPClient:
         self._tools = {}
         logger.info("Disconnected from Alpaca MCP server")
 
-    # ── Tool discovery ──────────────────────────────────────────
-
-    def list_tools(self) -> list[dict[str, Any]]:
-        """Return tool descriptions suitable for passing to an LLM."""
-        return [
-            {
-                "name": tool.name,
-                "description": tool.description,
-                "input_schema": tool.inputSchema,
-            }
-            for tool in self._tools.values()
-        ]
-
     # ── Tool execution ──────────────────────────────────────────
 
     async def call_tool(self, name: str, arguments: dict[str, Any] | None = None) -> Any:
@@ -114,6 +99,20 @@ class AlpacaMCPClient:
 
     async def get_clock(self) -> dict[str, Any]:
         return await self.call_tool("get_clock")
+
+    async def get_calendar(self, start: str | None = None, end: str | None = None) -> Any:
+        """Get the market calendar (trading days and hours).
+
+        Args:
+            start: Start date (YYYY-MM-DD). Defaults to today.
+            end: End date (YYYY-MM-DD). Defaults to 30 days from start.
+        """
+        args: dict[str, Any] = {}
+        if start:
+            args["start"] = start
+        if end:
+            args["end"] = end
+        return await self.call_tool("get_calendar", args or None)
 
     async def get_all_positions(self) -> Any:
         return await self.call_tool("get_all_positions")
@@ -157,9 +156,3 @@ class AlpacaMCPClient:
 
     async def close_all_positions(self) -> Any:
         return await self.call_tool("close_all_positions", {"cancel_orders": True})
-
-    async def get_orders(self, status: str | None = None) -> Any:
-        args: dict[str, Any] = {}
-        if status:
-            args["status"] = status
-        return await self.call_tool("get_orders", args)

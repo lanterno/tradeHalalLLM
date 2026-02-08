@@ -1,23 +1,20 @@
-"""Order execution logic — translates LLM decisions into Alpaca MCP orders."""
-
-from __future__ import annotations
+"""Order execution logic — translates LLM decisions into broker orders."""
 
 import logging
 from typing import Any
 
-from halal_trader.agent.decision import TradeDecision, TradingPlan
 from halal_trader.config import get_settings
-from halal_trader.db.repository import Repository
-from halal_trader.mcp.client import AlpacaMCPClient
+from halal_trader.domain.models import TradeDecision, TradingPlan
+from halal_trader.domain.ports import Broker, TradeRepository
 
 logger = logging.getLogger(__name__)
 
 
 class TradeExecutor:
-    """Executes trading decisions via the Alpaca MCP server."""
+    """Executes trading decisions via the broker."""
 
-    def __init__(self, mcp: AlpacaMCPClient, repo: Repository) -> None:
-        self._mcp = mcp
+    def __init__(self, broker: Broker, repo: TradeRepository) -> None:
+        self._broker = broker
         self._repo = repo
 
     async def execute_plan(self, plan: TradingPlan) -> list[dict[str, Any]]:
@@ -29,9 +26,30 @@ class TradeExecutor:
             result = await self._execute_sell(decision)
             results.append(result)
 
-        # Then execute buys
+        # Then execute buys (respecting max simultaneous positions)
+        settings = get_settings()
+        current_positions = await self._broker.get_all_positions()
+        open_count = len(current_positions) if isinstance(current_positions, list) else 0
+
         for decision in plan.buys:
+            if open_count >= settings.max_simultaneous_positions:
+                msg = (
+                    f"Max simultaneous positions ({settings.max_simultaneous_positions}) "
+                    f"reached — skipping BUY {decision.symbol}"
+                )
+                logger.warning(msg)
+                results.append(
+                    {
+                        "symbol": decision.symbol,
+                        "action": "buy",
+                        "status": "rejected",
+                        "reason": msg,
+                    }
+                )
+                continue
             result = await self._execute_buy(decision)
+            if result.get("status") == "submitted":
+                open_count += 1
             results.append(result)
 
         return results
@@ -41,11 +59,11 @@ class TradeExecutor:
         settings = get_settings()
 
         # Validate: check buying power before placing order
-        account = await self._mcp.get_account_info()
+        account = await self._broker.get_account_info()
         buying_power = float(account.get("buying_power", 0)) if isinstance(account, dict) else 0
 
         # Get current price estimate
-        snapshot = await self._mcp.get_stock_snapshot(decision.symbol)
+        snapshot = await self._broker.get_stock_snapshot(decision.symbol)
         estimated_price = self._extract_price(snapshot, decision.symbol)
         estimated_cost = estimated_price * decision.quantity
 
@@ -70,7 +88,7 @@ class TradeExecutor:
 
         # Place the order
         try:
-            order_result = await self._mcp.place_order(
+            order_result = await self._broker.place_order(
                 symbol=decision.symbol,
                 side="buy",
                 quantity=decision.quantity,
@@ -116,9 +134,9 @@ class TradeExecutor:
         try:
             if decision.quantity == 0:
                 # Close entire position
-                result = await self._mcp.close_position(decision.symbol)
+                result = await self._broker.close_position(decision.symbol)
             else:
-                result = await self._mcp.place_order(
+                result = await self._broker.place_order(
                     symbol=decision.symbol,
                     side="sell",
                     quantity=decision.quantity,
@@ -162,7 +180,7 @@ class TradeExecutor:
     async def close_all(self) -> Any:
         """Close all open positions (end of day)."""
         logger.info("Closing all positions (end of day)")
-        return await self._mcp.close_all_positions()
+        return await self._broker.close_all_positions()
 
     def _extract_price(self, snapshot: Any, symbol: str) -> float:
         """Extract a usable price from a snapshot response."""

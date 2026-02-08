@@ -1,16 +1,13 @@
 """Day-trading strategy with prompt engineering for LLM decision-making."""
 
-from __future__ import annotations
-
 import json
 import logging
 import time
 from typing import Any
 
-from halal_trader.agent.decision import TradingPlan
-from halal_trader.agent.llm import BaseLLM
 from halal_trader.config import get_settings
-from halal_trader.db.repository import Repository
+from halal_trader.domain.models import TradingPlan
+from halal_trader.domain.ports import LLMProvider, TradeRepository
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +72,9 @@ Today's P&L: ${today_pnl:+,.2f} ({today_pnl_pct:+.2%})
 === RECENT PRICE BARS (5-day daily) ===
 {bars_text}
 
+=== SENTIMENT ANALYSIS ===
+{sentiment_text}
+
 Based on this data, what trades should I make right now? \
 Remember: optimize for 1%+ daily return with proper risk management.
 """
@@ -138,7 +138,7 @@ def _format_bars(bars: dict[str, Any]) -> str:
 class TradingStrategy:
     """Orchestrates the LLM to produce a TradingPlan from market data."""
 
-    def __init__(self, llm: BaseLLM, repo: Repository) -> None:
+    def __init__(self, llm: LLMProvider, repo: TradeRepository) -> None:
         self._llm = llm
         self._repo = repo
 
@@ -150,8 +150,13 @@ class TradingStrategy:
         snapshots: dict[str, Any],
         bars: dict[str, Any],
         today_pnl: float = 0.0,
+        sentiment_text: str = "Sentiment data: not available",
     ) -> TradingPlan:
-        """Run the LLM analysis and return a structured TradingPlan."""
+        """Run the LLM analysis and return a structured TradingPlan.
+
+        Args:
+            sentiment_text: Pre-formatted sentiment analysis from FinGPT (optional).
+        """
         settings = get_settings()
 
         portfolio_value = float(
@@ -176,6 +181,7 @@ class TradingStrategy:
             halal_symbols=", ".join(halal_symbols),
             snapshots_text=_format_snapshots(snapshots),
             bars_text=_format_bars(bars),
+            sentiment_text=sentiment_text,
         )
 
         t0 = time.monotonic()

@@ -1,11 +1,11 @@
-"""Structured decision models for LLM trading outputs."""
-
-from __future__ import annotations
+"""Domain models — trading decisions, market data value objects, and portfolio state."""
 
 from enum import Enum
-from typing import Optional
 
 from pydantic import BaseModel, Field
+
+
+# ── Trading Decisions ───────────────────────────────────────────
 
 
 class TradeAction(str, Enum):
@@ -22,8 +22,8 @@ class TradeDecision(BaseModel):
     quantity: int = Field(ge=0, description="Number of shares")
     confidence: float = Field(ge=0.0, le=1.0, description="0-1 confidence score")
     reasoning: str = Field(description="Brief explanation of the decision")
-    target_price: Optional[float] = Field(default=None, description="Expected target price")
-    stop_loss: Optional[float] = Field(default=None, description="Suggested stop-loss price")
+    target_price: float | None = Field(default=None, description="Expected target price")
+    stop_loss: float | None = Field(default=None, description="Suggested stop-loss price")
 
 
 class TradingPlan(BaseModel):

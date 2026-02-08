@@ -1,7 +1,5 @@
 """Data access layer for the SQLite database."""
 
-from __future__ import annotations
-
 import json
 from datetime import date
 from typing import Any

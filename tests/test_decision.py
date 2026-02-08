@@ -5,7 +5,7 @@ import json
 import pytest
 from pydantic import ValidationError
 
-from halal_trader.agent.decision import TradeAction, TradeDecision, TradingPlan
+from halal_trader.domain.models import TradeAction, TradeDecision, TradingPlan
 
 
 class TestTradeDecision:

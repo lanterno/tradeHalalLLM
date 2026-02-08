@@ -1,7 +1,5 @@
 """APScheduler trading loop — pre-market, intraday, and end-of-day jobs."""
 
-from __future__ import annotations
-
 import asyncio
 import logging
 from typing import Any
@@ -9,11 +7,13 @@ from typing import Any
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
-from halal_trader.agent.llm import BaseLLM, create_llm
+from halal_trader.agent.llm import create_llm
+from halal_trader.agent.sentiment import SentimentAnalyzer
 from halal_trader.agent.strategy import TradingStrategy
 from halal_trader.config import get_settings
 from halal_trader.db.models import init_db
 from halal_trader.db.repository import Repository
+from halal_trader.domain.ports import Broker, ComplianceScreener, LLMProvider, TradeRepository
 from halal_trader.halal.cache import HalalScreener
 from halal_trader.halal.zoya import ZoyaClient
 from halal_trader.mcp.client import AlpacaMCPClient
@@ -28,13 +28,15 @@ class TradingBot:
 
     def __init__(self) -> None:
         self.settings = get_settings()
-        self.mcp = AlpacaMCPClient()
-        self.llm: BaseLLM | None = None
-        self.repo: Repository | None = None
-        self.screener: HalalScreener | None = None
+        self._mcp_client = AlpacaMCPClient()
+        self.broker: Broker = self._mcp_client
+        self.llm: LLMProvider | None = None
+        self.repo: TradeRepository | None = None
+        self.screener: ComplianceScreener | None = None
         self.strategy: TradingStrategy | None = None
         self.executor: TradeExecutor | None = None
         self.portfolio: PortfolioTracker | None = None
+        self.sentiment: SentimentAnalyzer | None = None
         self.scheduler = AsyncIOScheduler()
         self._running = False
 
@@ -46,8 +48,8 @@ class TradingBot:
         db = await init_db(str(self.settings.db_path))
         self.repo = Repository(db)
 
-        # MCP connection to Alpaca
-        await self.mcp.connect()
+        # Broker connection (Alpaca via MCP)
+        await self._mcp_client.connect()
 
         # LLM
         self.llm = create_llm(self.settings)
@@ -63,8 +65,11 @@ class TradingBot:
 
         # Strategy & executor
         self.strategy = TradingStrategy(self.llm, self.repo)
-        self.executor = TradeExecutor(self.mcp, self.repo)
-        self.portfolio = PortfolioTracker(self.mcp, self.repo)
+        self.executor = TradeExecutor(self.broker, self.repo)
+        self.portfolio = PortfolioTracker(self.broker, self.repo)
+
+        # Sentiment analyzer (supplementary — gracefully degrades if deps missing)
+        self.sentiment = SentimentAnalyzer()
 
         logger.info("Trading bot initialized successfully")
 
@@ -73,7 +78,7 @@ class TradingBot:
         logger.info("Shutting down trading bot...")
         if self.scheduler.running:
             self.scheduler.shutdown(wait=False)
-        await self.mcp.disconnect()
+        await self._mcp_client.disconnect()
         self._running = False
         logger.info("Trading bot shut down")
 
@@ -84,8 +89,20 @@ class TradingBot:
         logger.info("=== PRE-MARKET ROUTINE ===")
         try:
             # Check if market will open today
-            clock = await self.mcp.get_clock()
+            clock = await self.broker.get_clock()
             logger.info("Market clock: %s", clock)
+
+            # Log upcoming trading calendar
+            try:
+                calendar = await self.broker.get_calendar()
+                if isinstance(calendar, list) and calendar:
+                    next_days = calendar[:5]
+                    logger.info(
+                        "Upcoming trading days: %s",
+                        [d.get("date", d) if isinstance(d, dict) else d for d in next_days],
+                    )
+            except Exception as e:
+                logger.debug("Could not fetch market calendar: %s", e)
 
             # Refresh halal stock cache
             await self.screener.ensure_cache()
@@ -102,7 +119,7 @@ class TradingBot:
         logger.info("=== TRADING CYCLE ===")
         try:
             # Check market status
-            clock = await self.mcp.get_clock()
+            clock = await self.broker.get_clock()
             is_open = clock.get("is_open", False) if isinstance(clock, dict) else False
 
             if not is_open:
@@ -115,8 +132,8 @@ class TradingBot:
                 return
 
             # Gather data
-            account = await self.mcp.get_account_info()
-            positions_raw = await self.mcp.get_all_positions()
+            account = await self.broker.get_account_info()
+            positions_raw = await self.broker.get_all_positions()
             positions = positions_raw if isinstance(positions_raw, list) else []
 
             halal_symbols = await self.screener.get_halal_symbols()
@@ -129,17 +146,26 @@ class TradingBot:
             bars: dict[str, Any] = {}
             for sym in halal_symbols[:20]:  # Cap to avoid rate limits
                 try:
-                    snap = await self.mcp.get_stock_snapshot(sym)
+                    snap = await self.broker.get_stock_snapshot(sym)
                     snapshots[sym] = snap
                 except Exception as e:
                     logger.debug("Failed to get snapshot for %s: %s", sym, e)
                 try:
-                    bar = await self.mcp.get_stock_bars(sym, days=5, timeframe="1Day")
+                    bar = await self.broker.get_stock_bars(sym, days=5, timeframe="1Day")
                     bars[sym] = bar
                 except Exception as e:
                     logger.debug("Failed to get bars for %s: %s", sym, e)
 
             today_pnl = await self.portfolio.get_current_pnl()
+
+            # Run sentiment analysis (supplementary signal)
+            sentiment_text = "Sentiment data: not available"
+            if self.sentiment:
+                try:
+                    sentiment_scores = await self.sentiment.analyze_batch(halal_symbols[:10])
+                    sentiment_text = self.sentiment.format_for_prompt(sentiment_scores)
+                except Exception as e:
+                    logger.debug("Sentiment analysis skipped: %s", e)
 
             # Run LLM analysis
             plan = await self.strategy.analyze(
@@ -149,6 +175,7 @@ class TradingBot:
                 snapshots=snapshots,
                 bars=bars,
                 today_pnl=today_pnl,
+                sentiment_text=sentiment_text,
             )
 
             logger.info(

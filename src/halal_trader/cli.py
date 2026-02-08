@@ -1,7 +1,5 @@
 """Click CLI entrypoint with Rich terminal output."""
 
-from __future__ import annotations
-
 import asyncio
 import logging
 
@@ -108,13 +106,16 @@ def history(limit: int) -> None:
         db = await init_db(str(settings.db_path))
         repo = Repository(db)
 
-        # Recent trades
-        trades = await repo.get_recent_trades(limit)
-        _print_trades(trades)
+        try:
+            # Recent trades
+            trades = await repo.get_recent_trades(limit)
+            _print_trades(trades)
 
-        # Daily P&L
-        pnl_history = await repo.get_pnl_history(limit=14)
-        _print_pnl(pnl_history)
+            # Daily P&L
+            pnl_history = await repo.get_pnl_history(limit=14)
+            _print_pnl(pnl_history)
+        finally:
+            await db.close()
 
     asyncio.run(_history())
 

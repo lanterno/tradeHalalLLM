@@ -1,7 +1,5 @@
 """SQLite table definitions and database initialization."""
 
-from __future__ import annotations
-
 import aiosqlite
 
 SCHEMA_SQL = """

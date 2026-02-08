@@ -1,27 +1,24 @@
 """Position and P&L tracking."""
 
-from __future__ import annotations
-
 import logging
 from typing import Any
 
-from halal_trader.db.repository import Repository
-from halal_trader.mcp.client import AlpacaMCPClient
+from halal_trader.domain.ports import Broker, TradeRepository
 
 logger = logging.getLogger(__name__)
 
 
 class PortfolioTracker:
-    """Tracks portfolio state and daily P&L via Alpaca MCP + local DB."""
+    """Tracks portfolio state and daily P&L via broker + local DB."""
 
-    def __init__(self, mcp: AlpacaMCPClient, repo: Repository) -> None:
-        self._mcp = mcp
+    def __init__(self, broker: Broker, repo: TradeRepository) -> None:
+        self._broker = broker
         self._repo = repo
         self._starting_equity: float | None = None
 
     async def record_day_start(self) -> float:
         """Record the starting equity for today. Returns starting equity."""
-        account = await self._mcp.get_account_info()
+        account = await self._broker.get_account_info()
         equity = self._extract_equity(account)
         self._starting_equity = equity
         await self._repo.start_day(equity)
@@ -30,7 +27,7 @@ class PortfolioTracker:
 
     async def record_day_end(self) -> dict[str, Any]:
         """Record end-of-day stats. Returns summary dict."""
-        account = await self._mcp.get_account_info()
+        account = await self._broker.get_account_info()
         equity = self._extract_equity(account)
         trades = await self._repo.get_today_trades()
         trades_count = len(trades)
@@ -64,14 +61,14 @@ class PortfolioTracker:
 
     async def get_current_pnl(self) -> float:
         """Get the current unrealized + realized P&L for today."""
-        account = await self._mcp.get_account_info()
+        account = await self._broker.get_account_info()
         equity = self._extract_equity(account)
         starting = self._starting_equity or equity
         return equity - starting
 
     async def get_positions_summary(self) -> list[dict[str, Any]]:
         """Get a summary of all current positions."""
-        raw = await self._mcp.get_all_positions()
+        raw = await self._broker.get_all_positions()
         if isinstance(raw, list):
             return raw
         if isinstance(raw, str):

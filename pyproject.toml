@@ -45,7 +45,7 @@ build-backend = "hatchling.build"
 packages = ["src/halal_trader"]
 
 [tool.ruff]
-target-version = "py312"
+target-version = "py314"
 line-length = 100
 
 [tool.ruff.lint]

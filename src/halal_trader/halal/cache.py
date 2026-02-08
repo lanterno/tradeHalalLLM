@@ -1,10 +1,8 @@
 """Halal stock cache with SQLite persistence and Zoya API integration."""
 
-from __future__ import annotations
-
 import logging
 
-from halal_trader.db.repository import Repository
+from halal_trader.domain.ports import TradeRepository
 from halal_trader.halal.zoya import ZoyaClient
 
 logger = logging.getLogger(__name__)
@@ -38,7 +36,7 @@ DEFAULT_HALAL_SYMBOLS = [
 class HalalScreener:
     """Screens stocks for Shariah compliance using Zoya API + local cache."""
 
-    def __init__(self, repo: Repository, zoya: ZoyaClient | None = None) -> None:
+    def __init__(self, repo: TradeRepository, zoya: ZoyaClient | None = None) -> None:
         self._repo = repo
         self._zoya = zoya
 
