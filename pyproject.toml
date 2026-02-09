@@ -26,6 +26,8 @@ dependencies = [
     # Crypto trading
     "python-binance",
     "numpy",
+    # Logging
+    "python-json-logger",
 ]
 
 [project.optional-dependencies]

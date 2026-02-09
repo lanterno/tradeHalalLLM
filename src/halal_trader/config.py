@@ -93,7 +93,15 @@ class Settings(BaseSettings):
     db_path: Path = Field(default=Path("halal_trader.db"), description="SQLite database path")
 
     # ── Logging ─────────────────────────────────────────────────
-    log_level: str = Field(default="INFO", description="Logging level")
+    log_level: str = Field(default="INFO", description="Console logging level")
+    log_dir: Path = Field(default=Path("logs"), description="Directory for log files")
+    log_file_level: str = Field(default="DEBUG", description="File logging level")
+    log_max_bytes: int = Field(
+        default=10_485_760, description="Max log file size in bytes (10 MB)"
+    )
+    log_backup_count: int = Field(
+        default=5, description="Number of rotated log files to keep"
+    )
 
 
 # Singleton instance

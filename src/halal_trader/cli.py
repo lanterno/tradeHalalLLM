@@ -1,26 +1,13 @@
 """Click CLI entrypoint with Rich terminal output."""
 
 import asyncio
-import logging
 
 import click
-from rich.console import Console
-from rich.logging import RichHandler
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-console = Console()
-
-
-def _setup_logging(level: str = "INFO") -> None:
-    """Configure rich logging."""
-    logging.basicConfig(
-        level=level.upper(),
-        format="%(message)s",
-        datefmt="[%X]",
-        handlers=[RichHandler(console=console, rich_tracebacks=True)],
-    )
+from halal_trader.logging import console
 
 
 @click.group()
@@ -28,10 +15,10 @@ def _setup_logging(level: str = "INFO") -> None:
 def cli(log_level: str | None) -> None:
     """Halal Trader - LLM-powered halal day-trading bot."""
     from halal_trader.config import get_settings
+    from halal_trader.logging import setup_logging
 
     settings = get_settings()
-    level = log_level or settings.log_level
-    _setup_logging(level)
+    setup_logging(settings, cli_log_level=log_level)
 
 
 @cli.command()
