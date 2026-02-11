@@ -28,6 +28,8 @@ dependencies = [
     "numpy",
     # Logging
     "python-json-logger",
+    # Timezone data (required on minimal/WSL systems without system tzdata)
+    "tzdata",
 ]
 
 [project.optional-dependencies]

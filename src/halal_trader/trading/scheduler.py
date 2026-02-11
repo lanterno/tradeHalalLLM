@@ -165,51 +165,52 @@ class TradingBot:
     async def run(self) -> None:
         """Start the trading bot with scheduled jobs."""
         await self.initialize()
-        self._running = True
-
-        interval = self.settings.trading_interval_minutes
-
-        # Schedule pre-market at 9:00 AM ET (Mon-Fri)
-        self.scheduler.add_job(
-            self.pre_market,
-            CronTrigger(day_of_week="mon-fri", hour=9, minute=0, timezone="US/Eastern"),
-            id="pre_market",
-            replace_existing=True,
-        )
-
-        # Schedule trading cycles every N minutes during market hours (9:30 - 15:45 ET)
-        self.scheduler.add_job(
-            self.trading_cycle,
-            CronTrigger(
-                day_of_week="mon-fri",
-                hour="9-15",
-                minute=f"*/{interval}",
-                timezone="US/Eastern",
-            ),
-            id="trading_cycle",
-            replace_existing=True,
-        )
-
-        # Schedule end-of-day at 3:50 PM ET (before 4:00 close)
-        self.scheduler.add_job(
-            self.end_of_day,
-            CronTrigger(day_of_week="mon-fri", hour=15, minute=50, timezone="US/Eastern"),
-            id="end_of_day",
-            replace_existing=True,
-        )
-
-        self.scheduler.start()
-        logger.info(
-            "Trading bot started — interval: %d min, target: %.1f%%, loss limit: %.1f%%",
-            interval,
-            self.settings.daily_return_target * 100,
-            self.settings.daily_loss_limit * 100,
-        )
-
-        # Keep running until interrupted
         try:
+            self._running = True
+
+            interval = self.settings.trading_interval_minutes
+
+            # Schedule pre-market at 9:00 AM ET (Mon-Fri)
+            self.scheduler.add_job(
+                self.pre_market,
+                CronTrigger(day_of_week="mon-fri", hour=9, minute=0, timezone="US/Eastern"),
+                id="pre_market",
+                replace_existing=True,
+            )
+
+            # Schedule trading cycles every N minutes during market hours (9:30 - 15:45 ET)
+            self.scheduler.add_job(
+                self.trading_cycle,
+                CronTrigger(
+                    day_of_week="mon-fri",
+                    hour="9-15",
+                    minute=f"*/{interval}",
+                    timezone="US/Eastern",
+                ),
+                id="trading_cycle",
+                replace_existing=True,
+            )
+
+            # Schedule end-of-day at 3:50 PM ET (before 4:00 close)
+            self.scheduler.add_job(
+                self.end_of_day,
+                CronTrigger(day_of_week="mon-fri", hour=15, minute=50, timezone="US/Eastern"),
+                id="end_of_day",
+                replace_existing=True,
+            )
+
+            self.scheduler.start()
+            logger.info(
+                "Trading bot started — interval: %d min, target: %.1f%%, loss limit: %.1f%%",
+                interval,
+                self.settings.daily_return_target * 100,
+                self.settings.daily_loss_limit * 100,
+            )
+
+            # Keep running until interrupted
             while self._running:
                 await asyncio.sleep(1)
+
         except KeyboardInterrupt, asyncio.CancelledError:
             logger.info("Bot interrupted")
         finally:

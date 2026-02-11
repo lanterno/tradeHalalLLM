@@ -484,6 +484,7 @@ dependencies = [
     { name = "python-json-logger" },
     { name = "rich" },
     { name = "sqlmodel" },
+    { name = "tzdata" },
 ]
 
 [package.optional-dependencies]
@@ -522,6 +523,7 @@ requires-dist = [
     { name = "sqlmodel" },
     { name = "torch", marker = "extra == 'fingpt'" },
     { name = "transformers", marker = "extra == 'fingpt'" },
+    { name = "tzdata" },
 ]
 provides-extras = ["fingpt", "dev"]
 

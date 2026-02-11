@@ -61,7 +61,10 @@ class AlpacaMCPClient:
 
     async def disconnect(self) -> None:
         """Cleanly shut down the MCP session and subprocess."""
-        await self._exit_stack.aclose()
+        try:
+            await self._exit_stack.aclose()
+        except Exception as e:
+            logger.debug("MCP exit stack cleanup error (safe to ignore): %s", e)
         self.session = None
         self._tools = {}
         logger.info("Disconnected from Alpaca MCP server")
