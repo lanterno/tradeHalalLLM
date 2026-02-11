@@ -128,25 +128,48 @@ class AlpacaMCPClient:
                 ),
                 status=str(_flex_get(raw, "status", default="")),
             )
-        # Fallback: try to extract numbers from text response
+        # Fallback: extract values from human-readable text response.
+        # The Alpaca MCP server returns text like:
+        #   Equity: $100000.00
+        #   Buying Power: $200000.00
+        #   Cash: $100000.00
+        #   Portfolio Value: $100000.00
+        #   Status: ACTIVE
         if isinstance(raw, str) and raw.strip():
             logger.warning(
                 "get_account_info() received text instead of JSON — parsing: %s",
                 raw[:200],
             )
             account = Account()
-            # Try to find equity value in text (e.g. "equity: $100,000.00")
-            equity_match = re.search(r"equity[:\s]*\$?([\d,]+\.?\d*)", raw, re.IGNORECASE)
+            equity_match = re.search(
+                r"equity[:\s]*\$?([\d,]+\.?\d*)", raw, re.IGNORECASE
+            )
             if equity_match:
                 account.equity = float(equity_match.group(1).replace(",", ""))
             buying_power_match = re.search(
                 r"buying.power[:\s]*\$?([\d,]+\.?\d*)", raw, re.IGNORECASE
             )
             if buying_power_match:
-                account.buying_power = float(buying_power_match.group(1).replace(",", ""))
-            cash_match = re.search(r"cash[:\s]*\$?([\d,]+\.?\d*)", raw, re.IGNORECASE)
+                account.buying_power = float(
+                    buying_power_match.group(1).replace(",", "")
+                )
+            cash_match = re.search(
+                r"cash[:\s]*\$?([\d,]+\.?\d*)", raw, re.IGNORECASE
+            )
             if cash_match:
                 account.cash = float(cash_match.group(1).replace(",", ""))
+            pv_match = re.search(
+                r"portfolio.value[:\s]*\$?([\d,]+\.?\d*)", raw, re.IGNORECASE
+            )
+            if pv_match:
+                account.portfolio_value = float(
+                    pv_match.group(1).replace(",", "")
+                )
+            status_match = re.search(
+                r"status[:\s]*(\w+)", raw, re.IGNORECASE
+            )
+            if status_match:
+                account.status = status_match.group(1)
             return account
         logger.error("get_account_info() returned unexpected response: %r", raw)
         return Account()
@@ -173,14 +196,38 @@ class AlpacaMCPClient:
                 next_close=str(next_close),
             )
         # Fallback: parse text response for market open/closed status.
-        # The Alpaca MCP server may return human-readable text instead of JSON.
+        # The Alpaca MCP server returns human-readable text like:
+        #   Is Open: Yes
+        #   Next Open: 2026-02-12 09:30:00-05:00
+        #   Next Close: 2026-02-11 16:00:00-05:00
         if isinstance(raw, str) and raw.strip():
             logger.warning(
-                "get_clock() received text instead of JSON — parsing: %s", raw[:200]
+                "get_clock() received text instead of JSON — parsing: %s",
+                raw[:200],
             )
             text_lower = raw.lower()
-            is_open = "is open" in text_lower or "market is currently open" in text_lower
-            return MarketClock(is_open=is_open)
+            is_open = (
+                "is open: yes" in text_lower
+                or "is open" in text_lower
+                or "market is currently open" in text_lower
+            )
+            next_open = ""
+            next_close = ""
+            open_match = re.search(
+                r"next\s+open:\s*(.+)", raw, re.IGNORECASE
+            )
+            if open_match:
+                next_open = open_match.group(1).strip()
+            close_match = re.search(
+                r"next\s+close:\s*(.+)", raw, re.IGNORECASE
+            )
+            if close_match:
+                next_close = close_match.group(1).strip()
+            return MarketClock(
+                is_open=is_open,
+                next_open=next_open,
+                next_close=next_close,
+            )
         logger.error("get_clock() returned unexpected response: %r", raw)
         return MarketClock()
 
@@ -193,9 +240,9 @@ class AlpacaMCPClient:
         """
         args: dict[str, Any] = {}
         if start:
-            args["start"] = start
+            args["start_date"] = start
         if end:
-            args["end"] = end
+            args["end_date"] = end
         return await self.call_tool("get_calendar", args or None)
 
     async def get_all_positions(self) -> list[Position]:
