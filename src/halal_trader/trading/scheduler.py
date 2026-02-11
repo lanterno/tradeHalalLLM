@@ -1,7 +1,10 @@
 """APScheduler trading loop — pre-market, intraday, and end-of-day jobs."""
 
 import asyncio
+import fcntl
 import logging
+import os
+from pathlib import Path
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -23,6 +26,9 @@ from halal_trader.trading.portfolio import PortfolioTracker
 logger = logging.getLogger(__name__)
 
 
+_PID_FILE = Path("halal_trader.pid")
+
+
 class TradingBot:
     """Composition root and scheduler — wires components and runs cron jobs."""
 
@@ -36,6 +42,7 @@ class TradingBot:
         self.cycle_service: TradingCycleService | None = None
         self.scheduler = AsyncIOScheduler()
         self._running = False
+        self._lock_file: int | None = None  # file descriptor for PID lock
 
     async def initialize(self) -> None:
         """Set up all components."""
@@ -97,20 +104,87 @@ class TradingBot:
 
         logger.info("Trading bot initialized successfully")
 
+    def _acquire_lock(self) -> None:
+        """Acquire a PID file lock to prevent duplicate bot instances."""
+        try:
+            self._lock_file = os.open(str(_PID_FILE), os.O_CREAT | os.O_RDWR)
+            fcntl.flock(self._lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            os.write(self._lock_file, str(os.getpid()).encode())
+            os.ftruncate(self._lock_file, len(str(os.getpid())))
+            logger.info("Acquired PID lock (pid=%d)", os.getpid())
+        except OSError:
+            # Another instance holds the lock — read its PID for the error message
+            try:
+                with open(_PID_FILE) as f:
+                    other_pid = f.read().strip()
+            except Exception:
+                other_pid = "unknown"
+            raise RuntimeError(
+                f"Another trading bot instance is already running (pid={other_pid}). "
+                f"Remove {_PID_FILE} if the previous instance crashed."
+            )
+
+    def _release_lock(self) -> None:
+        """Release the PID file lock."""
+        if self._lock_file is not None:
+            try:
+                fcntl.flock(self._lock_file, fcntl.LOCK_UN)
+                os.close(self._lock_file)
+            except OSError:
+                pass
+            self._lock_file = None
+            try:
+                _PID_FILE.unlink(missing_ok=True)
+            except OSError:
+                pass
+            logger.info("Released PID lock")
+
     async def shutdown(self) -> None:
         """Clean up all resources."""
         logger.info("Shutting down trading bot...")
         if self.scheduler.running:
             self.scheduler.shutdown(wait=False)
         await self._mcp_client.disconnect()
+        self._release_lock()
         self._running = False
         logger.info("Trading bot shut down")
+
+    def _require_initialized(
+        self,
+    ) -> tuple[ComplianceScreener, TradeExecutor, PortfolioTracker, TradingCycleService]:
+        """Return initialized components; raise if the bot hasn't been initialized yet."""
+        if (
+            self.screener is None
+            or self.executor is None
+            or self.portfolio is None
+            or self.cycle_service is None
+        ):
+            missing = [
+                n
+                for n, v in (
+                    ("screener", self.screener),
+                    ("executor", self.executor),
+                    ("portfolio", self.portfolio),
+                    ("cycle_service", self.cycle_service),
+                )
+                if v is None
+            ]
+            raise RuntimeError(
+                "TradingBot.initialize() must be called before using: " + ", ".join(missing)
+            )
+        return (
+            self.screener,
+            self.executor,
+            self.portfolio,
+            self.cycle_service,
+        )
 
     # ── Scheduled Jobs ──────────────────────────────────────────
 
     async def pre_market(self) -> None:
         """Pre-market job: refresh halal cache, record day start."""
         logger.info("=== PRE-MARKET ROUTINE ===")
+        screener, _, portfolio, _ = self._require_initialized()
         try:
             # Check if market will open today
             clock = await self.broker.get_clock()
@@ -129,10 +203,10 @@ class TradingBot:
                 logger.debug("Could not fetch market calendar: %s", e)
 
             # Refresh halal stock cache
-            await self.screener.ensure_cache()
+            await screener.ensure_cache()
 
             # Record starting equity
-            await self.portfolio.record_day_start()
+            await portfolio.record_day_start()
 
             logger.info("Pre-market routine complete")
         except Exception as e:
@@ -140,21 +214,23 @@ class TradingBot:
 
     async def trading_cycle(self) -> None:
         """Intraday trading cycle — delegates to TradingCycleService."""
-        await self.cycle_service.run_cycle()
+        _, _, _, cycle_service = self._require_initialized()
+        await cycle_service.run_cycle()
 
     async def end_of_day(self) -> None:
         """End-of-day job: close all positions, record P&L."""
         logger.info("=== END OF DAY ROUTINE ===")
+        _, executor, portfolio, _ = self._require_initialized()
         try:
             # Close all positions
-            close_result = await self.executor.close_all()
+            close_result = await executor.close_all()
             logger.info("Close all positions result: %s", close_result)
 
             # Wait for positions to close
             await asyncio.sleep(5)
 
             # Record daily P&L
-            summary = await self.portfolio.record_day_end()
+            summary = await portfolio.record_day_end()
             logger.info("Day summary: %s", summary)
 
         except Exception as e:
@@ -164,6 +240,7 @@ class TradingBot:
 
     async def run(self) -> None:
         """Start the trading bot with scheduled jobs."""
+        self._acquire_lock()
         await self.initialize()
         try:
             self._running = True
@@ -171,24 +248,42 @@ class TradingBot:
             interval = self.settings.trading_interval_minutes
 
             # Schedule pre-market at 9:00 AM ET (Mon-Fri)
+            # Allow up to 30 min grace period so the job still runs if the system
+            # wakes from sleep after 09:00 ET (e.g. laptop lid open at 09:25).
             self.scheduler.add_job(
                 self.pre_market,
                 CronTrigger(day_of_week="mon-fri", hour=9, minute=0, timezone="US/Eastern"),
                 id="pre_market",
                 replace_existing=True,
+                misfire_grace_time=1800,
             )
 
-            # Schedule trading cycles every N minutes during market hours (9:30 - 15:45 ET)
+            # Schedule trading cycles every N minutes during market hours (9:30 - 15:45 ET).
+            # Use hour 10-15 for the bulk, plus a separate job for the 9:30-9:45 window.
             self.scheduler.add_job(
                 self.trading_cycle,
                 CronTrigger(
                     day_of_week="mon-fri",
-                    hour="9-15",
+                    hour="10-15",
                     minute=f"*/{interval}",
                     timezone="US/Eastern",
                 ),
                 id="trading_cycle",
                 replace_existing=True,
+                misfire_grace_time=900,
+            )
+            # Cover the first 30 minutes after market open (9:30, 9:45)
+            self.scheduler.add_job(
+                self.trading_cycle,
+                CronTrigger(
+                    day_of_week="mon-fri",
+                    hour=9,
+                    minute="30,45",
+                    timezone="US/Eastern",
+                ),
+                id="trading_cycle_open",
+                replace_existing=True,
+                misfire_grace_time=900,
             )
 
             # Schedule end-of-day at 3:50 PM ET (before 4:00 close)
@@ -207,11 +302,18 @@ class TradingBot:
                 self.settings.daily_loss_limit * 100,
             )
 
+            # Run pre-market once at startup to ensure cache and equity are
+            # initialized even if the scheduled job was missed (e.g. system sleep).
+            try:
+                await self.pre_market()
+            except Exception as e:
+                logger.warning("Startup pre-market failed (will retry at scheduled time): %s", e)
+
             # Keep running until interrupted
             while self._running:
                 await asyncio.sleep(1)
 
-        except KeyboardInterrupt, asyncio.CancelledError:
+        except (KeyboardInterrupt, asyncio.CancelledError):
             logger.info("Bot interrupted")
         finally:
             await self.shutdown()

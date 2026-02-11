@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 from contextlib import AsyncExitStack
 from typing import Any
 
@@ -12,6 +13,17 @@ from halal_trader.config import get_settings
 from halal_trader.domain.models import Account, MarketClock, Position
 
 logger = logging.getLogger(__name__)
+
+
+def _flex_get(d: dict[str, Any], *keys: str, default: Any = None) -> Any:
+    """Look up a value trying multiple key variants (snake_case, camelCase, etc.).
+
+    The Alpaca MCP server may return keys in different casings depending on version.
+    """
+    for key in keys:
+        if key in d:
+            return d[key]
+    return default
 
 
 class AlpacaMCPClient:
@@ -91,33 +103,85 @@ class AlpacaMCPClient:
 
         # Try to parse JSON responses
         combined = "\n".join(str(c) for c in contents)
+        logger.debug("Raw MCP response for %s: %s", name, combined[:500])
         try:
             return json.loads(combined)
-        except json.JSONDecodeError, TypeError:
+        except (json.JSONDecodeError, TypeError):
             return combined
 
     # ── Convenience wrappers ────────────────────────────────────
 
     async def get_account_info(self) -> Account:
         raw = await self.call_tool("get_account_info")
+        logger.info("get_account_info() raw response type=%s keys=%s",
+                     type(raw).__name__,
+                     list(raw.keys()) if isinstance(raw, dict) else repr(raw)[:200])
         if isinstance(raw, dict):
             return Account(
-                equity=float(raw.get("equity", 0) or 0),
-                buying_power=float(raw.get("buying_power", 0) or 0),
-                cash=float(raw.get("cash", 0) or 0),
-                portfolio_value=float(raw.get("portfolio_value", 0) or 0),
-                status=str(raw.get("status", "")),
+                equity=float(_flex_get(raw, "equity", default=0) or 0),
+                buying_power=float(
+                    _flex_get(raw, "buying_power", "buyingPower", "buying_power", default=0) or 0
+                ),
+                cash=float(_flex_get(raw, "cash", default=0) or 0),
+                portfolio_value=float(
+                    _flex_get(raw, "portfolio_value", "portfolioValue", default=0) or 0
+                ),
+                status=str(_flex_get(raw, "status", default="")),
             )
+        # Fallback: try to extract numbers from text response
+        if isinstance(raw, str) and raw.strip():
+            logger.warning(
+                "get_account_info() received text instead of JSON — parsing: %s",
+                raw[:200],
+            )
+            account = Account()
+            # Try to find equity value in text (e.g. "equity: $100,000.00")
+            equity_match = re.search(r"equity[:\s]*\$?([\d,]+\.?\d*)", raw, re.IGNORECASE)
+            if equity_match:
+                account.equity = float(equity_match.group(1).replace(",", ""))
+            buying_power_match = re.search(
+                r"buying.power[:\s]*\$?([\d,]+\.?\d*)", raw, re.IGNORECASE
+            )
+            if buying_power_match:
+                account.buying_power = float(buying_power_match.group(1).replace(",", ""))
+            cash_match = re.search(r"cash[:\s]*\$?([\d,]+\.?\d*)", raw, re.IGNORECASE)
+            if cash_match:
+                account.cash = float(cash_match.group(1).replace(",", ""))
+            return account
+        logger.error("get_account_info() returned unexpected response: %r", raw)
         return Account()
 
     async def get_clock(self) -> MarketClock:
         raw = await self.call_tool("get_clock")
+        logger.info("get_clock() raw response type=%s keys=%s",
+                     type(raw).__name__,
+                     list(raw.keys()) if isinstance(raw, dict) else repr(raw)[:200])
         if isinstance(raw, dict):
-            return MarketClock(
-                is_open=bool(raw.get("is_open", False)),
-                next_open=str(raw.get("next_open", "")),
-                next_close=str(raw.get("next_close", "")),
+            is_open_val = _flex_get(raw, "is_open", "isOpen", "is_market_open", default=False)
+            # Handle string booleans like "true"/"false"
+            if isinstance(is_open_val, str):
+                is_open_val = is_open_val.lower() in ("true", "1", "yes")
+            next_open = _flex_get(
+                raw, "next_open", "nextOpen", "next_open_time", default=""
             )
+            next_close = _flex_get(
+                raw, "next_close", "nextClose", "next_close_time", default=""
+            )
+            return MarketClock(
+                is_open=bool(is_open_val),
+                next_open=str(next_open),
+                next_close=str(next_close),
+            )
+        # Fallback: parse text response for market open/closed status.
+        # The Alpaca MCP server may return human-readable text instead of JSON.
+        if isinstance(raw, str) and raw.strip():
+            logger.warning(
+                "get_clock() received text instead of JSON — parsing: %s", raw[:200]
+            )
+            text_lower = raw.lower()
+            is_open = "is open" in text_lower or "market is currently open" in text_lower
+            return MarketClock(is_open=is_open)
+        logger.error("get_clock() returned unexpected response: %r", raw)
         return MarketClock()
 
     async def get_calendar(self, start: str | None = None, end: str | None = None) -> Any:
@@ -136,21 +200,41 @@ class AlpacaMCPClient:
 
     async def get_all_positions(self) -> list[Position]:
         raw = await self.call_tool("get_all_positions")
+        logger.info("get_all_positions() raw response type=%s len=%s",
+                     type(raw).__name__,
+                     len(raw) if isinstance(raw, (list, dict)) else repr(raw)[:200])
         if isinstance(raw, list):
             positions = []
             for p in raw:
                 if isinstance(p, dict):
                     positions.append(
                         Position(
-                            symbol=str(p.get("symbol", "")),
-                            qty=float(p.get("qty", 0) or 0),
-                            avg_entry_price=float(p.get("avg_entry_price", 0) or 0),
-                            current_price=float(p.get("current_price", 0) or 0),
-                            unrealized_pl=float(p.get("unrealized_pl", 0) or 0),
-                            unrealized_plpc=float(p.get("unrealized_plpc", 0) or 0),
+                            symbol=str(_flex_get(p, "symbol", default="")),
+                            qty=float(_flex_get(p, "qty", "quantity", default=0) or 0),
+                            avg_entry_price=float(
+                                _flex_get(p, "avg_entry_price", "avgEntryPrice", default=0) or 0
+                            ),
+                            current_price=float(
+                                _flex_get(p, "current_price", "currentPrice", default=0) or 0
+                            ),
+                            unrealized_pl=float(
+                                _flex_get(
+                                    p, "unrealized_pl", "unrealizedPl",
+                                    "unrealized_pnl", default=0,
+                                ) or 0
+                            ),
+                            unrealized_plpc=float(
+                                _flex_get(
+                                    p, "unrealized_plpc", "unrealizedPlpc",
+                                    "unrealized_pnl_pct", default=0,
+                                ) or 0
+                            ),
                         )
                     )
             return positions
+        if isinstance(raw, str) and raw.strip():
+            # Text responses like "no positions" are acceptable — just means empty
+            logger.info("get_all_positions() text response: %s", raw[:200])
         return []
 
     async def get_stock_snapshot(self, symbols: str) -> Any:

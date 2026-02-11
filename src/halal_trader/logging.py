@@ -2,6 +2,7 @@
 
 import logging
 from logging.handlers import RotatingFileHandler
+from typing import Any
 
 from pythonjsonlogger.json import JsonFormatter  # type: ignore[import-untyped]
 from rich.console import Console
@@ -10,6 +11,24 @@ from rich.logging import RichHandler
 from halal_trader.config import Settings
 
 console = Console()
+
+
+class SafeRichHandler(RichHandler):
+    """RichHandler that silently degrades on broken pipes.
+
+    When the bot runs headless (e.g. via nohup / systemd), stdout may be
+    closed, causing Rich to raise ``BrokenPipeError`` → ``SystemExit(1)``.
+    This wrapper catches those exceptions so the bot keeps running and
+    file logging continues uninterrupted.
+    """
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            super().emit(record)
+        except (BrokenPipeError, SystemExit, OSError):
+            # Console output is gone — nothing we can do, but don't
+            # let it crash the process.  File handlers still work.
+            pass
 
 
 def setup_logging(settings: Settings, *, cli_log_level: str | None = None) -> None:
@@ -31,8 +50,8 @@ def setup_logging(settings: Settings, *, cli_log_level: str | None = None) -> No
     # Remove any previously attached handlers (prevents duplicates on re-init)
     root.handlers.clear()
 
-    # ── Console handler (existing Rich behaviour) ──────────────
-    console_handler = RichHandler(
+    # ── Console handler (Safe Rich wrapper — tolerates broken pipes) ──
+    console_handler = SafeRichHandler(
         console=console,
         rich_tracebacks=True,
         show_time=True,
