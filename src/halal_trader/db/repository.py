@@ -1,8 +1,10 @@
 """Data access layer using SQLModel."""
 
 import json
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
+
+from halal_trader.market_hours import today_eastern, trading_day_end_utc, trading_day_start_utc
 
 from sqlalchemy.ext.asyncio import AsyncEngine
 from sqlmodel import select
@@ -66,12 +68,14 @@ class Repository:
             await session.commit()
 
     async def get_today_trades(self) -> list[dict[str, Any]]:
-        today = date.today().isoformat()
+        today = today_eastern()
+        day_start = trading_day_start_utc(today)
+        day_end = trading_day_end_utc(today)
         async with AsyncSession(self._engine) as session:
             statement = (
                 select(Trade)
-                .where(Trade.timestamp >= datetime.fromisoformat(today))
-                .where(Trade.timestamp < datetime.fromisoformat(today) + timedelta(days=1))
+                .where(Trade.timestamp >= day_start)
+                .where(Trade.timestamp < day_end)
                 .order_by(Trade.timestamp.desc())  # type: ignore[union-attr]
             )
             results = await session.exec(statement)
@@ -90,7 +94,7 @@ class Repository:
     # ── Stock Daily P&L ────────────────────────────────────────
 
     async def start_day(self, starting_equity: float) -> None:
-        today = date.today().isoformat()
+        today = today_eastern().isoformat()
         async with AsyncSession(self._engine) as session:
             # Check if row already exists for today
             statement = select(DailyPnl).where(DailyPnl.date == today)
@@ -102,7 +106,7 @@ class Repository:
                 await session.commit()
 
     async def end_day(self, ending_equity: float, realized_pnl: float, trades_count: int) -> None:
-        today = date.today().isoformat()
+        today = today_eastern().isoformat()
         async with AsyncSession(self._engine) as session:
             statement = select(DailyPnl).where(DailyPnl.date == today)
             result = await session.exec(statement)
@@ -245,12 +249,14 @@ class Repository:
             await session.commit()
 
     async def get_today_crypto_trades(self) -> list[dict[str, Any]]:
-        today = date.today().isoformat()
+        today = today_eastern()
+        day_start = trading_day_start_utc(today)
+        day_end = trading_day_end_utc(today)
         async with AsyncSession(self._engine) as session:
             statement = (
                 select(CryptoTrade)
-                .where(CryptoTrade.timestamp >= datetime.fromisoformat(today))
-                .where(CryptoTrade.timestamp < datetime.fromisoformat(today) + timedelta(days=1))
+                .where(CryptoTrade.timestamp >= day_start)
+                .where(CryptoTrade.timestamp < day_end)
                 .order_by(CryptoTrade.timestamp.desc())  # type: ignore[union-attr]
             )
             results = await session.exec(statement)
@@ -269,7 +275,7 @@ class Repository:
     # ── Crypto Daily P&L ───────────────────────────────────────
 
     async def start_crypto_day(self, starting_equity: float) -> None:
-        today = date.today().isoformat()
+        today = today_eastern().isoformat()
         async with AsyncSession(self._engine) as session:
             statement = select(CryptoDailyPnl).where(CryptoDailyPnl.date == today)
             result = await session.exec(statement)
@@ -282,7 +288,7 @@ class Repository:
     async def end_crypto_day(
         self, ending_equity: float, realized_pnl: float, trades_count: int
     ) -> None:
-        today = date.today().isoformat()
+        today = today_eastern().isoformat()
         async with AsyncSession(self._engine) as session:
             statement = select(CryptoDailyPnl).where(CryptoDailyPnl.date == today)
             result = await session.exec(statement)

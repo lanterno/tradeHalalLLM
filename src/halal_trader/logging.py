@@ -2,8 +2,6 @@
 
 import logging
 from logging.handlers import RotatingFileHandler
-from typing import Any
-
 from pythonjsonlogger.json import JsonFormatter  # type: ignore[import-untyped]
 from rich.console import Console
 from rich.logging import RichHandler
@@ -29,6 +27,38 @@ class SafeRichHandler(RichHandler):
             # Console output is gone — nothing we can do, but don't
             # let it crash the process.  File handlers still work.
             pass
+
+
+# Third-party loggers whose INFO chatter we suppress on the console.
+# They still appear in the JSON log file at whatever level the file handler allows.
+_NOISY_LOGGERS = frozenset(
+    {
+        "apscheduler",
+        "httpcore",
+        "httpx",
+        "aiosqlite",
+        "asyncio",
+        "mcp",
+    }
+)
+
+
+class ThirdPartyConsoleFilter(logging.Filter):
+    """Drop INFO (and below) records from noisy third-party loggers.
+
+    Only WARNING and above from these libraries reach the terminal, keeping
+    the console output focused on application messages.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        # Allow WARNING+ from any logger
+        if record.levelno >= logging.WARNING:
+            return True
+        # Block INFO/DEBUG from noisy third-party libraries
+        top_level = record.name.split(".")[0]
+        if top_level in _NOISY_LOGGERS:
+            return False
+        return True
 
 
 def setup_logging(settings: Settings, *, cli_log_level: str | None = None) -> None:
@@ -59,6 +89,7 @@ def setup_logging(settings: Settings, *, cli_log_level: str | None = None) -> No
     )
     console_handler.setLevel(console_level)
     console_handler.setFormatter(logging.Formatter("%(message)s", datefmt="[%X]"))
+    console_handler.addFilter(ThirdPartyConsoleFilter())
 
     # ── JSON file handler – all logs ──────────────────────────
     json_formatter = JsonFormatter(

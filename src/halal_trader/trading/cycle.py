@@ -6,6 +6,7 @@ from typing import Any
 from halal_trader.agent.sentiment import SentimentAnalyzer
 from halal_trader.agent.strategy import TradingStrategy
 from halal_trader.domain.ports import Broker, ComplianceScreener
+from halal_trader.market_hours import is_market_open_local, now_eastern
 from halal_trader.trading.executor import TradeExecutor
 from halal_trader.trading.portfolio import PortfolioTracker
 
@@ -52,12 +53,26 @@ class TradingCycleService:
         5. Run LLM strategy analysis.
         6. Execute resulting trades.
         """
-        logger.info("=== TRADING CYCLE ===")
+        now = now_eastern()
+        logger.info(
+            "=== TRADING CYCLE === (current time: %s ET)", now.strftime("%Y-%m-%d %H:%M:%S")
+        )
         try:
-            # 1. Check market status
+            # 1a. Fast local pre-check (no API call)
+            if not is_market_open_local():
+                logger.info("Market is closed (local check), skipping trading cycle")
+                return
+
+            # 1b. Confirm with broker API (authoritative for unexpected halts)
             clock = await self._broker.get_clock()
+            logger.info(
+                "Market clock: is_open=%s next_open='%s' next_close='%s'",
+                clock.is_open,
+                clock.next_open,
+                clock.next_close,
+            )
             if not clock.is_open:
-                logger.info("Market is closed, skipping trading cycle")
+                logger.info("Market is closed (broker API), skipping trading cycle")
                 return
 
             # 2. Check daily loss limit

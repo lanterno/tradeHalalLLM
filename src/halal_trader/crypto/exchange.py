@@ -25,11 +25,18 @@ class BinanceClient:
         api_key: str,
         secret_key: str,
         testnet: bool = True,
+        configured_pairs: list[str] | None = None,
     ) -> None:
         self._api_key = api_key
         self._secret_key = secret_key
         self._testnet = testnet
         self._client: AsyncClient | None = None
+        self._relevant_assets: set[str] | None = None
+        if configured_pairs:
+            self._relevant_assets = {
+                p.upper().removesuffix("USDT").removesuffix("BUSD")
+                for p in configured_pairs
+            }
 
     async def connect(self) -> None:
         """Create and initialise the async Binance client."""
@@ -57,14 +64,22 @@ class BinanceClient:
     # ── CryptoBroker protocol methods ──────────────────────────
 
     async def get_account(self) -> CryptoAccount:
-        """Get account snapshot with USDT-equivalent balances."""
+        """Get account snapshot with USDT-equivalent balances.
+
+        Only looks up ticker prices for the configured trading pair base assets
+        (e.g. BTC, ETH) to avoid hundreds of API calls on testnet accounts.
+        """
+        import asyncio
+
         info = await self.client.get_account()
         balances = info.get("balances", [])
 
         total = 0.0
         available = 0.0
         locked = 0.0
+        usdt_free = 0.0
 
+        to_price: list[dict[str, Any]] = []
         for b in balances:
             asset = b["asset"]
             free = float(b["free"])
@@ -74,21 +89,37 @@ class BinanceClient:
                 total += free + lock
                 available += free
                 locked += lock
+                usdt_free = free
             elif free + lock > 0:
-                # Estimate USDT value via ticker (best-effort)
-                try:
-                    ticker = await self.client.get_symbol_ticker(symbol=f"{asset}USDT")
-                    price = float(ticker["price"])
-                    total += (free + lock) * price
-                    available += free * price
-                    locked += lock * price
-                except BinanceAPIException, KeyError:
-                    pass  # Skip non-USDT-paired assets
+                if self._relevant_assets is None or asset in self._relevant_assets:
+                    to_price.append({"asset": asset, "free": free, "locked": lock})
+
+        async def _price_for(asset: str) -> float | None:
+            try:
+                ticker = await asyncio.wait_for(
+                    self.client.get_symbol_ticker(symbol=f"{asset}USDT"),
+                    timeout=5.0,
+                )
+                return float(ticker["price"])
+            except (BinanceAPIException, KeyError, TimeoutError, asyncio.TimeoutError):
+                return None
+
+        if to_price:
+            prices = await asyncio.gather(
+                *[_price_for(b["asset"]) for b in to_price],
+                return_exceptions=True,
+            )
+            for b, price in zip(to_price, prices):
+                if isinstance(price, (int, float)) and price is not None:
+                    total += (b["free"] + b["locked"]) * price
+                    available += b["free"] * price
+                    locked += b["locked"] * price
 
         return CryptoAccount(
             total_balance_usdt=total,
             available_balance_usdt=available,
             in_order_usdt=locked,
+            usdt_free=usdt_free,
         )
 
     async def get_balances(self) -> list[CryptoBalance]:

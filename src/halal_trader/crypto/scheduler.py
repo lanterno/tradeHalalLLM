@@ -2,7 +2,6 @@
 
 import asyncio
 import logging
-from datetime import UTC, datetime
 
 from halal_trader.agent.llm import create_llm
 from halal_trader.config import get_settings
@@ -15,6 +14,7 @@ from halal_trader.crypto.strategy import CryptoTradingStrategy
 from halal_trader.crypto.websocket import BinanceWSManager
 from halal_trader.db.models import init_db
 from halal_trader.db.repository import Repository
+from halal_trader.market_hours import today_eastern
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +28,7 @@ class CryptoTradingBot:
             api_key=self.settings.binance_api_key,
             secret_key=self.settings.binance_secret_key,
             testnet=self.settings.binance_testnet,
+            configured_pairs=self.settings.crypto_pairs,
         )
         self._ws: BinanceWSManager | None = None
         self._screener: CryptoHalalScreener | None = None
@@ -81,6 +82,7 @@ class CryptoTradingBot:
             repo,
             max_position_pct=self.settings.crypto_max_position_pct,
             max_simultaneous_positions=self.settings.crypto_max_simultaneous_positions,
+            configured_pairs=self.settings.crypto_pairs,
         )
 
         # Portfolio tracker
@@ -120,7 +122,7 @@ class CryptoTradingBot:
         try:
             await self._screener.refresh_screening()
             await self._portfolio.record_day_start()
-            self._last_day = datetime.now(UTC).strftime("%Y-%m-%d")
+            self._last_day = today_eastern().isoformat()
             logger.info("Crypto daily start complete")
         except Exception as e:
             logger.error("Crypto daily start failed: %s", e)
@@ -135,8 +137,8 @@ class CryptoTradingBot:
             logger.error("Crypto daily end failed: %s", e)
 
     async def _check_day_rollover(self) -> None:
-        """Check if we've crossed into a new UTC day and handle rollover."""
-        today = datetime.now(UTC).strftime("%Y-%m-%d")
+        """Check if we've crossed into a new Eastern day and handle rollover."""
+        today = today_eastern().isoformat()
         if self._last_day is not None and today != self._last_day:
             # End the previous day and start the new one
             await self._daily_end()

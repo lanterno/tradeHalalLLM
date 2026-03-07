@@ -96,12 +96,32 @@ class CryptoPortfolioTracker:
             return True
         return False
 
-    def format_positions_for_prompt(self, balances: list[CryptoBalance]) -> str:
-        """Format current balances into text for the LLM prompt."""
-        non_usdt = [b for b in balances if b.asset != "USDT" and b.free > 0]
-        if not non_usdt:
-            return "No open positions."
+    def format_positions_for_prompt(
+        self, balances: list[CryptoBalance], configured_pairs: list[str] | None = None
+    ) -> str:
+        """Format current balances into text for the LLM prompt.
+
+        Only shows balances for configured trading pairs to avoid flooding
+        the prompt with hundreds of irrelevant testnet dust balances.
+        """
+        if configured_pairs:
+            relevant_assets = {
+                p.upper().removesuffix("USDT").removesuffix("BUSD")
+                for p in configured_pairs
+            }
+            relevant_assets.add("USDT")
+        else:
+            relevant_assets = None
+
         lines = []
-        for b in non_usdt:
-            lines.append(f"  {b.asset}: {b.free:.8f} (locked: {b.locked:.8f})")
-        return "\n".join(lines)
+        for b in balances:
+            if b.free + b.locked <= 0:
+                continue
+            if relevant_assets and b.asset not in relevant_assets:
+                continue
+            if b.asset == "USDT":
+                lines.append(f"  USDT (cash): {b.free:.2f} (locked: {b.locked:.2f})")
+            else:
+                lines.append(f"  {b.asset}: {b.free:.8f} (locked: {b.locked:.8f})")
+
+        return "\n".join(lines) if lines else "No open positions."

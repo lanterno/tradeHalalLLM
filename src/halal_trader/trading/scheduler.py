@@ -18,6 +18,13 @@ from halal_trader.db.repository import Repository
 from halal_trader.domain.ports import Broker, ComplianceScreener
 from halal_trader.halal.cache import HalalScreener
 from halal_trader.halal.zoya import ZoyaClient
+from halal_trader.market_hours import (
+    MARKET_TZ,
+    effective_close_time,
+    is_trading_day,
+    now_eastern,
+    today_eastern,
+)
 from halal_trader.mcp.client import AlpacaMCPClient
 from halal_trader.trading.cycle import TradingCycleService
 from halal_trader.trading.executor import TradeExecutor
@@ -183,12 +190,33 @@ class TradingBot:
 
     async def pre_market(self) -> None:
         """Pre-market job: refresh halal cache, record day start."""
-        logger.info("=== PRE-MARKET ROUTINE ===")
+        now = now_eastern()
+        logger.info(
+            "=== PRE-MARKET ROUTINE === (current time: %s ET)", now.strftime("%Y-%m-%d %H:%M:%S")
+        )
+
+        # Skip entirely on market holidays (cron fires Mon-Fri regardless)
+        if not is_trading_day(now.date()):
+            logger.info("Today is not a trading day (holiday), skipping pre-market routine")
+            return
+
         screener, _, portfolio, _ = self._require_initialized()
         try:
             # Check if market will open today
             clock = await self.broker.get_clock()
-            logger.info("Market clock: %s", clock)
+            logger.info(
+                "Market clock: is_open=%s next_open='%s' next_close='%s'",
+                clock.is_open,
+                clock.next_open,
+                clock.next_close,
+            )
+
+            close = effective_close_time(now.date())
+            logger.info(
+                "Market schedule: close at %s ET%s",
+                close.strftime("%H:%M"),
+                " (early close)" if close.hour < 16 else "",
+            )
 
             # Log upcoming trading calendar
             try:
@@ -236,6 +264,19 @@ class TradingBot:
         except Exception as e:
             logger.error("End of day routine failed: %s", e)
 
+    async def _early_close_eod(self) -> None:
+        """End-of-day for early-close days (market closes at 1:00 PM ET).
+
+        Fires at 12:50 PM ET every weekday, but only runs the EOD logic
+        when today is actually an early-close day.
+        """
+        today = today_eastern()
+        if effective_close_time(today).hour >= 16:
+            # Not an early-close day — the regular 3:50 PM job handles it.
+            return
+        logger.info("=== EARLY CLOSE END OF DAY ROUTINE === (market closes at 1:00 PM ET)")
+        await self.end_of_day()
+
     # ── Main Loop ───────────────────────────────────────────────
 
     async def run(self) -> None:
@@ -247,18 +288,21 @@ class TradingBot:
 
             interval = self.settings.trading_interval_minutes
 
-            # Schedule pre-market at 9:00 AM ET (Mon-Fri)
+            # Schedule pre-market at 9:00 AM ET (Mon-Fri).
+            # The job itself checks is_trading_day() and skips on holidays.
             # Allow up to 30 min grace period so the job still runs if the system
             # wakes from sleep after 09:00 ET (e.g. laptop lid open at 09:25).
             self.scheduler.add_job(
                 self.pre_market,
-                CronTrigger(day_of_week="mon-fri", hour=9, minute=0, timezone="US/Eastern"),
+                CronTrigger(day_of_week="mon-fri", hour=9, minute=0, timezone=MARKET_TZ),
                 id="pre_market",
                 replace_existing=True,
                 misfire_grace_time=1800,
             )
 
             # Schedule trading cycles every N minutes during market hours (9:30 - 15:45 ET).
+            # The cycle's run_cycle() performs its own is_market_open_local() check,
+            # so holidays and early-close days are handled even though cron fires.
             # Use hour 10-15 for the bulk, plus a separate job for the 9:30-9:45 window.
             self.scheduler.add_job(
                 self.trading_cycle,
@@ -266,7 +310,7 @@ class TradingBot:
                     day_of_week="mon-fri",
                     hour="10-15",
                     minute=f"*/{interval}",
-                    timezone="US/Eastern",
+                    timezone=MARKET_TZ,
                 ),
                 id="trading_cycle",
                 replace_existing=True,
@@ -279,18 +323,29 @@ class TradingBot:
                     day_of_week="mon-fri",
                     hour=9,
                     minute="30,45",
-                    timezone="US/Eastern",
+                    timezone=MARKET_TZ,
                 ),
                 id="trading_cycle_open",
                 replace_existing=True,
                 misfire_grace_time=900,
             )
 
-            # Schedule end-of-day at 3:50 PM ET (before 4:00 close)
+            # Schedule end-of-day at 3:50 PM ET (before regular 4:00 close).
+            # On early-close days (1:00 PM close), the trading cycle's local
+            # market-open check will already stop trades after 1:00 PM, and the
+            # EOD job will still fire at 3:50 PM to reconcile P&L.
+            # A separate early-close EOD job fires at 12:50 PM ET to close
+            # positions before the 1:00 PM early close.
             self.scheduler.add_job(
                 self.end_of_day,
-                CronTrigger(day_of_week="mon-fri", hour=15, minute=50, timezone="US/Eastern"),
+                CronTrigger(day_of_week="mon-fri", hour=15, minute=50, timezone=MARKET_TZ),
                 id="end_of_day",
+                replace_existing=True,
+            )
+            self.scheduler.add_job(
+                self._early_close_eod,
+                CronTrigger(day_of_week="mon-fri", hour=12, minute=50, timezone=MARKET_TZ),
+                id="early_close_eod",
                 replace_existing=True,
             )
 

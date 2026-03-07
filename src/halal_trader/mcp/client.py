@@ -4,6 +4,7 @@ import json
 import logging
 import re
 from contextlib import AsyncExitStack
+from datetime import timedelta
 from typing import Any
 
 from mcp import ClientSession, StdioServerParameters
@@ -11,6 +12,7 @@ from mcp.client.stdio import stdio_client
 
 from halal_trader.config import get_settings
 from halal_trader.domain.models import Account, MarketClock, Position
+from halal_trader.market_hours import now_eastern, today_eastern
 
 logger = logging.getLogger(__name__)
 
@@ -65,11 +67,8 @@ class AlpacaMCPClient:
         # Cache available tools
         response = await self.session.list_tools()
         self._tools = {tool.name: tool for tool in response.tools}
-        logger.info(
-            "Connected to Alpaca MCP server with %d tools: %s",
-            len(self._tools),
-            list(self._tools.keys()),
-        )
+        logger.info("Connected to Alpaca MCP server (%d tools available)", len(self._tools))
+        logger.debug("Available tools: %s", list(self._tools.keys()))
 
     async def disconnect(self) -> None:
         """Cleanly shut down the MCP session and subprocess."""
@@ -90,7 +89,7 @@ class AlpacaMCPClient:
         if name not in self._tools:
             raise ValueError(f"Unknown tool: {name}. Available: {list(self._tools.keys())}")
 
-        logger.info("Calling MCP tool: %s(%s)", name, arguments or {})
+        logger.debug("Calling MCP tool: %s(%s)", name, arguments or {})
         result = await self.session.call_tool(name, arguments or {})
 
         # Extract text content from the result
@@ -113,9 +112,11 @@ class AlpacaMCPClient:
 
     async def get_account_info(self) -> Account:
         raw = await self.call_tool("get_account_info")
-        logger.info("get_account_info() raw response type=%s keys=%s",
-                     type(raw).__name__,
-                     list(raw.keys()) if isinstance(raw, dict) else repr(raw)[:200])
+        logger.debug(
+            "get_account_info() raw response type=%s keys=%s",
+            type(raw).__name__,
+            list(raw.keys()) if isinstance(raw, dict) else repr(raw)[:200],
+        )
         if isinstance(raw, dict):
             return Account(
                 equity=float(_flex_get(raw, "equity", default=0) or 0),
@@ -136,38 +137,26 @@ class AlpacaMCPClient:
         #   Portfolio Value: $100000.00
         #   Status: ACTIVE
         if isinstance(raw, str) and raw.strip():
-            logger.warning(
+            logger.debug(
                 "get_account_info() received text instead of JSON — parsing: %s",
                 raw[:200],
             )
             account = Account()
-            equity_match = re.search(
-                r"equity[:\s]*\$?([\d,]+\.?\d*)", raw, re.IGNORECASE
-            )
+            equity_match = re.search(r"equity[:\s]*\$?([\d,]+\.?\d*)", raw, re.IGNORECASE)
             if equity_match:
                 account.equity = float(equity_match.group(1).replace(",", ""))
             buying_power_match = re.search(
                 r"buying.power[:\s]*\$?([\d,]+\.?\d*)", raw, re.IGNORECASE
             )
             if buying_power_match:
-                account.buying_power = float(
-                    buying_power_match.group(1).replace(",", "")
-                )
-            cash_match = re.search(
-                r"cash[:\s]*\$?([\d,]+\.?\d*)", raw, re.IGNORECASE
-            )
+                account.buying_power = float(buying_power_match.group(1).replace(",", ""))
+            cash_match = re.search(r"cash[:\s]*\$?([\d,]+\.?\d*)", raw, re.IGNORECASE)
             if cash_match:
                 account.cash = float(cash_match.group(1).replace(",", ""))
-            pv_match = re.search(
-                r"portfolio.value[:\s]*\$?([\d,]+\.?\d*)", raw, re.IGNORECASE
-            )
+            pv_match = re.search(r"portfolio.value[:\s]*\$?([\d,]+\.?\d*)", raw, re.IGNORECASE)
             if pv_match:
-                account.portfolio_value = float(
-                    pv_match.group(1).replace(",", "")
-                )
-            status_match = re.search(
-                r"status[:\s]*(\w+)", raw, re.IGNORECASE
-            )
+                account.portfolio_value = float(pv_match.group(1).replace(",", ""))
+            status_match = re.search(r"status[:\s]*(\w+)", raw, re.IGNORECASE)
             if status_match:
                 account.status = status_match.group(1)
             return account
@@ -176,24 +165,24 @@ class AlpacaMCPClient:
 
     async def get_clock(self) -> MarketClock:
         raw = await self.call_tool("get_clock")
-        logger.info("get_clock() raw response type=%s keys=%s",
-                     type(raw).__name__,
-                     list(raw.keys()) if isinstance(raw, dict) else repr(raw)[:200])
+        timestamp = now_eastern()
+        logger.debug(
+            "get_clock() raw response type=%s keys=%s",
+            type(raw).__name__,
+            list(raw.keys()) if isinstance(raw, dict) else repr(raw)[:200],
+        )
         if isinstance(raw, dict):
             is_open_val = _flex_get(raw, "is_open", "isOpen", "is_market_open", default=False)
             # Handle string booleans like "true"/"false"
             if isinstance(is_open_val, str):
                 is_open_val = is_open_val.lower() in ("true", "1", "yes")
-            next_open = _flex_get(
-                raw, "next_open", "nextOpen", "next_open_time", default=""
-            )
-            next_close = _flex_get(
-                raw, "next_close", "nextClose", "next_close_time", default=""
-            )
+            next_open = _flex_get(raw, "next_open", "nextOpen", "next_open_time", default="")
+            next_close = _flex_get(raw, "next_close", "nextClose", "next_close_time", default="")
             return MarketClock(
                 is_open=bool(is_open_val),
                 next_open=str(next_open),
                 next_close=str(next_close),
+                timestamp=timestamp,
             )
         # Fallback: parse text response for market open/closed status.
         # The Alpaca MCP server returns human-readable text like:
@@ -201,55 +190,50 @@ class AlpacaMCPClient:
         #   Next Open: 2026-02-12 09:30:00-05:00
         #   Next Close: 2026-02-11 16:00:00-05:00
         if isinstance(raw, str) and raw.strip():
-            logger.warning(
+            logger.debug(
                 "get_clock() received text instead of JSON — parsing: %s",
                 raw[:200],
             )
             text_lower = raw.lower()
-            is_open = (
-                "is open: yes" in text_lower
-                or "is open" in text_lower
-                or "market is currently open" in text_lower
-            )
+            is_open = "is open: yes" in text_lower or "market is currently open" in text_lower
             next_open = ""
             next_close = ""
-            open_match = re.search(
-                r"next\s+open:\s*(.+)", raw, re.IGNORECASE
-            )
+            open_match = re.search(r"next\s+open:\s*(.+)", raw, re.IGNORECASE)
             if open_match:
                 next_open = open_match.group(1).strip()
-            close_match = re.search(
-                r"next\s+close:\s*(.+)", raw, re.IGNORECASE
-            )
+            close_match = re.search(r"next\s+close:\s*(.+)", raw, re.IGNORECASE)
             if close_match:
                 next_close = close_match.group(1).strip()
             return MarketClock(
                 is_open=is_open,
                 next_open=next_open,
                 next_close=next_close,
+                timestamp=timestamp,
             )
         logger.error("get_clock() returned unexpected response: %r", raw)
-        return MarketClock()
+        return MarketClock(timestamp=timestamp)
 
     async def get_calendar(self, start: str | None = None, end: str | None = None) -> Any:
         """Get the market calendar (trading days and hours).
 
         Args:
-            start: Start date (YYYY-MM-DD). Defaults to today.
+            start: Start date (YYYY-MM-DD). Defaults to today (US/Eastern).
             end: End date (YYYY-MM-DD). Defaults to 30 days from start.
         """
-        args: dict[str, Any] = {}
-        if start:
-            args["start_date"] = start
-        if end:
-            args["end_date"] = end
-        return await self.call_tool("get_calendar", args or None)
+        today = today_eastern()
+        start_date = start or today.isoformat()
+        end_date = end or (today + timedelta(days=30)).isoformat()
+        return await self.call_tool(
+            "get_calendar", {"start_date": start_date, "end_date": end_date}
+        )
 
     async def get_all_positions(self) -> list[Position]:
         raw = await self.call_tool("get_all_positions")
-        logger.info("get_all_positions() raw response type=%s len=%s",
-                     type(raw).__name__,
-                     len(raw) if isinstance(raw, (list, dict)) else repr(raw)[:200])
+        logger.debug(
+            "get_all_positions() raw response type=%s len=%s",
+            type(raw).__name__,
+            len(raw) if isinstance(raw, (list, dict)) else repr(raw)[:200],
+        )
         if isinstance(raw, list):
             positions = []
             for p in raw:
@@ -266,22 +250,30 @@ class AlpacaMCPClient:
                             ),
                             unrealized_pl=float(
                                 _flex_get(
-                                    p, "unrealized_pl", "unrealizedPl",
-                                    "unrealized_pnl", default=0,
-                                ) or 0
+                                    p,
+                                    "unrealized_pl",
+                                    "unrealizedPl",
+                                    "unrealized_pnl",
+                                    default=0,
+                                )
+                                or 0
                             ),
                             unrealized_plpc=float(
                                 _flex_get(
-                                    p, "unrealized_plpc", "unrealizedPlpc",
-                                    "unrealized_pnl_pct", default=0,
-                                ) or 0
+                                    p,
+                                    "unrealized_plpc",
+                                    "unrealizedPlpc",
+                                    "unrealized_pnl_pct",
+                                    default=0,
+                                )
+                                or 0
                             ),
                         )
                     )
             return positions
         if isinstance(raw, str) and raw.strip():
             # Text responses like "no positions" are acceptable — just means empty
-            logger.info("get_all_positions() text response: %s", raw[:200])
+            logger.debug("get_all_positions() text response: %s", raw[:200])
         return []
 
     async def get_stock_snapshot(self, symbols: str) -> Any:

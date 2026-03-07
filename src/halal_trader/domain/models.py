@@ -1,5 +1,6 @@
 """Domain models — trading decisions, market data value objects, and portfolio state."""
 
+from datetime import datetime
 from enum import Enum
 
 from pydantic import BaseModel, Field
@@ -39,6 +40,7 @@ class MarketClock(BaseModel):
     is_open: bool = False
     next_open: str = ""
     next_close: str = ""
+    timestamp: datetime | None = None  # When this clock reading was taken (ET)
 
 
 # ── Crypto Broker Data ─────────────────────────────────────────
@@ -50,6 +52,7 @@ class CryptoAccount(BaseModel):
     total_balance_usdt: float = 0.0
     available_balance_usdt: float = 0.0
     in_order_usdt: float = 0.0
+    usdt_free: float = 0.0
 
 
 class CryptoBalance(BaseModel):

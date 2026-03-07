@@ -166,6 +166,7 @@ def crypto_status() -> None:
             api_key=settings.binance_api_key,
             secret_key=settings.binance_secret_key,
             testnet=settings.binance_testnet,
+            configured_pairs=settings.crypto_pairs,
         )
 
         try:
@@ -378,11 +379,15 @@ def _print_clock(clock: object) -> None:
         status_text = (
             "[bold green]OPEN[/bold green]" if clock.is_open else "[bold red]CLOSED[/bold red]"
         )
-        console.print(f"\nMarket: {status_text}")
+        console.print(f"\nMarket (US Eastern): {status_text}")
+        if clock.timestamp:
+            console.print(
+                f"  As of: {clock.timestamp.strftime('%Y-%m-%d %H:%M:%S')} ET"
+            )
         if not clock.is_open:
-            console.print(f"  Next open: {clock.next_open or 'N/A'}")
+            console.print(f"  Next open: {clock.next_open or 'N/A'} ET")
         else:
-            console.print(f"  Closes at: {clock.next_close or 'N/A'}")
+            console.print(f"  Closes at: {clock.next_close or 'N/A'} ET")
     else:
         console.print(Panel(str(clock), title="Market Clock"))
 

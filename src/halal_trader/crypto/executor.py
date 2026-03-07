@@ -3,11 +3,15 @@
 import logging
 from typing import Any
 
+from binance import BinanceAPIException
+
 from halal_trader.crypto.exchange import BinanceClient
 from halal_trader.domain.models import CryptoTradeDecision, CryptoTradingPlan
 from halal_trader.domain.ports import TradeRepository
 
 logger = logging.getLogger(__name__)
+
+_MIN_NOTIONAL_USDT = 5.0
 
 
 class CryptoExecutor:
@@ -20,11 +24,16 @@ class CryptoExecutor:
         *,
         max_position_pct: float,
         max_simultaneous_positions: int,
+        configured_pairs: list[str] | None = None,
     ) -> None:
         self._broker = broker
         self._repo = repo
         self._max_position_pct = max_position_pct
         self._max_simultaneous_positions = max_simultaneous_positions
+        self._tracked_bases = {
+            p.upper().removesuffix("USDT").removesuffix("BUSD")
+            for p in (configured_pairs or [])
+        }
 
     async def execute_plan(self, plan: CryptoTradingPlan) -> list[dict[str, Any]]:
         """Execute all decisions in a CryptoTradingPlan."""
@@ -35,10 +44,16 @@ class CryptoExecutor:
             result = await self._execute_sell(decision)
             results.append(result)
 
-        # Then execute buys (respecting max simultaneous positions)
+        # Then execute buys (respecting max simultaneous positions).
+        # Only count balances in configured trading pairs (ignore unrelated testnet coins).
         balances = await self._broker.get_balances()
-        # Count positions as non-USDT balances with meaningful value
-        open_count = sum(1 for b in balances if b.asset != "USDT" and b.free > 0)
+        if self._tracked_bases:
+            open_count = sum(
+                1 for b in balances
+                if b.asset in self._tracked_bases and b.free > 0
+            )
+        else:
+            open_count = sum(1 for b in balances if b.asset != "USDT" and b.free > 0)
 
         for decision in plan.buys:
             if open_count >= self._max_simultaneous_positions:
@@ -63,29 +78,43 @@ class CryptoExecutor:
 
         return results
 
+    def _validate_order(
+        self, symbol: str, side: str, quantity: float, price: float
+    ) -> str | None:
+        """Pre-validate an order against Binance filters. Returns error message or None."""
+        notional = quantity * price
+        if notional < _MIN_NOTIONAL_USDT:
+            return (
+                f"Order too small for {symbol}: "
+                f"${notional:.2f} < ${_MIN_NOTIONAL_USDT} minimum notional"
+            )
+        return None
+
     async def _execute_buy(self, decision: CryptoTradeDecision) -> dict[str, Any]:
         """Execute a crypto buy order."""
-        # Validate: check available balance
         account = await self._broker.get_account()
         price = await self._broker.get_ticker_price(decision.symbol)
         estimated_cost = price * decision.quantity
 
-        if estimated_cost > account.available_balance_usdt:
+        usdt_available = account.usdt_free if account.usdt_free > 0 else account.available_balance_usdt
+        if estimated_cost > usdt_available:
             msg = (
-                f"Insufficient balance for {decision.symbol}: "
-                f"need ${estimated_cost:,.2f}, have ${account.available_balance_usdt:,.2f}"
+                f"Insufficient USDT for {decision.symbol}: "
+                f"need ${estimated_cost:,.2f}, have ${usdt_available:,.2f} USDT"
             )
             logger.warning(msg)
             return {"symbol": decision.symbol, "action": "buy", "status": "rejected", "reason": msg}
 
-        # Check position size limit
         total = account.total_balance_usdt
         if total > 0 and (estimated_cost / total) > self._max_position_pct:
             msg = f"Position size for {decision.symbol} exceeds {self._max_position_pct:.0%} limit"
             logger.warning(msg)
             return {"symbol": decision.symbol, "action": "buy", "status": "rejected", "reason": msg}
 
-        # Place the order
+        if err := self._validate_order(decision.symbol, "BUY", decision.quantity, price):
+            logger.info("Skipping BUY %s: %s", decision.symbol, err)
+            return {"symbol": decision.symbol, "action": "buy", "status": "rejected", "reason": err}
+
         try:
             order_result = await self._broker.place_order(
                 symbol=decision.symbol,
@@ -133,6 +162,14 @@ class CryptoExecutor:
     async def _execute_sell(self, decision: CryptoTradeDecision) -> dict[str, Any]:
         """Execute a crypto sell order."""
         try:
+            price = await self._broker.get_ticker_price(decision.symbol)
+            if err := self._validate_order(decision.symbol, "SELL", decision.quantity, price):
+                logger.info("Skipping SELL %s: %s", decision.symbol, err)
+                return {
+                    "symbol": decision.symbol, "action": "sell",
+                    "status": "rejected", "reason": err,
+                }
+
             order_result = await self._broker.place_order(
                 symbol=decision.symbol,
                 side="SELL",

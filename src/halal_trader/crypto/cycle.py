@@ -74,8 +74,19 @@ class CryptoCycleService:
             # 5. Gather portfolio state
             account = await self._broker.get_account()
             balances = await self._broker.get_balances()
-            positions_text = self._portfolio.format_positions_for_prompt(balances)
+            positions_text = self._portfolio.format_positions_for_prompt(
+                balances, configured_pairs=self._configured_pairs
+            )
             today_pnl = await self._portfolio.get_current_pnl()
+
+            # 5b. Skip LLM call if USDT balance is too low to place any order
+            usdt_free = account.usdt_free
+            if usdt_free < 5.0:
+                logger.info(
+                    "Available USDT ($%.2f) below $5 minimum — skipping LLM analysis",
+                    usdt_free,
+                )
+                return
 
             # 6. LLM analysis
             plan = await self._strategy.analyze(
@@ -116,18 +127,19 @@ class CryptoCycleService:
             logger.info("No halal cache — using configured pairs: %s", self._configured_pairs)
             return self._configured_pairs[:_MAX_PAIRS_PER_CYCLE]
 
-        # Map halal symbols to configured pair format (e.g., BTC -> BTCUSDT)
         halal_set = {s.upper() for s in halal_symbols}
         tradeable = []
         for pair in self._configured_pairs:
-            # Extract base asset from pair (e.g., BTCUSDT -> BTC)
-            base = pair.replace("USDT", "").replace("BUSD", "").replace("BTC", "")
-            # If the pair itself or the base asset is in the halal set, include it
-            if pair.upper() in halal_set or base.upper() in halal_set:
-                tradeable.append(pair)
-            # Also try the full base (e.g., for BTCUSDT, check "BTC")
-            pair_base = pair.upper().rstrip("USDT")
-            if pair_base in halal_set:
+            upper_pair = pair.upper()
+            # Extract base asset by removing known quote suffixes
+            for suffix in ("USDT", "BUSD"):
+                if upper_pair.endswith(suffix):
+                    base = upper_pair.removesuffix(suffix)
+                    break
+            else:
+                base = upper_pair
+
+            if upper_pair in halal_set or base in halal_set:
                 tradeable.append(pair)
 
         # Deduplicate

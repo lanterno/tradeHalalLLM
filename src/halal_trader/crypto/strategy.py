@@ -24,24 +24,29 @@ RULES:
 1. You ONLY trade pairs from the provided halal-compliant list.
 2. You make short-term momentum/scalping trades — hold times range from 1 to 60 minutes.
 3. Each trade must have a clear reasoning based on the technical indicators provided.
-4. Risk management: no single position should exceed {max_position_pct:.0%} of the portfolio.
+4. CRITICAL SIZING RULE: each trade's (quantity × current_price) MUST be STRICTLY LESS \
+than the "Max Position Size" dollar value shown in the portfolio status. Use at most 90% of \
+that limit to leave room for price movement. Check the "Available" balance too — you cannot \
+spend more USDT than what is available.
 5. Current daily loss limit is {daily_loss_limit:.0%} — if losses approach this, be conservative.
 6. Target daily return: {daily_return_target:.0%}.
 7. Maximum simultaneous open positions: {max_positions}.
 8. Trading fees are ~0.1% per trade (0.2% round trip) — factor this into your decisions.
 
 STRATEGY GUIDELINES:
-- Use RSI for overbought/oversold signals (buy below 30, sell above 70).
-- Use MACD crossovers for momentum confirmation.
-- Bollinger Band squeezes signal potential breakouts.
-- EMA crossovers (9/21) indicate short-term trend changes.
-- High volume ratios (>1.5x average) confirm moves.
+- Use RSI for overbought/oversold signals (buy below 40, sell above 65).
+- Use MACD crossovers for momentum confirmation — act early on emerging crossovers.
+- Bollinger Band squeezes signal potential breakouts — enter before the breakout confirms.
+- EMA crossovers (9/21) indicate short-term trend changes — act on the crossover, not after.
+- Volume ratios >1.2x average are sufficient to confirm moves.
 - VWAP acts as intraday support/resistance.
 - Order book imbalance indicates short-term pressure direction.
-- Set tight stop-losses (0.3-0.5% below entry for longs).
-- Take profits at 0.5-1.0% above entry (accounting for 0.2% fees).
-- If indicators are mixed or unclear, HOLD and wait for a clearer setup.
-- Crypto markets are 24/7 — there is no rush, wait for high-probability setups.
+- Use stop-losses of 0.5-1.0% below entry for longs.
+- Take profits at 0.8-2.0% above entry (accounting for 0.2% fees).
+- You SHOULD be making trades most cycles — look for opportunities, not reasons to hold.
+- If 2+ indicators align even moderately, take the trade with appropriate sizing.
+- Prefer smaller positions on moderate setups over sitting in cash.
+- Scale into positions: start with a partial position and add on confirmation.
 
 You MUST respond with valid JSON matching this exact schema:
 {{
@@ -61,7 +66,8 @@ You MUST respond with valid JSON matching this exact schema:
   "risk_notes": "<any risk concerns>"
 }}
 
-If there are no good setups, return an empty decisions list with your market outlook.
+Only return an empty decisions list if ALL indicators across ALL pairs are genuinely flat \
+with no directional signal at all. Otherwise, find the best available setup and trade it.
 """
 
 USER_PROMPT_TEMPLATE = """\
@@ -69,6 +75,7 @@ USER_PROMPT_TEMPLATE = """\
 Total Balance: ${total_balance:,.2f} USDT
 Available: ${available_balance:,.2f} USDT
 In Orders: ${in_order:,.2f} USDT
+Max Position Size: ${max_position_value:,.2f} USDT ({max_position_pct:.0%} of portfolio)
 Today's P&L: ${today_pnl:+,.2f} ({today_pnl_pct:+.2%})
 
 === CURRENT POSITIONS ===
@@ -84,8 +91,9 @@ Today's P&L: ${today_pnl:+,.2f} ({today_pnl_pct:+.2%})
 {orderbook_text}
 
 Based on these indicators, what trades should I make right now? \
-Remember: optimize for {daily_return_target:.0%}+ daily return with tight risk management. \
-Account for 0.2% round-trip fees in your calculations.
+Remember: optimize for {daily_return_target:.0%}+ daily return — being in cash earns nothing. \
+Account for 0.2% round-trip fees but don't let fees prevent you from acting on good setups. \
+Bias toward action: find the best opportunity available and size it appropriately.
 """
 
 
@@ -135,10 +143,16 @@ class CryptoTradingStrategy:
             max_positions=self._max_simultaneous_positions,
         )
 
+        pct_limit = portfolio_value * self._max_position_pct
+        spendable = account.usdt_free if account.usdt_free > 0 else account.available_balance_usdt
+        max_position_value = min(pct_limit, spendable)
+
         user_prompt = USER_PROMPT_TEMPLATE.format(
             total_balance=account.total_balance_usdt,
             available_balance=account.available_balance_usdt,
             in_order=account.in_order_usdt,
+            max_position_value=max_position_value,
+            max_position_pct=self._max_position_pct,
             today_pnl=today_pnl,
             today_pnl_pct=today_pnl_pct,
             positions_text=positions_text or "No open positions.",
