@@ -1,8 +1,11 @@
 """Crypto trading cycle — gathers data, computes indicators, analyzes, and executes."""
 
+from __future__ import annotations
+
 import logging
 from typing import Any
 
+from halal_trader.crypto.analytics import PerformanceAnalytics
 from halal_trader.crypto.exchange import BinanceClient
 from halal_trader.crypto.executor import CryptoExecutor
 from halal_trader.crypto.portfolio import CryptoPortfolioTracker
@@ -32,6 +35,15 @@ class CryptoCycleService:
         portfolio: CryptoPortfolioTracker,
         ws_manager: BinanceWSManager | None = None,
         configured_pairs: list[str] | None = None,
+        analytics: PerformanceAnalytics | None = None,
+        sentiment_manager=None,
+        timeframe_analyzer=None,
+        regime_detector=None,
+        ml_forecaster=None,
+        ml_anomaly_detector=None,
+        ml_signal_classifier=None,
+        self_review=None,
+        notifier=None,
     ) -> None:
         self._broker = broker
         self._screener = screener
@@ -40,6 +52,15 @@ class CryptoCycleService:
         self._portfolio = portfolio
         self._ws = ws_manager
         self._configured_pairs = configured_pairs or []
+        self._analytics = analytics
+        self._sentiment = sentiment_manager
+        self._timeframes = timeframe_analyzer
+        self._regime = regime_detector
+        self._ml_forecaster = ml_forecaster
+        self._ml_anomaly = ml_anomaly_detector
+        self._ml_signal = ml_signal_classifier
+        self._self_review = self_review
+        self._notifier = notifier
 
     async def run_cycle(self) -> None:
         """Execute one complete crypto trading cycle.
@@ -88,6 +109,107 @@ class CryptoCycleService:
                 )
                 return
 
+            # 5c. Compute performance stats for the LLM prompt
+            performance_text = ""
+            if self._analytics:
+                try:
+                    stats = await self._analytics.compute_stats(lookback_days=7)
+                    performance_text = self._analytics.format_for_prompt(stats)
+                except Exception as e:
+                    logger.debug("Performance stats unavailable: %s", e)
+
+            # 5d. Gather sentiment data
+            sentiment_text = ""
+            if self._sentiment and self._sentiment.enabled:
+                try:
+                    from halal_trader.sentiment.scoring import format_sentiment_for_prompt
+                    signals = self._sentiment.latest_signals
+                    if signals:
+                        sentiment_text = format_sentiment_for_prompt(signals)
+
+                        # Send buzz alerts via Telegram
+                        if self._notifier:
+                            for pair, sig in signals.items():
+                                if sig.buzz >= 3.0:
+                                    try:
+                                        await self._notifier.notify_buzz(
+                                            pair, sig.buzz, sig.score
+                                        )
+                                    except Exception:
+                                        pass
+                except Exception as e:
+                    logger.debug("Sentiment data unavailable: %s", e)
+
+            # 5e. Multi-timeframe analysis
+            timeframe_text = ""
+            if self._timeframes:
+                try:
+                    from halal_trader.crypto.timeframes import format_timeframes_for_prompt
+                    tf_results = await self._timeframes.analyze(halal_pairs)
+                    if tf_results:
+                        timeframe_text = format_timeframes_for_prompt(tf_results)
+                except Exception as e:
+                    logger.debug("Multi-timeframe analysis unavailable: %s", e)
+
+            # 5f. Market regime detection
+            regime_text = ""
+            if self._regime:
+                try:
+                    from halal_trader.crypto.indicators import compute_all
+                    from halal_trader.crypto.regime import format_regime_for_prompt
+                    regimes = {}
+                    for pair, klines in klines_by_symbol.items():
+                        if len(klines) >= 30:
+                            indicators = compute_all(klines)
+                            if "error" not in indicators:
+                                regimes[pair] = self._regime.detect(indicators)
+                    if regimes:
+                        regime_text = format_regime_for_prompt(regimes)
+                except Exception as e:
+                    logger.debug("Regime detection unavailable: %s", e)
+
+            # 5g. ML model signals
+            ml_signals_text = ""
+            if self._ml_forecaster or self._ml_anomaly or self._ml_signal:
+                try:
+                    from halal_trader.crypto.indicators import compute_all
+                    from halal_trader.ml.anomaly import format_ml_signals_for_prompt
+                    from halal_trader.ml.forecaster import format_forecasts_for_prompt
+
+                    forecasts = {}
+                    anomalies = {}
+                    ml_confidence = {}
+
+                    for pair, klines in klines_by_symbol.items():
+                        if self._ml_forecaster and len(klines) >= 20:
+                            closes = [k.close for k in klines]
+                            fc = self._ml_forecaster.forecast(pair, closes)
+                            if fc:
+                                forecasts[pair] = fc
+
+                        if len(klines) >= 30:
+                            indicators = compute_all(klines)
+                            if "error" not in indicators:
+                                if self._ml_anomaly:
+                                    self._ml_anomaly.add_sample(indicators)
+                                    anomalies[pair] = self._ml_anomaly.detect(indicators)
+                                if self._ml_signal:
+                                    conf = self._ml_signal.predict_confidence(indicators)
+                                    if conf is not None:
+                                        ml_confidence[pair] = conf
+
+                    forecasts_text = format_forecasts_for_prompt(forecasts)
+                    ml_signals_text = format_ml_signals_for_prompt(
+                        forecasts_text, anomalies or None, ml_confidence or None
+                    )
+                except Exception as e:
+                    logger.debug("ML signals unavailable: %s", e)
+
+            # 5h. Self-improvement adjustments
+            active_adjustments = ""
+            if self._self_review:
+                active_adjustments = self._self_review.format_adjustments_for_prompt()
+
             # 6. LLM analysis
             plan = await self._strategy.analyze(
                 account=account,
@@ -96,6 +218,12 @@ class CryptoCycleService:
                 klines_by_symbol=klines_by_symbol,
                 orderbooks=orderbooks,
                 today_pnl=today_pnl,
+                performance_text=performance_text,
+                sentiment_text=sentiment_text,
+                timeframe_text=timeframe_text,
+                ml_signals_text=ml_signals_text,
+                regime_text=regime_text,
+                active_adjustments=active_adjustments,
             )
 
             logger.info(
@@ -110,6 +238,16 @@ class CryptoCycleService:
                 results = await self._executor.execute_plan(plan)
                 for r in results:
                     logger.info("Crypto execution: %s", r)
+                    if self._notifier and r.get("status") == "submitted":
+                        try:
+                            await self._notifier.notify_trade(
+                                pair=r.get("symbol", ""),
+                                side=r.get("action", ""),
+                                quantity=r.get("quantity", 0),
+                                price=r.get("price", 0),
+                            )
+                        except Exception:
+                            pass
             else:
                 logger.info("No crypto trades to execute this cycle")
 

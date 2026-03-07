@@ -1,0 +1,30 @@
+---
+description: Core product strategy and development philosophy for Halal Trader
+alwaysApply: true
+---
+
+# Halal Trader -- Product Strategy
+
+## Competitive Positioning
+
+This is a small, home-built trading bot. We cannot compete with institutional players on infrastructure, speed, or capital. Instead, our edge comes from:
+
+1. **Aggressive adoption of new technology** -- LLMs, ML models from HuggingFace, novel AI techniques. Big firms are slow and conservative; we move fast.
+2. **Alternative data sources** -- Reddit sentiment, aggregated trading feeds, social signals, news APIs. Information that institutions ignore or are too bureaucratic to integrate.
+3. **Small, consistent profits** -- We don't need to beat the market at scale. Extracting small alpha through aggressive, high-frequency tactical trades compounds over time.
+4. **Rapid iteration** -- No compliance committees, no code review boards. We can test a new HuggingFace model or Reddit signal in hours, not quarters.
+
+## Development Principles
+
+- Always prefer integrating an existing open-source model or API over building from scratch.
+- When choosing between conservative and aggressive approaches, lean aggressive -- we are the underdog.
+- Every new feature should ask: "Does this give us an information or speed edge that big players don't have?"
+- Keep the system lean and composable -- small modules that can be swapped or upgraded independently.
+- Halal compliance is non-negotiable and applies to all features regardless of profitability.
+
+## Technology Bets
+
+- **LLMs** for market analysis, sentiment parsing, and self-improving strategy (our core differentiator)
+- **HuggingFace models** for specialized tasks: FinBERT sentiment, time-series forecasting, anomaly detection
+- **Reddit/social media** for retail sentiment and early signal detection
+- **Lightweight ML** (scikit-learn, XGBoost) for pattern recognition on our own trade history

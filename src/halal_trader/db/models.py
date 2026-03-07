@@ -84,6 +84,13 @@ class CryptoTrade(SQLModel, table=True):
     status: str = Field(default="pending")
     llm_reasoning: str | None = None
 
+    entry_price: float | None = None
+    stop_loss: float | None = None
+    target_price: float | None = None
+    exit_price: float | None = None
+    exit_reason: str | None = None
+    closed_at: datetime | None = None
+
 
 class CryptoDailyPnl(SQLModel, table=True):
     """Daily crypto profit-and-loss snapshot."""
@@ -112,16 +119,60 @@ class CryptoHalalCache(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
-async def init_db(db_path: str) -> AsyncEngine:
-    """Create the async engine and ensure all tables exist via Alembic.
+class StrategyAdjustment(SQLModel, table=True):
+    """Audit log for LLM self-improvement parameter changes."""
 
-    Falls back to SQLModel.metadata.create_all if Alembic is not configured
-    (e.g. in tests or first-time setup).
+    __tablename__ = "strategy_adjustments"
+
+    id: int | None = Field(default=None, primary_key=True)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    parameter: str
+    old_value: float | None = None
+    new_value: float
+    reasoning: str | None = None
+
+
+class TradeJournal(SQLModel, table=True):
+    """Extended context snapshot for trade review."""
+
+    __tablename__ = "trade_journal"
+
+    id: int | None = Field(default=None, primary_key=True)
+    trade_id: int
+    entry_context: str | None = None  # JSON: indicators, sentiment, regime at entry
+    exit_context: str | None = None  # JSON: indicators, sentiment at exit
+    review_notes: str | None = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+async def init_db(db_path: str) -> AsyncEngine:
+    """Create the async engine and ensure all tables exist.
+
+    Uses SQLModel create_all for new tables, then adds any missing columns
+    to existing tables (SQLite ALTER TABLE ADD COLUMN).
     """
+    import sqlalchemy as sa
+
     engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}")
 
-    # Apply schema via create_all (idempotent — only creates missing tables)
     async with engine.begin() as conn:
         await conn.run_sync(SQLModel.metadata.create_all)
+
+        # Ensure new columns exist on pre-existing crypto_trades tables
+        _NEW_CRYPTO_TRADE_COLUMNS = [
+            ("entry_price", "REAL"),
+            ("stop_loss", "REAL"),
+            ("target_price", "REAL"),
+            ("exit_price", "REAL"),
+            ("exit_reason", "TEXT"),
+            ("closed_at", "TIMESTAMP"),
+        ]
+        existing = await conn.execute(sa.text("PRAGMA table_info(crypto_trades)"))
+        existing_names = {row[1] for row in existing}
+        for col_name, col_type in _NEW_CRYPTO_TRADE_COLUMNS:
+            if col_name not in existing_names:
+                await conn.execute(
+                    sa.text(f"ALTER TABLE crypto_trades ADD COLUMN {col_name} {col_type}")
+                )
 
     return engine

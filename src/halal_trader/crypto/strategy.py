@@ -1,5 +1,7 @@
 """Crypto trading strategy — LLM prompt engineering for 1-minute scalping."""
 
+from __future__ import annotations
+
 import json
 import logging
 import time
@@ -47,6 +49,36 @@ STRATEGY GUIDELINES:
 - If 2+ indicators align even moderately, take the trade with appropriate sizing.
 - Prefer smaller positions on moderate setups over sitting in cash.
 - Scale into positions: start with a partial position and add on confirmation.
+- Review your recent performance stats: avoid pairs with consistently negative P&L, \
+and adjust aggression based on your current win rate and streak.
+
+SENTIMENT & ALTERNATIVE DATA (our competitive edge):
+- High buzz + positive sentiment = act fast. If Reddit is suddenly talking about a coin, \
+there's often a 15-60 minute window to profit before price fully adjusts.
+- A buzz score >= 3.0 is a strong signal — combine with technical confirmation \
+for high-confidence trades.
+- Negative sentiment diverging from bullish technicals = caution, reduce position size.
+- News headlines from CryptoPanic provide context — weight them alongside indicators.
+
+MULTI-TIMEFRAME CONTEXT:
+- Only take 1m signals that align with the 15m+ trend direction.
+- The trend alignment score ranges from -1 (all bearish) to +1 (all bullish).
+- Avoid counter-trend trades when alignment is below +0.3 (for buys) or above -0.3 (for sells).
+- Higher-timeframe support/resistance levels are key — respect them.
+
+ML MODEL SIGNALS:
+- When ML price forecasts are available, use them as confirmation, not primary signals.
+- ML confidence scores reflect patterns learned from our own trade history.
+- Anomaly alerts mean unusual market microstructure — proceed with caution \
+or exploit the opportunity.
+
+MARKET REGIME AWARENESS:
+- In TRENDING markets: trade with the trend, wider TP, tighter SL on counter-trend side.
+- In RANGING markets: mean-reversion strategy, buy at BB lower, sell at BB upper.
+- In HIGH VOLATILITY: reduce position sizes by 50%, widen SL, require strong confirmation.
+- In DOWNTREND: only sell/hold, no new buys unless strong reversal signals.
+
+{active_adjustments}
 
 You MUST respond with valid JSON matching this exact schema:
 {{
@@ -90,10 +122,26 @@ Today's P&L: ${today_pnl:+,.2f} ({today_pnl_pct:+.2%})
 === ORDER BOOK SUMMARY ===
 {orderbook_text}
 
-Based on these indicators, what trades should I make right now? \
-Remember: optimize for {daily_return_target:.0%}+ daily return — being in cash earns nothing. \
-Account for 0.2% round-trip fees but don't let fees prevent you from acting on good setups. \
-Bias toward action: find the best opportunity available and size it appropriately.
+=== SOCIAL SENTIMENT ===
+{sentiment_text}
+
+=== MULTI-TIMEFRAME ANALYSIS ===
+{timeframe_text}
+
+=== ML MODEL SIGNALS ===
+{ml_signals_text}
+
+=== MARKET REGIME ===
+{regime_text}
+
+=== YOUR RECENT PERFORMANCE (last 7 days) ===
+{performance_text}
+
+Based on these indicators, sentiment, ML signals, and your track record, what trades should I \
+make right now? Remember: optimize for {daily_return_target:.0%}+ daily return — being in cash \
+earns nothing. Account for 0.2% round-trip fees but don't let fees prevent you from acting on \
+good setups. Bias toward action: find the best opportunity available and size it appropriately. \
+Use sentiment and ML signals as your edge — big players don't have this data.
 """
 
 
@@ -127,6 +175,12 @@ class CryptoTradingStrategy:
         klines_by_symbol: dict[str, list[Kline]],
         orderbooks: dict[str, dict[str, Any]],
         today_pnl: float = 0.0,
+        performance_text: str = "",
+        sentiment_text: str = "",
+        timeframe_text: str = "",
+        ml_signals_text: str = "",
+        regime_text: str = "",
+        active_adjustments: str = "",
     ) -> CryptoTradingPlan:
         """Run the LLM analysis and return a structured CryptoTradingPlan."""
         portfolio_value = account.total_balance_usdt or 1000
@@ -136,11 +190,19 @@ class CryptoTradingStrategy:
         indicators_text = self._build_indicators_text(klines_by_symbol)
         orderbook_text = self._build_orderbook_text(orderbooks)
 
+        adjustments_block = ""
+        if active_adjustments:
+            adjustments_block = (
+                "ACTIVE STRATEGY ADJUSTMENTS (from your own performance review):\n"
+                + active_adjustments
+            )
+
         system = SYSTEM_PROMPT.format(
             max_position_pct=self._max_position_pct,
             daily_loss_limit=self._daily_loss_limit,
             daily_return_target=self._daily_return_target,
             max_positions=self._max_simultaneous_positions,
+            active_adjustments=adjustments_block,
         )
 
         pct_limit = portfolio_value * self._max_position_pct
@@ -159,6 +221,11 @@ class CryptoTradingStrategy:
             halal_pairs=", ".join(halal_pairs),
             indicators_text=indicators_text,
             orderbook_text=orderbook_text,
+            sentiment_text=sentiment_text or "No sentiment data available.",
+            timeframe_text=timeframe_text or "No multi-timeframe data available.",
+            ml_signals_text=ml_signals_text or "No ML model data available.",
+            regime_text=regime_text or "No regime data available.",
+            performance_text=performance_text or "No completed trades yet.",
             daily_return_target=self._daily_return_target,
         )
 

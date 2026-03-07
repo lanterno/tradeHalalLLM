@@ -89,6 +89,35 @@ class Settings(BaseSettings):
         default=1_000_000_000, description="Minimum market cap for halal screening ($1B)"
     )
 
+    # ── Sentiment ──────────────────────────────────────────────
+    reddit_client_id: str = Field(default="", description="Reddit API client ID (for sentiment)")
+    reddit_client_secret: str = Field(
+        default="", description="Reddit API client secret (for sentiment)"
+    )
+    cryptopanic_api_key: str = Field(
+        default="", description="CryptoPanic API key (for news sentiment)"
+    )
+    sentiment_update_interval_seconds: int = Field(
+        default=300, description="Seconds between sentiment updates"
+    )
+    sentiment_use_finbert: bool = Field(
+        default=False, description="Use FinBERT model for sentiment scoring"
+    )
+
+    # ── ML Models ──────────────────────────────────────────────
+    ml_enabled: bool = Field(default=False, description="Enable HuggingFace ML models")
+    ml_device: str = Field(default="cpu", description="Device for ML models (cpu/cuda/mps)")
+    ml_models_dir: Path = Field(
+        default=Path("models"), description="Directory for cached ML model files"
+    )
+    ml_retrain_interval_hours: int = Field(
+        default=24, description="Hours between ML model retraining"
+    )
+
+    # ── Telegram Notifications ─────────────────────────────────
+    telegram_bot_token: str = Field(default="", description="Telegram bot API token")
+    telegram_chat_id: str = Field(default="", description="Telegram chat ID for alerts")
+
     # ── Database ────────────────────────────────────────────────
     db_path: Path = Field(default=Path("halal_trader.db"), description="SQLite database path")
 

@@ -1,13 +1,17 @@
 """Crypto trading bot — composition root and 24/7 asyncio scheduler."""
 
+from __future__ import annotations
+
 import asyncio
 import logging
 
 from halal_trader.agent.llm import create_llm
 from halal_trader.config import get_settings
+from halal_trader.crypto.analytics import PerformanceAnalytics
 from halal_trader.crypto.cycle import CryptoCycleService
 from halal_trader.crypto.exchange import BinanceClient
 from halal_trader.crypto.executor import CryptoExecutor
+from halal_trader.crypto.monitor import PositionMonitor
 from halal_trader.crypto.portfolio import CryptoPortfolioTracker
 from halal_trader.crypto.screener import CryptoHalalScreener
 from halal_trader.crypto.strategy import CryptoTradingStrategy
@@ -34,6 +38,10 @@ class CryptoTradingBot:
         self._screener: CryptoHalalScreener | None = None
         self._cycle_service: CryptoCycleService | None = None
         self._portfolio: CryptoPortfolioTracker | None = None
+        self._monitor: PositionMonitor | None = None
+        self._sentiment_manager = None
+        self._self_review = None
+        self._notifier = None
         self._running = False
         self._last_day: str | None = None
 
@@ -92,7 +100,66 @@ class CryptoTradingBot:
             daily_loss_limit=self.settings.crypto_daily_loss_limit,
         )
 
-        # Cycle service
+        # Performance analytics
+        analytics = PerformanceAnalytics(repo)
+
+        # ── New Feature Components ─────────────────────────────
+
+        # Telegram notifier
+        from halal_trader.notifications.telegram import TelegramNotifier
+        self._notifier = TelegramNotifier(
+            bot_token=self.settings.telegram_bot_token,
+            chat_id=self.settings.telegram_chat_id,
+        )
+        if self._notifier.enabled:
+            logger.info("Telegram notifications enabled")
+
+        # Sentiment manager (Reddit + CryptoPanic)
+        from halal_trader.sentiment.manager import SentimentManager
+        self._sentiment_manager = SentimentManager(
+            trading_pairs=self.settings.crypto_pairs,
+            reddit_client_id=self.settings.reddit_client_id,
+            reddit_client_secret=self.settings.reddit_client_secret,
+            cryptopanic_api_key=self.settings.cryptopanic_api_key,
+            use_finbert=self.settings.sentiment_use_finbert,
+            update_interval_seconds=self.settings.sentiment_update_interval_seconds,
+        )
+        await self._sentiment_manager.start()
+
+        # Multi-timeframe analyzer
+        from halal_trader.crypto.timeframes import TimeframeAnalyzer
+        timeframe_analyzer = TimeframeAnalyzer(self._binance)
+
+        # Market regime detector
+        from halal_trader.crypto.regime import RegimeDetector
+        regime_detector = RegimeDetector(models_dir=self.settings.ml_models_dir)
+
+        # ML models (optional)
+        ml_forecaster = None
+        ml_anomaly = None
+        ml_signal = None
+        if self.settings.ml_enabled:
+            try:
+                from halal_trader.ml.anomaly import MarketAnomalyDetector, MLSignalClassifier
+                from halal_trader.ml.forecaster import PriceForecaster
+                from halal_trader.ml.hub import ModelHub
+
+                hub = ModelHub(
+                    device=self.settings.ml_device,
+                    models_dir=self.settings.ml_models_dir,
+                )
+                ml_forecaster = PriceForecaster(hub)
+                ml_anomaly = MarketAnomalyDetector(hub)
+                ml_signal = MLSignalClassifier(hub)
+                logger.info("ML models enabled (device: %s)", self.settings.ml_device)
+            except Exception as e:
+                logger.warning("ML models initialization failed: %s", e)
+
+        # Self-improvement loop
+        from halal_trader.crypto.self_improve import TradeSelfReview
+        self._self_review = TradeSelfReview(llm, repo)
+
+        # Cycle service (wired with all new components)
         self._cycle_service = CryptoCycleService(
             broker=self._binance,
             screener=self._screener,
@@ -101,7 +168,27 @@ class CryptoTradingBot:
             portfolio=self._portfolio,
             ws_manager=self._ws,
             configured_pairs=self.settings.crypto_pairs,
+            analytics=analytics,
+            sentiment_manager=self._sentiment_manager,
+            timeframe_analyzer=timeframe_analyzer,
+            regime_detector=regime_detector,
+            ml_forecaster=ml_forecaster,
+            ml_anomaly_detector=ml_anomaly,
+            ml_signal_classifier=ml_signal,
+            self_review=self._self_review,
+            notifier=self._notifier if self._notifier.enabled else None,
         )
+
+        # Position monitor (SL/TP enforcement)
+        self._monitor = PositionMonitor(
+            broker=self._binance,
+            repo=repo,
+            ws_manager=self._ws,
+            check_interval=2.0,
+            trailing_stop_activation_pct=0.005,
+            trailing_stop_distance_pct=0.003,
+        )
+        await self._monitor.start()
 
         logger.info("Crypto trading bot initialized successfully")
 
@@ -109,6 +196,10 @@ class CryptoTradingBot:
         """Clean up all resources."""
         logger.info("Shutting down crypto trading bot...")
         self._running = False
+        if self._monitor:
+            await self._monitor.stop()
+        if self._sentiment_manager:
+            await self._sentiment_manager.stop()
         if self._ws:
             await self._ws.stop()
         await self._binance.disconnect()
@@ -128,11 +219,30 @@ class CryptoTradingBot:
             logger.error("Crypto daily start failed: %s", e)
 
     async def _daily_end(self) -> None:
-        """Daily end routine: record P&L snapshot."""
+        """Daily end routine: record P&L snapshot, run self-review, send summary."""
         logger.info("=== CRYPTO DAILY END ===")
         try:
             summary = await self._portfolio.record_day_end()
             logger.info("Crypto daily summary: %s", summary)
+
+            # Run self-review
+            if self._self_review:
+                try:
+                    review = await self._self_review.review(lookback_days=1)
+                    if review.observations:
+                        logger.info(
+                            "Self-review observations: %s",
+                            "; ".join(review.observations[:3]),
+                        )
+                except Exception as e:
+                    logger.debug("Self-review failed: %s", e)
+
+            # Send daily summary via Telegram
+            if self._notifier and self._notifier.enabled:
+                try:
+                    await self._notifier.notify_daily_summary(summary or {})
+                except Exception:
+                    pass
         except Exception as e:
             logger.error("Crypto daily end failed: %s", e)
 
@@ -172,6 +282,15 @@ class CryptoTradingBot:
 
                 # Check for day rollover (UTC midnight)
                 await self._check_day_rollover()
+
+                # Check if self-review should trigger (consecutive losses)
+                if self._self_review:
+                    try:
+                        if await self._self_review.should_trigger_review():
+                            logger.info("Consecutive losses detected — triggering self-review")
+                            await self._self_review.review(lookback_days=1)
+                    except Exception:
+                        pass
 
                 # Run trading cycle
                 await self._cycle_service.run_cycle()

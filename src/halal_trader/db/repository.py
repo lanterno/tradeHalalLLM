@@ -4,8 +4,6 @@ import json
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from halal_trader.market_hours import today_eastern, trading_day_end_utc, trading_day_start_utc
-
 from sqlalchemy.ext.asyncio import AsyncEngine
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -17,8 +15,11 @@ from halal_trader.db.models import (
     DailyPnl,
     HalalCache,
     LlmDecision,
+    StrategyAdjustment,
     Trade,
+    TradeJournal,
 )
+from halal_trader.market_hours import today_eastern, trading_day_end_utc, trading_day_start_utc
 
 
 class Repository:
@@ -218,6 +219,9 @@ class Repository:
         exchange: str = "binance",
         status: str = "pending",
         llm_reasoning: str | None = None,
+        entry_price: float | None = None,
+        stop_loss: float | None = None,
+        target_price: float | None = None,
     ) -> int:
         trade = CryptoTrade(
             pair=pair,
@@ -228,6 +232,9 @@ class Repository:
             exchange=exchange,
             status=status,
             llm_reasoning=llm_reasoning,
+            entry_price=entry_price,
+            stop_loss=stop_loss,
+            target_price=target_price,
         )
         async with AsyncSession(self._engine) as session:
             session.add(trade)
@@ -248,6 +255,24 @@ class Repository:
             session.add(trade)
             await session.commit()
 
+    async def close_crypto_trade(
+        self,
+        trade_id: int,
+        exit_price: float,
+        exit_reason: str,
+    ) -> None:
+        """Mark a buy trade as closed with exit details."""
+        async with AsyncSession(self._engine) as session:
+            trade = await session.get(CryptoTrade, trade_id)
+            if trade is None:
+                return
+            trade.exit_price = exit_price
+            trade.exit_reason = exit_reason
+            trade.closed_at = datetime.now(UTC)
+            trade.status = "closed"
+            session.add(trade)
+            await session.commit()
+
     async def get_today_crypto_trades(self) -> list[dict[str, Any]]:
         today = today_eastern()
         day_start = trading_day_start_utc(today)
@@ -262,6 +287,19 @@ class Repository:
             results = await session.exec(statement)
             return [trade.model_dump() for trade in results.all()]
 
+    async def get_open_crypto_trades(self) -> list[CryptoTrade]:
+        """Return buy trades that haven't been closed yet (no exit recorded)."""
+        async with AsyncSession(self._engine) as session:
+            statement = (
+                select(CryptoTrade)
+                .where(CryptoTrade.side == "buy")
+                .where(CryptoTrade.closed_at.is_(None))  # type: ignore[union-attr]
+                .where(CryptoTrade.status != "rejected")
+                .order_by(CryptoTrade.timestamp.asc())  # type: ignore[union-attr]
+            )
+            results = await session.exec(statement)
+            return list(results.all())
+
     async def get_recent_crypto_trades(self, limit: int = 50) -> list[dict[str, Any]]:
         async with AsyncSession(self._engine) as session:
             statement = (
@@ -271,6 +309,53 @@ class Repository:
             )
             results = await session.exec(statement)
             return [trade.model_dump() for trade in results.all()]
+
+    # ── Crypto Round-Trip Analytics ──────────────────────────────
+
+    async def get_completed_round_trips(
+        self, limit: int = 100, lookback_days: int | None = None
+    ) -> list[dict[str, Any]]:
+        """Return closed buy trades paired with their exit data.
+
+        Each result contains entry/exit prices, P&L, duration, and exit reason.
+        """
+        async with AsyncSession(self._engine) as session:
+            statement = (
+                select(CryptoTrade)
+                .where(CryptoTrade.side == "buy")
+                .where(CryptoTrade.closed_at.is_not(None))  # type: ignore[union-attr]
+                .order_by(CryptoTrade.closed_at.desc())  # type: ignore[union-attr]
+            )
+            if lookback_days is not None:
+                cutoff = datetime.now(UTC) - timedelta(days=lookback_days)
+                statement = statement.where(CryptoTrade.closed_at >= cutoff)
+            statement = statement.limit(limit)
+
+            results = await session.exec(statement)
+            round_trips = []
+            for trade in results.all():
+                entry = trade.entry_price or trade.price or 0
+                exit_p = trade.exit_price or 0
+                pnl = (exit_p - entry) * trade.quantity
+                pnl_pct = (exit_p - entry) / entry if entry > 0 else 0
+                duration_min = 0.0
+                if trade.closed_at and trade.timestamp:
+                    duration_min = (trade.closed_at - trade.timestamp).total_seconds() / 60
+
+                round_trips.append({
+                    "id": trade.id,
+                    "pair": trade.pair,
+                    "buy_price": entry,
+                    "sell_price": exit_p,
+                    "quantity": trade.quantity,
+                    "pnl": pnl,
+                    "pnl_pct": pnl_pct,
+                    "duration_minutes": duration_min,
+                    "exit_reason": trade.exit_reason,
+                    "opened_at": trade.timestamp,
+                    "closed_at": trade.closed_at,
+                })
+            return round_trips
 
     # ── Crypto Daily P&L ───────────────────────────────────────
 
@@ -369,3 +454,55 @@ class Repository:
             statement = select(CryptoHalalCache).where(CryptoHalalCache.updated_at > cutoff)
             results = await session.exec(statement)
             return len(results.all()) > 0
+
+    # ── Strategy Adjustments ──────────────────────────────────
+
+    async def record_strategy_adjustment(
+        self,
+        parameter: str,
+        old_value: float | None,
+        new_value: float,
+        reasoning: str | None = None,
+    ) -> int:
+        adj = StrategyAdjustment(
+            parameter=parameter,
+            old_value=old_value,
+            new_value=new_value,
+            reasoning=reasoning,
+        )
+        async with AsyncSession(self._engine) as session:
+            session.add(adj)
+            await session.commit()
+            await session.refresh(adj)
+            return adj.id  # type: ignore[return-value]
+
+    async def get_recent_adjustments(self, limit: int = 20) -> list[dict[str, Any]]:
+        async with AsyncSession(self._engine) as session:
+            statement = (
+                select(StrategyAdjustment)
+                .order_by(StrategyAdjustment.timestamp.desc())  # type: ignore[union-attr]
+                .limit(limit)
+            )
+            results = await session.exec(statement)
+            return [row.model_dump() for row in results.all()]
+
+    # ── Trade Journal ─────────────────────────────────────────
+
+    async def record_trade_journal(
+        self,
+        trade_id: int,
+        entry_context: str | None = None,
+        exit_context: str | None = None,
+        review_notes: str | None = None,
+    ) -> int:
+        entry = TradeJournal(
+            trade_id=trade_id,
+            entry_context=entry_context,
+            exit_context=exit_context,
+            review_notes=review_notes,
+        )
+        async with AsyncSession(self._engine) as session:
+            session.add(entry)
+            await session.commit()
+            await session.refresh(entry)
+            return entry.id  # type: ignore[return-value]

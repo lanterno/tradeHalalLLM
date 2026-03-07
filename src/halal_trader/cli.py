@@ -222,6 +222,212 @@ def crypto_history(limit: int) -> None:
     asyncio.run(_history())
 
 
+@crypto.command("stats")
+@click.option("--days", default=7, help="Lookback period in days")
+def crypto_stats(days: int) -> None:
+    """Show trading performance metrics and recent round-trips."""
+
+    async def _stats() -> None:
+        from halal_trader.config import get_settings
+        from halal_trader.crypto.analytics import PerformanceAnalytics
+        from halal_trader.db.models import init_db
+        from halal_trader.db.repository import Repository
+
+        settings = get_settings()
+        engine = await init_db(str(settings.db_path))
+        repo = Repository(engine)
+        analytics = PerformanceAnalytics(repo)
+
+        stats = await analytics.compute_stats(lookback_days=days)
+
+        if stats.total_trades == 0:
+            console.print(f"[dim]No completed trades in the last {days} days.[/dim]")
+            await engine.dispose()
+            return
+
+        # Summary table
+        summary = Table(
+            title=f"Performance Summary (last {days} days)",
+            show_header=True, header_style="bold cyan",
+        )
+        summary.add_column("Metric", style="dim")
+        summary.add_column("Value", justify="right")
+
+        summary.add_row("Total Trades", str(stats.total_trades))
+        summary.add_row("Wins / Losses", f"{stats.wins} / {stats.losses}")
+
+        wr_style = "green" if stats.win_rate >= 0.5 else "red"
+        summary.add_row("Win Rate", Text(f"{stats.win_rate:.0%}", style=wr_style))
+        summary.add_row("Avg Win", Text(f"{stats.avg_win_pct:+.2%}", style="green"))
+        summary.add_row("Avg Loss", Text(f"{stats.avg_loss_pct:+.2%}", style="red"))
+
+        pf_style = "green" if stats.profit_factor >= 1.0 else "red"
+        pf_str = f"{stats.profit_factor:.2f}" if stats.profit_factor < 100 else "∞"
+        summary.add_row("Profit Factor", Text(pf_str, style=pf_style))
+
+        pnl_style = "green" if stats.total_pnl >= 0 else "red"
+        summary.add_row("Total P&L", Text(f"${stats.total_pnl:+,.2f}", style=pnl_style))
+        summary.add_row("Max Drawdown", Text(f"{stats.max_drawdown_pct:.2%}", style="red"))
+
+        hold_str = f"{stats.avg_hold_minutes:.0f} min"
+        if stats.avg_hold_minutes >= 60:
+            hold_str = f"{stats.avg_hold_minutes / 60:.1f} hrs"
+        summary.add_row("Avg Hold Time", hold_str)
+
+        streak_style = "green" if stats.streak_type == "wins" else "red"
+        summary.add_row(
+            "Current Streak",
+            Text(f"{stats.streak} {stats.streak_type}", style=streak_style),
+        )
+
+        if stats.best_pair:
+            summary.add_row(
+                "Best Pair",
+                Text(f"{stats.best_pair} (${stats.best_pair_pnl:+,.2f})", style="green"),
+            )
+            summary.add_row(
+                "Worst Pair",
+                Text(f"{stats.worst_pair} (${stats.worst_pair_pnl:+,.2f})", style="red"),
+            )
+
+        console.print(summary)
+
+        # Exit reasons breakdown
+        if stats.by_exit_reason:
+            reasons_table = Table(
+                title="Exit Reasons", show_header=True, header_style="bold cyan"
+            )
+            reasons_table.add_column("Reason")
+            reasons_table.add_column("Count", justify="right")
+            for reason, count in sorted(
+                stats.by_exit_reason.items(), key=lambda x: x[1], reverse=True
+            ):
+                reasons_table.add_row(reason, str(count))
+            console.print(reasons_table)
+
+        # Recent round-trips
+        round_trips = await repo.get_completed_round_trips(limit=10, lookback_days=days)
+        if round_trips:
+            rt_table = Table(
+                title="Recent Round-Trips", show_header=True, header_style="bold cyan"
+            )
+            rt_table.add_column("Pair")
+            rt_table.add_column("Entry", justify="right")
+            rt_table.add_column("Exit", justify="right")
+            rt_table.add_column("P&L", justify="right")
+            rt_table.add_column("P&L %", justify="right")
+            rt_table.add_column("Duration")
+            rt_table.add_column("Reason")
+
+            for rt in round_trips:
+                pnl_style = "green" if rt["pnl"] >= 0 else "red"
+                dur = rt["duration_minutes"]
+                dur_str = f"{dur:.0f}m" if dur < 60 else f"{dur / 60:.1f}h"
+                rt_table.add_row(
+                    rt["pair"],
+                    f"${rt['buy_price']:,.2f}",
+                    f"${rt['sell_price']:,.2f}",
+                    Text(f"${rt['pnl']:+,.2f}", style=pnl_style),
+                    Text(f"{rt['pnl_pct']:+.2%}", style=pnl_style),
+                    dur_str,
+                    rt.get("exit_reason") or "",
+                )
+            console.print(rt_table)
+
+        await engine.dispose()
+
+    asyncio.run(_stats())
+
+
+@crypto.command("backtest")
+@click.option("--pair", default="BTCUSDT", help="Trading pair to backtest")
+@click.option("--candles", default=1000, help="Number of historical candles")
+@click.option("--balance", default=10000.0, help="Starting balance in USDT")
+@click.option("--rsi-buy", default=35.0, help="RSI buy threshold")
+@click.option("--rsi-sell", default=65.0, help="RSI sell threshold")
+@click.option("--sl", default=0.01, help="Stop-loss percentage")
+@click.option("--tp", default=0.015, help="Take-profit percentage")
+def crypto_backtest(
+    pair: str,
+    candles: int,
+    balance: float,
+    rsi_buy: float,
+    rsi_sell: float,
+    sl: float,
+    tp: float,
+) -> None:
+    """Run a backtest on historical data."""
+
+    async def _backtest() -> None:
+        from halal_trader.config import get_settings
+        from halal_trader.crypto.backtest import BacktestEngine, fetch_historical_klines
+        from halal_trader.crypto.exchange import BinanceClient
+
+        settings = get_settings()
+        client = BinanceClient(
+            api_key=settings.binance_api_key,
+            secret_key=settings.binance_secret_key,
+            testnet=settings.binance_testnet,
+            configured_pairs=[pair],
+        )
+
+        try:
+            await client.connect()
+            console.print(f"[yellow]Fetching {candles} candles for {pair}...[/yellow]")
+            klines = await fetch_historical_klines(client, pair, limit=candles)
+
+            if len(klines) < 100:
+                console.print(f"[red]Insufficient data: {len(klines)} candles (need 100+)[/red]")
+                return
+
+            console.print(
+                f"[yellow]Running backtest on {len(klines)} candles "
+                f"(RSI buy<{rsi_buy}, sell>{rsi_sell}, SL={sl:.1%}, TP={tp:.1%})...[/yellow]"
+            )
+
+            engine = BacktestEngine(
+                initial_balance=balance,
+                rsi_buy=rsi_buy,
+                rsi_sell=rsi_sell,
+                sl_pct=sl,
+                tp_pct=tp,
+            )
+            result = await engine.run(pair, klines)
+
+            # Display results
+            table = Table(
+                title=f"Backtest Results: {pair} ({result.start_date} to {result.end_date})",
+                show_header=True,
+                header_style="bold cyan",
+            )
+            table.add_column("Metric", style="dim")
+            table.add_column("Value", justify="right")
+
+            ret_style = "green" if result.total_return_pct >= 0 else "red"
+            table.add_row("Initial Balance", f"${result.initial_balance:,.2f}")
+            table.add_row("Final Balance", Text(f"${result.final_balance:,.2f}", style=ret_style))
+            table.add_row("Total Return", Text(f"{result.total_return_pct:+.2%}", style=ret_style))
+            table.add_row("Total Trades", str(result.total_trades))
+            table.add_row("Wins / Losses", f"{result.wins} / {result.losses}")
+
+            wr_style = "green" if result.win_rate >= 0.5 else "red"
+            table.add_row("Win Rate", Text(f"{result.win_rate:.0%}", style=wr_style))
+
+            pf_str = f"{result.profit_factor:.2f}" if result.profit_factor < 100 else "inf"
+            table.add_row("Profit Factor", pf_str)
+            table.add_row("Max Drawdown", Text(f"{result.max_drawdown_pct:.2%}", style="red"))
+            table.add_row("Sharpe Ratio", f"{result.sharpe_ratio:.2f}")
+            table.add_row("Sortino Ratio", f"{result.sortino_ratio:.2f}")
+            table.add_row("Avg Hold", f"{result.avg_hold_candles:.0f} candles")
+
+            console.print(table)
+
+        finally:
+            await client.disconnect()
+
+    asyncio.run(_backtest())
+
+
 @crypto.command("screen")
 def crypto_screen() -> None:
     """Show halal-screened crypto pairs."""
@@ -521,6 +727,33 @@ def _print_crypto_trades(trades: list) -> None:
         )
 
     console.print(table)
+
+
+@cli.command()
+@click.option("--port", default=8080, help="Dashboard port")
+@click.option("--host", default="0.0.0.0", help="Dashboard host")
+def dashboard(port: int, host: str) -> None:
+    """Launch the web dashboard."""
+    try:
+        import uvicorn
+
+        from halal_trader.web.app import create_app
+
+        console.print(
+            Panel(
+                f"[bold green]Halal Trader Dashboard[/bold green]\n"
+                f"[dim]http://{host}:{port}[/dim]",
+                title="Starting",
+                border_style="green",
+            )
+        )
+        app = create_app()
+        uvicorn.run(app, host=host, port=port, log_level="info")
+    except ImportError:
+        console.print(
+            "[red]Dashboard requires fastapi and uvicorn. "
+            "Install with: pip install fastapi uvicorn[/red]"
+        )
 
 
 def _print_crypto_pnl(pnl_history: list) -> None:

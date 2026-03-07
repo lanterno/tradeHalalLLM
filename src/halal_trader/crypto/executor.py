@@ -3,8 +3,6 @@
 import logging
 from typing import Any
 
-from binance import BinanceAPIException
-
 from halal_trader.crypto.exchange import BinanceClient
 from halal_trader.domain.models import CryptoTradeDecision, CryptoTradingPlan
 from halal_trader.domain.ports import TradeRepository
@@ -96,7 +94,10 @@ class CryptoExecutor:
         price = await self._broker.get_ticker_price(decision.symbol)
         estimated_cost = price * decision.quantity
 
-        usdt_available = account.usdt_free if account.usdt_free > 0 else account.available_balance_usdt
+        usdt_available = (
+            account.usdt_free if account.usdt_free > 0
+            else account.available_balance_usdt
+        )
         if estimated_cost > usdt_available:
             msg = (
                 f"Insufficient USDT for {decision.symbol}: "
@@ -132,7 +133,7 @@ class CryptoExecutor:
             order_id = str(order_result.get("orderId", ""))
             fill_price = self._extract_fill_price(order_result) or price
 
-            await self._repo.record_crypto_trade(
+            trade_id = await self._repo.record_crypto_trade(
                 pair=decision.symbol,
                 side="buy",
                 quantity=decision.quantity,
@@ -140,6 +141,9 @@ class CryptoExecutor:
                 order_id=order_id,
                 status="submitted",
                 llm_reasoning=decision.reasoning,
+                entry_price=fill_price,
+                stop_loss=decision.stop_loss,
+                target_price=decision.target_price,
             )
 
             return {
@@ -149,6 +153,7 @@ class CryptoExecutor:
                 "price": fill_price,
                 "status": "submitted",
                 "order_id": order_id,
+                "trade_id": trade_id,
             }
         except Exception as e:
             logger.error("Failed to place crypto BUY for %s: %s", decision.symbol, e)

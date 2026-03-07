@@ -65,6 +65,10 @@ def compute_all(klines: list[Kline]) -> dict[str, Any]:
     if len(highs) >= 15:
         result["atr_14"] = round(float(atr(highs, lows, closes, period=14)), 2)
 
+    # ADX (14-period)
+    if len(highs) >= 28:
+        result["adx_14"] = round(float(adx(highs, lows, closes, period=14)), 2)
+
     # VWAP (from available candles)
     if len(closes) >= 2:
         result["vwap"] = round(float(vwap(highs, lows, closes, volumes)), 2)
@@ -159,6 +163,53 @@ def atr(highs: np.ndarray, lows: np.ndarray, closes: np.ndarray, period: int = 1
     return float(atr_val)
 
 
+def adx(highs: np.ndarray, lows: np.ndarray, closes: np.ndarray, period: int = 14) -> float:
+    """Average Directional Index — measures trend strength (0-100)."""
+    high_diff = np.diff(highs)
+    low_diff = -np.diff(lows)
+
+    plus_dm = np.where((high_diff > low_diff) & (high_diff > 0), high_diff, 0.0)
+    minus_dm = np.where((low_diff > high_diff) & (low_diff > 0), low_diff, 0.0)
+
+    tr_hl = highs[1:] - lows[1:]
+    tr_hc = np.abs(highs[1:] - closes[:-1])
+    tr_lc = np.abs(lows[1:] - closes[:-1])
+    true_range = np.maximum(tr_hl, np.maximum(tr_hc, tr_lc))
+
+    if len(true_range) < period:
+        return 0.0
+
+    # Wilder's smoothing
+    atr_val = np.mean(true_range[:period])
+    plus_dm_smooth = np.mean(plus_dm[:period])
+    minus_dm_smooth = np.mean(minus_dm[:period])
+
+    dx_values = []
+    for i in range(period, len(true_range)):
+        atr_val = (atr_val * (period - 1) + true_range[i]) / period
+        plus_dm_smooth = (plus_dm_smooth * (period - 1) + plus_dm[i]) / period
+        minus_dm_smooth = (minus_dm_smooth * (period - 1) + minus_dm[i]) / period
+
+        if atr_val > 0:
+            plus_di = 100 * plus_dm_smooth / atr_val
+            minus_di = 100 * minus_dm_smooth / atr_val
+            di_sum = plus_di + minus_di
+            if di_sum > 0:
+                dx_values.append(100 * abs(plus_di - minus_di) / di_sum)
+
+    if not dx_values:
+        return 0.0
+
+    if len(dx_values) < period:
+        return float(np.mean(dx_values))
+
+    adx_val = np.mean(dx_values[:period])
+    for i in range(period, len(dx_values)):
+        adx_val = (adx_val * (period - 1) + dx_values[i]) / period
+
+    return float(adx_val)
+
+
 def vwap(highs: np.ndarray, lows: np.ndarray, closes: np.ndarray, volumes: np.ndarray) -> float:
     """Volume-Weighted Average Price."""
     typical_price = (highs + lows + closes) / 3.0
@@ -229,6 +280,12 @@ def format_indicators_for_prompt(symbol: str, indicators: dict[str, Any]) -> str
     # ATR
     if "atr_14" in indicators:
         lines.append(f"    ATR(14): {indicators['atr_14']:.2f}")
+
+    # ADX
+    if "adx_14" in indicators:
+        adx_val = indicators["adx_14"]
+        strength = "STRONG TREND" if adx_val > 25 else "WEAK/RANGING"
+        lines.append(f"    ADX(14): {adx_val:.1f} ({strength})")
 
     # VWAP
     if "vwap" in indicators:

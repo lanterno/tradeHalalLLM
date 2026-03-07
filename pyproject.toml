@@ -33,6 +33,23 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+ml = [
+    "transformers",
+    "torch",
+    "scikit-learn",
+    "xgboost",
+    "chronos-forecasting",
+]
+sentiment = [
+    "praw",
+]
+dashboard = [
+    "fastapi",
+    "uvicorn",
+]
+all = [
+    "halal-trader[ml,sentiment,dashboard]",
+]
 fingpt = [
     "transformers",
     "peft",
@@ -60,6 +77,9 @@ line-length = 100
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "W"]
+
+[tool.ruff.lint.per-file-ignores]
+"src/halal_trader/web/app.py" = ["E501"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
