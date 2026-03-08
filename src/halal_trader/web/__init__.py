@@ -1,1 +1,1 @@
-"""Lightweight web dashboard — FastAPI + HTMX for live monitoring."""
+"""Web dashboard — FastAPI backend + React SPA frontend."""

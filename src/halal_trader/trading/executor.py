@@ -3,14 +3,15 @@
 import logging
 from typing import Any
 
+from halal_trader.core.executor import BaseExecutor
 from halal_trader.domain.models import TradeDecision, TradingPlan
 from halal_trader.domain.ports import Broker, TradeRepository
 
 logger = logging.getLogger(__name__)
 
 
-class TradeExecutor:
-    """Executes trading decisions via the broker."""
+class TradeExecutor(BaseExecutor):
+    """Executes stock trading decisions via the broker."""
 
     def __init__(
         self,
@@ -20,53 +21,31 @@ class TradeExecutor:
         max_position_pct: float,
         max_simultaneous_positions: int,
     ) -> None:
+        super().__init__(
+            repo,
+            max_position_pct=max_position_pct,
+            max_simultaneous_positions=max_simultaneous_positions,
+        )
         self._broker = broker
-        self._repo = repo
-        self._max_position_pct = max_position_pct
-        self._max_simultaneous_positions = max_simultaneous_positions
 
     async def execute_plan(self, plan: TradingPlan) -> list[dict[str, Any]]:
         """Execute all decisions in a TradingPlan, returning execution results."""
-        results = []
+        return await self._execute_plan_common(plan)
 
-        # Execute sells first (free up capital)
-        for decision in plan.sells:
-            result = await self._execute_sell(decision)
-            results.append(result)
+    def _get_sells(self, plan: Any) -> list[Any]:
+        return plan.sells
 
-        # Then execute buys (respecting max simultaneous positions)
+    def _get_buys(self, plan: Any) -> list[Any]:
+        return plan.buys
+
+    async def _get_current_position_count(self, **kwargs: Any) -> int:
         current_positions = await self._broker.get_all_positions()
-        open_count = len(current_positions)
+        return len(current_positions)
 
-        for decision in plan.buys:
-            if open_count >= self._max_simultaneous_positions:
-                msg = (
-                    f"Max simultaneous positions ({self._max_simultaneous_positions}) "
-                    f"reached — skipping BUY {decision.symbol}"
-                )
-                logger.warning(msg)
-                results.append(
-                    {
-                        "symbol": decision.symbol,
-                        "action": "buy",
-                        "status": "rejected",
-                        "reason": msg,
-                    }
-                )
-                continue
-            result = await self._execute_buy(decision)
-            if result.get("status") == "submitted":
-                open_count += 1
-            results.append(result)
-
-        return results
-
-    async def _execute_buy(self, decision: TradeDecision) -> dict[str, Any]:
+    async def _execute_buy(self, decision: Any, **kwargs: Any) -> dict[str, Any]:
         """Execute a buy order."""
-        # Validate: check buying power before placing order
         account = await self._broker.get_account_info()
 
-        # Get current price estimate
         snapshot = await self._broker.get_stock_snapshot(decision.symbol)
         estimated_price = self._extract_price(snapshot, decision.symbol)
         estimated_cost = estimated_price * decision.quantity
@@ -79,7 +58,6 @@ class TradeExecutor:
             logger.warning(msg)
             return {"symbol": decision.symbol, "action": "buy", "status": "rejected", "reason": msg}
 
-        # Check position size limit
         if (
             account.portfolio_value > 0
             and (estimated_cost / account.portfolio_value) > self._max_position_pct
@@ -88,7 +66,6 @@ class TradeExecutor:
             logger.warning(msg)
             return {"symbol": decision.symbol, "action": "buy", "status": "rejected", "reason": msg}
 
-        # Place the order
         try:
             order_result = await self._broker.place_order(
                 symbol=decision.symbol,
@@ -131,11 +108,10 @@ class TradeExecutor:
                 "reason": str(e),
             }
 
-    async def _execute_sell(self, decision: TradeDecision) -> dict[str, Any]:
+    async def _execute_sell(self, decision: Any, **kwargs: Any) -> dict[str, Any]:
         """Execute a sell order (close or reduce position)."""
         try:
             if decision.quantity == 0:
-                # Close entire position
                 result = await self._broker.close_position(decision.symbol)
             else:
                 result = await self._broker.place_order(
@@ -187,7 +163,6 @@ class TradeExecutor:
     def _extract_price(self, snapshot: Any, symbol: str) -> float:
         """Extract a usable price from a snapshot response."""
         if isinstance(snapshot, dict):
-            # May be nested under the symbol key
             data = snapshot.get(symbol, snapshot)
             if isinstance(data, dict):
                 trade = data.get("latest_trade", {})
@@ -195,7 +170,6 @@ class TradeExecutor:
                     price = trade.get("price", 0)
                     if price:
                         return float(price)
-                # Try daily bar close
                 bar = data.get("daily_bar", {})
                 if isinstance(bar, dict):
                     close = bar.get("close", 0)

@@ -78,7 +78,7 @@ class SentimentManager:
         )
 
     async def stop(self) -> None:
-        """Stop background collection."""
+        """Stop background collection and close HTTP clients."""
         self._running = False
         if self._task:
             self._task.cancel()
@@ -87,6 +87,10 @@ class SentimentManager:
             except asyncio.CancelledError:
                 pass
             self._task = None
+        if self._cryptopanic:
+            await self._cryptopanic.close()
+        if self._reddit and hasattr(self._reddit, "close"):
+            await self._reddit.close()
         logger.info("Sentiment manager stopped")
 
     async def _run_loop(self) -> None:

@@ -18,10 +18,29 @@ class TelegramNotifier:
     def __init__(self, bot_token: str, chat_id: str) -> None:
         self._bot_token = bot_token
         self._chat_id = chat_id
+        self._client: httpx.AsyncClient | None = None
+
+    _PLACEHOLDER_VALUES = frozenset({"your_bot_token", "your_chat_id", ""})
 
     @property
     def enabled(self) -> bool:
-        return bool(self._bot_token and self._chat_id)
+        return bool(
+            self._bot_token
+            and self._chat_id
+            and self._bot_token not in self._PLACEHOLDER_VALUES
+            and self._chat_id not in self._PLACEHOLDER_VALUES
+        )
+
+    def _get_client(self) -> httpx.AsyncClient:
+        if self._client is None or self._client.is_closed:
+            self._client = httpx.AsyncClient(timeout=10.0)
+        return self._client
+
+    async def close(self) -> None:
+        """Close the persistent HTTP client."""
+        if self._client and not self._client.is_closed:
+            await self._client.aclose()
+            self._client = None
 
     async def send(self, message: str, *, parse_mode: str = "HTML") -> bool:
         """Send a message to the configured Telegram chat."""
@@ -30,20 +49,20 @@ class TelegramNotifier:
 
         url = _API_BASE.format(token=self._bot_token)
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.post(
-                    url,
-                    json={
-                        "chat_id": self._chat_id,
-                        "text": message,
-                        "parse_mode": parse_mode,
-                        "disable_web_page_preview": True,
-                    },
-                )
-                if resp.status_code == 200:
-                    return True
-                logger.warning("Telegram API returned %d: %s", resp.status_code, resp.text)
-                return False
+            client = self._get_client()
+            resp = await client.post(
+                url,
+                json={
+                    "chat_id": self._chat_id,
+                    "text": message,
+                    "parse_mode": parse_mode,
+                    "disable_web_page_preview": True,
+                },
+            )
+            if resp.status_code == 200:
+                return True
+            logger.warning("Telegram API returned %d: %s", resp.status_code, resp.text)
+            return False
         except Exception as e:
             logger.warning("Telegram send failed: %s", e)
             return False
@@ -87,7 +106,7 @@ class TelegramNotifier:
 
     async def notify_daily_summary(self, stats: dict[str, Any]) -> None:
         """Send end-of-day performance summary."""
-        pnl = stats.get("total_pnl", 0)
+        pnl = stats.get("realized_pnl", stats.get("total_pnl", 0))
         emoji = "\U0001f4c8" if pnl >= 0 else "\U0001f4c9"
         msg = (
             f"{emoji} <b>Daily Summary</b>\n"

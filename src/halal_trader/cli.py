@@ -90,7 +90,7 @@ def history(limit: int) -> None:
         from halal_trader.db.repository import Repository
 
         settings = get_settings()
-        engine = await init_db(str(settings.db_path))
+        engine = await init_db(str(settings.resolve_db_path()))
         repo = Repository(engine)
 
         try:
@@ -205,7 +205,7 @@ def crypto_history(limit: int) -> None:
         from halal_trader.db.repository import Repository
 
         settings = get_settings()
-        engine = await init_db(str(settings.db_path))
+        engine = await init_db(str(settings.resolve_db_path()))
         repo = Repository(engine)
 
         try:
@@ -234,7 +234,7 @@ def crypto_stats(days: int) -> None:
         from halal_trader.db.repository import Repository
 
         settings = get_settings()
-        engine = await init_db(str(settings.db_path))
+        engine = await init_db(str(settings.resolve_db_path()))
         repo = Repository(engine)
         analytics = PerformanceAnalytics(repo)
 
@@ -439,7 +439,7 @@ def crypto_screen() -> None:
         from halal_trader.db.repository import Repository
 
         settings = get_settings()
-        engine = await init_db(str(settings.db_path))
+        engine = await init_db(str(settings.resolve_db_path()))
         repo = Repository(engine)
 
         screener = CryptoHalalScreener(
@@ -730,7 +730,7 @@ def _print_crypto_trades(trades: list) -> None:
 
 
 @cli.command()
-@click.option("--port", default=8080, help="Dashboard port")
+@click.option("--port", default=8082, help="Dashboard port")
 @click.option("--host", default="0.0.0.0", help="Dashboard host")
 def dashboard(port: int, host: str) -> None:
     """Launch the web dashboard."""

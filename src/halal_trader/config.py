@@ -55,38 +55,97 @@ class Settings(BaseSettings):
     ollama_host: str = Field(default="http://localhost:11434", description="Ollama server URL")
     openai_api_key: str | None = Field(default=None, description="OpenAI API key")
     anthropic_api_key: str | None = Field(default=None, description="Anthropic API key")
+    ollama_fallback_model: str = Field(
+        default="", description="Model name for Ollama when used as fallback (empty = same as llm_model)"
+    )
+    openai_fallback_model: str = Field(
+        default="gpt-4o-mini", description="Model name for OpenAI when used as fallback"
+    )
+    anthropic_fallback_model: str = Field(
+        default="claude-sonnet-4-20250514", description="Model name for Anthropic when used as fallback"
+    )
 
     # ── Stock Trading Parameters ────────────────────────────────
     trading_interval_minutes: int = Field(default=15, description="Minutes between analysis cycles")
-    daily_return_target: float = Field(default=0.01, description="Target daily return (1% = 0.01)")
-    max_position_pct: float = Field(default=0.20, description="Max portfolio % per position")
+    daily_return_target: float = Field(default=0.01, gt=0, le=0.5, description="Target daily return (1% = 0.01)")
+    max_position_pct: float = Field(default=0.20, gt=0, le=1.0, description="Max portfolio % per position")
     daily_loss_limit: float = Field(
-        default=0.02, description="Max daily loss before halting (2% = 0.02)"
+        default=0.02, ge=0, le=0.5, description="Max daily loss before halting (2% = 0.02)"
     )
-    max_simultaneous_positions: int = Field(default=5, description="Max number of open positions")
+    max_simultaneous_positions: int = Field(default=5, ge=1, description="Max number of open positions")
 
     # ── Crypto Trading Parameters ──────────────────────────────
     crypto_trading_interval_seconds: int = Field(
-        default=60, description="Seconds between crypto analysis cycles"
+        default=60, ge=5, description="Seconds between crypto analysis cycles"
     )
     crypto_pairs: list[str] = Field(
         default=["BTCUSDT", "ETHUSDT", "SOLUSDT", "ADAUSDT"],
         description="Crypto trading pairs to monitor",
     )
     crypto_max_position_pct: float = Field(
-        default=0.25, description="Max portfolio % per crypto position"
+        default=0.25, gt=0, le=1.0, description="Max portfolio % per crypto position"
     )
     crypto_daily_loss_limit: float = Field(
-        default=0.03, description="Max daily crypto loss before halting (3% = 0.03)"
+        default=0.03, ge=0, le=0.5, description="Max daily crypto loss before halting (3% = 0.03)"
     )
     crypto_daily_return_target: float = Field(
-        default=0.01, description="Target daily crypto return (1% = 0.01)"
+        default=0.01, gt=0, le=0.5, description="Target daily crypto return (1% = 0.01)"
     )
     crypto_max_simultaneous_positions: int = Field(
-        default=4, description="Max number of open crypto positions"
+        default=4, ge=1, description="Max number of open crypto positions"
     )
     crypto_min_market_cap: float = Field(
-        default=1_000_000_000, description="Minimum market cap for halal screening ($1B)"
+        default=1_000_000_000, ge=0, description="Minimum market cap for halal screening ($1B)"
+    )
+    crypto_max_pairs_per_cycle: int = Field(
+        default=10, ge=1, description="Max trading pairs per cycle"
+    )
+
+    # ── Flat-market skip thresholds ───────────────────────────
+    crypto_flat_price_threshold: float = Field(
+        default=0.03, ge=0, description="Min 5m price change (%) to consider non-flat"
+    )
+    crypto_flat_rsi_lower: float = Field(
+        default=40.0, ge=0, le=50, description="RSI below this = non-flat (oversold)"
+    )
+    crypto_flat_rsi_upper: float = Field(
+        default=60.0, ge=50, le=100, description="RSI above this = non-flat (overbought)"
+    )
+    crypto_flat_vol_threshold: float = Field(
+        default=1.2, ge=1.0, description="Volume ratio above this = non-flat"
+    )
+    crypto_max_consecutive_flat_skips: int = Field(
+        default=5, ge=1, description="Max consecutive flat-market skips before forcing LLM"
+    )
+
+    # ── Trailing stop / monitor ───────────────────────────────
+    crypto_trailing_stop_activation_pct: float = Field(
+        default=0.005, ge=0, description="% above entry to activate trailing stop"
+    )
+    crypto_trailing_stop_distance_pct: float = Field(
+        default=0.003, gt=0, description="Trailing stop distance from high water mark"
+    )
+    crypto_monitor_interval: float = Field(
+        default=2.0, gt=0, description="Seconds between position monitor checks"
+    )
+
+    # ── Circuit breaker (per-pair) ──────────────────────────────
+    crypto_circuit_breaker_threshold: int = Field(
+        default=5, ge=1, description="Errors before blocking a pair"
+    )
+    crypto_circuit_breaker_window: int = Field(
+        default=600, ge=60, description="Window in seconds for counting errors"
+    )
+    crypto_circuit_breaker_cooldown: int = Field(
+        default=1800, ge=60, description="Cooldown in seconds after circuit break"
+    )
+
+    # ── LLM circuit breaker ───────────────────────────────────
+    crypto_llm_failure_threshold: int = Field(
+        default=5, ge=1, description="Consecutive LLM failures before cooldown"
+    )
+    crypto_llm_cooldown_seconds: int = Field(
+        default=600, ge=60, description="Seconds to pause LLM calls after threshold failures"
     )
 
     # ── Sentiment ──────────────────────────────────────────────
@@ -110,16 +169,19 @@ class Settings(BaseSettings):
     ml_models_dir: Path = Field(
         default=Path("models"), description="Directory for cached ML model files"
     )
-    ml_retrain_interval_hours: int = Field(
-        default=24, description="Hours between ML model retraining"
-    )
-
     # ── Telegram Notifications ─────────────────────────────────
     telegram_bot_token: str = Field(default="", description="Telegram bot API token")
     telegram_chat_id: str = Field(default="", description="Telegram chat ID for alerts")
 
     # ── Database ────────────────────────────────────────────────
     db_path: Path = Field(default=Path("halal_trader.db"), description="SQLite database path")
+
+    def resolve_db_path(self) -> Path:
+        """Return an absolute db_path, resolving relative paths from the project root."""
+        if self.db_path.is_absolute():
+            return self.db_path
+        project_root = Path(__file__).resolve().parent.parent.parent
+        return project_root / self.db_path
 
     # ── Logging ─────────────────────────────────────────────────
     log_level: str = Field(default="INFO", description="Console logging level")

@@ -10,22 +10,20 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-_BASE_URL = "https://cryptopanic.com/api/free/v1/posts/"
+_BASE_URLS = [
+    "https://cryptopanic.com/api/v1/posts/",
+    "https://cryptopanic.com/api/free/v1/posts/",
+]
 
-_PAIR_TO_CURRENCY: dict[str, str] = {
-    "BTCUSDT": "BTC",
-    "ETHUSDT": "ETH",
-    "SOLUSDT": "SOL",
-    "ADAUSDT": "ADA",
-    "BNBUSDT": "BNB",
-    "XRPUSDT": "XRP",
-    "DOGEUSDT": "DOGE",
-    "DOTUSDT": "DOT",
-    "AVAXUSDT": "AVAX",
-    "MATICUSDT": "MATIC",
-    "LINKUSDT": "LINK",
-    "ATOMUSDT": "ATOM",
-}
+_RETRY_AFTER_SECONDS = 1800  # 30 minutes
+
+
+def _pair_to_currency(pair: str) -> str | None:
+    """Derive currency code from a trading pair (e.g. BTCUSDT -> BTC)."""
+    for suffix in ("USDT", "BUSD"):
+        if pair.upper().endswith(suffix):
+            return pair.upper().removesuffix(suffix)
+    return None
 
 
 @dataclass
@@ -67,6 +65,20 @@ class CryptoPanicCollector:
         self._cache_ttl = cache_ttl_seconds
         self._cache: dict[str, CryptoPanicData] = {}
         self._cache_time: float = 0.0
+        self._disabled_until: float = 0
+        self._working_url: str | None = None
+        self._client: httpx.AsyncClient | None = None
+
+    def _get_client(self) -> httpx.AsyncClient:
+        if self._client is None or self._client.is_closed:
+            self._client = httpx.AsyncClient(timeout=15.0)
+        return self._client
+
+    async def close(self) -> None:
+        """Close the persistent HTTP client."""
+        if self._client and not self._client.is_closed:
+            await self._client.aclose()
+            self._client = None
 
     async def collect(self) -> dict[str, CryptoPanicData]:
         """Collect news for all trading pairs.
@@ -80,10 +92,13 @@ class CryptoPanicCollector:
         if not self._api_key:
             return {}
 
+        if now < self._disabled_until:
+            return self._cache or {}
+
         result: dict[str, CryptoPanicData] = {}
         currencies = set()
         for pair in self._trading_pairs:
-            currency = _PAIR_TO_CURRENCY.get(pair)
+            currency = _pair_to_currency(pair)
             if currency:
                 currencies.add(currency)
 
@@ -91,21 +106,10 @@ class CryptoPanicCollector:
             return result
 
         try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                resp = await client.get(
-                    _BASE_URL,
-                    params={
-                        "auth_token": self._api_key,
-                        "currencies": ",".join(currencies),
-                        "filter": "hot",
-                        "public": "true",
-                    },
-                )
-                resp.raise_for_status()
-                data = resp.json()
+            data = await self._fetch_posts(currencies)
 
             for pair in self._trading_pairs:
-                currency = _PAIR_TO_CURRENCY.get(pair)
+                currency = _pair_to_currency(pair)
                 if not currency:
                     continue
                 pair_data = CryptoPanicData(pair=pair)
@@ -153,3 +157,33 @@ class CryptoPanicCollector:
         self._cache = result
         self._cache_time = now
         return result
+
+    async def _fetch_posts(self, currencies: set[str]) -> dict:
+        """Try each known API URL, returning the first successful response."""
+        urls_to_try = (
+            [self._working_url] if self._working_url else list(_BASE_URLS)
+        )
+        params = {
+            "auth_token": self._api_key,
+            "currencies": ",".join(currencies),
+            "filter": "hot",
+            "public": "true",
+        }
+
+        client = self._get_client()
+        for url in urls_to_try:
+            resp = await client.get(url, params=params)
+            if resp.status_code == 404 and url != urls_to_try[-1]:
+                continue
+            if resp.status_code == 404:
+                self._disabled_until = time.monotonic() + _RETRY_AFTER_SECONDS
+                logger.warning(
+                    "CryptoPanic API returned 404 on all URLs — retrying in %ds",
+                    _RETRY_AFTER_SECONDS,
+                )
+                return {}
+            resp.raise_for_status()
+            self._working_url = url
+            return resp.json()
+
+        return {}

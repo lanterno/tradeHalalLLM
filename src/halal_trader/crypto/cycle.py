@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
+from halal_trader.config import get_settings
+from halal_trader.core.cycle import BaseCycleService
 from halal_trader.crypto.analytics import PerformanceAnalytics
 from halal_trader.crypto.exchange import BinanceClient
 from halal_trader.crypto.executor import CryptoExecutor
+from halal_trader.crypto.indicators import compute_all
 from halal_trader.crypto.portfolio import CryptoPortfolioTracker
 from halal_trader.crypto.screener import CryptoHalalScreener
 from halal_trader.crypto.strategy import CryptoTradingStrategy
@@ -16,11 +20,8 @@ from halal_trader.domain.models import Kline
 
 logger = logging.getLogger(__name__)
 
-# Maximum pairs to analyze per cycle
-_MAX_PAIRS_PER_CYCLE = 10
 
-
-class CryptoCycleService:
+class CryptoCycleService(BaseCycleService):
     """Runs a single crypto trading cycle: gather data, analyze, execute.
 
     Crypto markets are 24/7 — there is no market-hours check.
@@ -45,6 +46,7 @@ class CryptoCycleService:
         self_review=None,
         notifier=None,
     ) -> None:
+        super().__init__()
         self._broker = broker
         self._screener = screener
         self._strategy = strategy
@@ -61,215 +63,262 @@ class CryptoCycleService:
         self._ml_signal = ml_signal_classifier
         self._self_review = self_review
         self._notifier = notifier
+        self._consecutive_flat_skips = 0
+        self._settings = get_settings()
 
-    async def run_cycle(self) -> None:
-        """Execute one complete crypto trading cycle.
+    async def _pre_cycle_checks(self) -> bool:
+        return True  # Crypto markets are 24/7
 
-        Steps:
-        1. Check if daily loss limit has been breached.
-        2. Determine tradeable halal pairs.
-        3. Gather market data (klines from WS buffer or REST fallback).
-        4. Fetch order books.
-        5. Run LLM strategy analysis.
-        6. Execute resulting trades.
-        """
-        logger.info("=== CRYPTO TRADING CYCLE ===")
+    async def _should_halt(self) -> bool:
+        if await self._portfolio.should_halt_trading():
+            logger.warning("Crypto daily loss limit reached — halting trades")
+            return True
+        return False
+
+    async def _run_cycle_impl(self) -> None:
+        halal_pairs = await self._get_tradeable_pairs()
+        if not halal_pairs:
+            logger.warning("No halal crypto pairs available, skipping cycle")
+            return
+
+        klines_by_symbol = await self._fetch_klines(halal_pairs)
+
+        indicators_cache: dict[str, dict] = {}
+        for symbol, klines in klines_by_symbol.items():
+            indicators_cache[symbol] = compute_all(klines)
+
+        open_trades = None
+        current_prices: dict[str, float] = {}
         try:
-            # 1. Check daily loss limit
-            if await self._portfolio.should_halt_trading():
-                logger.warning("Crypto daily loss limit reached — halting trades")
-                return
+            open_trades = await self._portfolio.get_open_trades()
+            if self._ws:
+                for pair in self._configured_pairs:
+                    p = self._ws.get_latest_price(pair)
+                    if p is not None:
+                        current_prices[pair] = p
+        except Exception as e:
+            logger.debug("Failed to fetch open trades: %s", e)
 
-            # 2. Get halal pairs (intersect configured pairs with screened halal ones)
-            halal_pairs = await self._get_tradeable_pairs()
-            if not halal_pairs:
-                logger.warning("No halal crypto pairs available, skipping cycle")
-                return
+        has_open_positions = bool(open_trades)
 
-            # 3. Gather kline data
-            klines_by_symbol = await self._fetch_klines(halal_pairs)
-
-            # 4. Fetch order books
-            orderbooks = await self._fetch_orderbooks(halal_pairs)
-
-            # 5. Gather portfolio state
-            account = await self._broker.get_account()
-            balances = await self._broker.get_balances()
-            positions_text = self._portfolio.format_positions_for_prompt(
-                balances, configured_pairs=self._configured_pairs
-            )
-            today_pnl = await self._portfolio.get_current_pnl()
-
-            # 5b. Skip LLM call if USDT balance is too low to place any order
-            usdt_free = account.usdt_free
-            if usdt_free < 5.0:
+        if not has_open_positions and self._should_skip_llm(indicators_cache):
+            self._consecutive_flat_skips += 1
+            if self._consecutive_flat_skips < self._settings.crypto_max_consecutive_flat_skips:
                 logger.info(
-                    "Available USDT ($%.2f) below $5 minimum — skipping LLM analysis",
+                    "All pairs flat — skipping LLM analysis (%d/%d)",
+                    self._consecutive_flat_skips,
+                    self._settings.crypto_max_consecutive_flat_skips,
+                )
+                return
+            logger.info(
+                "All pairs flat but reached max consecutive skips (%d) — forcing LLM",
+                self._consecutive_flat_skips,
+            )
+
+        self._consecutive_flat_skips = 0
+
+        orderbooks = await self._fetch_orderbooks(halal_pairs)
+
+        account = await self._broker.get_account()
+        balances = await self._broker.get_balances()
+
+        positions_text = self._portfolio.format_positions_for_prompt(
+            balances,
+            configured_pairs=self._configured_pairs,
+            open_trades=open_trades,
+            current_prices=current_prices,
+        )
+        today_pnl = await self._portfolio.get_current_pnl(account=account)
+
+        usdt_free = account.usdt_free
+        if usdt_free < 5.0:
+            tracked_bases = {
+                p.upper().removesuffix("USDT").removesuffix("BUSD")
+                for p in self._configured_pairs
+            }
+            has_positions = any(
+                b.asset in tracked_bases and b.free > 0 for b in balances
+            )
+            if not has_positions:
+                logger.info(
+                    "Available USDT ($%.2f) below $5 and no open positions — skipping",
                     usdt_free,
                 )
                 return
-
-            # 5c. Compute performance stats for the LLM prompt
-            performance_text = ""
-            if self._analytics:
-                try:
-                    stats = await self._analytics.compute_stats(lookback_days=7)
-                    performance_text = self._analytics.format_for_prompt(stats)
-                except Exception as e:
-                    logger.debug("Performance stats unavailable: %s", e)
-
-            # 5d. Gather sentiment data
-            sentiment_text = ""
-            if self._sentiment and self._sentiment.enabled:
-                try:
-                    from halal_trader.sentiment.scoring import format_sentiment_for_prompt
-                    signals = self._sentiment.latest_signals
-                    if signals:
-                        sentiment_text = format_sentiment_for_prompt(signals)
-
-                        # Send buzz alerts via Telegram
-                        if self._notifier:
-                            for pair, sig in signals.items():
-                                if sig.buzz >= 3.0:
-                                    try:
-                                        await self._notifier.notify_buzz(
-                                            pair, sig.buzz, sig.score
-                                        )
-                                    except Exception:
-                                        pass
-                except Exception as e:
-                    logger.debug("Sentiment data unavailable: %s", e)
-
-            # 5e. Multi-timeframe analysis
-            timeframe_text = ""
-            if self._timeframes:
-                try:
-                    from halal_trader.crypto.timeframes import format_timeframes_for_prompt
-                    tf_results = await self._timeframes.analyze(halal_pairs)
-                    if tf_results:
-                        timeframe_text = format_timeframes_for_prompt(tf_results)
-                except Exception as e:
-                    logger.debug("Multi-timeframe analysis unavailable: %s", e)
-
-            # 5f. Market regime detection
-            regime_text = ""
-            if self._regime:
-                try:
-                    from halal_trader.crypto.indicators import compute_all
-                    from halal_trader.crypto.regime import format_regime_for_prompt
-                    regimes = {}
-                    for pair, klines in klines_by_symbol.items():
-                        if len(klines) >= 30:
-                            indicators = compute_all(klines)
-                            if "error" not in indicators:
-                                regimes[pair] = self._regime.detect(indicators)
-                    if regimes:
-                        regime_text = format_regime_for_prompt(regimes)
-                except Exception as e:
-                    logger.debug("Regime detection unavailable: %s", e)
-
-            # 5g. ML model signals
-            ml_signals_text = ""
-            if self._ml_forecaster or self._ml_anomaly or self._ml_signal:
-                try:
-                    from halal_trader.crypto.indicators import compute_all
-                    from halal_trader.ml.anomaly import format_ml_signals_for_prompt
-                    from halal_trader.ml.forecaster import format_forecasts_for_prompt
-
-                    forecasts = {}
-                    anomalies = {}
-                    ml_confidence = {}
-
-                    for pair, klines in klines_by_symbol.items():
-                        if self._ml_forecaster and len(klines) >= 20:
-                            closes = [k.close for k in klines]
-                            fc = self._ml_forecaster.forecast(pair, closes)
-                            if fc:
-                                forecasts[pair] = fc
-
-                        if len(klines) >= 30:
-                            indicators = compute_all(klines)
-                            if "error" not in indicators:
-                                if self._ml_anomaly:
-                                    self._ml_anomaly.add_sample(indicators)
-                                    anomalies[pair] = self._ml_anomaly.detect(indicators)
-                                if self._ml_signal:
-                                    conf = self._ml_signal.predict_confidence(indicators)
-                                    if conf is not None:
-                                        ml_confidence[pair] = conf
-
-                    forecasts_text = format_forecasts_for_prompt(forecasts)
-                    ml_signals_text = format_ml_signals_for_prompt(
-                        forecasts_text, anomalies or None, ml_confidence or None
-                    )
-                except Exception as e:
-                    logger.debug("ML signals unavailable: %s", e)
-
-            # 5h. Self-improvement adjustments
-            active_adjustments = ""
-            if self._self_review:
-                active_adjustments = self._self_review.format_adjustments_for_prompt()
-
-            # 6. LLM analysis
-            plan = await self._strategy.analyze(
-                account=account,
-                positions_text=positions_text,
-                halal_pairs=halal_pairs,
-                klines_by_symbol=klines_by_symbol,
-                orderbooks=orderbooks,
-                today_pnl=today_pnl,
-                performance_text=performance_text,
-                sentiment_text=sentiment_text,
-                timeframe_text=timeframe_text,
-                ml_signals_text=ml_signals_text,
-                regime_text=regime_text,
-                active_adjustments=active_adjustments,
-            )
-
             logger.info(
-                "Crypto plan: %s | %d buys, %d sells",
-                plan.market_outlook[:80] if plan.market_outlook else "N/A",
-                len(plan.buys),
-                len(plan.sells),
+                "Low USDT ($%.2f) but have open positions — LLM may recommend sells",
+                usdt_free,
             )
 
-            # 7. Execute decisions
-            if plan.decisions:
-                results = await self._executor.execute_plan(plan)
-                for r in results:
-                    logger.info("Crypto execution: %s", r)
-                    if self._notifier and r.get("status") == "submitted":
-                        try:
-                            await self._notifier.notify_trade(
-                                pair=r.get("symbol", ""),
-                                side=r.get("action", ""),
-                                quantity=r.get("quantity", 0),
-                                price=r.get("price", 0),
-                            )
-                        except Exception:
-                            pass
-            else:
-                logger.info("No crypto trades to execute this cycle")
+        performance_text = ""
+        if self._analytics:
+            try:
+                stats = await self._analytics.compute_stats(lookback_days=7)
+                performance_text = self._analytics.format_for_prompt(stats)
+            except Exception as e:
+                logger.debug("Performance stats unavailable: %s", e)
 
-        except Exception as e:
-            logger.error("Crypto trading cycle failed: %s", e, exc_info=True)
+        sentiment_text = ""
+        if self._sentiment and self._sentiment.enabled:
+            try:
+                from halal_trader.sentiment.scoring import format_sentiment_for_prompt
+                signals = self._sentiment.latest_signals
+                if signals:
+                    sentiment_text = format_sentiment_for_prompt(signals)
+                    if self._notifier:
+                        for pair, sig in signals.items():
+                            if sig.buzz >= 3.0:
+                                try:
+                                    await self._notifier.notify_buzz(
+                                        pair, sig.buzz, sig.score
+                                    )
+                                except Exception as exc:
+                                    logger.debug("Failed to send buzz alert: %s", exc)
+            except Exception as e:
+                logger.debug("Sentiment data unavailable: %s", e)
+
+        timeframe_text = ""
+        if self._timeframes:
+            try:
+                from halal_trader.crypto.timeframes import format_timeframes_for_prompt
+                tf_results = await self._timeframes.analyze(halal_pairs)
+                if tf_results:
+                    timeframe_text = format_timeframes_for_prompt(tf_results)
+            except Exception as e:
+                logger.debug("Multi-timeframe analysis unavailable: %s", e)
+
+        regime_text = ""
+        if self._regime:
+            try:
+                from halal_trader.crypto.regime import format_regime_for_prompt
+                regimes = {}
+                for pair in klines_by_symbol:
+                    indicators = indicators_cache.get(pair, {})
+                    if not indicators or "error" in indicators:
+                        continue
+                    regimes[pair] = self._regime.detect(indicators)
+                if regimes:
+                    regime_text = format_regime_for_prompt(regimes)
+            except Exception as e:
+                logger.debug("Regime detection unavailable: %s", e)
+
+        ml_signals_text = ""
+        if self._ml_forecaster or self._ml_anomaly or self._ml_signal:
+            try:
+                from halal_trader.ml.anomaly import format_ml_signals_for_prompt
+                from halal_trader.ml.forecaster import format_forecasts_for_prompt
+
+                forecasts = {}
+                anomalies = {}
+                ml_confidence = {}
+
+                for pair, klines in klines_by_symbol.items():
+                    if self._ml_forecaster and len(klines) >= 20:
+                        closes = [k.close for k in klines]
+                        fc = self._ml_forecaster.forecast(pair, closes)
+                        if fc:
+                            forecasts[pair] = fc
+
+                    indicators = indicators_cache.get(pair, {})
+                    if not indicators or "error" in indicators:
+                        continue
+                    if self._ml_anomaly:
+                        self._ml_anomaly.add_sample(indicators)
+                        anomalies[pair] = self._ml_anomaly.detect(indicators)
+                    if self._ml_signal:
+                        conf = self._ml_signal.predict_confidence(indicators)
+                        if conf is not None:
+                            ml_confidence[pair] = conf
+
+                forecasts_text = format_forecasts_for_prompt(forecasts)
+                ml_signals_text = format_ml_signals_for_prompt(
+                    forecasts_text, anomalies or None, ml_confidence or None
+                )
+            except Exception as e:
+                logger.debug("ML signals unavailable: %s", e)
+
+        active_adjustments = ""
+        if self._self_review:
+            active_adjustments = self._self_review.format_adjustments_for_prompt()
+
+        exchange_rules_text = self._broker.format_filters_for_prompt()
+
+        plan = await self._strategy.analyze(
+            account=account,
+            positions_text=positions_text,
+            halal_pairs=halal_pairs,
+            klines_by_symbol=klines_by_symbol,
+            orderbooks=orderbooks,
+            today_pnl=today_pnl,
+            performance_text=performance_text,
+            sentiment_text=sentiment_text,
+            timeframe_text=timeframe_text,
+            ml_signals_text=ml_signals_text,
+            regime_text=regime_text,
+            active_adjustments=active_adjustments,
+            exchange_rules_text=exchange_rules_text,
+            indicators_cache=indicators_cache,
+        )
+
+        logger.info(
+            "Crypto plan: %s | %d buys, %d sells",
+            plan.market_outlook[:80] if plan.market_outlook else "N/A",
+            len(plan.buys),
+            len(plan.sells),
+        )
+
+        if plan.decisions:
+            results = await self._executor.execute_plan(plan, account=account)
+            for r in results:
+                logger.info("Crypto execution: %s", r)
+                if self._notifier and r.get("status") in ("submitted", "filled"):
+                    try:
+                        await self._notifier.notify_trade(
+                            pair=r.get("symbol", ""),
+                            side=r.get("action", ""),
+                            quantity=r.get("quantity", 0),
+                            price=r.get("price", 0),
+                        )
+                    except Exception as exc:
+                        logger.debug("Failed to send trade notification: %s", exc)
+        else:
+            logger.info("No crypto trades to execute this cycle")
 
     # ── Private helpers ────────────────────────────────────────
 
+    def _should_skip_llm(self, indicators_cache: dict[str, dict]) -> bool:
+        """Skip LLM if all pairs are flat with no directional signal."""
+        if not indicators_cache:
+            return True
+        s = self._settings
+        for symbol, indicators in indicators_cache.items():
+            if indicators.get("error"):
+                continue
+            price_change_5m = abs(indicators.get("price_change_5m", 0))
+            rsi = indicators.get("rsi_14", 50)
+            vol_ratio = indicators.get("volume_ratio", 1.0)
+            if (
+                price_change_5m > s.crypto_flat_price_threshold
+                or rsi < s.crypto_flat_rsi_lower
+                or rsi > s.crypto_flat_rsi_upper
+                or vol_ratio > s.crypto_flat_vol_threshold
+            ):
+                return False
+        return True
+
     async def _get_tradeable_pairs(self) -> list[str]:
         """Get the intersection of configured pairs and halal-screened pairs."""
+        max_pairs = self._settings.crypto_max_pairs_per_cycle
         halal_symbols = await self._screener.get_halal_pairs()
 
         if not halal_symbols:
-            # If no cache yet, use configured pairs (first run)
             logger.info("No halal cache — using configured pairs: %s", self._configured_pairs)
-            return self._configured_pairs[:_MAX_PAIRS_PER_CYCLE]
+            return self._configured_pairs[:max_pairs]
 
         halal_set = {s.upper() for s in halal_symbols}
         tradeable = []
         for pair in self._configured_pairs:
             upper_pair = pair.upper()
-            # Extract base asset by removing known quote suffixes
             for suffix in ("USDT", "BUSD"):
                 if upper_pair.endswith(suffix):
                     base = upper_pair.removesuffix(suffix)
@@ -280,7 +329,6 @@ class CryptoCycleService:
             if upper_pair in halal_set or base in halal_set:
                 tradeable.append(pair)
 
-        # Deduplicate
         seen: set[str] = set()
         unique: list[str] = []
         for p in tradeable:
@@ -289,37 +337,45 @@ class CryptoCycleService:
                 unique.append(p)
 
         if unique:
-            return unique[:_MAX_PAIRS_PER_CYCLE]
-        return self._configured_pairs[:_MAX_PAIRS_PER_CYCLE]
+            return unique[:max_pairs]
+        return self._configured_pairs[:max_pairs]
 
     async def _fetch_klines(self, pairs: list[str]) -> dict[str, list[Kline]]:
-        """Fetch klines from WebSocket buffer or REST fallback."""
-        klines_by_symbol: dict[str, list[Kline]] = {}
-
-        for pair in pairs:
-            # Try WebSocket buffer first
+        """Fetch klines from WebSocket buffer or REST fallback (parallel)."""
+        async def _get_klines(pair: str) -> tuple[str, list[Kline]]:
             if self._ws:
                 ws_klines = self._ws.get_klines(pair, limit=100)
                 if len(ws_klines) >= 20:
-                    klines_by_symbol[pair] = ws_klines
-                    continue
+                    return pair, ws_klines
+            klines = await self._broker.get_klines(pair, interval="1m", limit=100)
+            return pair, klines
 
-            # REST fallback
-            try:
-                klines = await self._broker.get_klines(pair, interval="1m", limit=100)
-                klines_by_symbol[pair] = klines
-            except Exception as e:
-                logger.debug("Failed to get klines for %s: %s", pair, e)
-
+        results = await asyncio.gather(
+            *[_get_klines(p) for p in pairs], return_exceptions=True
+        )
+        klines_by_symbol: dict[str, list[Kline]] = {}
+        for result in results:
+            if isinstance(result, Exception):
+                logger.debug("Failed to get klines: %s", result)
+                continue
+            pair, klines = result
+            klines_by_symbol[pair] = klines
         return klines_by_symbol
 
     async def _fetch_orderbooks(self, pairs: list[str]) -> dict[str, dict[str, Any]]:
-        """Fetch order book depth for each pair."""
+        """Fetch order book depth for each pair (parallel)."""
+        async def _get_book(pair: str) -> tuple[str, dict[str, Any]]:
+            book = await self._broker.get_order_book(pair, limit=10)
+            return pair, book
+
+        results = await asyncio.gather(
+            *[_get_book(p) for p in pairs], return_exceptions=True
+        )
         orderbooks: dict[str, dict[str, Any]] = {}
-        for pair in pairs:
-            try:
-                book = await self._broker.get_order_book(pair, limit=10)
-                orderbooks[pair] = book
-            except Exception as e:
-                logger.debug("Failed to get order book for %s: %s", pair, e)
+        for result in results:
+            if isinstance(result, Exception):
+                logger.debug("Failed to get order book: %s", result)
+                continue
+            pair, book = result
+            orderbooks[pair] = book
         return orderbooks

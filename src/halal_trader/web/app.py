@@ -1,11 +1,12 @@
-"""FastAPI dashboard application — REST API + SSE + HTMX templates."""
+"""FastAPI dashboard application — REST API + WebSocket + React SPA serving."""
 
 from __future__ import annotations
 
 import asyncio
 import json
 import logging
-from datetime import datetime
+from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -16,63 +17,98 @@ from halal_trader.db.repository import Repository
 
 logger = logging.getLogger(__name__)
 
-_TEMPLATE_DIR = Path(__file__).parent / "templates"
+_DASHBOARD_DIST = Path(__file__).resolve().parent.parent.parent.parent / "dashboard" / "dist"
 
 
-def create_app():
+def _serialize(obj: Any) -> Any:
+    """Convert datetime values in dicts/lists to ISO strings for JSON."""
+    if isinstance(obj, list):
+        return [_serialize(item) for item in obj]
+    if isinstance(obj, dict):
+        return {k: _serialize(v) for k, v in obj.items()}
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    return obj
+
+app_state: dict[str, Any] = {}
+
+
+def create_app() -> Any:
     """Create and configure the FastAPI application."""
-    from fastapi import FastAPI
-    from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+    from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query
+    from fastapi.middleware.cors import CORSMiddleware
+    from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+    from fastapi.staticfiles import StaticFiles
 
-    app = FastAPI(title="Halal Trader Dashboard", version="0.2.0")
-
-    _state: dict[str, Any] = {}
-
-    @app.on_event("startup")
-    async def startup():
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
         settings = get_settings()
-        engine = await init_db(str(settings.db_path))
-        _state["engine"] = engine
-        _state["repo"] = Repository(engine)
-        _state["analytics"] = PerformanceAnalytics(_state["repo"])
+        engine = await init_db(str(settings.resolve_db_path()))
+        app_state["engine"] = engine
+        app_state["repo"] = Repository(engine)
+        app_state["analytics"] = PerformanceAnalytics(app_state["repo"])
+        app_state["started_at"] = datetime.now(timezone.utc)
+        yield
+        if "engine" in app_state:
+            await app_state["engine"].dispose()
 
-    @app.on_event("shutdown")
-    async def shutdown():
-        if "engine" in _state:
-            await _state["engine"].dispose()
+    app = FastAPI(title="Halal Trader Dashboard", version="0.2.0", lifespan=lifespan)
 
-    # ── HTML Pages ─────────────────────────────────────────────
-
-    @app.get("/", response_class=HTMLResponse)
-    async def index():
-        return _render_page("dashboard")
-
-    @app.get("/trades", response_class=HTMLResponse)
-    async def trades_page():
-        return _render_page("trades")
-
-    @app.get("/analytics", response_class=HTMLResponse)
-    async def analytics_page():
-        return _render_page("analytics")
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
     # ── REST API ───────────────────────────────────────────────
 
     @app.get("/api/trades")
-    async def api_trades(limit: int = 100):
-        repo: Repository = _state["repo"]
-        trades = await repo.get_recent_crypto_trades(limit)
-        return JSONResponse(trades)
+    async def api_trades(
+        limit: int = 100,
+        offset: int = 0,
+        pair: str | None = None,
+        side: str | None = None,
+        status: str | None = None,
+        from_date: str | None = None,
+        to_date: str | None = None,
+    ) -> JSONResponse:
+        repo: Repository = app_state["repo"]
+        trades = await repo.get_recent_crypto_trades(limit=limit + offset)
+        result = trades[offset:]
+
+        if pair:
+            result = [t for t in result if t.get("pair") == pair]
+        if side:
+            result = [t for t in result if t.get("side") == side]
+        if status:
+            result = [t for t in result if t.get("status") == status]
+        if from_date:
+            result = [
+                t for t in result
+                if (t.get("timestamp") or "") >= from_date
+            ]
+        if to_date:
+            result = [
+                t for t in result
+                if (t.get("timestamp") or "") <= to_date
+            ]
+
+        return JSONResponse(_serialize(result[:limit]))
 
     @app.get("/api/pnl/daily")
-    async def api_daily_pnl(days: int = 30):
-        repo: Repository = _state["repo"]
+    async def api_daily_pnl(days: int = 30) -> JSONResponse:
+        repo: Repository = app_state["repo"]
         pnl = await repo.get_crypto_pnl_history(limit=days)
-        return JSONResponse(pnl)
+        return JSONResponse(_serialize(pnl))
 
     @app.get("/api/analytics")
-    async def api_analytics(days: int = 7):
-        analytics: PerformanceAnalytics = _state["analytics"]
+    async def api_analytics(days: int = 7) -> JSONResponse:
+        analytics: PerformanceAnalytics = app_state["analytics"]
         stats = await analytics.compute_stats(lookback_days=days)
+        pf = stats.profit_factor
+        if pf == float("inf"):
+            pf = 999999.0
         return JSONResponse({
             "total_trades": stats.total_trades,
             "wins": stats.wins,
@@ -81,7 +117,7 @@ def create_app():
             "avg_win_pct": stats.avg_win_pct,
             "avg_loss_pct": stats.avg_loss_pct,
             "total_pnl": stats.total_pnl,
-            "profit_factor": stats.profit_factor,
+            "profit_factor": pf,
             "max_drawdown_pct": stats.max_drawdown_pct,
             "avg_hold_minutes": stats.avg_hold_minutes,
             "best_pair": stats.best_pair,
@@ -91,46 +127,112 @@ def create_app():
             "by_exit_reason": stats.by_exit_reason,
         })
 
+    @app.get("/api/positions")
+    async def api_positions() -> JSONResponse:
+        repo: Repository = app_state["repo"]
+        open_trades = await repo.get_open_crypto_trades()
+        positions = []
+        for t in open_trades:
+            d = t.model_dump()
+            current = None
+            ws_mgr = app_state.get("ws_manager")
+            if ws_mgr and hasattr(ws_mgr, "get_latest_price"):
+                current = ws_mgr.get_latest_price(t.pair)
+
+            entry = t.entry_price or t.price
+            d["entry_price"] = entry
+            if current and entry:
+                d["current_price"] = current
+                d["unrealized_pnl"] = (current - entry) * t.quantity
+                d["unrealized_pnl_pct"] = (current - entry) / entry
+            else:
+                d["current_price"] = entry
+                d["unrealized_pnl"] = 0.0
+                d["unrealized_pnl_pct"] = 0.0
+
+            positions.append(d)
+        return JSONResponse(_serialize(positions))
+
     @app.get("/api/decisions")
-    async def api_decisions(limit: int = 50):
-        repo: Repository = _state["repo"]
-        # Use raw SQL for LLM decisions since we don't have a dedicated method
-        from sqlalchemy import text
-        async with repo._engine.connect() as conn:
-            result = await conn.execute(
-                text(
-                    "SELECT * FROM llm_decisions ORDER BY timestamp DESC LIMIT :limit"
-                ),
-                {"limit": limit},
-            )
-            rows = [dict(row._mapping) for row in result]
-            for row in rows:
-                for k, v in row.items():
-                    if isinstance(v, datetime):
-                        row[k] = v.isoformat()
-            return JSONResponse(rows)
+    async def api_decisions(limit: int = 50) -> JSONResponse:
+        repo: Repository = app_state["repo"]
+        decisions = await repo.get_recent_decisions(limit=limit)
+        return JSONResponse(_serialize(decisions))
 
     @app.get("/api/adjustments")
-    async def api_adjustments():
-        repo: Repository = _state["repo"]
+    async def api_adjustments() -> JSONResponse:
+        repo: Repository = app_state["repo"]
         adjustments = await repo.get_recent_adjustments()
-        return JSONResponse(adjustments)
+        return JSONResponse(_serialize(adjustments))
+
+    @app.get("/api/sentiment")
+    async def api_sentiment() -> JSONResponse:
+        mgr = app_state.get("sentiment_manager")
+        if not mgr or not hasattr(mgr, "latest_signals"):
+            return JSONResponse([])
+
+        signals = []
+        for pair, sig in mgr.latest_signals.items():
+            signals.append({
+                "pair": pair,
+                "score": getattr(sig, "score", 0),
+                "buzz": getattr(sig, "buzz", 0),
+                "confidence": getattr(sig, "confidence", 0),
+                "top_narratives": getattr(sig, "top_narratives", []) or [],
+                "news_headlines": getattr(sig, "news_headlines", []) or [],
+                "data_sources": getattr(sig, "data_sources", []) or [],
+            })
+        return JSONResponse(signals)
+
+    @app.get("/api/config")
+    async def api_config() -> JSONResponse:
+        settings = get_settings()
+        return JSONResponse({
+            "llm_provider": settings.llm_provider.value,
+            "llm_model": settings.llm_model,
+            "crypto_pairs": settings.crypto_pairs,
+            "crypto_trading_interval_seconds": settings.crypto_trading_interval_seconds,
+            "crypto_max_position_pct": settings.crypto_max_position_pct,
+            "crypto_daily_loss_limit": settings.crypto_daily_loss_limit,
+            "crypto_daily_return_target": settings.crypto_daily_return_target,
+            "db_path": str(settings.db_path),
+        })
+
+    @app.get("/api/system/status")
+    async def api_system_status() -> JSONResponse:
+        started = app_state.get("started_at")
+        uptime = None
+        if started:
+            uptime = (datetime.now(timezone.utc) - started).total_seconds()
+
+        ws_health: dict[str, Any] = {}
+        ws_mgr = app_state.get("ws_manager")
+        if ws_mgr and hasattr(ws_mgr, "health_status"):
+            ws_health = ws_mgr.health_status()
+
+        return JSONResponse({
+            "bot_running": app_state.get("bot_running", False),
+            "last_cycle": app_state.get("last_cycle"),
+            "cycle_interval_seconds": get_settings().crypto_trading_interval_seconds,
+            "ws_health": ws_health,
+            "uptime_seconds": uptime,
+        })
 
     @app.get("/api/health")
-    async def api_health():
+    async def api_health() -> JSONResponse:
         return JSONResponse({
             "status": "running",
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "version": "0.2.0",
         })
 
     # ── SSE Live Updates ───────────────────────────────────────
 
     @app.get("/api/sse")
-    async def sse():
-        async def event_stream():
+    async def sse() -> StreamingResponse:
+        async def event_stream():  # type: ignore[return]
             while True:
-                repo: Repository = _state["repo"]
+                repo: Repository = app_state["repo"]
                 trades = await repo.get_recent_crypto_trades(5)
                 data = json.dumps({"trades": trades}, default=str)
                 yield f"data: {data}\n\n"
@@ -138,204 +240,46 @@ def create_app():
 
         return StreamingResponse(event_stream(), media_type="text/event-stream")
 
+    # ── WebSocket Live Prices ──────────────────────────────────
+
+    @app.websocket("/ws/prices")
+    async def ws_prices(
+        websocket: WebSocket,
+        symbols: list[str] = Query(default=[]),
+    ) -> None:
+        await websocket.accept()
+        try:
+            while True:
+                prices: dict[str, float] = {}
+                ws_mgr = app_state.get("ws_manager")
+                for sym in symbols:
+                    price = None
+                    if ws_mgr and hasattr(ws_mgr, "get_latest_price"):
+                        price = ws_mgr.get_latest_price(sym)
+                    if price is not None:
+                        prices[sym] = price
+                if prices:
+                    await websocket.send_json(prices)
+                await asyncio.sleep(1)
+        except WebSocketDisconnect:
+            pass
+        except Exception:
+            logger.debug("WebSocket connection closed")
+
+    # ── Static Files / SPA ─────────────────────────────────────
+
+    if _DASHBOARD_DIST.exists():
+        app.mount(
+            "/assets",
+            StaticFiles(directory=str(_DASHBOARD_DIST / "assets")),
+            name="static",
+        )
+
+        @app.get("/{full_path:path}")
+        async def spa_catch_all(full_path: str) -> FileResponse:
+            file = _DASHBOARD_DIST / full_path
+            if file.exists() and file.is_file():
+                return FileResponse(str(file))
+            return FileResponse(str(_DASHBOARD_DIST / "index.html"))
+
     return app
-
-
-def _render_page(page: str) -> str:
-    """Render an HTMX-powered HTML page."""
-    template_path = _TEMPLATE_DIR / f"{page}.html"
-    if template_path.exists():
-        return template_path.read_text()
-
-    # Inline fallback template
-    return _INLINE_TEMPLATES.get(page, _INLINE_TEMPLATES["dashboard"])
-
-
-_INLINE_TEMPLATES = {
-    "dashboard": """\
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Halal Trader Dashboard</title>
-    <script src="https://unpkg.com/htmx.org@2.0.4"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
-               background: #0a0a0f; color: #e0e0e0; }
-        .header { background: #111118; padding: 1rem 2rem; border-bottom: 1px solid #1a1a2e;
-                  display: flex; justify-content: space-between; align-items: center; }
-        .header h1 { font-size: 1.4rem; color: #4ade80; }
-        .nav { display: flex; gap: 1rem; }
-        .nav a { color: #888; text-decoration: none; padding: 0.5rem 1rem; border-radius: 6px; }
-        .nav a:hover, .nav a.active { color: #fff; background: #1a1a2e; }
-        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-                gap: 1rem; padding: 1.5rem; }
-        .card { background: #111118; border: 1px solid #1a1a2e; border-radius: 10px;
-                padding: 1.2rem; }
-        .card h3 { font-size: 0.85rem; color: #888; text-transform: uppercase;
-                   letter-spacing: 0.05em; margin-bottom: 0.5rem; }
-        .card .value { font-size: 1.8rem; font-weight: 700; }
-        .green { color: #4ade80; }
-        .red { color: #f87171; }
-        .chart-container { background: #111118; border: 1px solid #1a1a2e; border-radius: 10px;
-                          padding: 1.2rem; margin: 0 1.5rem 1.5rem; }
-        table { width: 100%; border-collapse: collapse; }
-        th, td { text-align: left; padding: 0.6rem 1rem; border-bottom: 1px solid #1a1a2e; }
-        th { color: #888; font-size: 0.8rem; text-transform: uppercase; }
-        .status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block;
-                     margin-right: 6px; }
-        .status-dot.live { background: #4ade80; animation: pulse 2s infinite; }
-        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
-    </style>
-</head>
-<body>
-    <div class="header">
-        <h1>Halal Trader</h1>
-        <div class="nav">
-            <a href="/" class="active">Dashboard</a>
-            <a href="/trades">Trades</a>
-            <a href="/analytics">Analytics</a>
-        </div>
-        <div><span class="status-dot live"></span> Live</div>
-    </div>
-    <div class="grid" id="stats" hx-get="/api/analytics" hx-trigger="load, every 30s"
-         hx-swap="innerHTML">
-        <div class="card"><h3>Loading...</h3></div>
-    </div>
-    <div class="chart-container">
-        <h3 style="color:#888;font-size:0.85rem;text-transform:uppercase;margin-bottom:1rem;">
-            Recent Trades</h3>
-        <div id="trades-table" hx-get="/api/trades?limit=20" hx-trigger="load, every 15s"
-             hx-swap="innerHTML">
-            <p style="color:#666;">Loading trades...</p>
-        </div>
-    </div>
-    <script>
-    document.body.addEventListener('htmx:afterSwap', function(e) {
-        if (e.detail.target.id === 'stats') {
-            try {
-                const data = JSON.parse(e.detail.xhr.responseText);
-                const pnlClass = data.total_pnl >= 0 ? 'green' : 'red';
-                const wrClass = data.win_rate >= 0.5 ? 'green' : 'red';
-                e.detail.target.innerHTML = `
-                    <div class="card"><h3>Total P&L</h3>
-                        <div class="value ${pnlClass}">$${data.total_pnl?.toFixed(2) || '0.00'}</div></div>
-                    <div class="card"><h3>Win Rate</h3>
-                        <div class="value ${wrClass}">${(data.win_rate*100)?.toFixed(0) || 0}%</div></div>
-                    <div class="card"><h3>Total Trades</h3>
-                        <div class="value">${data.total_trades || 0}</div></div>
-                    <div class="card"><h3>Profit Factor</h3>
-                        <div class="value">${data.profit_factor?.toFixed(2) || '0.00'}</div></div>
-                    <div class="card"><h3>Max Drawdown</h3>
-                        <div class="value red">${(data.max_drawdown_pct*100)?.toFixed(1) || 0}%</div></div>
-                    <div class="card"><h3>Streak</h3>
-                        <div class="value">${data.streak || 0} ${data.streak_type || ''}</div></div>`;
-            } catch(err) {}
-        }
-        if (e.detail.target.id === 'trades-table') {
-            try {
-                const trades = JSON.parse(e.detail.xhr.responseText);
-                if (!trades.length) { e.detail.target.innerHTML = '<p style="color:#666">No trades yet.</p>'; return; }
-                let html = '<table><tr><th>Time</th><th>Pair</th><th>Side</th><th>Qty</th><th>Price</th><th>Status</th></tr>';
-                trades.slice(0, 20).forEach(t => {
-                    const cls = t.side === 'buy' ? 'green' : 'red';
-                    html += `<tr><td>${(t.timestamp||'').slice(0,19)}</td><td>${t.pair||''}</td>
-                        <td class="${cls}">${(t.side||'').toUpperCase()}</td>
-                        <td>${Number(t.quantity||0).toFixed(6)}</td>
-                        <td>$${Number(t.price||0).toFixed(2)}</td><td>${t.status||''}</td></tr>`;
-                });
-                html += '</table>';
-                e.detail.target.innerHTML = html;
-            } catch(err) {}
-        }
-    });
-    </script>
-</body>
-</html>""",
-    "trades": """\
-<!DOCTYPE html>
-<html lang="en"><head><meta charset="UTF-8"><title>Trades - Halal Trader</title>
-<script src="https://unpkg.com/htmx.org@2.0.4"></script>
-<style>* { margin: 0; padding: 0; box-sizing: border-box; }
-body { font-family: system-ui, sans-serif; background: #0a0a0f; color: #e0e0e0; }
-.header { background: #111118; padding: 1rem 2rem; border-bottom: 1px solid #1a1a2e;
-          display: flex; justify-content: space-between; align-items: center; }
-.header h1 { font-size: 1.4rem; color: #4ade80; }
-.nav { display: flex; gap: 1rem; }
-.nav a { color: #888; text-decoration: none; padding: 0.5rem 1rem; border-radius: 6px; }
-.nav a:hover, .nav a.active { color: #fff; background: #1a1a2e; }
-.content { padding: 1.5rem; }
-table { width: 100%; border-collapse: collapse; background: #111118; border-radius: 10px; }
-th, td { text-align: left; padding: 0.6rem 1rem; border-bottom: 1px solid #1a1a2e; }
-th { color: #888; font-size: 0.8rem; text-transform: uppercase; }
-.green { color: #4ade80; } .red { color: #f87171; }</style></head>
-<body>
-<div class="header"><h1>Halal Trader</h1>
-<div class="nav"><a href="/">Dashboard</a><a href="/trades" class="active">Trades</a>
-<a href="/analytics">Analytics</a></div></div>
-<div class="content" id="trades" hx-get="/api/trades?limit=100" hx-trigger="load"
-     hx-swap="innerHTML"><p>Loading...</p></div>
-<script>
-document.body.addEventListener('htmx:afterSwap', function(e) {
-    if (e.detail.target.id !== 'trades') return;
-    try {
-        const trades = JSON.parse(e.detail.xhr.responseText);
-        let html = '<table><tr><th>Time</th><th>Pair</th><th>Side</th><th>Qty</th><th>Price</th><th>Status</th><th>Reasoning</th></tr>';
-        trades.forEach(t => {
-            const cls = t.side === 'buy' ? 'green' : 'red';
-            html += `<tr><td>${(t.timestamp||'').slice(0,19)}</td><td>${t.pair||''}</td>
-                <td class="${cls}">${(t.side||'').toUpperCase()}</td>
-                <td>${Number(t.quantity||0).toFixed(6)}</td><td>$${Number(t.price||0).toFixed(2)}</td>
-                <td>${t.status||''}</td><td>${(t.llm_reasoning||'').slice(0,60)}</td></tr>`;
-        });
-        e.detail.target.innerHTML = html + '</table>';
-    } catch(err) { e.detail.target.innerHTML = '<p>Error loading trades</p>'; }
-});
-</script></body></html>""",
-    "analytics": """\
-<!DOCTYPE html>
-<html lang="en"><head><meta charset="UTF-8"><title>Analytics - Halal Trader</title>
-<script src="https://unpkg.com/htmx.org@2.0.4"></script>
-<style>* { margin: 0; padding: 0; box-sizing: border-box; }
-body { font-family: system-ui, sans-serif; background: #0a0a0f; color: #e0e0e0; }
-.header { background: #111118; padding: 1rem 2rem; border-bottom: 1px solid #1a1a2e;
-          display: flex; justify-content: space-between; align-items: center; }
-.header h1 { font-size: 1.4rem; color: #4ade80; }
-.nav { display: flex; gap: 1rem; }
-.nav a { color: #888; text-decoration: none; padding: 0.5rem 1rem; border-radius: 6px; }
-.nav a:hover, .nav a.active { color: #fff; background: #1a1a2e; }
-.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-        gap: 1rem; padding: 1.5rem; }
-.card { background: #111118; border: 1px solid #1a1a2e; border-radius: 10px; padding: 1.2rem; }
-.card h3 { font-size: 0.85rem; color: #888; text-transform: uppercase; margin-bottom: 0.5rem; }
-.card .value { font-size: 1.5rem; font-weight: 700; }
-.green { color: #4ade80; } .red { color: #f87171; }</style></head>
-<body>
-<div class="header"><h1>Halal Trader</h1>
-<div class="nav"><a href="/">Dashboard</a><a href="/trades">Trades</a>
-<a href="/analytics" class="active">Analytics</a></div></div>
-<div class="grid" id="analytics" hx-get="/api/analytics?days=30" hx-trigger="load"
-     hx-swap="innerHTML"><div class="card"><h3>Loading...</h3></div></div>
-<script>
-document.body.addEventListener('htmx:afterSwap', function(e) {
-    if (e.detail.target.id !== 'analytics') return;
-    try {
-        const d = JSON.parse(e.detail.xhr.responseText);
-        e.detail.target.innerHTML = `
-            <div class="card"><h3>Total Trades (30d)</h3><div class="value">${d.total_trades}</div></div>
-            <div class="card"><h3>Win Rate</h3><div class="value ${d.win_rate>=0.5?'green':'red'}">${(d.win_rate*100).toFixed(0)}%</div></div>
-            <div class="card"><h3>Total P&L</h3><div class="value ${d.total_pnl>=0?'green':'red'}">$${d.total_pnl.toFixed(2)}</div></div>
-            <div class="card"><h3>Profit Factor</h3><div class="value">${d.profit_factor.toFixed(2)}</div></div>
-            <div class="card"><h3>Max Drawdown</h3><div class="value red">${(d.max_drawdown_pct*100).toFixed(1)}%</div></div>
-            <div class="card"><h3>Avg Win</h3><div class="value green">${(d.avg_win_pct*100).toFixed(2)}%</div></div>
-            <div class="card"><h3>Avg Loss</h3><div class="value red">${(d.avg_loss_pct*100).toFixed(2)}%</div></div>
-            <div class="card"><h3>Avg Hold</h3><div class="value">${d.avg_hold_minutes.toFixed(0)} min</div></div>
-            <div class="card"><h3>Best Pair</h3><div class="value green">${d.best_pair||'N/A'}</div></div>
-            <div class="card"><h3>Worst Pair</h3><div class="value red">${d.worst_pair||'N/A'}</div></div>`;
-    } catch(err) {}
-});
-</script></body></html>""",
-}

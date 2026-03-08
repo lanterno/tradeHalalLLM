@@ -1,19 +1,23 @@
 """Crypto portfolio and P&L tracking."""
 
 import logging
+from datetime import UTC, datetime
 from typing import Any
 
+from halal_trader.core.portfolio import BasePortfolioTracker
 from halal_trader.crypto.exchange import BinanceClient
+from halal_trader.db.models import CryptoTrade
 from halal_trader.domain.models import CryptoBalance
 from halal_trader.domain.ports import TradeRepository
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_EQUITY = 10_000.0
 
-
-class CryptoPortfolioTracker:
+class CryptoPortfolioTracker(BasePortfolioTracker):
     """Tracks crypto portfolio state and daily P&L."""
+
+    _DEFAULT_EQUITY: float = 10_000.0
+    _label: str = "Crypto "
 
     def __init__(
         self,
@@ -22,88 +26,50 @@ class CryptoPortfolioTracker:
         *,
         daily_loss_limit: float,
     ) -> None:
+        super().__init__(repo, daily_loss_limit=daily_loss_limit)
         self._broker = broker
-        self._repo = repo
-        self._daily_loss_limit = daily_loss_limit
-        self._starting_equity: float | None = None
 
-    async def record_day_start(self) -> float:
-        """Record the starting USDT-equivalent equity for today."""
-        account = await self._broker.get_account()
-        equity = account.total_balance_usdt or _DEFAULT_EQUITY
-        self._starting_equity = equity
+    # ── Hook implementations ───────────────────────────────────
+
+    async def _get_equity(self, **kwargs: Any) -> float:
+        account = kwargs.get("account")
+        if account is None:
+            account = await self._broker.get_account()
+        return account.total_balance_usdt or self._DEFAULT_EQUITY
+
+    async def _get_today_trades(self) -> list[dict[str, Any]]:
+        return await self._repo.get_today_crypto_trades()
+
+    async def _persist_day_start(self, equity: float) -> None:
         await self._repo.start_crypto_day(equity)
-        logger.info("Crypto day started with equity: $%.2f USDT", equity)
-        return equity
 
-    async def record_day_end(self) -> dict[str, Any]:
-        """Record end-of-day stats. Returns summary dict."""
-        account = await self._broker.get_account()
-        equity = account.total_balance_usdt or _DEFAULT_EQUITY
-        trades = await self._repo.get_today_crypto_trades()
-        trades_count = len(trades)
-
-        realized_pnl = equity - (self._starting_equity or equity)
+    async def _persist_day_end(
+        self, equity: float, pnl: float, count: int
+    ) -> None:
         await self._repo.end_crypto_day(
             ending_equity=equity,
-            realized_pnl=realized_pnl,
-            trades_count=trades_count,
+            realized_pnl=pnl,
+            trades_count=count,
         )
 
-        starting = self._starting_equity or equity
-        return_pct = (equity - starting) / starting if starting else 0
+    # ── Crypto-specific methods ────────────────────────────────
 
-        summary = {
-            "starting_equity": starting,
-            "ending_equity": equity,
-            "realized_pnl": realized_pnl,
-            "return_pct": return_pct,
-            "trades_count": trades_count,
-        }
-        logger.info(
-            "Crypto day ended: $%.2f -> $%.2f (P&L: $%+.2f, %+.2f%%, %d trades)",
-            starting,
-            equity,
-            realized_pnl,
-            return_pct * 100,
-            trades_count,
-        )
-        return summary
-
-    async def get_current_pnl(self) -> float:
-        """Get current P&L for today."""
-        account = await self._broker.get_account()
-        equity = account.total_balance_usdt or _DEFAULT_EQUITY
-        starting = self._starting_equity or equity
-        return equity - starting
+    async def get_open_trades(self) -> list[CryptoTrade]:
+        """Return buy trades that haven't been closed yet."""
+        return await self._repo.get_open_crypto_trades()
 
     async def get_balances_summary(self) -> list[CryptoBalance]:
         """Get all current balances."""
         return await self._broker.get_balances()
 
-    async def should_halt_trading(self) -> bool:
-        """Check if daily loss limit has been breached."""
-        pnl = await self.get_current_pnl()
-        starting = self._starting_equity or _DEFAULT_EQUITY
-        loss_pct = abs(pnl) / starting if pnl < 0 else 0
-
-        if loss_pct >= self._daily_loss_limit:
-            logger.warning(
-                "Crypto daily loss limit breached: %.2f%% (limit: %.2f%%)",
-                loss_pct * 100,
-                self._daily_loss_limit * 100,
-            )
-            return True
-        return False
-
     def format_positions_for_prompt(
-        self, balances: list[CryptoBalance], configured_pairs: list[str] | None = None
+        self,
+        balances: list[CryptoBalance],
+        configured_pairs: list[str] | None = None,
+        open_trades: list[CryptoTrade] | None = None,
+        current_prices: dict[str, float] | None = None,
     ) -> str:
-        """Format current balances into text for the LLM prompt.
-
-        Only shows balances for configured trading pairs to avoid flooding
-        the prompt with hundreds of irrelevant testnet dust balances.
-        """
+        """Format current balances with entry price, unrealized P&L, and hold duration."""
         if configured_pairs:
             relevant_assets = {
                 p.upper().removesuffix("USDT").removesuffix("BUSD")
@@ -113,6 +79,13 @@ class CryptoPortfolioTracker:
         else:
             relevant_assets = None
 
+        trade_by_asset: dict[str, CryptoTrade] = {}
+        if open_trades:
+            for t in open_trades:
+                asset = t.pair.upper().removesuffix("USDT").removesuffix("BUSD")
+                trade_by_asset[asset] = t
+
+        now = datetime.now(UTC)
         lines = []
         for b in balances:
             if b.free + b.locked <= 0:
@@ -121,7 +94,32 @@ class CryptoPortfolioTracker:
                 continue
             if b.asset == "USDT":
                 lines.append(f"  USDT (cash): {b.free:.2f} (locked: {b.locked:.2f})")
-            else:
-                lines.append(f"  {b.asset}: {b.free:.8f} (locked: {b.locked:.8f})")
+                continue
+
+            line = f"  {b.asset}: {b.free:.8f}"
+            trade = trade_by_asset.get(b.asset)
+            if trade and trade.entry_price:
+                price = (current_prices or {}).get(f"{b.asset}USDT")
+                entry_str = f"entry: ${trade.entry_price:,.2f}"
+                pnl_str = ""
+                if price:
+                    unrealized = (price - trade.entry_price) * b.free
+                    pnl_pct = (price - trade.entry_price) / trade.entry_price * 100
+                    pnl_str = f", unrealized: ${unrealized:+,.2f} ({pnl_pct:+.1f}%)"
+                held_str = ""
+                if trade.timestamp:
+                    ts = trade.timestamp
+                    if ts.tzinfo is None:
+                        ts = ts.replace(tzinfo=UTC)
+                    held_min = (now - ts).total_seconds() / 60
+                    if held_min < 60:
+                        held_str = f", held: {held_min:.0f}m"
+                    else:
+                        held_str = f", held: {held_min / 60:.1f}h"
+                line += f" ({entry_str}{pnl_str}{held_str})"
+            elif b.locked > 0:
+                line += f" (locked: {b.locked:.8f})"
+
+            lines.append(line)
 
         return "\n".join(lines) if lines else "No open positions."

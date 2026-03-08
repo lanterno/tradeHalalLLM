@@ -30,17 +30,6 @@ class TestTradeRecording:
         assert trade_id is not None
         assert trade_id > 0
 
-    async def test_update_trade_status(self, repo):
-        trade_id = await repo.record_trade(
-            symbol="AAPL", side="buy", quantity=10, status="submitted"
-        )
-        await repo.update_trade_status(trade_id, "filled", price=191.00)
-
-        trades = await repo.get_recent_trades(limit=1)
-        assert len(trades) == 1
-        assert trades[0]["status"] == "filled"
-        assert trades[0]["price"] == 191.00
-
     async def test_get_today_trades(self, repo):
         await repo.record_trade(symbol="AAPL", side="buy", quantity=10)
         await repo.record_trade(symbol="NVDA", side="sell", quantity=5)

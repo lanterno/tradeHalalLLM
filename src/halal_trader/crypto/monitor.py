@@ -1,17 +1,22 @@
 """Live position monitor — watches open trades against SL/TP using WebSocket prices."""
 
+from __future__ import annotations
+
 import asyncio
 import logging
-from typing import Any
+from typing import TYPE_CHECKING
 
-from halal_trader.crypto.exchange import BinanceClient
+from halal_trader.crypto.exchange import BinanceClient, extract_fill_price
 from halal_trader.crypto.websocket import BinanceWSManager
 from halal_trader.db.models import CryptoTrade
 from halal_trader.db.repository import Repository
 
+if TYPE_CHECKING:
+    from halal_trader.notifications.telegram import TelegramNotifier
+
 logger = logging.getLogger(__name__)
 
-_MIN_NOTIONAL_USDT = 5.0
+_FALLBACK_MIN_NOTIONAL = 5.0
 
 
 class PositionMonitor:
@@ -30,6 +35,7 @@ class PositionMonitor:
         check_interval: float = 2.0,
         trailing_stop_activation_pct: float | None = None,
         trailing_stop_distance_pct: float = 0.003,
+        notifier: TelegramNotifier | None = None,
     ) -> None:
         self._broker = broker
         self._repo = repo
@@ -37,6 +43,7 @@ class PositionMonitor:
         self._check_interval = check_interval
         self._trailing_activation_pct = trailing_stop_activation_pct
         self._trailing_distance_pct = trailing_stop_distance_pct
+        self._notifier = notifier
         self._running = False
         self._task: asyncio.Task[None] | None = None
         self._high_water: dict[int, float] = {}
@@ -81,11 +88,11 @@ class PositionMonitor:
     async def _check_trade(self, trade: CryptoTrade, price: float) -> None:
         """Check a single trade against its SL/TP levels."""
         trade_id = trade.id
-        assert trade_id is not None
+        if trade_id is None:
+            return
 
-        # Update trailing stop if enabled
         if self._trailing_activation_pct and trade.entry_price and trade.stop_loss:
-            self._update_trailing_stop(trade, price)
+            await self._update_trailing_stop(trade, price)
 
         if trade.stop_loss and price <= trade.stop_loss:
             logger.warning(
@@ -104,10 +111,13 @@ class PositionMonitor:
     async def _exit_position(self, trade: CryptoTrade, current_price: float, reason: str) -> None:
         """Place a market sell to exit the position and record the closure."""
         trade_id = trade.id
-        assert trade_id is not None
+        if trade_id is None:
+            return
 
+        sf = self._broker.get_symbol_filter(trade.pair)
+        min_notional = sf.min_notional if sf else _FALLBACK_MIN_NOTIONAL
         notional = trade.quantity * current_price
-        if notional < _MIN_NOTIONAL_USDT:
+        if notional < min_notional:
             logger.info(
                 "Skipping auto-exit for %s #%d: notional $%.2f below minimum",
                 trade.pair, trade_id, notional,
@@ -122,7 +132,9 @@ class PositionMonitor:
                 quantity=trade.quantity,
                 order_type="MARKET",
             )
-            fill_price = self._extract_fill_price(order_result) or current_price
+            fill_price = extract_fill_price(order_result) or current_price
+            order_status = order_result.get("status", "")
+            db_status = "filled" if order_status == "FILLED" else "submitted"
 
             await self._repo.record_crypto_trade(
                 pair=trade.pair,
@@ -130,7 +142,7 @@ class PositionMonitor:
                 quantity=trade.quantity,
                 price=fill_price,
                 order_id=str(order_result.get("orderId", "")),
-                status="submitted",
+                status=db_status,
                 llm_reasoning=f"Auto {reason}: price ${current_price:.2f}",
             )
 
@@ -142,6 +154,18 @@ class PositionMonitor:
                 reason, trade.pair, trade_id, trade.quantity, fill_price, pnl,
             )
 
+            if self._notifier and self._notifier.enabled:
+                try:
+                    await self._notifier.notify_sl_tp(
+                        pair=trade.pair,
+                        exit_reason=reason,
+                        entry_price=trade.entry_price or 0,
+                        exit_price=fill_price,
+                        pnl=pnl,
+                    )
+                except Exception as e:
+                    logger.debug("Failed to send SL/TP notification: %s", e)
+
         except Exception as e:
             logger.error(
                 "Failed to auto-exit %s #%d (%s): %s",
@@ -150,12 +174,11 @@ class PositionMonitor:
 
         self._high_water.pop(trade_id, None)
 
-    def _update_trailing_stop(self, trade: CryptoTrade, price: float) -> None:
+    async def _update_trailing_stop(self, trade: CryptoTrade, price: float) -> None:
         """Ratchet the stop-loss up when price moves favourably."""
         trade_id = trade.id
-        assert trade_id is not None
-        assert trade.entry_price is not None
-        assert self._trailing_activation_pct is not None
+        if trade_id is None or trade.entry_price is None or self._trailing_activation_pct is None:
+            return
 
         activation_price = trade.entry_price * (1 + self._trailing_activation_pct)
         if price < activation_price:
@@ -170,21 +193,8 @@ class PositionMonitor:
         current_sl = trade.stop_loss or 0
         if new_sl > current_sl:
             trade.stop_loss = new_sl
+            await self._repo.update_crypto_trade_stop_loss(trade_id, new_sl)
             logger.debug(
                 "Trailing stop updated for %s #%d: SL $%.2f -> $%.2f (high $%.2f)",
                 trade.pair, trade_id, current_sl, new_sl, high,
             )
-
-    @staticmethod
-    def _extract_fill_price(order_result: dict[str, Any]) -> float | None:
-        fills = order_result.get("fills", [])
-        if fills:
-            total_qty = sum(float(f.get("qty", 0)) for f in fills)
-            total_cost = sum(float(f.get("price", 0)) * float(f.get("qty", 0)) for f in fills)
-            if total_qty > 0:
-                return total_cost / total_qty
-        exec_qty = float(order_result.get("executedQty", 0))
-        cumulative = float(order_result.get("cumulativeQuoteQty", 0))
-        if exec_qty > 0 and cumulative > 0:
-            return cumulative / exec_qty
-        return None

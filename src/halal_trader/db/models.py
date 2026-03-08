@@ -63,6 +63,7 @@ class LlmDecision(SQLModel, table=True):
     parsed_action: str | None = None  # stored as JSON string
     symbols: str | None = None  # stored as JSON string
     execution_ms: int | None = None
+    thinking: str | None = None  # reasoning chain from thinking-mode LLMs
 
 
 # ── Crypto Tables ──────────────────────────────────────────────
@@ -132,19 +133,6 @@ class StrategyAdjustment(SQLModel, table=True):
     reasoning: str | None = None
 
 
-class TradeJournal(SQLModel, table=True):
-    """Extended context snapshot for trade review."""
-
-    __tablename__ = "trade_journal"
-
-    id: int | None = Field(default=None, primary_key=True)
-    trade_id: int
-    entry_context: str | None = None  # JSON: indicators, sentiment, regime at entry
-    exit_context: str | None = None  # JSON: indicators, sentiment at exit
-    review_notes: str | None = None
-    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
-
-
 async def init_db(db_path: str) -> AsyncEngine:
     """Create the async engine and ensure all tables exist.
 
@@ -173,6 +161,17 @@ async def init_db(db_path: str) -> AsyncEngine:
             if col_name not in existing_names:
                 await conn.execute(
                     sa.text(f"ALTER TABLE crypto_trades ADD COLUMN {col_name} {col_type}")
+                )
+
+        _NEW_LLM_DECISION_COLUMNS = [
+            ("thinking", "TEXT"),
+        ]
+        existing = await conn.execute(sa.text("PRAGMA table_info(llm_decisions)"))
+        existing_names = {row[1] for row in existing}
+        for col_name, col_type in _NEW_LLM_DECISION_COLUMNS:
+            if col_name not in existing_names:
+                await conn.execute(
+                    sa.text(f"ALTER TABLE llm_decisions ADD COLUMN {col_name} {col_type}")
                 )
 
     return engine

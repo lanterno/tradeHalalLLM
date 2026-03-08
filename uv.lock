@@ -524,6 +524,7 @@ dependencies = [
     { name = "anthropic" },
     { name = "apscheduler" },
     { name = "click" },
+    { name = "fastapi" },
     { name = "greenlet" },
     { name = "httpx" },
     { name = "mcp" },
@@ -536,6 +537,7 @@ dependencies = [
     { name = "rich" },
     { name = "sqlmodel" },
     { name = "tzdata" },
+    { name = "uvicorn" },
 ]
 
 [package.optional-dependencies]
@@ -582,6 +584,7 @@ requires-dist = [
     { name = "apscheduler", specifier = ">=3.10" },
     { name = "chronos-forecasting", marker = "extra == 'ml'" },
     { name = "click" },
+    { name = "fastapi", specifier = ">=0.135.1" },
     { name = "fastapi", marker = "extra == 'dashboard'" },
     { name = "greenlet" },
     { name = "halal-trader", extras = ["ml", "sentiment", "dashboard"], marker = "extra == 'all'" },
@@ -606,6 +609,7 @@ requires-dist = [
     { name = "transformers", marker = "extra == 'fingpt'" },
     { name = "transformers", marker = "extra == 'ml'" },
     { name = "tzdata" },
+    { name = "uvicorn", specifier = ">=0.40.0" },
     { name = "uvicorn", marker = "extra == 'dashboard'" },
     { name = "xgboost", marker = "extra == 'ml'" },
 ]

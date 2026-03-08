@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import signal
+import time
 
-from halal_trader.agent.llm import create_llm
-from halal_trader.config import get_settings
+from halal_trader.core.llm import create_llm
+from halal_trader.core.scheduler import BaseTradingBot
 from halal_trader.crypto.analytics import PerformanceAnalytics
 from halal_trader.crypto.cycle import CryptoCycleService
 from halal_trader.crypto.exchange import BinanceClient
@@ -16,18 +18,16 @@ from halal_trader.crypto.portfolio import CryptoPortfolioTracker
 from halal_trader.crypto.screener import CryptoHalalScreener
 from halal_trader.crypto.strategy import CryptoTradingStrategy
 from halal_trader.crypto.websocket import BinanceWSManager
-from halal_trader.db.models import init_db
-from halal_trader.db.repository import Repository
 from halal_trader.market_hours import today_eastern
 
 logger = logging.getLogger(__name__)
 
 
-class CryptoTradingBot:
+class CryptoTradingBot(BaseTradingBot):
     """Composition root and scheduler — wires crypto components and runs 24/7."""
 
     def __init__(self) -> None:
-        self.settings = get_settings()
+        super().__init__()
         self._binance = BinanceClient(
             api_key=self.settings.binance_api_key,
             secret_key=self.settings.binance_secret_key,
@@ -42,16 +42,14 @@ class CryptoTradingBot:
         self._sentiment_manager = None
         self._self_review = None
         self._notifier = None
-        self._running = False
         self._last_day: str | None = None
 
-    async def initialize(self) -> None:
-        """Set up all crypto trading components."""
+    async def _create_components(self) -> None:
+        """Create crypto-specific trading components."""
         logger.info("Initializing crypto trading bot...")
 
-        # Database
-        engine = await init_db(str(self.settings.db_path))
-        repo = Repository(engine)
+        repo = self._repo
+        assert repo is not None
 
         # Binance connection
         await self._binance.connect()
@@ -82,6 +80,8 @@ class CryptoTradingBot:
             daily_loss_limit=self.settings.crypto_daily_loss_limit,
             daily_return_target=self.settings.crypto_daily_return_target,
             max_simultaneous_positions=self.settings.crypto_max_simultaneous_positions,
+            llm_failure_threshold=self.settings.crypto_llm_failure_threshold,
+            llm_cooldown_seconds=self.settings.crypto_llm_cooldown_seconds,
         )
 
         # Executor
@@ -91,6 +91,9 @@ class CryptoTradingBot:
             max_position_pct=self.settings.crypto_max_position_pct,
             max_simultaneous_positions=self.settings.crypto_max_simultaneous_positions,
             configured_pairs=self.settings.crypto_pairs,
+            circuit_breaker_threshold=self.settings.crypto_circuit_breaker_threshold,
+            circuit_breaker_window=self.settings.crypto_circuit_breaker_window,
+            circuit_breaker_cooldown=self.settings.crypto_circuit_breaker_cooldown,
         )
 
         # Portfolio tracker
@@ -155,9 +158,10 @@ class CryptoTradingBot:
             except Exception as e:
                 logger.warning("ML models initialization failed: %s", e)
 
-        # Self-improvement loop
+        # Self-improvement loop (load saved adjustments from DB)
         from halal_trader.crypto.self_improve import TradeSelfReview
-        self._self_review = TradeSelfReview(llm, repo)
+        self._self_review = TradeSelfReview(llm, repo, strategy=strategy)
+        await self._self_review.load_from_db()
 
         # Cycle service (wired with all new components)
         self._cycle_service = CryptoCycleService(
@@ -180,30 +184,31 @@ class CryptoTradingBot:
         )
 
         # Position monitor (SL/TP enforcement)
+        notifier_for_monitor = self._notifier if self._notifier.enabled else None
         self._monitor = PositionMonitor(
             broker=self._binance,
             repo=repo,
             ws_manager=self._ws,
-            check_interval=2.0,
-            trailing_stop_activation_pct=0.005,
-            trailing_stop_distance_pct=0.003,
+            check_interval=self.settings.crypto_monitor_interval,
+            trailing_stop_activation_pct=self.settings.crypto_trailing_stop_activation_pct,
+            trailing_stop_distance_pct=self.settings.crypto_trailing_stop_distance_pct,
+            notifier=notifier_for_monitor,
         )
         await self._monitor.start()
 
+        # Expose live components to the dashboard
+        from halal_trader.web.app import app_state as _web_state
+        _web_state["ws_manager"] = self._ws
+        _web_state["sentiment_manager"] = self._sentiment_manager
+        _web_state["exchange"] = self._binance
+        _web_state["bot_running"] = True
+
         logger.info("Crypto trading bot initialized successfully")
 
-    async def shutdown(self) -> None:
-        """Clean up all resources."""
-        logger.info("Shutting down crypto trading bot...")
-        self._running = False
-        if self._monitor:
-            await self._monitor.stop()
-        if self._sentiment_manager:
-            await self._sentiment_manager.stop()
-        if self._ws:
-            await self._ws.stop()
-        await self._binance.disconnect()
-        logger.info("Crypto trading bot shut down")
+    def _get_cycle_service(self) -> CryptoCycleService:
+        if self._cycle_service is None:
+            raise RuntimeError("CryptoTradingBot.initialize() must be called first")
+        return self._cycle_service
 
     # ── Daily Routines ─────────────────────────────────────────
 
@@ -241,8 +246,8 @@ class CryptoTradingBot:
             if self._notifier and self._notifier.enabled:
                 try:
                     await self._notifier.notify_daily_summary(summary or {})
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("Failed to send daily summary: %s", e)
         except Exception as e:
             logger.error("Crypto daily end failed: %s", e)
 
@@ -250,9 +255,43 @@ class CryptoTradingBot:
         """Check if we've crossed into a new Eastern day and handle rollover."""
         today = today_eastern().isoformat()
         if self._last_day is not None and today != self._last_day:
-            # End the previous day and start the new one
             await self._daily_end()
             await self._daily_start()
+
+    # ── Shutdown ───────────────────────────────────────────────
+
+    async def shutdown(self) -> None:
+        """Clean up all resources."""
+        logger.info("Shutting down crypto trading bot...")
+        self._running = False
+
+        from halal_trader.web.app import app_state as _web_state
+        _web_state["bot_running"] = False
+
+        components: list[tuple[str, object | None]] = [
+            ("monitor", self._monitor),
+            ("sentiment", self._sentiment_manager),
+            ("notifier", self._notifier),
+            ("websocket", self._ws),
+        ]
+        for name, component in components:
+            if component is None:
+                continue
+            try:
+                if hasattr(component, "stop"):
+                    await component.stop()
+                elif hasattr(component, "close"):
+                    await component.close()
+            except Exception as e:
+                logger.warning("Failed to stop %s: %s", name, e)
+
+        try:
+            await self._binance.disconnect()
+        except Exception as e:
+            logger.warning("Failed to disconnect Binance: %s", e)
+
+        await super().shutdown()
+        logger.info("Crypto trading bot shut down")
 
     # ── Main Loop ──────────────────────────────────────────────
 
@@ -260,6 +299,11 @@ class CryptoTradingBot:
         """Start the crypto trading bot with continuous 1-minute cycles."""
         await self.initialize()
         self._running = True
+
+        # Register signal handlers for clean shutdown
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            loop.add_signal_handler(sig, self._handle_signal)
 
         # Initial daily start
         await self._daily_start()
@@ -278,9 +322,8 @@ class CryptoTradingBot:
 
         try:
             while self._running:
-                cycle_start = asyncio.get_event_loop().time()
+                cycle_start = time.monotonic()
 
-                # Check for day rollover (UTC midnight)
                 await self._check_day_rollover()
 
                 # Check if self-review should trigger (consecutive losses)
@@ -289,14 +332,18 @@ class CryptoTradingBot:
                         if await self._self_review.should_trigger_review():
                             logger.info("Consecutive losses detected — triggering self-review")
                             await self._self_review.review(lookback_days=1)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug("Self-review trigger check failed: %s", e)
 
                 # Run trading cycle
                 await self._cycle_service.run_cycle()
 
+                from halal_trader.web.app import app_state as _web_state
+                from datetime import datetime, timezone
+                _web_state["last_cycle"] = datetime.now(timezone.utc).isoformat()
+
                 # Sleep for remaining interval time
-                elapsed = asyncio.get_event_loop().time() - cycle_start
+                elapsed = time.monotonic() - cycle_start
                 sleep_time = max(0, interval - elapsed)
                 if sleep_time > 0:
                     logger.debug(
@@ -312,17 +359,13 @@ class CryptoTradingBot:
                         interval,
                     )
 
-        except KeyboardInterrupt, asyncio.CancelledError:
+        except (KeyboardInterrupt, asyncio.CancelledError):
             logger.info("Crypto bot interrupted")
         finally:
             await self._daily_end()
             await self.shutdown()
 
-    async def run_once(self) -> None:
-        """Run a single crypto trading cycle (useful for testing)."""
-        await self.initialize()
-        try:
-            await self._daily_start()
-            await self._cycle_service.run_cycle()
-        finally:
-            await self.shutdown()
+    def _handle_signal(self) -> None:
+        """Signal handler: set running flag to false for clean shutdown."""
+        logger.info("Received shutdown signal")
+        self._running = False

@@ -64,10 +64,10 @@ class CryptoBroker(Protocol):
     async def get_ticker_price(self, symbol: str) -> float: ...
 
 
-# ── LLM Provider ───────────────────────────────────────────────
+# ── LLM Backend ────────────────────────────────────────────────
 
 
-class LLMProvider(Protocol):
+class LLMBackend(Protocol):
     """Abstraction over an LLM backend (Ollama, OpenAI, Anthropic, etc.)."""
 
     model: str
@@ -118,10 +118,6 @@ class TradeRepository(Protocol):
         llm_reasoning: str | None = None,
     ) -> int: ...
 
-    async def update_trade_status(
-        self, trade_id: int, status: str, price: float | None = None
-    ) -> None: ...
-
     async def get_today_trades(self) -> list[dict[str, Any]]: ...
     async def get_recent_trades(self, limit: int = 50) -> list[dict[str, Any]]: ...
 
@@ -150,6 +146,7 @@ class TradeRepository(Protocol):
         parsed_action: dict | None = None,
         symbols: list[str] | None = None,
         execution_ms: int | None = None,
+        thinking: str | None = None,
     ) -> int: ...
 
     # Crypto trades
@@ -163,14 +160,26 @@ class TradeRepository(Protocol):
         exchange: str = "binance",
         status: str = "pending",
         llm_reasoning: str | None = None,
+        entry_price: float | None = None,
+        stop_loss: float | None = None,
+        target_price: float | None = None,
     ) -> int: ...
 
-    async def update_crypto_trade_status(
-        self, trade_id: int, status: str, price: float | None = None
+    async def update_crypto_trade_stop_loss(
+        self, trade_id: int, new_stop_loss: float
     ) -> None: ...
+
+    async def close_crypto_trade(
+        self, trade_id: int, exit_price: float, exit_reason: str
+    ) -> None: ...
+
+    async def get_open_crypto_trades(self) -> list: ...
 
     async def get_today_crypto_trades(self) -> list[dict[str, Any]]: ...
     async def get_recent_crypto_trades(self, limit: int = 50) -> list[dict[str, Any]]: ...
+    async def get_completed_round_trips(
+        self, limit: int = 100, lookback_days: int | None = None
+    ) -> list[dict[str, Any]]: ...
 
     # Crypto daily P&L
     async def start_crypto_day(self, starting_equity: float) -> None: ...
@@ -191,3 +200,16 @@ class TradeRepository(Protocol):
     async def get_crypto_halal_status(self, symbol: str) -> str | None: ...
     async def get_crypto_halal_symbols(self) -> list[str]: ...
     async def is_crypto_cache_fresh(self, max_age_hours: int = 24) -> bool: ...
+
+    # Strategy adjustments
+    async def record_strategy_adjustment(
+        self,
+        parameter: str,
+        old_value: float | None,
+        new_value: float,
+        reasoning: str | None = None,
+    ) -> int: ...
+
+    async def get_latest_strategy_adjustments(self) -> dict[str, float]: ...
+    async def get_recent_adjustments(self, limit: int = 20) -> list[dict[str, Any]]: ...
+    async def get_recent_decisions(self, limit: int = 50) -> list[dict[str, Any]]: ...

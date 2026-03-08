@@ -30,6 +30,8 @@ dependencies = [
     "python-json-logger",
     # Timezone data (required on minimal/WSL systems without system tzdata)
     "tzdata",
+    "uvicorn>=0.40.0",
+    "fastapi>=0.135.1",
 ]
 
 [project.optional-dependencies]

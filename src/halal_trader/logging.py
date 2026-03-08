@@ -106,6 +106,7 @@ def setup_logging(settings: Settings, *, cli_log_level: str | None = None) -> No
     )
     file_handler.setLevel(settings.log_file_level.upper())
     file_handler.setFormatter(json_formatter)
+    file_handler.addFilter(ThirdPartyConsoleFilter())
 
     # ── Error-only file handler ───────────────────────────────
     error_handler = RotatingFileHandler(
@@ -120,3 +121,9 @@ def setup_logging(settings: Settings, *, cli_log_level: str | None = None) -> No
     root.addHandler(console_handler)
     root.addHandler(file_handler)
     root.addHandler(error_handler)
+
+    # Silence extremely noisy third-party loggers at source level.
+    # These produce thousands of DEBUG messages per minute (WebSocket frames)
+    # that drown out useful application logs even in the JSON file.
+    for name in ("binance", "websockets", "aiosqlite"):
+        logging.getLogger(name).setLevel(logging.WARNING)

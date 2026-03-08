@@ -9,12 +9,10 @@ from pathlib import Path
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
-from halal_trader.agent.llm import create_llm
-from halal_trader.agent.sentiment import SentimentAnalyzer
-from halal_trader.agent.strategy import TradingStrategy
-from halal_trader.config import get_settings
-from halal_trader.db.models import init_db
-from halal_trader.db.repository import Repository
+from halal_trader.core.llm import create_llm
+from halal_trader.trading.sentiment import SentimentAnalyzer
+from halal_trader.trading.strategy import TradingStrategy
+from halal_trader.core.scheduler import BaseTradingBot
 from halal_trader.domain.ports import Broker, ComplianceScreener
 from halal_trader.halal.cache import HalalScreener
 from halal_trader.halal.zoya import ZoyaClient
@@ -36,11 +34,11 @@ logger = logging.getLogger(__name__)
 _PID_FILE = Path("halal_trader.pid")
 
 
-class TradingBot:
+class TradingBot(BaseTradingBot):
     """Composition root and scheduler — wires components and runs cron jobs."""
 
     def __init__(self) -> None:
-        self.settings = get_settings()
+        super().__init__()
         self._mcp_client = AlpacaMCPClient()
         self.broker: Broker = self._mcp_client
         self.screener: ComplianceScreener | None = None
@@ -48,16 +46,14 @@ class TradingBot:
         self.portfolio: PortfolioTracker | None = None
         self.cycle_service: TradingCycleService | None = None
         self.scheduler = AsyncIOScheduler()
-        self._running = False
-        self._lock_file: int | None = None  # file descriptor for PID lock
+        self._lock_file: int | None = None
 
-    async def initialize(self) -> None:
-        """Set up all components."""
+    async def _create_components(self) -> None:
+        """Create stock-specific trading components."""
         logger.info("Initializing trading bot...")
 
-        # Database
-        engine = await init_db(str(self.settings.db_path))
-        repo = Repository(engine)
+        repo = self._repo
+        assert repo is not None
 
         # Broker connection (Alpaca via MCP)
         await self._mcp_client.connect()
@@ -111,6 +107,18 @@ class TradingBot:
 
         logger.info("Trading bot initialized successfully")
 
+    def _get_cycle_service(self) -> TradingCycleService:
+        _, _, _, cs = self._require_initialized()
+        return cs
+
+    async def _daily_start(self) -> None:
+        await self.pre_market()
+
+    async def _daily_end(self) -> None:
+        await self.end_of_day()
+
+    # ── PID Lock ─────────────────────────────────────────────────
+
     def _acquire_lock(self) -> None:
         """Acquire a PID file lock to prevent duplicate bot instances."""
         try:
@@ -120,7 +128,6 @@ class TradingBot:
             os.ftruncate(self._lock_file, len(str(os.getpid())))
             logger.info("Acquired PID lock (pid=%d)", os.getpid())
         except OSError:
-            # Another instance holds the lock — read its PID for the error message
             try:
                 with open(_PID_FILE) as f:
                     other_pid = f.read().strip()
@@ -146,6 +153,8 @@ class TradingBot:
                 pass
             logger.info("Released PID lock")
 
+    # ── Shutdown ─────────────────────────────────────────────────
+
     async def shutdown(self) -> None:
         """Clean up all resources."""
         logger.info("Shutting down trading bot...")
@@ -153,7 +162,7 @@ class TradingBot:
             self.scheduler.shutdown(wait=False)
         await self._mcp_client.disconnect()
         self._release_lock()
-        self._running = False
+        await super().shutdown()
         logger.info("Trading bot shut down")
 
     def _require_initialized(
@@ -272,7 +281,6 @@ class TradingBot:
         """
         today = today_eastern()
         if effective_close_time(today).hour >= 16:
-            # Not an early-close day — the regular 3:50 PM job handles it.
             return
         logger.info("=== EARLY CLOSE END OF DAY ROUTINE === (market closes at 1:00 PM ET)")
         await self.end_of_day()
@@ -370,14 +378,5 @@ class TradingBot:
 
         except (KeyboardInterrupt, asyncio.CancelledError):
             logger.info("Bot interrupted")
-        finally:
-            await self.shutdown()
-
-    async def run_once(self) -> None:
-        """Run a single trading cycle (useful for testing)."""
-        await self.initialize()
-        try:
-            await self.pre_market()
-            await self.trading_cycle()
         finally:
             await self.shutdown()

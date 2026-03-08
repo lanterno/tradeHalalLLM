@@ -2,18 +2,18 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import time
 from typing import Any
 
+from halal_trader.core.strategy import BaseStrategy
 from halal_trader.crypto.indicators import compute_all, format_indicators_for_prompt
 from halal_trader.domain.models import (
     CryptoAccount,
     CryptoTradingPlan,
     Kline,
 )
-from halal_trader.domain.ports import LLMProvider, TradeRepository
+from halal_trader.domain.ports import LLMBackend, TradeRepository
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +30,9 @@ RULES:
 than the "Max Position Size" dollar value shown in the portfolio status. Use at most 90% of \
 that limit to leave room for price movement. Check the "Available" balance too — you cannot \
 spend more USDT than what is available.
+4b. CRITICAL QUANTITY RULE: your quantity MUST comply with the EXCHANGE TRADING RULES \
+section. The quantity must be a multiple of the step size and >= min_qty. The order's \
+notional value (quantity × price) must be >= min_notional.
 5. Current daily loss limit is {daily_loss_limit:.0%} — if losses approach this, be conservative.
 6. Target daily return: {daily_return_target:.0%}.
 7. Maximum simultaneous open positions: {max_positions}.
@@ -119,6 +122,9 @@ Today's P&L: ${today_pnl:+,.2f} ({today_pnl_pct:+.2%})
 === TECHNICAL INDICATORS (1-minute candles) ===
 {indicators_text}
 
+=== EXCHANGE TRADING RULES ===
+{exchange_rules_text}
+
 === ORDER BOOK SUMMARY ===
 {orderbook_text}
 
@@ -145,12 +151,12 @@ Use sentiment and ML signals as your edge — big players don't have this data.
 """
 
 
-class CryptoTradingStrategy:
-    """Orchestrates the LLM to produce a CryptoTradingPlan from market data."""
+class CryptoTradingStrategy(BaseStrategy):
+    """Crypto scalping strategy with LLM circuit breaker."""
 
     def __init__(
         self,
-        llm: LLMProvider,
+        llm: LLMBackend,
         repo: TradeRepository,
         *,
         llm_provider_name: str,
@@ -158,14 +164,38 @@ class CryptoTradingStrategy:
         daily_loss_limit: float,
         daily_return_target: float,
         max_simultaneous_positions: int,
+        llm_failure_threshold: int = 5,
+        llm_cooldown_seconds: int = 600,
     ) -> None:
-        self._llm = llm
-        self._repo = repo
-        self._llm_provider_name = llm_provider_name
-        self._max_position_pct = max_position_pct
-        self._daily_loss_limit = daily_loss_limit
-        self._daily_return_target = daily_return_target
-        self._max_simultaneous_positions = max_simultaneous_positions
+        super().__init__(
+            llm,
+            repo,
+            llm_provider_name=llm_provider_name,
+            max_position_pct=max_position_pct,
+            daily_loss_limit=daily_loss_limit,
+            daily_return_target=daily_return_target,
+            max_simultaneous_positions=max_simultaneous_positions,
+        )
+        self._consecutive_llm_failures = 0
+        self._llm_cooldown_until: float = 0
+        self._llm_failure_threshold = llm_failure_threshold
+        self._llm_cooldown_seconds = llm_cooldown_seconds
+
+    def _on_llm_success(self) -> None:
+        self._consecutive_llm_failures = 0
+
+    def _on_llm_failure(self, error: Exception, elapsed_ms: int, prefix: str) -> None:
+        self._consecutive_llm_failures += 1
+        logger.error(
+            "Crypto LLM analysis failed after %dms (%d consecutive): %s",
+            elapsed_ms, self._consecutive_llm_failures, error,
+        )
+        if self._consecutive_llm_failures >= self._llm_failure_threshold:
+            self._llm_cooldown_until = time.monotonic() + self._llm_cooldown_seconds
+            logger.warning(
+                "LLM failed %d times consecutively — entering %ds cooldown",
+                self._consecutive_llm_failures, self._llm_cooldown_seconds,
+            )
 
     async def analyze(
         self,
@@ -181,13 +211,25 @@ class CryptoTradingStrategy:
         ml_signals_text: str = "",
         regime_text: str = "",
         active_adjustments: str = "",
+        exchange_rules_text: str = "",
+        indicators_cache: dict[str, dict] | None = None,
     ) -> CryptoTradingPlan:
-        """Run the LLM analysis and return a structured CryptoTradingPlan."""
-        portfolio_value = account.total_balance_usdt or 1000
+        now = time.monotonic()
+        if now < self._llm_cooldown_until:
+            remaining = int(self._llm_cooldown_until - now)
+            logger.warning("LLM in cooldown (%ds remaining) — holding positions", remaining)
+            return CryptoTradingPlan(
+                market_outlook="LLM cooldown active — holding",
+                risk_notes=f"Cooldown for {remaining}s after {self._consecutive_llm_failures} consecutive failures",
+            )
+
+        portfolio_value = account.total_balance_usdt
+        if not portfolio_value:
+            logger.warning("Portfolio value is zero/None — falling back to $1000 for sizing")
+            portfolio_value = 1000
         today_pnl_pct = today_pnl / portfolio_value if portfolio_value else 0
 
-        # Pre-compute all technical indicators
-        indicators_text = self._build_indicators_text(klines_by_symbol)
+        indicators_text = self._build_indicators_text(klines_by_symbol, indicators_cache)
         orderbook_text = self._build_orderbook_text(orderbooks)
 
         adjustments_block = ""
@@ -220,6 +262,7 @@ class CryptoTradingStrategy:
             positions_text=positions_text or "No open positions.",
             halal_pairs=", ".join(halal_pairs),
             indicators_text=indicators_text,
+            exchange_rules_text=exchange_rules_text or "No exchange trading rules available.",
             orderbook_text=orderbook_text,
             sentiment_text=sentiment_text or "No sentiment data available.",
             timeframe_text=timeframe_text or "No multi-timeframe data available.",
@@ -229,82 +272,53 @@ class CryptoTradingStrategy:
             daily_return_target=self._daily_return_target,
         )
 
-        t0 = time.monotonic()
-        try:
-            raw = await self._llm.generate_json(user_prompt, system=system)
-            elapsed_ms = int((time.monotonic() - t0) * 1000)
-
-            plan = CryptoTradingPlan.model_validate(raw)
-
-            # Audit trail
-            await self._repo.record_decision(
-                provider=self._llm_provider_name,
-                model=self._llm.model,
-                prompt_summary=(
-                    f"Crypto: analyzed {len(halal_pairs)} halal pairs, "
-                    f"balance=${account.total_balance_usdt:.2f}"
-                ),
-                raw_response=json.dumps(raw),
-                parsed_action={
-                    "buys": len(plan.buys),
-                    "sells": len(plan.sells),
-                    "holds": len(plan.holds),
-                },
-                symbols=[d.symbol for d in plan.decisions],
-                execution_ms=elapsed_ms,
-            )
-
-            logger.info(
-                "Crypto LLM analysis complete in %dms: %d buys, %d sells, %d holds",
-                elapsed_ms,
-                len(plan.buys),
-                len(plan.sells),
-                len(plan.holds),
-            )
-            return plan
-
-        except Exception as e:
-            elapsed_ms = int((time.monotonic() - t0) * 1000)
-            logger.error("Crypto LLM analysis failed after %dms: %s", elapsed_ms, e)
-            await self._repo.record_decision(
-                provider=self._llm_provider_name,
-                model=self._llm.model,
-                prompt_summary="FAILED crypto analysis",
-                raw_response=str(e),
-                execution_ms=elapsed_ms,
-            )
-            return CryptoTradingPlan(
+        return await self._run_llm_analysis(
+            system,
+            user_prompt,
+            prompt_summary=(
+                f"Crypto: analyzed {len(halal_pairs)} halal pairs, "
+                f"balance=${account.total_balance_usdt:.2f}"
+            ),
+            validate=lambda raw: CryptoTradingPlan.model_validate(raw),
+            make_empty=lambda msg: CryptoTradingPlan(
                 market_outlook="Analysis failed — holding positions",
-                risk_notes=str(e),
-            )
+                risk_notes=msg,
+            ),
+            extract_symbols=lambda p: [d.symbol for d in p.decisions],
+            count_actions=lambda p: {
+                "buys": len(p.buys),
+                "sells": len(p.sells),
+                "holds": len(p.holds),
+            },
+            log_prefix="Crypto",
+        )
 
-    # ── Private helpers ────────────────────────────────────────
-
-    def _build_indicators_text(self, klines_by_symbol: dict[str, list[Kline]]) -> str:
-        """Compute technical indicators for each symbol and format for the prompt."""
+    def _build_indicators_text(
+        self,
+        klines_by_symbol: dict[str, list[Kline]],
+        indicators_cache: dict[str, dict] | None = None,
+    ) -> str:
         if not klines_by_symbol:
             return "No indicator data available."
-
         lines = []
         for symbol, klines in klines_by_symbol.items():
-            indicators = compute_all(klines)
+            if indicators_cache and symbol in indicators_cache:
+                indicators = indicators_cache[symbol]
+            else:
+                indicators = compute_all(klines)
             lines.append(format_indicators_for_prompt(symbol, indicators))
         return "\n".join(lines)
 
     def _build_orderbook_text(self, orderbooks: dict[str, dict[str, Any]]) -> str:
-        """Format order book data for the prompt."""
         if not orderbooks:
             return "No order book data available."
-
         lines = []
         for symbol, book in orderbooks.items():
             bids = book.get("bids", [])
             asks = book.get("asks", [])
-
             bid_vol = sum(q for _, q in bids[:5]) if bids else 0
             ask_vol = sum(q for _, q in asks[:5]) if asks else 0
             total = bid_vol + ask_vol
-
             if total > 0:
                 imbalance = (bid_vol - ask_vol) / total
                 direction = (
@@ -315,16 +329,13 @@ class CryptoTradingStrategy:
             else:
                 imbalance = 0
                 direction = "N/A"
-
             best_bid = bids[0][0] if bids else 0
             best_ask = asks[0][0] if asks else 0
             spread = best_ask - best_bid if best_ask and best_bid else 0
             spread_pct = (spread / best_bid * 100) if best_bid else 0
-
             lines.append(
                 f"  {symbol}: Bid={best_bid:.2f}, Ask={best_ask:.2f}, "
                 f"Spread={spread_pct:.4f}%, "
                 f"Imbalance={imbalance:+.2f} ({direction})"
             )
-
         return "\n".join(lines)
