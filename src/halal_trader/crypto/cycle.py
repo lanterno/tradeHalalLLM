@@ -290,6 +290,21 @@ class CryptoCycleService(BaseCycleService):
                 )
                 risk_text = self._risk_engine.format_for_prompt(risk_state)
 
+                # Cache the latest risk state for the dashboard.
+                try:
+                    from halal_trader.web.app import app_state as _web_state
+
+                    _web_state["risk_state"] = {
+                        "is_halted": risk_state.is_halted,
+                        "halt_reason": risk_state.halt_reason,
+                        "portfolio_heat_pct": getattr(risk_state, "portfolio_heat_pct", None),
+                        "drawdown_pct": getattr(risk_state, "drawdown_pct", None),
+                        "avg_correlation": getattr(risk_state, "avg_correlation", None),
+                        "summary": risk_text,
+                    }
+                except Exception:
+                    pass
+
                 if risk_state.is_halted:
                     logger.warning("Risk engine halt: %s", risk_state.halt_reason)
                     return

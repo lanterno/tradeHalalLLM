@@ -1,0 +1,230 @@
+"""Smoke + contract tests for the FastAPI dashboard endpoints."""
+
+from __future__ import annotations
+
+import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy.ext.asyncio import create_async_engine
+from sqlmodel import SQLModel
+
+from halal_trader.core import halt
+from halal_trader.db.repository import Repository
+from halal_trader.web import app as web_app
+
+
+@pytest.fixture
+def client(tmp_path, monkeypatch):
+    """TestClient pointed at a fresh tmp DB.
+
+    `init_db` (called by the app's lifespan) refuses any DB that isn't at
+    the head Alembic revision, so we apply migrations against the tmp DB
+    via `alembic.command.upgrade` first.
+    """
+    db_path = tmp_path / "web.db"
+    monkeypatch.setenv("DB_PATH", str(db_path))
+    monkeypatch.setenv("BACKUP_DIR", str(tmp_path / "backups"))
+    monkeypatch.setenv("LOG_DIR", str(tmp_path / "logs"))
+
+    # Bust the Settings singleton so the new env vars are picked up.
+    import halal_trader.config as _config
+
+    _config._settings = None
+
+    # Apply migrations to the fresh tmp DB.
+    from halal_trader.db import admin
+
+    admin.upgrade("head")
+
+    web_app.app_state.clear()
+    app = web_app.create_app()
+
+    with TestClient(app) as c:
+        yield c
+
+    # Reset the Settings singleton for the next test.
+    _config._settings = None
+
+
+# ── Health & basic GETs ────────────────────────────────────────
+
+
+def test_health(client):
+    r = client.get("/api/health")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "running"
+    assert "timestamp" in body
+
+
+def test_request_id_echoed_back(client):
+    r = client.get("/api/health", headers={"X-Request-ID": "test-rid-123"})
+    assert r.status_code == 200
+    assert r.headers.get("X-Request-ID") == "test-rid-123"
+
+
+def test_request_id_generated_if_missing(client):
+    r = client.get("/api/health")
+    rid = r.headers.get("X-Request-ID", "")
+    assert rid.startswith("req-")
+
+
+def test_trades_endpoint_empty(client):
+    r = client.get("/api/trades")
+    assert r.status_code == 200
+    assert r.json() == []
+
+
+def test_pnl_daily_empty(client):
+    r = client.get("/api/pnl/daily?days=7")
+    assert r.status_code == 200
+    assert isinstance(r.json(), list)
+
+
+def test_analytics_returns_zeros_with_no_trades(client):
+    r = client.get("/api/analytics")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total_trades"] == 0
+
+
+# ── Risk + system status ───────────────────────────────────────
+
+
+def test_risk_state_unavailable_when_unset(client):
+    r = client.get("/api/risk/state")
+    assert r.status_code == 200
+    assert r.json() == {"available": False}
+
+
+def test_risk_state_round_trips_cached_value(client):
+    web_app.app_state["risk_state"] = {
+        "is_halted": False,
+        "halt_reason": None,
+        "portfolio_heat_pct": 0.012,
+        "drawdown_pct": 0.04,
+        "avg_correlation": 0.55,
+        "summary": "all clear",
+    }
+    r = client.get("/api/risk/state")
+    body = r.json()
+    assert body["available"] is True
+    assert body["portfolio_heat_pct"] == 0.012
+
+
+def test_halt_get_returns_disabled_initially(client):
+    r = client.get("/api/system/halt")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["enabled"] is False
+
+
+def test_halt_post_requires_confirm_header(client):
+    r = client.post("/api/system/halt", json={"reason": "drill"})
+    assert r.status_code == 400
+    assert "X-Halt-Confirm" in r.json()["error"]
+
+
+def test_halt_post_engages_with_confirm_header(client):
+    r = client.post(
+        "/api/system/halt",
+        json={"reason": "drill"},
+        headers={"X-Halt-Confirm": "yes"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["enabled"] is True
+    assert body["reason"] == "drill"
+    assert body["set_by"] == "dashboard"
+
+    # Subsequent GET reflects the engaged state.
+    body2 = client.get("/api/system/halt").json()
+    assert body2["enabled"] is True
+
+
+def test_halt_delete_requires_confirm_header(client):
+    r = client.delete("/api/system/halt")
+    assert r.status_code == 400
+
+
+def test_halt_delete_clears_with_confirm_header(client):
+    client.post(
+        "/api/system/halt",
+        json={"reason": "drill"},
+        headers={"X-Halt-Confirm": "yes"},
+    )
+    r = client.delete("/api/system/halt", headers={"X-Halt-Confirm": "yes"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["enabled"] is False
+    assert body["reason"] == "drill"  # audit retained
+
+
+def test_reconcile_recent_paginates(client):
+    # Seed a row directly via the engine.
+    from datetime import UTC, datetime
+
+    from sqlmodel.ext.asyncio.session import AsyncSession
+
+    from halal_trader.db.models import ReconciliationLog
+
+    async def _seed():
+        eng = web_app.app_state["engine"]
+        async with AsyncSession(eng) as session:
+            for i in range(5):
+                session.add(
+                    ReconciliationLog(
+                        timestamp=datetime.now(UTC),
+                        market="crypto",
+                        symbol=f"SYM{i}",
+                        db_quantity=1.0,
+                        broker_quantity=0.5,
+                        drift_pct=0.5,
+                    )
+                )
+            await session.commit()
+
+    import asyncio
+
+    asyncio.run(_seed())
+
+    r = client.get("/api/system/reconcile/recent?limit=3")
+    assert r.status_code == 200
+    rows = r.json()
+    assert len(rows) == 3
+
+
+def test_reconcile_recent_caps_limit(client):
+    r = client.get("/api/system/reconcile/recent?limit=9999")
+    assert r.status_code == 200
+
+
+def test_backups_endpoint_empty(client, tmp_path, monkeypatch):
+    from halal_trader.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "backup_dir", tmp_path / "noexist")
+    r = client.get("/api/system/backups")
+    assert r.status_code == 200
+    assert r.json() == []
+
+
+# ── Metrics endpoints ─────────────────────────────────────────
+
+
+def test_metrics_cycles_returns_zero_count_with_no_log(client, tmp_path, monkeypatch):
+    from halal_trader.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "log_dir", tmp_path)
+    r = client.get("/api/metrics/cycles?window=3600")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["count"] == 0
+    assert body["window_seconds"] == 3600
+
+
+def test_metrics_llm_returns_zero_calls_with_no_log(client, tmp_path, monkeypatch):
+    from halal_trader.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "log_dir", tmp_path)
+    r = client.get("/api/metrics/llm?window=86400")
+    assert r.status_code == 200
+    assert r.json()["calls"] == 0

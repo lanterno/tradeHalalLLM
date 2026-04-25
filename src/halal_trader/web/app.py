@@ -36,7 +36,7 @@ app_state: dict[str, Any] = {}
 
 def create_app() -> Any:
     """Create and configure the FastAPI application."""
-    from fastapi import FastAPI, Query, Request, WebSocket, WebSocketDisconnect
+    from fastapi import Body, FastAPI, Header, Query, Request, WebSocket, WebSocketDisconnect
     from fastapi.middleware.cors import CORSMiddleware
     from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
     from fastapi.staticfiles import StaticFiles
@@ -279,6 +279,102 @@ def create_app() -> Any:
                 "p95_ms": m.p95_ms,
                 "by_provider": m.by_provider,
             }
+        )
+
+    # ── Risk + system-status ───────────────────────────────────
+
+    @app.get("/api/risk/state")
+    async def api_risk_state() -> JSONResponse:
+        """Return the most recent PortfolioRiskState (cached by the cycle)."""
+        state = app_state.get("risk_state")
+        if state is None:
+            return JSONResponse({"available": False})
+        return JSONResponse({"available": True, **state})
+
+    @app.get("/api/system/halt")
+    async def api_get_halt() -> JSONResponse:
+        from halal_trader.core.halt import get_status
+
+        engine = app_state["engine"]
+        s = await get_status(engine)
+        return JSONResponse(
+            {
+                "enabled": s.enabled,
+                "reason": s.reason,
+                "set_by": s.set_by,
+                "set_at": s.set_at.isoformat() if s.set_at else None,
+            }
+        )
+
+    @app.post("/api/system/halt")
+    async def api_set_halt(
+        body: dict | None = Body(default=None),
+        x_halt_confirm: str = Header(default=""),
+    ) -> JSONResponse:
+        if x_halt_confirm.lower() != "yes":
+            return JSONResponse(
+                {"error": "X-Halt-Confirm: yes header required"},
+                status_code=400,
+            )
+        from halal_trader.core.halt import set_halt
+
+        reason = (body or {}).get("reason") or "dashboard"
+        engine = app_state["engine"]
+        s = await set_halt(engine, reason=reason, set_by="dashboard")
+        return JSONResponse(
+            {
+                "enabled": s.enabled,
+                "reason": s.reason,
+                "set_by": s.set_by,
+                "set_at": s.set_at.isoformat() if s.set_at else None,
+            }
+        )
+
+    @app.delete("/api/system/halt")
+    async def api_clear_halt(
+        x_halt_confirm: str = Header(default=""),
+    ) -> JSONResponse:
+        if x_halt_confirm.lower() != "yes":
+            return JSONResponse(
+                {"error": "X-Halt-Confirm: yes header required"},
+                status_code=400,
+            )
+        from halal_trader.core.halt import clear_halt
+
+        engine = app_state["engine"]
+        s = await clear_halt(engine)
+        return JSONResponse(
+            {
+                "enabled": s.enabled,
+                "reason": s.reason,
+                "set_by": s.set_by,
+                "set_at": s.set_at.isoformat() if s.set_at else None,
+            }
+        )
+
+    @app.get("/api/system/reconcile/recent")
+    async def api_reconcile_recent(limit: int = 25) -> JSONResponse:
+        from halal_trader.core.reconcile import get_recent_logs
+
+        engine = app_state["engine"]
+        rows = await get_recent_logs(engine, limit=max(1, min(limit, 200)))
+        return JSONResponse(rows)
+
+    @app.get("/api/system/backups")
+    async def api_backups() -> JSONResponse:
+        from halal_trader.db.backup import list_backups
+
+        settings = get_settings()
+        rows = list_backups(settings.backup_dir)
+        return JSONResponse(
+            [
+                {
+                    "path": str(r.path),
+                    "size_bytes": r.size_bytes,
+                    "backed_up_at": r.backed_up_at.isoformat(),
+                }
+                for r in rows
+            ]
         )
 
     # ── SSE Live Updates ───────────────────────────────────────

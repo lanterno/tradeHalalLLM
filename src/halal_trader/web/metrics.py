@@ -90,7 +90,7 @@ def _iter_records(path: Path, max_lines: int) -> Iterator[dict]:
     for line in _tail(path, max_lines):
         try:
             yield json.loads(line)
-        except (ValueError, TypeError):
+        except ValueError, TypeError:
             continue
 
 

@@ -6,8 +6,6 @@ import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-import pytest
-
 from halal_trader.core import events
 from halal_trader.web import metrics
 
@@ -140,12 +138,7 @@ def test_metrics_tolerate_malformed_lines(tmp_path):
     p = tmp_path / "halal_trader.log"
     with p.open("w", encoding="utf-8") as f:
         f.write("not json at all\n")
-        f.write(
-            json.dumps(
-                _record(events.CYCLE_COMPLETE, ts=now, elapsed_ms=42)
-            )
-            + "\n"
-        )
+        f.write(json.dumps(_record(events.CYCLE_COMPLETE, ts=now, elapsed_ms=42)) + "\n")
         f.write("{broken json\n")
     m = metrics.cycle_metrics(p, window_seconds=3600, now=now)
     assert m.count == 1
