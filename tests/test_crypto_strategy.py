@@ -202,32 +202,37 @@ class TestSellOnlyMode:
 
 class TestBuildOrderbookText:
     def test_empty_orderbooks(self):
-        strategy, _, _ = _make_strategy()
-        text = strategy._build_orderbook_text({})
+        from halal_trader.crypto.prompts import build_orderbook_text
+
+        text = build_orderbook_text({})
         assert "No order book" in text
 
     def test_formats_orderbook_with_imbalance(self):
-        strategy, _, _ = _make_strategy()
+        from halal_trader.crypto.prompts import build_orderbook_text
+
         orderbooks = {
             "BTCUSDT": {
                 "bids": [[50000.0, 2.0], [49990.0, 1.0]],
                 "asks": [[50010.0, 0.5], [50020.0, 0.3]],
             }
         }
-        text = strategy._build_orderbook_text(orderbooks)
+        text = build_orderbook_text(orderbooks)
         assert "BTCUSDT" in text
-        assert "BUY pressure" in text
+        # Bid volume > ask volume → labelled buy-side imbalance.
+        assert "buy-side" in text
 
 
 class TestBuildIndicatorsText:
     def test_empty_klines(self):
-        strategy, _, _ = _make_strategy()
-        text = strategy._build_indicators_text({}, None)
+        from halal_trader.crypto.prompts import build_indicators_text
+
+        text = build_indicators_text({}, None)
         assert "No indicator data" in text
 
     def test_uses_cache_when_available(self):
-        strategy, _, _ = _make_strategy()
+        from halal_trader.crypto.prompts import build_indicators_text
+
         cache = {"BTCUSDT": {"rsi_14": 45, "error": None}}
         klines = {"BTCUSDT": _make_klines()}
-        text = strategy._build_indicators_text(klines, cache)
+        text = build_indicators_text(klines, cache)
         assert "BTCUSDT" in text

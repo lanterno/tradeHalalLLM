@@ -4,11 +4,7 @@ from __future__ import annotations
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy.ext.asyncio import create_async_engine
-from sqlmodel import SQLModel
 
-from halal_trader.core import halt
-from halal_trader.db.repository import Repository
 from halal_trader.web import app as web_app
 
 

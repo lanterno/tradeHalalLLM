@@ -366,6 +366,9 @@ class LLMBacktestEngine:
         cache_path.write_text(json.dumps(self._cache))
 
     def _cache_key(self, pair: str, step: int, indicators: dict) -> str:
+        """Legacy key — kept so old caches still hit. New writes use the
+        prompt-hash via :func:`prompts.prompt_cache_key` once the prompt
+        is built."""
         import hashlib
         import json
 
@@ -388,7 +391,14 @@ class LLMBacktestEngine:
             window_size: Number of candles to include in each analysis window.
             cycle_interval: Run LLM every N candles (to avoid excessive API calls).
         """
-        from halal_trader.crypto.indicators import compute_all, format_indicators_for_prompt
+        from halal_trader.crypto.indicators import compute_all
+        from halal_trader.crypto.prompts import (
+            PromptContext,
+            StrategyParams,
+            build_prompts,
+            prompt_cache_key,
+        )
+        from halal_trader.domain.models import CryptoAccount
 
         executor = SimulatedExecutor(
             initial_balance=self._initial_balance,
@@ -398,6 +408,14 @@ class LLMBacktestEngine:
         )
 
         llm_calls = 0
+        params = StrategyParams(
+            max_position_pct=self._max_position_pct,
+            daily_loss_limit=0.05,
+            daily_return_target=0.01,
+            max_positions=1,
+            stop_loss_pct=self._sl_pct,
+            take_profit_pct=self._tp_pct,
+        )
 
         for i in range(window_size, len(klines)):
             current = klines[i]
@@ -414,29 +432,45 @@ class LLMBacktestEngine:
                 executor.update_equity(current.close)
                 continue
 
-            cache_key = self._cache_key(pair, i, indicators)
+            # Build the same prompt the live cycle would build, with
+            # synthetic context derived from the simulated portfolio.
+            balance = executor.balance
+            if executor.position:
+                balance += executor.position.quantity * current.close
+            account = CryptoAccount(
+                total_balance_usdt=balance,
+                available_balance_usdt=executor.balance,
+                in_order_usdt=0.0,
+                usdt_free=executor.balance,
+            )
+            pos = executor.position
+            if pos is not None:
+                positions_text = (
+                    f"{pair}: LONG {pos.quantity:.6f} @ ${pos.entry_price:,.2f} "
+                    f"(SL ${pos.stop_loss or 0:,.2f}, TP ${pos.target_price or 0:,.2f})"
+                )
+                open_position_count = 1
+            else:
+                positions_text = "No open positions."
+                open_position_count = 0
+
+            ctx = PromptContext(
+                account=account,
+                positions_text=positions_text,
+                halal_pairs=[pair],
+                klines_by_symbol={pair: window},
+                indicators_cache={pair: indicators},
+                today_pnl=balance - self._initial_balance,
+                open_position_count=open_position_count,
+            )
+            system, user_prompt = build_prompts(ctx, params)
+            cache_key = prompt_cache_key(system, user_prompt)
+
             if cache_key in self._cache:
                 raw = self._cache[cache_key]
             else:
-                balance = executor.balance
-                if executor.position:
-                    balance += executor.position.quantity * current.close
-
-                prompt = (
-                    f"Pair: {pair}\nPrice: ${current.close:,.2f}\n"
-                    f"Balance: ${balance:,.2f}\n"
-                    f"Position: {'LONG' if executor.position else 'NONE'}\n"
-                    f"Indicators:\n{format_indicators_for_prompt(pair, indicators)}\n\n"
-                    f"Should I buy, sell, or hold? Respond with JSON: "
-                    f'{{"action": "buy"|"sell"|"hold", "confidence": 0.0-1.0, '
-                    f'"reasoning": "..."}}'
-                )
-                system = (
-                    "You are a crypto scalping AI analyzing 1-minute candle data. "
-                    "Respond ONLY with valid JSON."
-                )
                 try:
-                    raw = await self._llm.generate_json(prompt, system=system)
+                    raw = await self._llm.generate_json(user_prompt, system=system)
                     self._cache[cache_key] = raw
                     llm_calls += 1
                 except Exception as e:
@@ -444,9 +478,7 @@ class LLMBacktestEngine:
                     executor.update_equity(current.close)
                     continue
 
-            action = raw.get("action", "hold").lower()
-            confidence = float(raw.get("confidence", 0.5))
-            reasoning = raw.get("reasoning", "")
+            action, confidence, reasoning = _extract_decision(raw, pair)
 
             if action == "buy" and executor.position is None and confidence >= 0.5:
                 sl = current.close * (1 - self._sl_pct)
@@ -481,6 +513,36 @@ class LLMBacktestEngine:
             max_position_pct=self._max_position_pct,
         )._compute_results(pair, klines, executor)
         return result
+
+
+def _extract_decision(raw: dict, pair: str) -> tuple[str, float, str]:
+    """Pick a single (action, confidence, reasoning) tuple from the live-style plan.
+
+    The unified prompt asks for a list of decisions; the backtest runs on
+    one pair at a time, so we take the first decision matching the pair
+    (or the first one regardless if pairs aren't tagged). Older cached
+    responses might have the simpler ``{action, confidence, reasoning}``
+    shape, which is also handled.
+    """
+    if "decisions" in raw and isinstance(raw["decisions"], list) and raw["decisions"]:
+        for d in raw["decisions"]:
+            if d.get("symbol", pair).upper() == pair.upper():
+                return (
+                    str(d.get("action", "hold")).lower(),
+                    float(d.get("confidence", 0.5)),
+                    str(d.get("reasoning", "")),
+                )
+        d = raw["decisions"][0]
+        return (
+            str(d.get("action", "hold")).lower(),
+            float(d.get("confidence", 0.5)),
+            str(d.get("reasoning", "")),
+        )
+    return (
+        str(raw.get("action", "hold")).lower(),
+        float(raw.get("confidence", 0.5)),
+        str(raw.get("reasoning", "")),
+    )
 
 
 async def fetch_historical_klines(
