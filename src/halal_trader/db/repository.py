@@ -137,6 +137,10 @@ class Repository:
         order_id: str | None = None,
         status: str = "pending",
         llm_reasoning: str | None = None,
+        submitted_at: datetime | None = None,
+        filled_at: datetime | None = None,
+        filled_price: float | None = None,
+        filled_quantity: float | None = None,
     ) -> int:
         trade = Trade(
             symbol=symbol,
@@ -146,6 +150,10 @@ class Repository:
             order_id=order_id,
             status=status,
             llm_reasoning=llm_reasoning,
+            submitted_at=submitted_at,
+            filled_at=filled_at,
+            filled_price=filled_price,
+            filled_quantity=filled_quantity,
         )
         async with AsyncSession(self._engine) as session:
             session.add(trade)
@@ -244,6 +252,10 @@ class Repository:
         entry_price: float | None = None,
         stop_loss: float | None = None,
         target_price: float | None = None,
+        submitted_at: datetime | None = None,
+        filled_at: datetime | None = None,
+        filled_price: float | None = None,
+        filled_quantity: float | None = None,
     ) -> int:
         trade = CryptoTrade(
             pair=pair,
@@ -257,6 +269,10 @@ class Repository:
             entry_price=entry_price,
             stop_loss=stop_loss,
             target_price=target_price,
+            submitted_at=submitted_at,
+            filled_at=filled_at,
+            filled_price=filled_price,
+            filled_quantity=filled_quantity,
         )
         async with AsyncSession(self._engine) as session:
             session.add(trade)

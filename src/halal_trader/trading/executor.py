@@ -1,13 +1,19 @@
 """Order execution logic — translates LLM decisions into broker orders."""
 
 import logging
+from datetime import UTC, datetime
 from typing import Any
 
+from halal_trader.core import events
 from halal_trader.core.executor import BaseExecutor
+from halal_trader.core.fills import confirm_alpaca
 from halal_trader.domain.models import TradingPlan
 from halal_trader.domain.ports import Broker, TradeRepository
 
 logger = logging.getLogger(__name__)
+
+_FILL_TIMEOUT = 30.0
+_FILL_POLL_INTERVAL = 2.0
 
 
 class TradeExecutor(BaseExecutor):
@@ -67,6 +73,7 @@ class TradeExecutor(BaseExecutor):
             return {"symbol": decision.symbol, "action": "buy", "status": "rejected", "reason": msg}
 
         try:
+            submitted_at = datetime.now(UTC)
             order_result = await self._broker.place_order(
                 symbol=decision.symbol,
                 side="buy",
@@ -74,29 +81,45 @@ class TradeExecutor(BaseExecutor):
                 order_type="market",
                 time_in_force="day",
             )
+            order_id = order_result.get("id", "") if isinstance(order_result, dict) else ""
+            fill = await self._confirm_fill(order_id, submitted_at)
+
             logger.info(
-                "BUY order placed: %s x%d — %s",
+                "BUY order placed: %s x%d — orderId=%s status=%s filled=%s",
                 decision.symbol,
                 decision.quantity,
-                order_result,
+                order_id,
+                fill.status,
+                fill.filled_quantity,
+                extra={
+                    "event": events.TRADE_BUY_PLACED,
+                    "symbol": decision.symbol,
+                    "order_id": order_id,
+                    "status": fill.status,
+                    "filled_quantity": fill.filled_quantity,
+                    "filled_price": fill.filled_price,
+                },
             )
 
-            order_id = order_result.get("id", "") if isinstance(order_result, dict) else ""
             await self._repo.record_trade(
                 symbol=decision.symbol,
                 side="buy",
                 quantity=decision.quantity,
-                price=estimated_price,
+                price=fill.filled_price or estimated_price,
                 order_id=order_id,
-                status="submitted",
+                status=fill.status,
                 llm_reasoning=decision.reasoning,
+                submitted_at=fill.submitted_at,
+                filled_at=fill.filled_at,
+                filled_price=fill.filled_price,
+                filled_quantity=fill.filled_quantity,
             )
 
             return {
                 "symbol": decision.symbol,
                 "action": "buy",
                 "quantity": decision.quantity,
-                "status": "submitted",
+                "status": fill.status,
                 "order": order_result,
             }
         except Exception as e:
@@ -111,6 +134,7 @@ class TradeExecutor(BaseExecutor):
     async def _execute_sell(self, decision: Any, **kwargs: Any) -> dict[str, Any]:
         """Execute a sell order (close or reduce position)."""
         try:
+            submitted_at = datetime.now(UTC)
             if decision.quantity == 0:
                 result = await self._broker.close_position(decision.symbol)
             else:
@@ -122,28 +146,45 @@ class TradeExecutor(BaseExecutor):
                     time_in_force="day",
                 )
 
+            order_id = result.get("id", "") if isinstance(result, dict) else ""
+            fill = await self._confirm_fill(order_id, submitted_at)
+
             logger.info(
-                "SELL order placed: %s x%d — %s",
+                "SELL order placed: %s x%d — orderId=%s status=%s filled=%s",
                 decision.symbol,
                 decision.quantity,
-                result,
+                order_id,
+                fill.status,
+                fill.filled_quantity,
+                extra={
+                    "event": events.TRADE_SELL_PLACED,
+                    "symbol": decision.symbol,
+                    "order_id": order_id,
+                    "status": fill.status,
+                    "filled_quantity": fill.filled_quantity,
+                    "filled_price": fill.filled_price,
+                },
             )
 
-            order_id = result.get("id", "") if isinstance(result, dict) else ""
             await self._repo.record_trade(
                 symbol=decision.symbol,
                 side="sell",
                 quantity=decision.quantity,
+                price=fill.filled_price,
                 order_id=order_id,
-                status="submitted",
+                status=fill.status,
                 llm_reasoning=decision.reasoning,
+                submitted_at=fill.submitted_at,
+                filled_at=fill.filled_at,
+                filled_price=fill.filled_price,
+                filled_quantity=fill.filled_quantity,
             )
 
             return {
                 "symbol": decision.symbol,
                 "action": "sell",
                 "quantity": decision.quantity,
-                "status": "submitted",
+                "status": fill.status,
                 "order": result,
             }
         except Exception as e:
@@ -154,6 +195,34 @@ class TradeExecutor(BaseExecutor):
                 "status": "error",
                 "reason": str(e),
             }
+
+    async def _confirm_fill(self, order_id: str, submitted_at: datetime) -> Any:
+        """Poll the broker for fill state, returning a FillResult.
+
+        If the order_id is empty (e.g. close_position returned a non-dict
+        response), fall back to a "pending" FillResult so the trade is still
+        recorded with the submission timestamp.
+        """
+        from halal_trader.core.fills import FillResult
+
+        if not order_id:
+            return FillResult(
+                status="pending",
+                order_id="",
+                filled_quantity=0.0,
+                filled_price=None,
+                submitted_at=submitted_at,
+                filled_at=None,
+                raw={},
+            )
+
+        return await confirm_alpaca(
+            poll=lambda: self._broker.get_order_by_id(order_id),
+            order_id=order_id,
+            submitted_at=submitted_at,
+            timeout=_FILL_TIMEOUT,
+            interval=_FILL_POLL_INTERVAL,
+        )
 
     async def close_all(self) -> Any:
         """Close all open positions (end of day)."""

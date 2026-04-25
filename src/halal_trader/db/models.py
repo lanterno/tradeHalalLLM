@@ -27,6 +27,12 @@ class Trade(SQLModel, table=True):
     status: str = Field(default="pending")
     llm_reasoning: str | None = None
 
+    # Fill confirmation (populated by FillConfirmer after place_order).
+    submitted_at: datetime | None = None
+    filled_at: datetime | None = None
+    filled_price: float | None = None
+    filled_quantity: float | None = None
+
 
 class DailyPnl(SQLModel, table=True):
     """Daily profit-and-loss snapshot."""
@@ -95,6 +101,12 @@ class CryptoTrade(SQLModel, table=True):
     exit_price: float | None = None
     exit_reason: str | None = None
     closed_at: datetime | None = None
+
+    # Fill confirmation (populated by FillConfirmer after place_order).
+    submitted_at: datetime | None = None
+    filled_at: datetime | None = None
+    filled_price: float | None = None
+    filled_quantity: float | None = None
 
 
 class CryptoDailyPnl(SQLModel, table=True):

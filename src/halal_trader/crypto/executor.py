@@ -3,12 +3,15 @@
 import logging
 import math
 import time
+from datetime import UTC, datetime
 from typing import Any
 
 from binance import BinanceAPIException
 
+from halal_trader.core import events
 from halal_trader.core.executor import BaseExecutor
-from halal_trader.crypto.exchange import BinanceClient, extract_fill_price
+from halal_trader.core.fills import confirm_binance
+from halal_trader.crypto.exchange import BinanceClient
 from halal_trader.domain.models import (
     CryptoAccount,
     CryptoTradingPlan,
@@ -259,22 +262,50 @@ class CryptoExecutor(BaseExecutor):
             return {"symbol": decision.symbol, "action": "buy", "status": "rejected", "reason": err}
 
         try:
+            submitted_at = datetime.now(UTC)
             order_result = await self._broker.place_order(
                 symbol=decision.symbol,
                 side="BUY",
                 quantity=quantity,
                 order_type="MARKET",
             )
+            fill = confirm_binance(order_result, submitted_at)
+            order_id = fill.order_id
+            fill_price = fill.filled_price or price
+            db_status = fill.status
+
             logger.info(
-                "Crypto BUY placed: %s qty=%s — orderId=%s",
+                "Crypto BUY placed: %s qty=%s — orderId=%s status=%s filled=%s",
                 decision.symbol,
                 quantity,
-                order_result.get("orderId"),
+                order_id,
+                db_status,
+                fill.filled_quantity,
+                extra={
+                    "event": events.TRADE_BUY_PLACED,
+                    "pair": decision.symbol,
+                    "order_id": order_id,
+                    "status": db_status,
+                    "filled_quantity": fill.filled_quantity,
+                    "filled_price": fill.filled_price,
+                },
             )
 
-            order_id = str(order_result.get("orderId", ""))
-            fill_price = extract_fill_price(order_result) or price
-            db_status = self._map_order_status(order_result)
+            if db_status == "partially_filled":
+                logger.warning(
+                    "Partial fill on BUY %s: filled %s of %s @ $%.2f",
+                    decision.symbol,
+                    fill.filled_quantity,
+                    quantity,
+                    fill_price,
+                    extra={
+                        "event": events.TRADE_FILL_PARTIAL,
+                        "pair": decision.symbol,
+                        "order_id": order_id,
+                        "filled_quantity": fill.filled_quantity,
+                        "requested_quantity": quantity,
+                    },
+                )
 
             slippage = abs(fill_price - price) / price if price > 0 else 0
             if slippage > _MAX_SLIPPAGE_PCT:
@@ -297,6 +328,10 @@ class CryptoExecutor(BaseExecutor):
                 entry_price=fill_price,
                 stop_loss=decision.stop_loss,
                 target_price=decision.target_price,
+                submitted_at=fill.submitted_at,
+                filled_at=fill.filled_at,
+                filled_price=fill.filled_price,
+                filled_quantity=fill.filled_quantity,
             )
 
             return {
@@ -383,22 +418,49 @@ class CryptoExecutor(BaseExecutor):
                     "reason": err,
                 }
 
+            submitted_at = datetime.now(UTC)
             order_result = await self._broker.place_order(
                 symbol=decision.symbol,
                 side="SELL",
                 quantity=quantity,
                 order_type="MARKET",
             )
+            fill = confirm_binance(order_result, submitted_at)
+            order_id = fill.order_id
+            fill_price = fill.filled_price
+            db_status = fill.status
+
             logger.info(
-                "Crypto SELL placed: %s qty=%s — orderId=%s",
+                "Crypto SELL placed: %s qty=%s — orderId=%s status=%s filled=%s",
                 decision.symbol,
                 quantity,
-                order_result.get("orderId"),
+                order_id,
+                db_status,
+                fill.filled_quantity,
+                extra={
+                    "event": events.TRADE_SELL_PLACED,
+                    "pair": decision.symbol,
+                    "order_id": order_id,
+                    "status": db_status,
+                    "filled_quantity": fill.filled_quantity,
+                    "filled_price": fill.filled_price,
+                },
             )
 
-            order_id = str(order_result.get("orderId", ""))
-            fill_price = extract_fill_price(order_result)
-            db_status = self._map_order_status(order_result)
+            if db_status == "partially_filled":
+                logger.warning(
+                    "Partial fill on SELL %s: filled %s of %s",
+                    decision.symbol,
+                    fill.filled_quantity,
+                    quantity,
+                    extra={
+                        "event": events.TRADE_FILL_PARTIAL,
+                        "pair": decision.symbol,
+                        "order_id": order_id,
+                        "filled_quantity": fill.filled_quantity,
+                        "requested_quantity": quantity,
+                    },
+                )
 
             if fill_price and price > 0:
                 slippage = abs(fill_price - price) / price
@@ -419,6 +481,10 @@ class CryptoExecutor(BaseExecutor):
                 order_id=order_id,
                 status=db_status,
                 llm_reasoning=decision.reasoning,
+                submitted_at=fill.submitted_at,
+                filled_at=fill.filled_at,
+                filled_price=fill.filled_price,
+                filled_quantity=fill.filled_quantity,
             )
 
             return {

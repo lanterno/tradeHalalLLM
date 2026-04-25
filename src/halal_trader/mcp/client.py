@@ -310,6 +310,13 @@ class AlpacaMCPClient:
             },
         )
 
+    async def get_order_by_id(self, order_id: str) -> dict[str, Any]:
+        """Fetch a single order by id — used for fill confirmation polling."""
+        result = await self.call_tool("get_order_by_id", {"order_id": order_id})
+        if isinstance(result, dict):
+            return result
+        return {}
+
     async def close_position(self, symbol: str) -> Any:
         return await self.call_tool("close_position", {"symbol": symbol})
 
