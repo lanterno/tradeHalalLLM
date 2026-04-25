@@ -50,8 +50,9 @@ class CryptoCycleService(BaseCycleService):
         self_review=None,
         notifier=None,
         risk_engine: PortfolioRiskEngine | None = None,
+        alerts=None,
     ) -> None:
-        super().__init__()
+        super().__init__(alerts=alerts)
         self._broker = broker
         self._screener = screener
         self._strategy = strategy

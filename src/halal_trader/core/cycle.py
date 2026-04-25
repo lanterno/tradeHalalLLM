@@ -3,9 +3,13 @@
 import logging
 import time
 from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING
 
 from halal_trader.core import events
 from halal_trader.core.observability import cycle_context
+
+if TYPE_CHECKING:
+    from halal_trader.notifications.telegram import AlertSink
 
 logger = logging.getLogger(__name__)
 
@@ -18,8 +22,8 @@ class BaseCycleService(ABC):
     abstract hooks with their own data flows.
     """
 
-    def __init__(self) -> None:
-        pass
+    def __init__(self, alerts: "AlertSink | None" = None) -> None:
+        self._alerts = alerts
 
     async def run_cycle(self) -> None:
         """Execute one complete trading cycle (template method)."""
@@ -73,6 +77,11 @@ class BaseCycleService(ABC):
                         "elapsed_ms": int((time.monotonic() - t0) * 1000),
                     },
                 )
+                if self._alerts is not None:
+                    await self._alerts.notify(
+                        events.CYCLE_FAILED,
+                        f"{type(e).__name__}: {e}",
+                    )
 
     @abstractmethod
     async def _pre_cycle_checks(self) -> bool:

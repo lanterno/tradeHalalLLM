@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from halal_trader.config import LLMProvider, Settings, get_settings
+from halal_trader.core import events
 
 logger = logging.getLogger(__name__)
 
@@ -319,6 +320,11 @@ class FallbackLLM(BaseLLM):
             "All LLM providers failed (%d consecutive) — chain backoff for %ds",
             self._chain_failures,
             chain_backoff_sec,
+            extra={
+                "event": events.LLM_CHAIN_BACKOFF,
+                "consecutive": self._chain_failures,
+                "backoff_seconds": chain_backoff_sec,
+            },
         )
         raise last_error or RuntimeError("No LLM providers available")
 
@@ -384,6 +390,11 @@ class FallbackLLM(BaseLLM):
             "All LLM providers failed (%d consecutive) — chain backoff for %ds",
             self._chain_failures,
             chain_backoff_sec,
+            extra={
+                "event": events.LLM_CHAIN_BACKOFF,
+                "consecutive": self._chain_failures,
+                "backoff_seconds": chain_backoff_sec,
+            },
         )
         raise last_error or RuntimeError("No LLM providers available")
 

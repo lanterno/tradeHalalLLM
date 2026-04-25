@@ -55,6 +55,15 @@ class TradingBot(BaseTradingBot):
         repo = self._repo
         assert repo is not None
 
+        # Telegram notifier + rate-limited error sink (shared across cycle and EOD)
+        from halal_trader.notifications.telegram import AlertSink, TelegramNotifier
+
+        self._notifier = TelegramNotifier(
+            bot_token=self.settings.telegram_bot_token,
+            chat_id=self.settings.telegram_chat_id,
+        )
+        self._alerts = AlertSink(self._notifier)
+
         # Broker connection (Alpaca via MCP)
         await self._mcp_client.connect()
 
@@ -103,6 +112,7 @@ class TradingBot(BaseTradingBot):
             executor=self.executor,
             portfolio=self.portfolio,
             sentiment=sentiment,
+            alerts=self._alerts,
         )
 
         logger.info("Trading bot initialized successfully")
@@ -248,6 +258,11 @@ class TradingBot(BaseTradingBot):
             logger.info("Pre-market routine complete")
         except Exception as e:
             logger.error("Pre-market routine failed: %s", e)
+            if self._alerts is not None:
+                await self._alerts.notify(
+                    "stock.pre_market.failed",
+                    f"{type(e).__name__}: {e}",
+                )
 
     async def trading_cycle(self) -> None:
         """Intraday trading cycle — delegates to TradingCycleService."""
@@ -272,6 +287,11 @@ class TradingBot(BaseTradingBot):
 
         except Exception as e:
             logger.error("End of day routine failed: %s", e)
+            if self._alerts is not None:
+                await self._alerts.notify(
+                    "stock.end_of_day.failed",
+                    f"{type(e).__name__}: {e}",
+                )
 
     async def _early_close_eod(self) -> None:
         """End-of-day for early-close days (market closes at 1:00 PM ET).

@@ -110,13 +110,14 @@ class CryptoTradingBot(BaseTradingBot):
 
         # ── New Feature Components ─────────────────────────────
 
-        # Telegram notifier
-        from halal_trader.notifications.telegram import TelegramNotifier
+        # Telegram notifier + rate-limited error sink
+        from halal_trader.notifications.telegram import AlertSink, TelegramNotifier
 
         self._notifier = TelegramNotifier(
             bot_token=self.settings.telegram_bot_token,
             chat_id=self.settings.telegram_chat_id,
         )
+        self._alerts = AlertSink(self._notifier)
         if self._notifier.enabled:
             logger.info("Telegram notifications enabled")
 
@@ -201,6 +202,7 @@ class CryptoTradingBot(BaseTradingBot):
             self_review=self._self_review,
             notifier=self._notifier if self._notifier.enabled else None,
             risk_engine=risk_engine,
+            alerts=self._alerts,
         )
 
         # ML retrainer (labels closed trades and retrains models)
@@ -422,6 +424,10 @@ class CryptoTradingBot(BaseTradingBot):
                     logger.error(
                         "Trading cycle timed out after %ds — skipping to next",
                         cycle_timeout,
+                    )
+                    await self._alerts.notify(
+                        "cycle.timeout",
+                        f"Crypto trading cycle exceeded {cycle_timeout}s and was cancelled.",
                     )
 
                 from datetime import datetime, timezone

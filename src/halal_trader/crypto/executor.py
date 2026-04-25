@@ -71,10 +71,28 @@ class CryptoExecutor(BaseExecutor):
         return False
 
     def _record_pair_error(self, symbol: str) -> None:
-        errors = self._pair_errors.setdefault(symbol.upper(), [])
+        sym = symbol.upper()
+        errors = self._pair_errors.setdefault(sym, [])
         errors.append(time.monotonic())
         now = time.monotonic()
-        self._pair_errors[symbol.upper()] = [t for t in errors if now - t < self._cb_cooldown]
+        kept = [t for t in errors if now - t < self._cb_cooldown]
+        self._pair_errors[sym] = kept
+        # Threshold-cross emits a structured event so operators can grep
+        # for it; the AlertSink wiring lives in the cycle (this module is
+        # broker-agnostic and shouldn't import notification code).
+        if len(kept) == self._cb_threshold:
+            logger.error(
+                "Circuit breaker tripped for %s after %d errors in %ds",
+                sym,
+                self._cb_threshold,
+                self._cb_window,
+                extra={
+                    "event": "executor.circuit_breaker.tripped",
+                    "pair": sym,
+                    "errors": self._cb_threshold,
+                    "window_s": self._cb_window,
+                },
+            )
 
     async def execute_plan(
         self,

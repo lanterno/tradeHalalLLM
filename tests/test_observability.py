@@ -135,3 +135,28 @@ async def test_run_cycle_emits_halted_event(caplog):
     event_names = [r.__dict__.get("event") for r in caplog.records]
     assert events.CYCLE_HALTED in event_names
     assert events.CYCLE_COMPLETE not in event_names
+
+
+class _ExplodingCycle(BaseCycleService):
+    async def _pre_cycle_checks(self) -> bool:
+        return True
+
+    async def _should_halt(self) -> bool:
+        return False
+
+    async def _run_cycle_impl(self) -> None:
+        raise RuntimeError("kaboom")
+
+
+@pytest.mark.asyncio
+async def test_run_cycle_exception_triggers_alert():
+    from unittest.mock import AsyncMock
+
+    alerts = AsyncMock()
+    cycle = _ExplodingCycle(alerts=alerts)
+    await cycle.run_cycle()
+    alerts.notify.assert_awaited_once()
+    error_type, details = alerts.notify.await_args.args
+    assert error_type == events.CYCLE_FAILED
+    assert "RuntimeError" in details
+    assert "kaboom" in details

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 import httpx
@@ -131,3 +132,67 @@ class TelegramNotifier:
             f"Reddit is talking about this coin \u2014 check for opportunities."
         )
         await self.send(msg)
+
+
+class AlertSink:
+    """Rate-limited error alerter on top of TelegramNotifier.
+
+    Buckets alerts by ``error_type`` so a flapping error doesn't burn the
+    Telegram API quota or spam the operator. The window is ``cooldown_seconds``
+    long; the first alert in a window goes through, subsequent ones are
+    counted and dropped (with a debug log).
+
+    A no-op `AlertSink` is returned when the underlying notifier is
+    disabled (no bot token / chat id), so call sites can stay branchless:
+
+        sink = AlertSink(notifier)
+        await sink.notify("cycle.failed", str(exc))   # safe even if disabled
+    """
+
+    DEFAULT_COOLDOWN_SECONDS = 900  # 15 minutes
+
+    def __init__(
+        self,
+        notifier: TelegramNotifier | None,
+        *,
+        cooldown_seconds: int = DEFAULT_COOLDOWN_SECONDS,
+    ) -> None:
+        self._notifier = notifier
+        self._cooldown = cooldown_seconds
+        # NOTE: single-asyncio-loop only \u2014 not thread-safe.
+        self._last_sent: dict[str, float] = {}
+        self._suppressed: dict[str, int] = {}
+
+    @property
+    def enabled(self) -> bool:
+        return self._notifier is not None and self._notifier.enabled
+
+    async def notify(self, error_type: str, details: str) -> bool:
+        """Send a Telegram alert, deduped by ``error_type`` within the window.
+
+        Returns ``True`` if a message went out, ``False`` if it was suppressed
+        (or the notifier is disabled).
+        """
+        if not self.enabled:
+            return False
+
+        now = time.monotonic()
+        last = self._last_sent.get(error_type, 0.0)
+        if now - last < self._cooldown:
+            self._suppressed[error_type] = self._suppressed.get(error_type, 0) + 1
+            logger.debug(
+                "Alert suppressed for %s (%ds since last; %d total in window)",
+                error_type,
+                int(now - last),
+                self._suppressed[error_type],
+            )
+            return False
+
+        suppressed = self._suppressed.pop(error_type, 0)
+        if suppressed:
+            details = f"{details}\n\n(also suppressed {suppressed} similar alerts)"
+
+        assert self._notifier is not None
+        await self._notifier.notify_error(error_type, details)
+        self._last_sent[error_type] = now
+        return True

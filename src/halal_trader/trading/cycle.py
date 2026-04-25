@@ -35,8 +35,9 @@ class TradingCycleService(BaseCycleService):
         executor: TradeExecutor,
         portfolio: PortfolioTracker,
         sentiment: SentimentAnalyzer | None = None,
+        alerts=None,
     ) -> None:
-        super().__init__()
+        super().__init__(alerts=alerts)
         self._broker = broker
         self._screener = screener
         self._strategy = strategy
