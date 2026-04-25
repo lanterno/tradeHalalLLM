@@ -11,11 +11,13 @@ import httpx
 logger = logging.getLogger(__name__)
 
 _BASE_URLS = [
-    "https://cryptopanic.com/api/v1/posts/",
-    "https://cryptopanic.com/api/free/v1/posts/",
+    "https://cryptopanic.com/api/developer/v2/posts/",
+    "https://cryptopanic.com/api/growth/v2/posts/",
+    "https://cryptopanic.com/api/enterprise/v2/posts/",
 ]
 
-_RETRY_AFTER_SECONDS = 1800  # 30 minutes
+_INITIAL_RETRY_SECONDS = 30
+_MAX_RETRY_SECONDS = 1800
 
 
 def _pair_to_currency(pair: str) -> str | None:
@@ -68,6 +70,7 @@ class CryptoPanicCollector:
         self._disabled_until: float = 0
         self._working_url: str | None = None
         self._client: httpx.AsyncClient | None = None
+        self._consecutive_failures: int = 0
 
     def _get_client(self) -> httpx.AsyncClient:
         if self._client is None or self._client.is_closed:
@@ -158,6 +161,11 @@ class CryptoPanicCollector:
         self._cache_time = now
         return result
 
+    @property
+    def healthy(self) -> bool:
+        """Whether the API is currently reachable (not in backoff)."""
+        return time.monotonic() >= self._disabled_until
+
     async def _fetch_posts(self, currencies: set[str]) -> dict:
         """Try each known API URL, returning the first successful response."""
         urls_to_try = (
@@ -176,14 +184,20 @@ class CryptoPanicCollector:
             if resp.status_code == 404 and url != urls_to_try[-1]:
                 continue
             if resp.status_code == 404:
-                self._disabled_until = time.monotonic() + _RETRY_AFTER_SECONDS
+                self._consecutive_failures += 1
+                retry_after = min(
+                    _INITIAL_RETRY_SECONDS * 2 ** (self._consecutive_failures - 1),
+                    _MAX_RETRY_SECONDS,
+                )
+                self._disabled_until = time.monotonic() + retry_after
                 logger.warning(
-                    "CryptoPanic API returned 404 on all URLs — retrying in %ds",
-                    _RETRY_AFTER_SECONDS,
+                    "CryptoPanic API returned 404 on %s — retrying in %ds (attempt %d)",
+                    url, retry_after, self._consecutive_failures,
                 )
                 return {}
             resp.raise_for_status()
             self._working_url = url
+            self._consecutive_failures = 0
             return resp.json()
 
         return {}
