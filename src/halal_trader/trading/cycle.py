@@ -75,6 +75,23 @@ class TradingCycleService(BaseCycleService):
             return True
         return False
 
+    async def _post_cycle(self) -> None:
+        """Run a reconciliation pass after each cycle (cheap; cycle is 15-min)."""
+        if self._engine is None:
+            return
+        try:
+            from halal_trader.core.reconcile import reconcile_stocks
+
+            await reconcile_stocks(
+                engine=self._engine,
+                broker=self._broker,
+                alerts=self._alerts,
+            )
+        except Exception as exc:
+            import logging as _logging
+
+            _logging.getLogger(__name__).debug("Stock reconcile failed: %s", exc)
+
     async def _run_cycle_impl(self) -> None:
         account = await self._broker.get_account_info()
         positions = await self._broker.get_all_positions()

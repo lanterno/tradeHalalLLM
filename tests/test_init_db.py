@@ -69,4 +69,4 @@ async def test_init_db_succeeds_at_head(tmp_path):
 
 def test_alembic_head_matches_known_revision():
     """If somebody adds a revision without updating tests, this fails loudly."""
-    assert admin.head() == "a6b7c8d9e0f1"
+    assert admin.head() == "b7c8d9e0f1a2"

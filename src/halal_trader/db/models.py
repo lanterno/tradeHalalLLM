@@ -171,6 +171,22 @@ class StrategyAdjustment(SQLModel, table=True):
     reasoning: str | None = None
 
 
+class ReconciliationLog(SQLModel, table=True):
+    """Append-only log of DB-vs-broker drift events surfaced by the Reconciler."""
+
+    __tablename__ = "reconciliation_log"
+
+    id: int | None = Field(default=None, primary_key=True)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    market: str  # 'stocks' | 'crypto'
+    symbol: str  # asset/ticker affected
+    db_quantity: float
+    broker_quantity: float
+    drift_pct: float  # |db - broker| / max(db, broker, 1e-9)
+    drift_usd: float | None = None
+    notes: str | None = None
+
+
 class KillSwitch(SQLModel, table=True):
     """Single-row operator kill-switch.
 

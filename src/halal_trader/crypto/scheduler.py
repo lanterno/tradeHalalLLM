@@ -44,6 +44,7 @@ class CryptoTradingBot(BaseTradingBot):
         self._notifier = None
         self._last_day: str | None = None
         self._exiting_pairs: set[str] = set()
+        self._reconcile_task: asyncio.Task[None] | None = None
 
     async def _create_components(self) -> None:
         """Create crypto-specific trading components."""
@@ -242,6 +243,9 @@ class CryptoTradingBot(BaseTradingBot):
             self._news_reactor.on_event(self._on_news_event)
             await self._news_reactor.start()
 
+        # Reconciliation loop — every 5 min compare DB open trades to broker.
+        self._reconcile_task = asyncio.create_task(self._reconcile_loop(), name="crypto-reconcile")
+
         # Expose live components to the dashboard
         from halal_trader.web.app import app_state as _web_state
 
@@ -256,6 +260,29 @@ class CryptoTradingBot(BaseTradingBot):
         if self._cycle_service is None:
             raise RuntimeError("CryptoTradingBot.initialize() must be called first")
         return self._cycle_service
+
+    async def _reconcile_loop(self) -> None:
+        """Run reconciliation every 5 minutes while the bot is alive."""
+        from halal_trader.core.reconcile import reconcile_crypto
+
+        interval = 300
+        while self._running:
+            try:
+                if self._engine is not None:
+                    await reconcile_crypto(
+                        engine=self._engine,
+                        broker=self._binance,
+                        alerts=self._alerts,
+                    )
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.debug("Reconciliation pass failed: %s", e)
+
+            try:
+                await asyncio.sleep(interval)
+            except asyncio.CancelledError:
+                break
 
     async def _on_news_event(self, event) -> None:
         """Handle a breaking news event by triggering an emergency mini-cycle."""
@@ -345,6 +372,15 @@ class CryptoTradingBot(BaseTradingBot):
         from halal_trader.web.app import app_state as _web_state
 
         _web_state["bot_running"] = False
+
+        # Cancel the reconcile background task before disposing the engine.
+        if self._reconcile_task is not None:
+            self._reconcile_task.cancel()
+            try:
+                await self._reconcile_task
+            except asyncio.CancelledError, Exception:
+                pass
+            self._reconcile_task = None
 
         components: list[tuple[str, object | None]] = [
             ("monitor", self._monitor),
