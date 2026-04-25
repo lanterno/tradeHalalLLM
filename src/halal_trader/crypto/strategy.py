@@ -46,11 +46,14 @@ STRATEGY GUIDELINES:
 - Volume ratios >1.2x average are sufficient to confirm moves.
 - VWAP acts as intraday support/resistance.
 - Order book imbalance indicates short-term pressure direction.
-- Use stop-losses of 0.5-1.0% below entry for longs.
-- Take profits at 0.8-2.0% above entry (accounting for 0.2% fees).
+- Use stop-losses of {stop_loss_pct:.1%} below entry for longs.
+- Take profits at {take_profit_pct:.1%} above entry (accounting for 0.2% fees).
 - You SHOULD be making trades most cycles — look for opportunities, not reasons to hold.
 - If 2+ indicators align even moderately, take the trade with appropriate sizing.
-- Prefer smaller positions on moderate setups over sitting in cash.
+- MINIMUM POSITION SIZING: each trade's notional value (quantity × price) should be at \
+least 5% of the Max Position Size shown. Never trade amounts below $50. \
+For high-confidence setups (confidence >= 0.7), use 50-90% of Max Position Size. \
+For moderate setups, use 20-50%. Calculate: quantity = (dollar_amount / current_price).
 - Scale into positions: start with a partial position and add on confirmation.
 - Review your recent performance stats: avoid pairs with consistently negative P&L, \
 and adjust aggression based on your current win rate and streak.
@@ -74,6 +77,12 @@ ML MODEL SIGNALS:
 - ML confidence scores reflect patterns learned from our own trade history.
 - Anomaly alerts mean unusual market microstructure — proceed with caution \
 or exploit the opportunity.
+
+PORTFOLIO RISK:
+- When correlation is HIGH (>0.7), reduce position sizes — all positions will move together.
+- Respect the risk-adjusted position limits shown in the PORTFOLIO RISK section.
+- If portfolio heat is negative and significant, be conservative with new entries.
+- If drawdown is approaching the limit, only take high-confidence trades or close losing positions.
 
 MARKET REGIME AWARENESS:
 - In TRENDING markets: trade with the trend, wider TP, tighter SL on counter-trend side.
@@ -112,7 +121,8 @@ Available: ${available_balance:,.2f} USDT
 In Orders: ${in_order:,.2f} USDT
 Max Position Size: ${max_position_value:,.2f} USDT ({max_position_pct:.0%} of portfolio)
 Today's P&L: ${today_pnl:+,.2f} ({today_pnl_pct:+.2%})
-
+Open Positions: {open_position_count}/{max_positions}
+{position_limit_warning}
 === CURRENT POSITIONS ===
 {positions_text}
 
@@ -140,6 +150,9 @@ Today's P&L: ${today_pnl:+,.2f} ({today_pnl_pct:+.2%})
 === MARKET REGIME ===
 {regime_text}
 
+=== PORTFOLIO RISK ===
+{risk_text}
+
 === YOUR RECENT PERFORMANCE (last 7 days) ===
 {performance_text}
 
@@ -166,6 +179,8 @@ class CryptoTradingStrategy(BaseStrategy):
         max_simultaneous_positions: int,
         llm_failure_threshold: int = 5,
         llm_cooldown_seconds: int = 600,
+        stop_loss_pct: float = 0.01,
+        take_profit_pct: float = 0.02,
     ) -> None:
         super().__init__(
             llm,
@@ -180,6 +195,8 @@ class CryptoTradingStrategy(BaseStrategy):
         self._llm_cooldown_until: float = 0
         self._llm_failure_threshold = llm_failure_threshold
         self._llm_cooldown_seconds = llm_cooldown_seconds
+        self._stop_loss_pct = stop_loss_pct
+        self._take_profit_pct = take_profit_pct
 
     def _on_llm_success(self) -> None:
         self._consecutive_llm_failures = 0
@@ -213,6 +230,8 @@ class CryptoTradingStrategy(BaseStrategy):
         active_adjustments: str = "",
         exchange_rules_text: str = "",
         indicators_cache: dict[str, dict] | None = None,
+        open_position_count: int = 0,
+        risk_text: str = "",
     ) -> CryptoTradingPlan:
         now = time.monotonic()
         if now < self._llm_cooldown_until:
@@ -239,17 +258,52 @@ class CryptoTradingStrategy(BaseStrategy):
                 + active_adjustments
             )
 
+        at_max = open_position_count >= self._max_simultaneous_positions
+
         system = SYSTEM_PROMPT.format(
             max_position_pct=self._max_position_pct,
             daily_loss_limit=self._daily_loss_limit,
             daily_return_target=self._daily_return_target,
             max_positions=self._max_simultaneous_positions,
             active_adjustments=adjustments_block,
+            stop_loss_pct=self._stop_loss_pct,
+            take_profit_pct=self._take_profit_pct,
         )
+
+        if at_max:
+            system += (
+                "\n\n*** SELL-ONLY MODE ***\n"
+                "You are currently at the MAXIMUM number of open positions. "
+                "You CANNOT buy anything. Any buy decisions will be rejected.\n"
+                "Focus ONLY on:\n"
+                "1. Selling your weakest position(s) to free up capital and slots.\n"
+                "2. Holding strong positions.\n"
+                "Do NOT include any buy decisions in your response."
+            )
 
         pct_limit = portfolio_value * self._max_position_pct
         spendable = account.usdt_free if account.usdt_free > 0 else account.available_balance_usdt
         max_position_value = min(pct_limit, spendable)
+        position_limit_warning = ""
+        if at_max:
+            position_limit_warning = (
+                "⚠ POSITION LIMIT REACHED — you MUST fully close (sell ALL quantity of) "
+                "an existing position before any new buys will be accepted. A partial "
+                "sell does NOT free the slot. Sell the ENTIRE holding of your weakest "
+                "position to open a slot for a better opportunity."
+            )
+        elif open_position_count >= self._max_simultaneous_positions - 1:
+            position_limit_warning = (
+                "⚠ Only 1 position slot remaining — be selective with buys."
+            )
+
+        optional_sections: list[tuple[str, str, str]] = [
+            ("=== SOCIAL SENTIMENT ===", sentiment_text, "No sentiment data available."),
+            ("=== MULTI-TIMEFRAME ANALYSIS ===", timeframe_text, "No multi-timeframe data available."),
+            ("=== ML MODEL SIGNALS ===", ml_signals_text, "No ML model data available."),
+            ("=== MARKET REGIME ===", regime_text, "No regime data available."),
+            ("=== PORTFOLIO RISK ===", risk_text, "No portfolio risk data available."),
+        ]
 
         user_prompt = USER_PROMPT_TEMPLATE.format(
             total_balance=account.total_balance_usdt,
@@ -259,6 +313,9 @@ class CryptoTradingStrategy(BaseStrategy):
             max_position_pct=self._max_position_pct,
             today_pnl=today_pnl,
             today_pnl_pct=today_pnl_pct,
+            open_position_count=open_position_count,
+            max_positions=self._max_simultaneous_positions,
+            position_limit_warning=position_limit_warning,
             positions_text=positions_text or "No open positions.",
             halal_pairs=", ".join(halal_pairs),
             indicators_text=indicators_text,
@@ -268,9 +325,16 @@ class CryptoTradingStrategy(BaseStrategy):
             timeframe_text=timeframe_text or "No multi-timeframe data available.",
             ml_signals_text=ml_signals_text or "No ML model data available.",
             regime_text=regime_text or "No regime data available.",
+            risk_text=risk_text or "No portfolio risk data available.",
             performance_text=performance_text or "No completed trades yet.",
             daily_return_target=self._daily_return_target,
         )
+
+        for header, value, placeholder in optional_sections:
+            if not value:
+                user_prompt = user_prompt.replace(
+                    f"{header}\n{placeholder}\n\n", ""
+                )
 
         return await self._run_llm_analysis(
             system,

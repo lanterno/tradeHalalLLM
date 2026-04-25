@@ -26,7 +26,11 @@ _SAFE_BOUNDS = {
 
 _STRATEGY_PARAM_MAP = {
     "max_position_pct": "_max_position_pct",
+    "stop_loss_pct": "_stop_loss_pct",
+    "take_profit_pct": "_take_profit_pct",
 }
+
+_NOOP_EPSILON = 1e-6
 
 _REVIEW_SYSTEM_PROMPT = """\
 You are reviewing your own crypto trading decisions. Your goal is to identify patterns \
@@ -273,9 +277,13 @@ Analyze these trades and execution failures, and suggest improvements.
             low, high = _SAFE_BOUNDS[param]
             clamped = max(low, min(high, float(value)))
 
+            old_value = self._active_adjustments.get(param)
+            if old_value is not None and abs(clamped - old_value) < _NOOP_EPSILON:
+                continue
+
             result.adjustments.append(StrategyAdjustment(
                 parameter=param,
-                old_value=self._active_adjustments.get(param),
+                old_value=old_value,
                 new_value=clamped,
                 reasoning=f"Self-review suggested {param}={value}, clamped to [{low}, {high}]",
             ))

@@ -68,6 +68,8 @@ class BinanceClient:
         self._latest_price_cache: dict[str, float] = {}
         self._account_cache: tuple[float, CryptoAccount] | None = None
         self._account_cache_ttl = 10.0
+        self._filters_loaded_at: float = 0.0
+        self._filters_refresh_interval = 3600.0
         if configured_pairs:
             self._relevant_assets = {
                 p.upper().removesuffix("USDT").removesuffix("BUSD")
@@ -114,10 +116,18 @@ class BinanceClient:
             except Exception as e:
                 logger.debug("Failed to load symbol info for %s: %s", pair, e)
 
+        self._filters_loaded_at = time.monotonic()
         if self._symbol_filters:
             logger.info(
                 "Loaded exchange filters for %d symbols", len(self._symbol_filters)
             )
+
+    async def refresh_symbol_filters_if_stale(self) -> None:
+        """Reload symbol filters if they haven't been refreshed within the interval."""
+        elapsed = time.monotonic() - self._filters_loaded_at
+        if elapsed >= self._filters_refresh_interval:
+            logger.info("Refreshing symbol filters (stale for %.0fs)", elapsed)
+            await self._load_symbol_filters()
 
     @staticmethod
     def _parse_symbol_filters(info: dict[str, Any]) -> SymbolFilter | None:

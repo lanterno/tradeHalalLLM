@@ -105,6 +105,27 @@ class Settings(BaseSettings):
         default=10, ge=1, description="Max trading pairs per cycle"
     )
 
+    # ── Portfolio-level risk ─────────────────────────────────
+    crypto_max_portfolio_heat_pct: float = Field(
+        default=0.05, ge=0.01, le=0.5,
+        description="Max unrealized loss before blocking entries",
+    )
+    crypto_max_drawdown_pct: float = Field(
+        default=0.08, ge=0.01, le=0.5,
+        description="Max peak-to-trough drawdown before halt",
+    )
+    crypto_high_correlation_threshold: float = Field(
+        default=0.7, ge=0.0, le=1.0,
+        description="Correlation threshold for size reduction",
+    )
+    crypto_correlation_reduction_factor: float = Field(
+        default=0.5, ge=0.1, le=1.0,
+        description="Size multiplier when correlated with open",
+    )
+    crypto_atr_baseline: float = Field(
+        default=0.02, gt=0, description="ATR baseline for volatility-adjusted sizing"
+    )
+
     # ── Flat-market skip thresholds ───────────────────────────
     crypto_flat_price_threshold: float = Field(
         default=0.03, ge=0, description="Min 5m price change (%) to consider non-flat"

@@ -6,17 +6,22 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING
 
+from binance import BinanceAPIException
+
 from halal_trader.crypto.exchange import BinanceClient, extract_fill_price
 from halal_trader.crypto.websocket import BinanceWSManager
 from halal_trader.db.models import CryptoTrade
 from halal_trader.db.repository import Repository
 
 if TYPE_CHECKING:
+    from halal_trader.ml.retrainer import RetrainingScheduler
     from halal_trader.notifications.telegram import TelegramNotifier
 
 logger = logging.getLogger(__name__)
 
 _FALLBACK_MIN_NOTIONAL = 5.0
+_DUST_NOTIONAL_THRESHOLD = 5.0
+_MAX_EXIT_FAILURES = 3
 
 
 class PositionMonitor:
@@ -36,6 +41,8 @@ class PositionMonitor:
         trailing_stop_activation_pct: float | None = None,
         trailing_stop_distance_pct: float = 0.003,
         notifier: TelegramNotifier | None = None,
+        retrainer: RetrainingScheduler | None = None,
+        exiting_pairs: set[str] | None = None,
     ) -> None:
         self._broker = broker
         self._repo = repo
@@ -44,9 +51,12 @@ class PositionMonitor:
         self._trailing_activation_pct = trailing_stop_activation_pct
         self._trailing_distance_pct = trailing_stop_distance_pct
         self._notifier = notifier
+        self._retrainer = retrainer
         self._running = False
         self._task: asyncio.Task[None] | None = None
         self._high_water: dict[int, float] = {}
+        self._exit_failures: dict[int, int] = {}
+        self._exiting_pairs: set[str] = exiting_pairs if exiting_pairs is not None else set()
 
     async def start(self) -> None:
         """Start the monitor as a background task."""
@@ -91,6 +101,9 @@ class PositionMonitor:
         if trade_id is None:
             return
 
+        if trade.pair in self._exiting_pairs:
+            return
+
         if self._trailing_activation_pct and trade.entry_price and trade.stop_loss:
             await self._update_trailing_stop(trade, price)
 
@@ -114,22 +127,63 @@ class PositionMonitor:
         if trade_id is None:
             return
 
+        if trade.pair in self._exiting_pairs:
+            return
+        self._exiting_pairs.add(trade.pair)
+
+        try:
+            await self._exit_position_inner(trade, current_price, reason)
+        finally:
+            self._exiting_pairs.discard(trade.pair)
+
+    async def _exit_position_inner(
+        self, trade: CryptoTrade, current_price: float, reason: str
+    ) -> None:
+        """Internal exit logic — caller manages the exiting_pairs lock."""
+        trade_id = trade.id
+        assert trade_id is not None
+
+        base_asset = trade.pair.upper().removesuffix("USDT").removesuffix("BUSD")
+        balances = await self._broker.get_balances()
+        actual_free = next((b.free for b in balances if b.asset == base_asset), 0.0)
+
+        if actual_free <= 0 or actual_free * current_price < _DUST_NOTIONAL_THRESHOLD:
+            logger.warning(
+                "No %s balance for %s #%d (free=%.8f) — closing as balance_exhausted",
+                base_asset, trade.pair, trade_id, actual_free,
+            )
+            await self._repo.close_crypto_trade(trade_id, current_price, "balance_exhausted")
+            self._exit_failures.pop(trade_id, None)
+            self._high_water.pop(trade_id, None)
+            return
+
+        quantity = min(trade.quantity, actual_free)
+        quantity = self._broker.round_quantity(trade.pair, quantity)
+
+        if quantity <= 0:
+            await self._repo.close_crypto_trade(trade_id, current_price, "balance_exhausted")
+            self._exit_failures.pop(trade_id, None)
+            self._high_water.pop(trade_id, None)
+            return
+
         sf = self._broker.get_symbol_filter(trade.pair)
         min_notional = sf.min_notional if sf else _FALLBACK_MIN_NOTIONAL
-        notional = trade.quantity * current_price
+        notional = quantity * current_price
         if notional < min_notional:
             logger.info(
                 "Skipping auto-exit for %s #%d: notional $%.2f below minimum",
                 trade.pair, trade_id, notional,
             )
             await self._repo.close_crypto_trade(trade_id, current_price, f"{reason}_too_small")
+            self._exit_failures.pop(trade_id, None)
+            self._high_water.pop(trade_id, None)
             return
 
         try:
             order_result = await self._broker.place_order(
                 symbol=trade.pair,
                 side="SELL",
-                quantity=trade.quantity,
+                quantity=quantity,
                 order_type="MARKET",
             )
             fill_price = extract_fill_price(order_result) or current_price
@@ -139,7 +193,7 @@ class PositionMonitor:
             await self._repo.record_crypto_trade(
                 pair=trade.pair,
                 side="sell",
-                quantity=trade.quantity,
+                quantity=quantity,
                 price=fill_price,
                 order_id=str(order_result.get("orderId", "")),
                 status=db_status,
@@ -147,12 +201,30 @@ class PositionMonitor:
             )
 
             await self._repo.close_crypto_trade(trade_id, fill_price, reason)
+            self._exit_failures.pop(trade_id, None)
 
-            pnl = (fill_price - (trade.entry_price or 0)) * trade.quantity
+            consolidated = await self._repo.close_open_crypto_trades_for_pair(
+                trade.pair, fill_price, "consolidated", exclude_id=trade_id,
+            )
+            if consolidated > 0:
+                logger.info(
+                    "Consolidated %d ghost trade(s) for %s after %s exit",
+                    consolidated, trade.pair, reason,
+                )
+
+            pnl = (fill_price - (trade.entry_price or 0)) * quantity
+            entry = trade.entry_price or 0
+            return_pct = (fill_price - entry) / entry if entry > 0 else 0
             logger.info(
                 "Auto-%s exit for %s #%d: sold %.6f @ $%.2f (P&L: $%+.2f)",
-                reason, trade.pair, trade_id, trade.quantity, fill_price, pnl,
+                reason, trade.pair, trade_id, quantity, fill_price, pnl,
             )
+
+            if self._retrainer:
+                try:
+                    await self._retrainer.on_trade_closed(trade_id, return_pct)
+                except Exception as e:
+                    logger.debug("Retrainer callback failed: %s", e)
 
             if self._notifier and self._notifier.enabled:
                 try:
@@ -166,13 +238,47 @@ class PositionMonitor:
                 except Exception as e:
                     logger.debug("Failed to send SL/TP notification: %s", e)
 
+        except BinanceAPIException as e:
+            if e.code == -2010:
+                logger.warning(
+                    "Insufficient balance for %s #%d — force-closing trade: %s",
+                    trade.pair, trade_id, e,
+                )
+                await self._repo.close_crypto_trade(
+                    trade_id, current_price, f"{reason}_insufficient_balance"
+                )
+                self._exit_failures.pop(trade_id, None)
+                self._high_water.pop(trade_id, None)
+                return
+            await self._handle_exit_failure(trade_id, trade.pair, reason, e)
+
         except Exception as e:
-            logger.error(
-                "Failed to auto-exit %s #%d (%s): %s",
-                trade.pair, trade_id, reason, e,
-            )
+            await self._handle_exit_failure(trade_id, trade.pair, reason, e)
 
         self._high_water.pop(trade_id, None)
+
+    async def _handle_exit_failure(
+        self, trade_id: int, pair: str, reason: str, error: Exception
+    ) -> None:
+        """Track exit failures and force-close after max retries."""
+        failures = self._exit_failures.get(trade_id, 0) + 1
+        self._exit_failures[trade_id] = failures
+
+        if failures >= _MAX_EXIT_FAILURES:
+            logger.error(
+                "Max exit retries (%d) for %s #%d — force-closing: %s",
+                _MAX_EXIT_FAILURES, pair, trade_id, error,
+            )
+            price = self._ws.get_latest_price(pair) or 0.0
+            await self._repo.close_crypto_trade(
+                trade_id, price, f"{reason}_max_retries"
+            )
+            self._exit_failures.pop(trade_id, None)
+        else:
+            logger.error(
+                "Failed to auto-exit %s #%d (%s), attempt %d/%d: %s",
+                pair, trade_id, reason, failures, _MAX_EXIT_FAILURES, error,
+            )
 
     async def _update_trailing_stop(self, trade: CryptoTrade, price: float) -> None:
         """Ratchet the stop-loss up when price moves favourably."""

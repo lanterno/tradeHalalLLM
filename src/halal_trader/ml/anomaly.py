@@ -108,7 +108,26 @@ class MLSignalClassifier:
         self._hub = hub
         self._model = None
         self._model_path = hub.models_dir / "signal_classifier.pkl"
+        self._samples: list[list[float]] = []
+        self._labels: list[int] = []
         self._load_model()
+
+    def add_sample(self, indicators: dict, label: int) -> None:
+        """Add a labeled indicator snapshot for incremental training."""
+        features = []
+        for feat in _FEATURES:
+            val = indicators.get(feat)
+            if val is None:
+                return
+            features.append(float(val))
+        self._samples.append(features)
+        self._labels.append(label)
+
+    def auto_train(self, min_samples: int = 50) -> bool:
+        """Train on accumulated samples if enough data is available."""
+        if len(self._samples) < min_samples:
+            return False
+        return self.train(self._samples[-5000:], self._labels[-5000:])
 
     def _load_model(self) -> None:
         if self._model_path.exists():

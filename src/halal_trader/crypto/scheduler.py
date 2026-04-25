@@ -43,6 +43,7 @@ class CryptoTradingBot(BaseTradingBot):
         self._self_review = None
         self._notifier = None
         self._last_day: str | None = None
+        self._exiting_pairs: set[str] = set()
 
     async def _create_components(self) -> None:
         """Create crypto-specific trading components."""
@@ -94,6 +95,7 @@ class CryptoTradingBot(BaseTradingBot):
             circuit_breaker_threshold=self.settings.crypto_circuit_breaker_threshold,
             circuit_breaker_window=self.settings.crypto_circuit_breaker_window,
             circuit_breaker_cooldown=self.settings.crypto_circuit_breaker_cooldown,
+            exiting_pairs=self._exiting_pairs,
         )
 
         # Portfolio tracker
@@ -163,6 +165,17 @@ class CryptoTradingBot(BaseTradingBot):
         self._self_review = TradeSelfReview(llm, repo, strategy=strategy)
         await self._self_review.load_from_db()
 
+        # Portfolio-level risk engine
+        from halal_trader.crypto.risk import PortfolioRiskEngine
+        risk_engine = PortfolioRiskEngine(
+            base_max_position_pct=self.settings.crypto_max_position_pct,
+            max_portfolio_heat_pct=self.settings.crypto_max_portfolio_heat_pct,
+            max_drawdown_pct=self.settings.crypto_max_drawdown_pct,
+            high_correlation_threshold=self.settings.crypto_high_correlation_threshold,
+            correlation_reduction_factor=self.settings.crypto_correlation_reduction_factor,
+            atr_baseline=self.settings.crypto_atr_baseline,
+        )
+
         # Cycle service (wired with all new components)
         self._cycle_service = CryptoCycleService(
             broker=self._binance,
@@ -181,6 +194,14 @@ class CryptoTradingBot(BaseTradingBot):
             ml_signal_classifier=ml_signal,
             self_review=self._self_review,
             notifier=self._notifier if self._notifier.enabled else None,
+            risk_engine=risk_engine,
+        )
+
+        # ML retrainer (labels closed trades and retrains models)
+        from halal_trader.ml.retrainer import RetrainingScheduler
+        self._retrainer = RetrainingScheduler(
+            repo,
+            models_dir=self.settings.ml_models_dir,
         )
 
         # Position monitor (SL/TP enforcement)
@@ -193,8 +214,22 @@ class CryptoTradingBot(BaseTradingBot):
             trailing_stop_activation_pct=self.settings.crypto_trailing_stop_activation_pct,
             trailing_stop_distance_pct=self.settings.crypto_trailing_stop_distance_pct,
             notifier=notifier_for_monitor,
+            retrainer=self._retrainer,
+            exiting_pairs=self._exiting_pairs,
         )
         await self._monitor.start()
+
+        # News event reactor (real-time CryptoPanic stream)
+        from halal_trader.sentiment.events import NewsEventReactor
+        self._news_reactor = NewsEventReactor(
+            api_key=self.settings.cryptopanic_api_key,
+            trading_pairs=self.settings.crypto_pairs,
+            poll_interval_seconds=30,
+            importance_filter="hot",
+        )
+        if self._news_reactor.enabled:
+            self._news_reactor.on_event(self._on_news_event)
+            await self._news_reactor.start()
 
         # Expose live components to the dashboard
         from halal_trader.web.app import app_state as _web_state
@@ -209,6 +244,36 @@ class CryptoTradingBot(BaseTradingBot):
         if self._cycle_service is None:
             raise RuntimeError("CryptoTradingBot.initialize() must be called first")
         return self._cycle_service
+
+    async def _on_news_event(self, event) -> None:
+        """Handle a breaking news event by triggering an emergency mini-cycle."""
+        logger.info(
+            "News event trigger: %s (affects %s)",
+            event.title[:60],
+            ", ".join(event.affected_pairs) or "general market",
+        )
+
+        if self._notifier and self._notifier.enabled:
+            try:
+                await self._notifier.send(
+                    f"\U0001f4f0 <b>Breaking News</b>\n"
+                    f"{event.title}\n"
+                    f"Source: {event.source}\n"
+                    f"Sentiment: {event.sentiment}\n"
+                    f"Affects: {', '.join(event.affected_pairs) or 'general'}\n"
+                    f"<i>Bot is evaluating response...</i>"
+                )
+            except Exception:
+                pass
+
+        if not self._cycle_service:
+            return
+
+        try:
+            await self._cycle_service.run_cycle()
+            logger.info("Emergency mini-cycle completed for news event")
+        except Exception as e:
+            logger.error("Emergency mini-cycle failed: %s", e)
 
     # ── Daily Routines ─────────────────────────────────────────
 
@@ -270,6 +335,7 @@ class CryptoTradingBot(BaseTradingBot):
 
         components: list[tuple[str, object | None]] = [
             ("monitor", self._monitor),
+            ("news_reactor", getattr(self, "_news_reactor", None)),
             ("sentiment", self._sentiment_manager),
             ("notifier", self._notifier),
             ("websocket", self._ws),
@@ -335,8 +401,18 @@ class CryptoTradingBot(BaseTradingBot):
                     except Exception as e:
                         logger.debug("Self-review trigger check failed: %s", e)
 
-                # Run trading cycle
-                await self._cycle_service.run_cycle()
+                # Run trading cycle with timeout (2x interval)
+                cycle_timeout = interval * 2
+                try:
+                    await asyncio.wait_for(
+                        self._cycle_service.run_cycle(),
+                        timeout=cycle_timeout,
+                    )
+                except asyncio.TimeoutError:
+                    logger.error(
+                        "Trading cycle timed out after %ds — skipping to next",
+                        cycle_timeout,
+                    )
 
                 from halal_trader.web.app import app_state as _web_state
                 from datetime import datetime, timezone

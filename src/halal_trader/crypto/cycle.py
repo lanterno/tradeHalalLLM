@@ -6,6 +6,8 @@ import asyncio
 import logging
 from typing import Any
 
+from binance import BinanceAPIException
+
 from halal_trader.config import get_settings
 from halal_trader.core.cycle import BaseCycleService
 from halal_trader.crypto.analytics import PerformanceAnalytics
@@ -13,8 +15,10 @@ from halal_trader.crypto.exchange import BinanceClient
 from halal_trader.crypto.executor import CryptoExecutor
 from halal_trader.crypto.indicators import compute_all
 from halal_trader.crypto.portfolio import CryptoPortfolioTracker
+from halal_trader.crypto.risk import PortfolioRiskEngine
 from halal_trader.crypto.screener import CryptoHalalScreener
 from halal_trader.crypto.strategy import CryptoTradingStrategy
+from halal_trader.crypto.regime import MarketRegime
 from halal_trader.crypto.websocket import BinanceWSManager
 from halal_trader.domain.models import Kline
 
@@ -45,6 +49,7 @@ class CryptoCycleService(BaseCycleService):
         ml_signal_classifier=None,
         self_review=None,
         notifier=None,
+        risk_engine: PortfolioRiskEngine | None = None,
     ) -> None:
         super().__init__()
         self._broker = broker
@@ -63,6 +68,7 @@ class CryptoCycleService(BaseCycleService):
         self._ml_signal = ml_signal_classifier
         self._self_review = self_review
         self._notifier = notifier
+        self._risk_engine = risk_engine
         self._consecutive_flat_skips = 0
         self._settings = get_settings()
 
@@ -76,6 +82,8 @@ class CryptoCycleService(BaseCycleService):
         return False
 
     async def _run_cycle_impl(self) -> None:
+        await self._broker.refresh_symbol_filters_if_stale()
+
         halal_pairs = await self._get_tradeable_pairs()
         if not halal_pairs:
             logger.warning("No halal crypto pairs available, skipping cycle")
@@ -129,6 +137,18 @@ class CryptoCycleService(BaseCycleService):
             current_prices=current_prices,
         )
         today_pnl = await self._portfolio.get_current_pnl(account=account)
+
+        tracked_bases = {
+            p.upper().removesuffix("USDT").removesuffix("BUSD")
+            for p in self._configured_pairs
+        }
+        open_position_count = 0
+        for b in balances:
+            if b.asset in tracked_bases and b.free > 0:
+                price = self._broker.get_cached_price(f"{b.asset}USDT")
+                if price and b.free * price < 5.0:
+                    continue
+                open_position_count += 1
 
         usdt_free = account.usdt_free
         if usdt_free < 5.0:
@@ -237,6 +257,35 @@ class CryptoCycleService(BaseCycleService):
             except Exception as e:
                 logger.debug("ML signals unavailable: %s", e)
 
+        risk_text = ""
+        if self._risk_engine:
+            try:
+                open_pos_value: dict[str, float] = {}
+                unrealized_pnl: dict[str, float] = {}
+                for t in (open_trades or []):
+                    price = (
+                        current_prices.get(t.pair)
+                        or self._broker.get_cached_price(t.pair)
+                    )
+                    if price and t.entry_price:
+                        open_pos_value[t.pair] = t.quantity * price
+                        unrealized_pnl[t.pair] = (price - t.entry_price) * t.quantity
+
+                risk_state = self._risk_engine.evaluate(
+                    klines_by_symbol=klines_by_symbol,
+                    indicators_cache=indicators_cache,
+                    open_positions_value=open_pos_value,
+                    unrealized_pnl=unrealized_pnl,
+                    total_equity=account.total_balance_usdt,
+                )
+                risk_text = self._risk_engine.format_for_prompt(risk_state)
+
+                if risk_state.is_halted:
+                    logger.warning("Risk engine halt: %s", risk_state.halt_reason)
+                    return
+            except Exception as e:
+                logger.debug("Risk engine evaluation failed: %s", e)
+
         active_adjustments = ""
         if self._self_review:
             active_adjustments = self._self_review.format_adjustments_for_prompt()
@@ -258,7 +307,30 @@ class CryptoCycleService(BaseCycleService):
             active_adjustments=active_adjustments,
             exchange_rules_text=exchange_rules_text,
             indicators_cache=indicators_cache,
+            open_position_count=open_position_count,
+            risk_text=risk_text,
         )
+
+        if self._regime and plan.buys:
+            downtrend_pairs: set[str] = set()
+            for pair in klines_by_symbol:
+                indicators = indicators_cache.get(pair, {})
+                if not indicators or "error" in indicators:
+                    continue
+                regime, confidence, _ = self._regime.detect(indicators)
+                if regime == MarketRegime.TRENDING_DOWN and confidence >= 0.6:
+                    downtrend_pairs.add(pair)
+
+            if downtrend_pairs:
+                blocked = [d for d in plan.buys if d.symbol in downtrend_pairs]
+                if blocked:
+                    for d in blocked:
+                        plan.decisions.remove(d)
+                    logger.warning(
+                        "Regime gate blocked %d BUY(s) in downtrend: %s",
+                        len(blocked),
+                        ", ".join(d.symbol for d in blocked),
+                    )
 
         logger.info(
             "Crypto plan: %s | %d buys, %d sells",
@@ -271,6 +343,18 @@ class CryptoCycleService(BaseCycleService):
             results = await self._executor.execute_plan(plan, account=account)
             for r in results:
                 logger.info("Crypto execution: %s", r)
+                if r.get("status") in ("submitted", "filled") and r.get("action") == "buy":
+                    trade_id = r.get("trade_id")
+                    symbol = r.get("symbol", "")
+                    if trade_id and symbol in indicators_cache:
+                        try:
+                            await self._portfolio._repo.record_indicator_snapshot(
+                                trade_id=trade_id,
+                                pair=symbol,
+                                indicators=indicators_cache[symbol],
+                            )
+                        except Exception as exc:
+                            logger.debug("Failed to record indicator snapshot: %s", exc)
                 if self._notifier and r.get("status") in ("submitted", "filled"):
                     try:
                         await self._notifier.notify_trade(
@@ -341,14 +425,17 @@ class CryptoCycleService(BaseCycleService):
         return self._configured_pairs[:max_pairs]
 
     async def _fetch_klines(self, pairs: list[str]) -> dict[str, list[Kline]]:
-        """Fetch klines from WebSocket buffer or REST fallback (parallel)."""
+        """Fetch klines from WebSocket buffer or REST fallback (throttled)."""
+        sem = asyncio.Semaphore(5)
+
         async def _get_klines(pair: str) -> tuple[str, list[Kline]]:
             if self._ws:
                 ws_klines = self._ws.get_klines(pair, limit=100)
                 if len(ws_klines) >= 20:
                     return pair, ws_klines
-            klines = await self._broker.get_klines(pair, interval="1m", limit=100)
-            return pair, klines
+            async with sem:
+                klines = await self._broker.get_klines(pair, interval="1m", limit=100)
+                return pair, klines
 
         results = await asyncio.gather(
             *[_get_klines(p) for p in pairs], return_exceptions=True
@@ -356,17 +443,24 @@ class CryptoCycleService(BaseCycleService):
         klines_by_symbol: dict[str, list[Kline]] = {}
         for result in results:
             if isinstance(result, Exception):
-                logger.debug("Failed to get klines: %s", result)
+                if isinstance(result, BinanceAPIException) and result.code == -1003:
+                    logger.warning("Rate limited fetching klines, backing off")
+                    await asyncio.sleep(30)
+                else:
+                    logger.debug("Failed to get klines: %s", result)
                 continue
             pair, klines = result
             klines_by_symbol[pair] = klines
         return klines_by_symbol
 
     async def _fetch_orderbooks(self, pairs: list[str]) -> dict[str, dict[str, Any]]:
-        """Fetch order book depth for each pair (parallel)."""
+        """Fetch order book depth for each pair (throttled)."""
+        sem = asyncio.Semaphore(5)
+
         async def _get_book(pair: str) -> tuple[str, dict[str, Any]]:
-            book = await self._broker.get_order_book(pair, limit=10)
-            return pair, book
+            async with sem:
+                book = await self._broker.get_order_book(pair, limit=10)
+                return pair, book
 
         results = await asyncio.gather(
             *[_get_book(p) for p in pairs], return_exceptions=True
@@ -374,7 +468,11 @@ class CryptoCycleService(BaseCycleService):
         orderbooks: dict[str, dict[str, Any]] = {}
         for result in results:
             if isinstance(result, Exception):
-                logger.debug("Failed to get order book: %s", result)
+                if isinstance(result, BinanceAPIException) and result.code == -1003:
+                    logger.warning("Rate limited fetching orderbooks, backing off")
+                    await asyncio.sleep(30)
+                else:
+                    logger.debug("Failed to get order book: %s", result)
                 continue
             pair, book = result
             orderbooks[pair] = book

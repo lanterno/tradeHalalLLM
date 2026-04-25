@@ -14,6 +14,7 @@ from halal_trader.db.models import (
     CryptoTrade,
     DailyPnl,
     HalalCache,
+    IndicatorSnapshot,
     LlmDecision,
     StrategyAdjustment,
     Trade,
@@ -298,6 +299,52 @@ class Repository:
             results = await session.exec(statement)
             return list(results.all())
 
+    async def get_open_crypto_trades_for_pair(self, pair: str) -> list[CryptoTrade]:
+        """Return all open (unclosed, non-rejected) buy trades for a specific pair."""
+        async with AsyncSession(self._engine) as session:
+            statement = (
+                select(CryptoTrade)
+                .where(CryptoTrade.side == "buy")
+                .where(CryptoTrade.pair == pair)
+                .where(CryptoTrade.closed_at.is_(None))  # type: ignore[union-attr]
+                .where(CryptoTrade.status != "rejected")
+            )
+            results = await session.exec(statement)
+            return list(results.all())
+
+    async def close_open_crypto_trades_for_pair(
+        self,
+        pair: str,
+        exit_price: float,
+        exit_reason: str,
+        exclude_id: int | None = None,
+    ) -> int:
+        """Close all open trades for a pair (except exclude_id). Returns count closed."""
+        async with AsyncSession(self._engine) as session:
+            statement = (
+                select(CryptoTrade)
+                .where(CryptoTrade.side == "buy")
+                .where(CryptoTrade.pair == pair)
+                .where(CryptoTrade.closed_at.is_(None))  # type: ignore[union-attr]
+                .where(CryptoTrade.status != "rejected")
+            )
+            if exclude_id is not None:
+                statement = statement.where(CryptoTrade.id != exclude_id)
+            results = await session.exec(statement)
+            trades = results.all()
+            now = datetime.now(UTC)
+            count = 0
+            for trade in trades:
+                trade.exit_price = exit_price
+                trade.exit_reason = exit_reason
+                trade.closed_at = now
+                trade.status = "closed"
+                session.add(trade)
+                count += 1
+            if count > 0:
+                await session.commit()
+            return count
+
     async def get_recent_crypto_trades(self, limit: int = 50) -> list[dict[str, Any]]:
         return await self._get_recent_rows(CryptoTrade, limit)
 
@@ -384,6 +431,64 @@ class Repository:
 
     async def is_crypto_cache_fresh(self, max_age_hours: int = 24) -> bool:
         return await self._is_cache_fresh(CryptoHalalCache, max_age_hours)
+
+    # ── Indicator Snapshots (ML training) ────────────────────
+
+    async def record_indicator_snapshot(
+        self,
+        trade_id: int,
+        pair: str,
+        indicators: dict[str, float],
+    ) -> int:
+        snap = IndicatorSnapshot(
+            trade_id=trade_id,
+            pair=pair,
+            rsi_14=indicators.get("rsi_14"),
+            macd_histogram=indicators.get("macd_histogram"),
+            volume_ratio=indicators.get("volume_ratio"),
+            atr_14=indicators.get("atr_14"),
+            bb_position=indicators.get("bb_position"),
+            price_change_5m=indicators.get("price_change_5m"),
+            ema_9=indicators.get("ema_9"),
+            ema_21=indicators.get("ema_21"),
+            vwap=indicators.get("vwap"),
+        )
+        async with AsyncSession(self._engine) as session:
+            session.add(snap)
+            await session.commit()
+            await session.refresh(snap)
+            return snap.id  # type: ignore[return-value]
+
+    async def label_indicator_snapshot(
+        self, trade_id: int, label: int, return_pct: float
+    ) -> None:
+        async with AsyncSession(self._engine) as session:
+            statement = select(IndicatorSnapshot).where(
+                IndicatorSnapshot.trade_id == trade_id
+            )
+            result = await session.exec(statement)
+            snap = result.first()
+            if snap:
+                snap.label = label
+                snap.return_pct = return_pct
+                session.add(snap)
+                await session.commit()
+
+    async def get_labeled_snapshots(
+        self, min_samples: int = 50
+    ) -> list[dict[str, Any]]:
+        async with AsyncSession(self._engine) as session:
+            statement = (
+                select(IndicatorSnapshot)
+                .where(IndicatorSnapshot.label.is_not(None))  # type: ignore[union-attr]
+                .order_by(IndicatorSnapshot.timestamp.desc())  # type: ignore[union-attr]
+                .limit(5000)
+            )
+            results = await session.exec(statement)
+            rows = results.all()
+            if len(rows) < min_samples:
+                return []
+            return [r.model_dump() for r in rows]
 
     # ── Strategy Adjustments ──────────────────────────────────
 

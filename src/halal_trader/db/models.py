@@ -120,6 +120,28 @@ class CryptoHalalCache(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
+class IndicatorSnapshot(SQLModel, table=True):
+    """Indicator feature vector captured at trade entry time for ML training."""
+
+    __tablename__ = "indicator_snapshots"
+
+    id: int | None = Field(default=None, primary_key=True)
+    trade_id: int = Field(index=True)
+    pair: str
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    rsi_14: float | None = None
+    macd_histogram: float | None = None
+    volume_ratio: float | None = None
+    atr_14: float | None = None
+    bb_position: float | None = None
+    price_change_5m: float | None = None
+    ema_9: float | None = None
+    ema_21: float | None = None
+    vwap: float | None = None
+    label: int | None = None  # 1=profitable, 0=unprofitable (set after close)
+    return_pct: float | None = None  # actual return % (set after close)
+
+
 class StrategyAdjustment(SQLModel, table=True):
     """Audit log for LLM self-improvement parameter changes."""
 
