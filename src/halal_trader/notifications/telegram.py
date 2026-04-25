@@ -160,6 +160,9 @@ class AlertSink:
         self._notifier = notifier
         self._cooldown = cooldown_seconds
         # NOTE: single-asyncio-loop only \u2014 not thread-safe.
+        # ``last_sent`` uses ``None`` as the never-sent sentinel; ``0.0``
+        # would falsely engage the cooldown gate on fresh systems where
+        # ``time.monotonic()`` starts below the cooldown window.
         self._last_sent: dict[str, float] = {}
         self._suppressed: dict[str, int] = {}
 
@@ -177,8 +180,8 @@ class AlertSink:
             return False
 
         now = time.monotonic()
-        last = self._last_sent.get(error_type, 0.0)
-        if now - last < self._cooldown:
+        last = self._last_sent.get(error_type)
+        if last is not None and now - last < self._cooldown:
             self._suppressed[error_type] = self._suppressed.get(error_type, 0) + 1
             logger.debug(
                 "Alert suppressed for %s (%ds since last; %d total in window)",
