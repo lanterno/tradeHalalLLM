@@ -65,7 +65,7 @@ def _bars_to_klines(bars_for_symbol: Any) -> list[Kline]:
             low = float(bar.get("l", bar.get("low", 0)))
             c = float(bar.get("c", bar.get("close", 0)))
             v = float(bar.get("v", bar.get("volume", 0)))
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             continue
         if c <= 0:
             continue
@@ -109,8 +109,7 @@ def evaluate_stock_risk(
         indicators_cache[symbol] = compute_all(klines)
 
     open_positions_value: dict[str, float] = {
-        p.symbol: float(p.qty) * float(p.current_price or p.avg_entry_price)
-        for p in positions
+        p.symbol: float(p.qty) * float(p.current_price or p.avg_entry_price) for p in positions
     }
     unrealized_pnl: dict[str, float] = {p.symbol: float(p.unrealized_pl) for p in positions}
 

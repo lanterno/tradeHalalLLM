@@ -2,10 +2,6 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-
-import pytest
-
 from halal_trader.config import Settings
 from halal_trader.domain.models import Position
 from halal_trader.trading.risk import _bars_to_klines, evaluate_stock_risk

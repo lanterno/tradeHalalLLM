@@ -26,7 +26,10 @@ from halal_trader.db.models import (  # noqa: F401
 config = context.config
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # disable_existing_loggers=False so that pre-configured loggers
+    # (e.g. pytest's caplog) are not wiped when alembic runs in-process
+    # during tests.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = SQLModel.metadata
 
