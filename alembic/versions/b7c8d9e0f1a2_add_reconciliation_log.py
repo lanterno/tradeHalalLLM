@@ -43,14 +43,10 @@ def upgrade() -> None:
         sa.Column("notes", sqlmodel.sql.sqltypes.AutoString(), nullable=True),
         sa.PrimaryKeyConstraint("id"),
     )
-    op.create_index(
-        "ix_reconciliation_log_timestamp", "reconciliation_log", ["timestamp"]
-    )
+    op.create_index("ix_reconciliation_log_timestamp", "reconciliation_log", ["timestamp"])
 
 
 def downgrade() -> None:
     if _table_exists("reconciliation_log"):
-        op.drop_index(
-            "ix_reconciliation_log_timestamp", table_name="reconciliation_log"
-        )
+        op.drop_index("ix_reconciliation_log_timestamp", table_name="reconciliation_log")
         op.drop_table("reconciliation_log")

@@ -219,6 +219,18 @@ class Settings(BaseSettings):
 
     # ── Database ────────────────────────────────────────────────
     db_path: Path = Field(default=Path("halal_trader.db"), description="SQLite database path")
+    backup_dir: Path = Field(
+        default=Path("backups"),
+        description="Directory for daily SQLite gzipped backups",
+    )
+    backup_retention_days: int = Field(
+        default=30, ge=1, description="Keep this many daily backups before pruning"
+    )
+    backup_weekly_count: int = Field(
+        default=12,
+        ge=0,
+        description="On top of daily retention, keep this many Sunday backups",
+    )
 
     def resolve_db_path(self) -> Path:
         """Return an absolute db_path, resolving relative paths from the project root."""

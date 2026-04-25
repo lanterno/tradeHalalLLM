@@ -84,11 +84,7 @@ async def reconcile_crypto(
     for trade in open_trades:
         if getattr(trade, "side", "") != "buy":
             continue
-        base = (
-            trade.pair.upper().removesuffix("USDT").removesuffix("BUSD")
-            if trade.pair
-            else ""
-        )
+        base = trade.pair.upper().removesuffix("USDT").removesuffix("BUSD") if trade.pair else ""
         if not base:
             continue
         db_by_asset[base] = db_by_asset.get(base, 0.0) + float(trade.quantity or 0)
@@ -107,9 +103,7 @@ async def reconcile_crypto(
         pct = _drift_pct(db_qty, broker_qty)
         if pct > threshold_pct:
             price = _safe_cached_price(broker, f"{asset}USDT")
-            drift_usd = (
-                abs(db_qty - broker_qty) * price if price is not None else None
-            )
+            drift_usd = abs(db_qty - broker_qty) * price if price is not None else None
             drift = Drift(
                 market="crypto",
                 symbol=asset,
@@ -192,9 +186,7 @@ async def reconcile_stocks(
         db_by_symbol[symbol] = db_by_symbol.get(symbol, 0.0) + sign * qty
 
     positions = await broker.get_all_positions()
-    broker_by_symbol: dict[str, float] = {
-        p.symbol.upper(): float(p.qty) for p in positions
-    }
+    broker_by_symbol: dict[str, float] = {p.symbol.upper(): float(p.qty) for p in positions}
 
     report = ReconcileReport(market="stocks")
     seen: set[str] = set()
@@ -307,17 +299,13 @@ def _summarize_drifts(drifts: Iterable[Drift]) -> str:
 # ── Repository helper ─────────────────────────────────────────
 
 
-async def get_recent_logs(
-    engine: AsyncEngine, *, limit: int = 25
-) -> list[dict[str, Any]]:
+async def get_recent_logs(engine: AsyncEngine, *, limit: int = 25) -> list[dict[str, Any]]:
     """Return the most recent reconciliation log rows as dicts."""
     from sqlmodel import col, select
 
     async with AsyncSession(engine) as session:
         result = await session.execute(
-            select(ReconciliationLog)
-            .order_by(col(ReconciliationLog.timestamp).desc())
-            .limit(limit)
+            select(ReconciliationLog).order_by(col(ReconciliationLog.timestamp).desc()).limit(limit)
         )
         return [
             {

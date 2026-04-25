@@ -352,6 +352,17 @@ class CryptoTradingBot(BaseTradingBot):
                     await self._notifier.notify_daily_summary(summary or {})
                 except Exception as e:
                     logger.debug("Failed to send daily summary: %s", e)
+
+            # Daily backup (gzipped SQLite snapshot + retention prune).
+            from halal_trader.db.backup import run_with_alerts
+
+            await run_with_alerts(
+                db_path=self.settings.resolve_db_path(),
+                backup_dir=self.settings.backup_dir,
+                retention_days=self.settings.backup_retention_days,
+                weekly_count=self.settings.backup_weekly_count,
+                alerts=self._alerts,
+            )
         except Exception as e:
             logger.error("Crypto daily end failed: %s", e)
 

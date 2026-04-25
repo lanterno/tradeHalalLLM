@@ -286,6 +286,17 @@ class TradingBot(BaseTradingBot):
             summary = await portfolio.record_day_end()
             logger.info("Day summary: %s", summary)
 
+            # Daily backup (gzipped SQLite snapshot + retention prune).
+            from halal_trader.db.backup import run_with_alerts
+
+            await run_with_alerts(
+                db_path=self.settings.resolve_db_path(),
+                backup_dir=self.settings.backup_dir,
+                retention_days=self.settings.backup_retention_days,
+                weekly_count=self.settings.backup_weekly_count,
+                alerts=self._alerts,  # type: ignore[arg-type]
+            )
+
         except Exception as e:
             logger.error("End of day routine failed: %s", e)
             if self._alerts is not None:

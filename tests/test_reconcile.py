@@ -10,7 +10,6 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from sqlmodel import SQLModel
 
 from halal_trader.core import reconcile
-from halal_trader.db.models import CryptoTrade, ReconciliationLog, Trade
 from halal_trader.db.repository import Repository
 from halal_trader.notifications.telegram import AlertSink, TelegramNotifier
 
@@ -91,9 +90,7 @@ async def test_crypto_drift_below_threshold_skipped(engine):
     broker.get_balances = AsyncMock(return_value=[_balance("BTC", 0.998)])
     broker.get_cached_price = MagicMock(return_value=70000.0)
 
-    report = await reconcile.reconcile_crypto(
-        engine=engine, broker=broker, threshold_pct=0.01
-    )
+    report = await reconcile.reconcile_crypto(engine=engine, broker=broker, threshold_pct=0.01)
     assert not report.has_drift
 
 
@@ -123,9 +120,7 @@ async def test_crypto_surplus_dust_below_5usd_ignored(engine):
 @pytest.mark.asyncio
 async def test_crypto_ignores_usdt_balance(engine):
     broker = MagicMock()
-    broker.get_balances = AsyncMock(
-        return_value=[_balance("USDT", 1000.0), _balance("BUSD", 50.0)]
-    )
+    broker.get_balances = AsyncMock(return_value=[_balance("USDT", 1000.0), _balance("BUSD", 50.0)])
     broker.get_cached_price = MagicMock(return_value=None)
 
     report = await reconcile.reconcile_crypto(engine=engine, broker=broker)
@@ -182,9 +177,7 @@ async def test_get_recent_logs_orders_desc(engine):
     await repo.record_crypto_trade(pair="ETHUSDT", side="buy", quantity=2.0, status="filled")
 
     broker = MagicMock()
-    broker.get_balances = AsyncMock(
-        return_value=[_balance("BTC", 0.5), _balance("ETH", 1.0)]
-    )
+    broker.get_balances = AsyncMock(return_value=[_balance("BTC", 0.5), _balance("ETH", 1.0)])
     broker.get_cached_price = MagicMock(return_value=10000.0)
 
     await reconcile.reconcile_crypto(engine=engine, broker=broker)
