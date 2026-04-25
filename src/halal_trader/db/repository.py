@@ -44,9 +44,7 @@ class Repository:
             results = await session.exec(statement)
             return [row.model_dump() for row in results.all()]
 
-    async def _get_recent_rows(
-        self, model: type[SQLModel], limit: int
-    ) -> list[dict[str, Any]]:
+    async def _get_recent_rows(self, model: type[SQLModel], limit: int) -> list[dict[str, Any]]:
         async with AsyncSession(self._engine) as session:
             statement = (
                 select(model)
@@ -56,9 +54,7 @@ class Repository:
             results = await session.exec(statement)
             return [row.model_dump() for row in results.all()]
 
-    async def _start_day(
-        self, pnl_model: type[SQLModel], starting_equity: float
-    ) -> None:
+    async def _start_day(self, pnl_model: type[SQLModel], starting_equity: float) -> None:
         today = today_eastern().isoformat()
         async with AsyncSession(self._engine) as session:
             statement = select(pnl_model).where(
@@ -94,9 +90,7 @@ class Repository:
             session.add(row)
             await session.commit()
 
-    async def _get_pnl_history(
-        self, pnl_model: type[SQLModel], limit: int
-    ) -> list[dict[str, Any]]:
+    async def _get_pnl_history(self, pnl_model: type[SQLModel], limit: int) -> list[dict[str, Any]]:
         async with AsyncSession(self._engine) as session:
             statement = (
                 select(pnl_model)
@@ -106,9 +100,7 @@ class Repository:
             results = await session.exec(statement)
             return [row.model_dump() for row in results.all()]
 
-    async def _get_halal_status(
-        self, cache_model: type[SQLModel], symbol: str
-    ) -> str | None:
+    async def _get_halal_status(self, cache_model: type[SQLModel], symbol: str) -> str | None:
         async with AsyncSession(self._engine) as session:
             statement = select(cache_model).where(
                 cache_model.symbol == symbol  # type: ignore[attr-defined]
@@ -125,9 +117,7 @@ class Repository:
             results = await session.exec(statement)
             return [row.symbol for row in results.all()]  # type: ignore[union-attr]
 
-    async def _is_cache_fresh(
-        self, cache_model: type[SQLModel], max_age_hours: int
-    ) -> bool:
+    async def _is_cache_fresh(self, cache_model: type[SQLModel], max_age_hours: int) -> bool:
         cutoff = datetime.now(UTC) - timedelta(hours=max_age_hours)
         async with AsyncSession(self._engine) as session:
             statement = select(cache_model).where(
@@ -149,8 +139,13 @@ class Repository:
         llm_reasoning: str | None = None,
     ) -> int:
         trade = Trade(
-            symbol=symbol, side=side, quantity=quantity, price=price,
-            order_id=order_id, status=status, llm_reasoning=llm_reasoning,
+            symbol=symbol,
+            side=side,
+            quantity=quantity,
+            price=price,
+            order_id=order_id,
+            status=status,
+            llm_reasoning=llm_reasoning,
         )
         async with AsyncSession(self._engine) as session:
             session.add(trade)
@@ -216,11 +211,14 @@ class Repository:
         thinking: str | None = None,
     ) -> int:
         decision = LlmDecision(
-            provider=provider, model=model,
-            prompt_summary=prompt_summary, raw_response=raw_response,
+            provider=provider,
+            model=model,
+            prompt_summary=prompt_summary,
+            raw_response=raw_response,
             parsed_action=json.dumps(parsed_action) if parsed_action else None,
             symbols=json.dumps(symbols) if symbols else None,
-            execution_ms=execution_ms, thinking=thinking,
+            execution_ms=execution_ms,
+            thinking=thinking,
         )
         async with AsyncSession(self._engine) as session:
             session.add(decision)
@@ -248,10 +246,17 @@ class Repository:
         target_price: float | None = None,
     ) -> int:
         trade = CryptoTrade(
-            pair=pair, side=side, quantity=quantity, price=price,
-            order_id=order_id, exchange=exchange, status=status,
-            llm_reasoning=llm_reasoning, entry_price=entry_price,
-            stop_loss=stop_loss, target_price=target_price,
+            pair=pair,
+            side=side,
+            quantity=quantity,
+            price=price,
+            order_id=order_id,
+            exchange=exchange,
+            status=status,
+            llm_reasoning=llm_reasoning,
+            entry_price=entry_price,
+            stop_loss=stop_loss,
+            target_price=target_price,
         )
         async with AsyncSession(self._engine) as session:
             session.add(trade)
@@ -259,9 +264,7 @@ class Repository:
             await session.refresh(trade)
             return trade.id  # type: ignore[return-value]
 
-    async def update_crypto_trade_stop_loss(
-        self, trade_id: int, new_stop_loss: float
-    ) -> None:
+    async def update_crypto_trade_stop_loss(self, trade_id: int, new_stop_loss: float) -> None:
         async with AsyncSession(self._engine) as session:
             trade = await session.get(CryptoTrade, trade_id)
             if trade is None:
@@ -271,7 +274,10 @@ class Repository:
             await session.commit()
 
     async def close_crypto_trade(
-        self, trade_id: int, exit_price: float, exit_reason: str,
+        self,
+        trade_id: int,
+        exit_price: float,
+        exit_reason: str,
     ) -> None:
         async with AsyncSession(self._engine) as session:
             trade = await session.get(CryptoTrade, trade_id)
@@ -373,13 +379,21 @@ class Repository:
                 duration_min = 0.0
                 if trade.closed_at and trade.timestamp:
                     duration_min = (trade.closed_at - trade.timestamp).total_seconds() / 60
-                round_trips.append({
-                    "id": trade.id, "pair": trade.pair,
-                    "buy_price": entry, "sell_price": exit_p,
-                    "quantity": trade.quantity, "pnl": pnl, "pnl_pct": pnl_pct,
-                    "duration_minutes": duration_min, "exit_reason": trade.exit_reason,
-                    "opened_at": trade.timestamp, "closed_at": trade.closed_at,
-                })
+                round_trips.append(
+                    {
+                        "id": trade.id,
+                        "pair": trade.pair,
+                        "buy_price": entry,
+                        "sell_price": exit_p,
+                        "quantity": trade.quantity,
+                        "pnl": pnl,
+                        "pnl_pct": pnl_pct,
+                        "duration_minutes": duration_min,
+                        "exit_reason": trade.exit_reason,
+                        "opened_at": trade.timestamp,
+                        "closed_at": trade.closed_at,
+                    }
+                )
             return round_trips
 
     # ── Crypto Daily P&L ───────────────────────────────────────
@@ -417,10 +431,15 @@ class Repository:
                 existing.updated_at = datetime.now(UTC)
                 session.add(existing)
             else:
-                session.add(CryptoHalalCache(
-                    symbol=symbol, compliance=compliance, category=category,
-                    market_cap=market_cap, screening_criteria=screening_criteria,
-                ))
+                session.add(
+                    CryptoHalalCache(
+                        symbol=symbol,
+                        compliance=compliance,
+                        category=category,
+                        market_cap=market_cap,
+                        screening_criteria=screening_criteria,
+                    )
+                )
             await session.commit()
 
     async def get_crypto_halal_status(self, symbol: str) -> str | None:
@@ -459,13 +478,9 @@ class Repository:
             await session.refresh(snap)
             return snap.id  # type: ignore[return-value]
 
-    async def label_indicator_snapshot(
-        self, trade_id: int, label: int, return_pct: float
-    ) -> None:
+    async def label_indicator_snapshot(self, trade_id: int, label: int, return_pct: float) -> None:
         async with AsyncSession(self._engine) as session:
-            statement = select(IndicatorSnapshot).where(
-                IndicatorSnapshot.trade_id == trade_id
-            )
+            statement = select(IndicatorSnapshot).where(IndicatorSnapshot.trade_id == trade_id)
             result = await session.exec(statement)
             snap = result.first()
             if snap:
@@ -474,9 +489,7 @@ class Repository:
                 session.add(snap)
                 await session.commit()
 
-    async def get_labeled_snapshots(
-        self, min_samples: int = 50
-    ) -> list[dict[str, Any]]:
+    async def get_labeled_snapshots(self, min_samples: int = 50) -> list[dict[str, Any]]:
         async with AsyncSession(self._engine) as session:
             statement = (
                 select(IndicatorSnapshot)
@@ -493,12 +506,17 @@ class Repository:
     # ── Strategy Adjustments ──────────────────────────────────
 
     async def record_strategy_adjustment(
-        self, parameter: str, old_value: float | None, new_value: float,
+        self,
+        parameter: str,
+        old_value: float | None,
+        new_value: float,
         reasoning: str | None = None,
     ) -> int:
         adj = StrategyAdjustment(
-            parameter=parameter, old_value=old_value,
-            new_value=new_value, reasoning=reasoning,
+            parameter=parameter,
+            old_value=old_value,
+            new_value=new_value,
+            reasoning=reasoning,
         )
         async with AsyncSession(self._engine) as session:
             session.add(adj)

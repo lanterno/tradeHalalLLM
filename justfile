@@ -96,6 +96,18 @@ format:
     uv run ruff format src/ tests/
     uv run ruff check --fix src/ tests/
 
+# Type-check (domain + core, strict)
+typecheck:
+    uv run mypy
+
+# Run all pre-commit hooks against every tracked file
+precommit:
+    uv run pre-commit run --all-files
+
+# Install pre-commit's git hooks into .git/hooks/
+precommit-install:
+    uv run pre-commit install
+
 # ── Maintenance ───────────────────────────────────────────
 
 # Remove caches and compiled files

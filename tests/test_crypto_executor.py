@@ -61,8 +61,12 @@ def _make_plan(decisions):
 
 
 def _make_buy(
-    symbol="BTCUSDT", quantity=0.001, confidence=0.8,
-    entry_price=50000, sl=49500, tp=51000,
+    symbol="BTCUSDT",
+    quantity=0.001,
+    confidence=0.8,
+    entry_price=50000,
+    sl=49500,
+    tp=51000,
 ):
     return CryptoTradeDecision(
         action=TradeAction.BUY,
@@ -137,9 +141,7 @@ class TestExecuteBuy:
 
 class TestExecuteSell:
     async def test_successful_sell(self):
-        executor, broker, repo = _make_executor(
-            balances=[CryptoBalance(asset="BTC", free=0.01)]
-        )
+        executor, broker, repo = _make_executor(balances=[CryptoBalance(asset="BTC", free=0.01)])
         plan = _make_plan([_make_sell()])
         results = await executor.execute_plan(plan, account=_make_account())
 
@@ -148,9 +150,7 @@ class TestExecuteSell:
         broker.place_order.assert_awaited_once()
 
     async def test_sell_clamps_to_actual_balance(self):
-        executor, broker, repo = _make_executor(
-            balances=[CryptoBalance(asset="BTC", free=0.0005)]
-        )
+        executor, broker, repo = _make_executor(balances=[CryptoBalance(asset="BTC", free=0.0005)])
         plan = _make_plan([_make_sell(quantity=1.0)])
         await executor.execute_plan(plan, account=_make_account())
 
@@ -158,9 +158,7 @@ class TestExecuteSell:
         assert call_args.kwargs["quantity"] <= 0.0005
 
     async def test_sell_rejected_no_balance(self):
-        executor, broker, repo = _make_executor(
-            balances=[CryptoBalance(asset="USDT", free=5000.0)]
-        )
+        executor, broker, repo = _make_executor(balances=[CryptoBalance(asset="USDT", free=5000.0)])
         plan = _make_plan([_make_sell()])
         results = await executor.execute_plan(plan, account=_make_account())
 
@@ -260,14 +258,16 @@ class TestSellsFirstThenBuys:
         async def track_sell(*args, **kwargs):
             call_order.append("sell")
             return {
-                "orderId": "s1", "status": "FILLED",
+                "orderId": "s1",
+                "status": "FILLED",
                 "fills": [{"price": "50000", "qty": "0.001"}],
             }
 
         async def track_buy(*args, **kwargs):
             call_order.append("buy")
             return {
-                "orderId": "b1", "status": "FILLED",
+                "orderId": "b1",
+                "status": "FILLED",
                 "fills": [{"price": "50000", "qty": "0.001"}],
             }
 

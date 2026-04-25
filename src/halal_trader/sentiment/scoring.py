@@ -35,6 +35,7 @@ class SentimentScorer:
             return
         try:
             from transformers import pipeline
+
             self._finbert_pipeline = pipeline(
                 "sentiment-analysis",
                 model="ProsusAI/finbert",
@@ -177,7 +178,7 @@ def format_sentiment_for_prompt(signals: dict[str, SentimentSignal]) -> str:
 
         if sig.top_narratives:
             for narrative in sig.top_narratives[:2]:
-                lines.append(f"    - \"{narrative}\"")
+                lines.append(f'    - "{narrative}"')
 
         if sig.news_headlines:
             for headline in sig.news_headlines[:2]:

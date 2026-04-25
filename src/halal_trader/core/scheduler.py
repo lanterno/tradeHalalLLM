@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import abc
 import logging
+from typing import Any
+
+from sqlalchemy.ext.asyncio import AsyncEngine
 
 from halal_trader.config import get_settings
 from halal_trader.db.models import init_db
@@ -18,7 +21,7 @@ class BaseTradingBot(abc.ABC):
     def __init__(self) -> None:
         self.settings = get_settings()
         self._running = False
-        self._engine = None
+        self._engine: AsyncEngine | None = None
         self._repo: Repository | None = None
 
     async def initialize(self) -> None:
@@ -41,7 +44,7 @@ class BaseTradingBot(abc.ABC):
         """End-of-day routine."""
 
     @abc.abstractmethod
-    def _get_cycle_service(self):
+    def _get_cycle_service(self) -> Any:
         """Return the cycle service whose ``run_cycle`` drives one iteration."""
 
     async def run_once(self) -> None:

@@ -58,9 +58,13 @@ def _make_monitor(
     sf = MagicMock()
     sf.min_notional = symbol_filter_min_notional
     broker.get_symbol_filter = MagicMock(return_value=sf)
-    broker.get_balances.return_value = balances if balances is not None else [
-        _make_balance("BTC", 0.001),
-    ]
+    broker.get_balances.return_value = (
+        balances
+        if balances is not None
+        else [
+            _make_balance("BTC", 0.001),
+        ]
+    )
     broker.round_quantity = MagicMock(side_effect=lambda symbol, qty: qty)
 
     repo = AsyncMock()

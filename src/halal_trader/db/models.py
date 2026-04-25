@@ -192,17 +192,12 @@ async def init_db(db_path: str | Path) -> AsyncEngine:
 
     async with engine.connect() as conn:
         version_row = await conn.execute(
-            sa.text(
-                "SELECT name FROM sqlite_master "
-                "WHERE type='table' AND name='alembic_version'"
-            )
+            sa.text("SELECT name FROM sqlite_master WHERE type='table' AND name='alembic_version'")
         )
         alembic_table_present = version_row.first() is not None
 
         existing_tables: set[str] = set()
-        result = await conn.execute(
-            sa.text("SELECT name FROM sqlite_master WHERE type='table'")
-        )
+        result = await conn.execute(sa.text("SELECT name FROM sqlite_master WHERE type='table'"))
         existing_tables = {row[0] for row in result}
 
         current_revision: str | None = None

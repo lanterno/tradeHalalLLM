@@ -43,15 +43,11 @@ class BinanceWSManager:
         self._running = True
 
         if len(self._symbols) > 1:
-            task = asyncio.create_task(
-                self._combined_kline_stream(), name="ws-kline-combined"
-            )
+            task = asyncio.create_task(self._combined_kline_stream(), name="ws-kline-combined")
             self._tasks.append(task)
         else:
             for symbol in self._symbols:
-                task = asyncio.create_task(
-                    self._kline_stream(symbol), name=f"ws-kline-{symbol}"
-                )
+                task = asyncio.create_task(self._kline_stream(symbol), name=f"ws-kline-{symbol}")
                 self._tasks.append(task)
 
         logger.info(
@@ -123,7 +119,9 @@ class BinanceWSManager:
             try:
                 async with self._bsm.multiplex_socket(streams) as stream:
                     reconnect_delay = 1
-                    logger.debug("Combined kline stream connected for %d symbols", len(self._symbols))
+                    logger.debug(
+                        "Combined kline stream connected for %d symbols", len(self._symbols)
+                    )
 
                     while self._running:
                         msg = await asyncio.wait_for(stream.recv(), timeout=60)
@@ -144,7 +142,8 @@ class BinanceWSManager:
                     break
                 logger.warning(
                     "Combined kline stream error: %s — reconnecting in %ds",
-                    e, reconnect_delay,
+                    e,
+                    reconnect_delay,
                 )
                 await asyncio.sleep(reconnect_delay)
                 reconnect_delay = min(reconnect_delay * 2, 60)
@@ -175,7 +174,9 @@ class BinanceWSManager:
                     break
                 logger.warning(
                     "Kline stream error for %s: %s — reconnecting in %ds",
-                    sym_upper, e, reconnect_delay,
+                    sym_upper,
+                    e,
+                    reconnect_delay,
                 )
                 await asyncio.sleep(reconnect_delay)
                 reconnect_delay = min(reconnect_delay * 2, 60)

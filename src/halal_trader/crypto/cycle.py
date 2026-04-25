@@ -15,10 +15,10 @@ from halal_trader.crypto.exchange import BinanceClient
 from halal_trader.crypto.executor import CryptoExecutor
 from halal_trader.crypto.indicators import compute_all
 from halal_trader.crypto.portfolio import CryptoPortfolioTracker
+from halal_trader.crypto.regime import MarketRegime
 from halal_trader.crypto.risk import PortfolioRiskEngine
 from halal_trader.crypto.screener import CryptoHalalScreener
 from halal_trader.crypto.strategy import CryptoTradingStrategy
-from halal_trader.crypto.regime import MarketRegime
 from halal_trader.crypto.websocket import BinanceWSManager
 from halal_trader.domain.models import Kline
 
@@ -139,8 +139,7 @@ class CryptoCycleService(BaseCycleService):
         today_pnl = await self._portfolio.get_current_pnl(account=account)
 
         tracked_bases = {
-            p.upper().removesuffix("USDT").removesuffix("BUSD")
-            for p in self._configured_pairs
+            p.upper().removesuffix("USDT").removesuffix("BUSD") for p in self._configured_pairs
         }
         open_position_count = 0
         for b in balances:
@@ -153,12 +152,9 @@ class CryptoCycleService(BaseCycleService):
         usdt_free = account.usdt_free
         if usdt_free < 5.0:
             tracked_bases = {
-                p.upper().removesuffix("USDT").removesuffix("BUSD")
-                for p in self._configured_pairs
+                p.upper().removesuffix("USDT").removesuffix("BUSD") for p in self._configured_pairs
             }
-            has_positions = any(
-                b.asset in tracked_bases and b.free > 0 for b in balances
-            )
+            has_positions = any(b.asset in tracked_bases and b.free > 0 for b in balances)
             if not has_positions:
                 logger.info(
                     "Available USDT ($%.2f) below $5 and no open positions — skipping",
@@ -182,6 +178,7 @@ class CryptoCycleService(BaseCycleService):
         if self._sentiment and self._sentiment.enabled:
             try:
                 from halal_trader.sentiment.scoring import format_sentiment_for_prompt
+
                 signals = self._sentiment.latest_signals
                 if signals:
                     sentiment_text = format_sentiment_for_prompt(signals)
@@ -189,9 +186,7 @@ class CryptoCycleService(BaseCycleService):
                         for pair, sig in signals.items():
                             if sig.buzz >= 3.0:
                                 try:
-                                    await self._notifier.notify_buzz(
-                                        pair, sig.buzz, sig.score
-                                    )
+                                    await self._notifier.notify_buzz(pair, sig.buzz, sig.score)
                                 except Exception as exc:
                                     logger.debug("Failed to send buzz alert: %s", exc)
             except Exception as e:
@@ -201,6 +196,7 @@ class CryptoCycleService(BaseCycleService):
         if self._timeframes:
             try:
                 from halal_trader.crypto.timeframes import format_timeframes_for_prompt
+
                 tf_results = await self._timeframes.analyze(halal_pairs)
                 if tf_results:
                     timeframe_text = format_timeframes_for_prompt(tf_results)
@@ -211,6 +207,7 @@ class CryptoCycleService(BaseCycleService):
         if self._regime:
             try:
                 from halal_trader.crypto.regime import format_regime_for_prompt
+
                 regimes = {}
                 for pair in klines_by_symbol:
                     indicators = indicators_cache.get(pair, {})
@@ -262,11 +259,8 @@ class CryptoCycleService(BaseCycleService):
             try:
                 open_pos_value: dict[str, float] = {}
                 unrealized_pnl: dict[str, float] = {}
-                for t in (open_trades or []):
-                    price = (
-                        current_prices.get(t.pair)
-                        or self._broker.get_cached_price(t.pair)
-                    )
+                for t in open_trades or []:
+                    price = current_prices.get(t.pair) or self._broker.get_cached_price(t.pair)
                     if price and t.entry_price:
                         open_pos_value[t.pair] = t.quantity * price
                         unrealized_pnl[t.pair] = (price - t.entry_price) * t.quantity
@@ -437,9 +431,7 @@ class CryptoCycleService(BaseCycleService):
                 klines = await self._broker.get_klines(pair, interval="1m", limit=100)
                 return pair, klines
 
-        results = await asyncio.gather(
-            *[_get_klines(p) for p in pairs], return_exceptions=True
-        )
+        results = await asyncio.gather(*[_get_klines(p) for p in pairs], return_exceptions=True)
         klines_by_symbol: dict[str, list[Kline]] = {}
         for result in results:
             if isinstance(result, Exception):
@@ -462,9 +454,7 @@ class CryptoCycleService(BaseCycleService):
                 book = await self._broker.get_order_book(pair, limit=10)
                 return pair, book
 
-        results = await asyncio.gather(
-            *[_get_book(p) for p in pairs], return_exceptions=True
-        )
+        results = await asyncio.gather(*[_get_book(p) for p in pairs], return_exceptions=True)
         orderbooks: dict[str, dict[str, Any]] = {}
         for result in results:
             if isinstance(result, Exception):

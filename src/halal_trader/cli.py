@@ -307,7 +307,8 @@ def crypto_stats(days: int) -> None:
         # Summary table
         summary = Table(
             title=f"Performance Summary (last {days} days)",
-            show_header=True, header_style="bold cyan",
+            show_header=True,
+            header_style="bold cyan",
         )
         summary.add_column("Metric", style="dim")
         summary.add_column("Value", justify="right")
@@ -353,9 +354,7 @@ def crypto_stats(days: int) -> None:
 
         # Exit reasons breakdown
         if stats.by_exit_reason:
-            reasons_table = Table(
-                title="Exit Reasons", show_header=True, header_style="bold cyan"
-            )
+            reasons_table = Table(title="Exit Reasons", show_header=True, header_style="bold cyan")
             reasons_table.add_column("Reason")
             reasons_table.add_column("Count", justify="right")
             for reason, count in sorted(
@@ -367,9 +366,7 @@ def crypto_stats(days: int) -> None:
         # Recent round-trips
         round_trips = await repo.get_completed_round_trips(limit=10, lookback_days=days)
         if round_trips:
-            rt_table = Table(
-                title="Recent Round-Trips", show_header=True, header_style="bold cyan"
-            )
+            rt_table = Table(title="Recent Round-Trips", show_header=True, header_style="bold cyan")
             rt_table.add_column("Pair")
             rt_table.add_column("Entry", justify="right")
             rt_table.add_column("Exit", justify="right")
@@ -643,9 +640,7 @@ def _print_clock(clock: object) -> None:
         )
         console.print(f"\nMarket (US Eastern): {status_text}")
         if clock.timestamp:
-            console.print(
-                f"  As of: {clock.timestamp.strftime('%Y-%m-%d %H:%M:%S')} ET"
-            )
+            console.print(f"  As of: {clock.timestamp.strftime('%Y-%m-%d %H:%M:%S')} ET")
         if not clock.is_open:
             console.print(f"  Next open: {clock.next_open or 'N/A'} ET")
         else:
@@ -827,8 +822,7 @@ def dashboard(port: int, host: str) -> None:
 
         console.print(
             Panel(
-                f"[bold green]Halal Trader Dashboard[/bold green]\n"
-                f"[dim]http://{host}:{port}[/dim]",
+                f"[bold green]Halal Trader Dashboard[/bold green]\n[dim]http://{host}:{port}[/dim]",
                 title="Starting",
                 border_style="green",
             )

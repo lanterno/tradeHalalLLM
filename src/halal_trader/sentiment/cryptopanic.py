@@ -117,9 +117,7 @@ class CryptoPanicCollector:
                     continue
                 pair_data = CryptoPanicData(pair=pair)
                 for item in data.get("results", []):
-                    item_currencies = {
-                        c.get("code", "") for c in item.get("currencies", [])
-                    }
+                    item_currencies = {c.get("code", "") for c in item.get("currencies", [])}
                     if currency not in item_currencies:
                         continue
 
@@ -137,20 +135,22 @@ class CryptoPanicCollector:
                         sentiment = "neutral"
                         pair_data.neutral_count += 1
 
-                    pair_data.items.append(NewsItem(
-                        title=item.get("title", ""),
-                        source=item.get("source", {}).get("title", ""),
-                        url=item.get("url", ""),
-                        published_at=item.get("published_at", ""),
-                        sentiment=sentiment,
-                        votes=votes,
-                    ))
+                    pair_data.items.append(
+                        NewsItem(
+                            title=item.get("title", ""),
+                            source=item.get("source", {}).get("title", ""),
+                            url=item.get("url", ""),
+                            published_at=item.get("published_at", ""),
+                            sentiment=sentiment,
+                            votes=votes,
+                        )
+                    )
 
                 total = pair_data.bullish_count + pair_data.bearish_count + pair_data.neutral_count
                 if total > 0:
                     pair_data.sentiment_score = (
-                        (pair_data.bullish_count - pair_data.bearish_count) / total
-                    )
+                        pair_data.bullish_count - pair_data.bearish_count
+                    ) / total
 
                 result[pair] = pair_data
 
@@ -168,9 +168,7 @@ class CryptoPanicCollector:
 
     async def _fetch_posts(self, currencies: set[str]) -> dict:
         """Try each known API URL, returning the first successful response."""
-        urls_to_try = (
-            [self._working_url] if self._working_url else list(_BASE_URLS)
-        )
+        urls_to_try = [self._working_url] if self._working_url else list(_BASE_URLS)
         params = {
             "auth_token": self._api_key,
             "currencies": ",".join(currencies),
@@ -192,7 +190,9 @@ class CryptoPanicCollector:
                 self._disabled_until = time.monotonic() + retry_after
                 logger.warning(
                     "CryptoPanic API returned 404 on %s — retrying in %ds (attempt %d)",
-                    url, retry_after, self._consecutive_failures,
+                    url,
+                    retry_after,
+                    self._consecutive_failures,
                 )
                 return {}
             resp.raise_for_status()

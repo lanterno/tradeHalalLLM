@@ -75,22 +75,24 @@ class TestAnalyze:
         repo.record_decision.assert_awaited_once()
 
     async def test_returns_plan_with_decisions(self):
-        strategy, llm, repo = _make_strategy(llm_response={
-            "decisions": [
-                {
-                    "action": "buy",
-                    "symbol": "BTCUSDT",
-                    "quantity": 0.001,
-                    "confidence": 0.8,
-                    "reasoning": "RSI oversold",
-                    "entry_price": 50000,
-                    "target_price": 51000,
-                    "stop_loss": 49500,
-                }
-            ],
-            "market_outlook": "Bullish",
-            "risk_notes": "Low volume",
-        })
+        strategy, llm, repo = _make_strategy(
+            llm_response={
+                "decisions": [
+                    {
+                        "action": "buy",
+                        "symbol": "BTCUSDT",
+                        "quantity": 0.001,
+                        "confidence": 0.8,
+                        "reasoning": "RSI oversold",
+                        "entry_price": 50000,
+                        "target_price": 51000,
+                        "stop_loss": 49500,
+                    }
+                ],
+                "market_outlook": "Bullish",
+                "risk_notes": "Low volume",
+            }
+        )
         plan = await strategy.analyze(
             account=_make_account(),
             positions_text="No positions",

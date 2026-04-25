@@ -35,9 +35,7 @@ class PortfolioTracker(BasePortfolioTracker):
     async def _persist_day_start(self, equity: float) -> None:
         await self._repo.start_day(equity)
 
-    async def _persist_day_end(
-        self, equity: float, pnl: float, count: int
-    ) -> None:
+    async def _persist_day_end(self, equity: float, pnl: float, count: int) -> None:
         await self._repo.end_day(
             ending_equity=equity,
             realized_pnl=pnl,

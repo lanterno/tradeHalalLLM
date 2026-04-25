@@ -55,9 +55,7 @@ async def test_init_db_succeeds_at_head(tmp_path):
         await conn.execute(
             sa.text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)")
         )
-        await conn.execute(
-            sa.text(f"INSERT INTO alembic_version (version_num) VALUES ('{head}')")
-        )
+        await conn.execute(sa.text(f"INSERT INTO alembic_version (version_num) VALUES ('{head}')"))
     await engine.dispose()
 
     opened = await init_db(str(db_path))

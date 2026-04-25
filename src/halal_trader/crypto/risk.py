@@ -202,14 +202,17 @@ class PortfolioRiskEngine:
 
         if state.avg_correlation > 0:
             corr_label = (
-                "HIGH" if state.avg_correlation > 0.7
+                "HIGH"
+                if state.avg_correlation > 0.7
                 else ("MODERATE" if state.avg_correlation > 0.4 else "LOW")
             )
             lines.append(
                 f"Portfolio Correlation: {state.avg_correlation:.2f} ({corr_label}) — "
-                + ("reduce exposure, positions move together"
-                   if corr_label == "HIGH"
-                   else "diversification is adequate")
+                + (
+                    "reduce exposure, positions move together"
+                    if corr_label == "HIGH"
+                    else "diversification is adequate"
+                )
             )
 
         if state.portfolio_heat != 0:
@@ -230,9 +233,7 @@ class PortfolioRiskEngine:
                 if abs(pct - self._base_max_position_pct) > 0.01:
                     adjusted.append(f"{sym}: {pct:.0%}")
             if adjusted:
-                lines.append(
-                    "Risk-Adjusted Position Limits: " + ", ".join(adjusted)
-                )
+                lines.append("Risk-Adjusted Position Limits: " + ", ".join(adjusted))
 
         if state.is_halted:
             lines.append(f"⚠ RISK HALT: {state.halt_reason}")

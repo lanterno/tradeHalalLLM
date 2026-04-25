@@ -3,13 +3,13 @@
 import logging
 from typing import Any
 
-from halal_trader.trading.sentiment import SentimentAnalyzer
-from halal_trader.trading.strategy import TradingStrategy
 from halal_trader.core.cycle import BaseCycleService
 from halal_trader.domain.ports import Broker, ComplianceScreener
 from halal_trader.market_hours import is_market_open_local, now_eastern
 from halal_trader.trading.executor import TradeExecutor
 from halal_trader.trading.portfolio import PortfolioTracker
+from halal_trader.trading.sentiment import SentimentAnalyzer
+from halal_trader.trading.strategy import TradingStrategy
 
 logger = logging.getLogger(__name__)
 

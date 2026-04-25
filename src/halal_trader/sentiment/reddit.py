@@ -83,6 +83,7 @@ class RedditCollector:
             return
         try:
             import praw
+
             self._reddit = praw.Reddit(
                 client_id=self._client_id,
                 client_secret=self._client_secret,
@@ -115,8 +116,7 @@ class RedditCollector:
     def _collect_sync(self) -> dict[str, RedditSentimentData]:
         """Synchronous Reddit collection (runs in thread pool)."""
         pair_data: dict[str, RedditSentimentData] = {
-            pair: RedditSentimentData(pair=pair)
-            for pair in self._trading_pairs
+            pair: RedditSentimentData(pair=pair) for pair in self._trading_pairs
         }
 
         for sub_name in _SUBREDDITS:

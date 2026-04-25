@@ -49,12 +49,14 @@ class BaseExecutor(ABC):
                     f"reached — skipping BUY {decision.symbol}"
                 )
                 logger.warning(msg)
-                results.append({
-                    "symbol": decision.symbol,
-                    "action": "buy",
-                    "status": "rejected",
-                    "reason": msg,
-                })
+                results.append(
+                    {
+                        "symbol": decision.symbol,
+                        "action": "buy",
+                        "status": "rejected",
+                        "reason": msg,
+                    }
+                )
                 continue
             result = await self._execute_buy(decision, **kwargs)
             if result.get("status") in ("submitted", "filled"):

@@ -20,10 +20,7 @@ ENV_EXAMPLE = PROJECT_ROOT / ".env.example"
 
 def _env_keys() -> set[str]:
     text = ENV_EXAMPLE.read_text()
-    return {
-        m.group(1)
-        for m in re.finditer(r"^([A-Z][A-Z0-9_]*)=", text, flags=re.MULTILINE)
-    }
+    return {m.group(1) for m in re.finditer(r"^([A-Z][A-Z0-9_]*)=", text, flags=re.MULTILINE)}
 
 
 def test_env_example_exists():

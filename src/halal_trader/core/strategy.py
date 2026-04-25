@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from abc import ABC, abstractmethod
+from abc import ABC
 from typing import Any
 
 from halal_trader.domain.ports import LLMBackend, TradeRepository

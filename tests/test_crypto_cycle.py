@@ -68,9 +68,7 @@ def _make_cycle_service(
     screener.get_halal_pairs.return_value = halal_pairs or ["BTC", "ETH"]
 
     strategy = AsyncMock()
-    strategy.analyze.return_value = plan or CryptoTradingPlan(
-        market_outlook="Test", risk_notes=""
-    )
+    strategy.analyze.return_value = plan or CryptoTradingPlan(market_outlook="Test", risk_notes="")
 
     executor = AsyncMock()
     executor.execute_plan.return_value = []
@@ -126,6 +124,7 @@ class TestRunCycle:
     @patch("halal_trader.crypto.cycle.get_settings")
     async def test_executes_plan_with_decisions(self, mock_get_settings):
         from halal_trader.domain.models import CryptoTradeDecision, TradeAction
+
         mock_get_settings.return_value = _mock_settings()
         plan = CryptoTradingPlan(
             decisions=[

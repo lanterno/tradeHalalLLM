@@ -4,7 +4,7 @@ import logging
 from typing import Any
 
 from halal_trader.core.executor import BaseExecutor
-from halal_trader.domain.models import TradeDecision, TradingPlan
+from halal_trader.domain.models import TradingPlan
 from halal_trader.domain.ports import Broker, TradeRepository
 
 logger = logging.getLogger(__name__)

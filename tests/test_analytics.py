@@ -6,8 +6,12 @@ from halal_trader.crypto.analytics import PerformanceAnalytics, PerformanceStats
 
 
 def _make_rt(
-    pair, pnl, pnl_pct, duration_minutes=10,
-    exit_reason="llm_sell", closed_at="2025-01-01T12:00:00",
+    pair,
+    pnl,
+    pnl_pct,
+    duration_minutes=10,
+    exit_reason="llm_sell",
+    closed_at="2025-01-01T12:00:00",
 ):
     return {
         "pair": pair,
@@ -174,10 +178,12 @@ class TestFormatForPrompt:
 
     async def test_includes_key_fields(self):
         trips = [
-            _make_rt("BTCUSDT", 10, 0.01, exit_reason="take_profit",
-                     closed_at="2025-01-01T12:00:00"),
-            _make_rt("ETHUSDT", -3, -0.01, exit_reason="stop_loss",
-                     closed_at="2025-01-01T12:05:00"),
+            _make_rt(
+                "BTCUSDT", 10, 0.01, exit_reason="take_profit", closed_at="2025-01-01T12:00:00"
+            ),
+            _make_rt(
+                "ETHUSDT", -3, -0.01, exit_reason="stop_loss", closed_at="2025-01-01T12:05:00"
+            ),
         ]
         analytics = PerformanceAnalytics(FakeRepo(trips))
         stats = await analytics.compute_stats()

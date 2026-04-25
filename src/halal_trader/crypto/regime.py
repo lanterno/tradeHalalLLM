@@ -71,9 +71,7 @@ class RegimeDetector:
 
         return self._detect_rules(indicators)
 
-    def _detect_rules(
-        self, indicators: dict[str, Any]
-    ) -> tuple[MarketRegime, float, str]:
+    def _detect_rules(self, indicators: dict[str, Any]) -> tuple[MarketRegime, float, str]:
         """Rule-based regime detection (always works, no training needed)."""
         adx = indicators.get("adx_14")
         bb_width = self._compute_bb_width(indicators)
@@ -137,9 +135,7 @@ class RegimeDetector:
             _REGIME_INSTRUCTIONS[MarketRegime.RANGING],
         )
 
-    def _detect_ml(
-        self, indicators: dict[str, Any]
-    ) -> tuple[MarketRegime, float, str]:
+    def _detect_ml(self, indicators: dict[str, Any]) -> tuple[MarketRegime, float, str]:
         """ML-based regime detection (requires trained model)."""
         features = self._extract_features(indicators)
         if features is None:
@@ -170,7 +166,7 @@ class RegimeDetector:
             if len(X) < 100:
                 return False
 
-            y = labels[:len(X)]
+            y = labels[: len(X)]
             model = RandomForestClassifier(n_estimators=100, random_state=42)
             model.fit(np.array(X), y)
 
@@ -223,9 +219,7 @@ def format_regime_for_prompt(
 
     lines = []
     for pair, (regime, confidence, instructions) in sorted(regimes.items()):
-        lines.append(
-            f"  {pair}: {regime.value.upper()} (confidence: {confidence:.0%})"
-        )
+        lines.append(f"  {pair}: {regime.value.upper()} (confidence: {confidence:.0%})")
         lines.append(f"    Strategy: {instructions}")
 
     return "\n".join(lines)

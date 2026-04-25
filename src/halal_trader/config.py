@@ -57,26 +57,37 @@ class Settings(BaseSettings):
     anthropic_api_key: str | None = Field(default=None, description="Anthropic API key")
     llm_fallback_providers: list[str] = Field(
         default=[],
-        description="Ordered list of fallback LLM providers (e.g. ['openai', 'anthropic']). Empty = no fallbacks.",
+        description=(
+            "Ordered list of fallback LLM providers (e.g. ['openai', 'anthropic']). "
+            "Empty = no fallbacks."
+        ),
     )
     ollama_fallback_model: str = Field(
-        default="", description="Model name for Ollama when used as fallback (empty = same as llm_model)"
+        default="",
+        description="Model name for Ollama when used as fallback (empty = same as llm_model)",
     )
     openai_fallback_model: str = Field(
         default="gpt-4o-mini", description="Model name for OpenAI when used as fallback"
     )
     anthropic_fallback_model: str = Field(
-        default="claude-sonnet-4-20250514", description="Model name for Anthropic when used as fallback"
+        default="claude-sonnet-4-20250514",
+        description="Model name for Anthropic when used as fallback",
     )
 
     # ── Stock Trading Parameters ────────────────────────────────
     trading_interval_minutes: int = Field(default=15, description="Minutes between analysis cycles")
-    daily_return_target: float = Field(default=0.01, gt=0, le=0.5, description="Target daily return (1% = 0.01)")
-    max_position_pct: float = Field(default=0.20, gt=0, le=1.0, description="Max portfolio % per position")
+    daily_return_target: float = Field(
+        default=0.01, gt=0, le=0.5, description="Target daily return (1% = 0.01)"
+    )
+    max_position_pct: float = Field(
+        default=0.20, gt=0, le=1.0, description="Max portfolio % per position"
+    )
     daily_loss_limit: float = Field(
         default=0.02, ge=0, le=0.5, description="Max daily loss before halting (2% = 0.02)"
     )
-    max_simultaneous_positions: int = Field(default=5, ge=1, description="Max number of open positions")
+    max_simultaneous_positions: int = Field(
+        default=5, ge=1, description="Max number of open positions"
+    )
 
     # ── Crypto Trading Parameters ──────────────────────────────
     crypto_trading_interval_seconds: int = Field(
@@ -107,19 +118,27 @@ class Settings(BaseSettings):
 
     # ── Portfolio-level risk ─────────────────────────────────
     crypto_max_portfolio_heat_pct: float = Field(
-        default=0.05, ge=0.01, le=0.5,
+        default=0.05,
+        ge=0.01,
+        le=0.5,
         description="Max unrealized loss before blocking entries",
     )
     crypto_max_drawdown_pct: float = Field(
-        default=0.08, ge=0.01, le=0.5,
+        default=0.08,
+        ge=0.01,
+        le=0.5,
         description="Max peak-to-trough drawdown before halt",
     )
     crypto_high_correlation_threshold: float = Field(
-        default=0.7, ge=0.0, le=1.0,
+        default=0.7,
+        ge=0.0,
+        le=1.0,
         description="Correlation threshold for size reduction",
     )
     crypto_correlation_reduction_factor: float = Field(
-        default=0.5, ge=0.1, le=1.0,
+        default=0.5,
+        ge=0.1,
+        le=1.0,
         description="Size multiplier when correlated with open",
     )
     crypto_atr_baseline: float = Field(

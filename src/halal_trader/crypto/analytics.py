@@ -117,13 +117,10 @@ class PerformanceAnalytics:
             f"Win rate: {stats.win_rate:.0%} | "
             f"Avg win: {stats.avg_win_pct:+.2%} | "
             f"Avg loss: {stats.avg_loss_pct:+.2%}",
-
             f"Profit factor: {stats.profit_factor:.1f} | "
             f"Max drawdown: {stats.max_drawdown_pct:.2%} | "
             f"Total P&L: ${stats.total_pnl:+,.2f}",
-
-            f"Avg hold time: {hold_str} | "
-            f"Current streak: {stats.streak} {stats.streak_type}",
+            f"Avg hold time: {hold_str} | Current streak: {stats.streak} {stats.streak_type}",
         ]
 
         if stats.best_pair:
@@ -165,9 +162,7 @@ class PerformanceAnalytics:
     @staticmethod
     def _compute_streak(round_trips: list[dict[str, Any]]) -> tuple[int, str]:
         """Compute the current win/loss streak from most recent trades."""
-        sorted_trips = sorted(
-            round_trips, key=lambda r: r.get("closed_at") or "", reverse=True
-        )
+        sorted_trips = sorted(round_trips, key=lambda r: r.get("closed_at") or "", reverse=True)
         if not sorted_trips:
             return 0, ""
 

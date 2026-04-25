@@ -16,6 +16,9 @@ just dev                # uv sync --extra dev --extra all  (ml + sentiment + das
 just test               # pytest (asyncio_mode=auto, testpaths=tests)
 just lint               # ruff check src/ tests/
 just format             # ruff format + ruff check --fix
+just typecheck          # mypy (strict on domain/ + core/ only)
+just precommit          # run all pre-commit hooks against every tracked file
+just precommit-install  # one-time: wire pre-commit into .git/hooks/
 
 # Stocks
 just stocks             # halal-trader start  (APScheduler, market hours)

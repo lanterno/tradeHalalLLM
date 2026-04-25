@@ -72,8 +72,7 @@ class BinanceClient:
         self._filters_refresh_interval = 3600.0
         if configured_pairs:
             self._relevant_assets = {
-                p.upper().removesuffix("USDT").removesuffix("BUSD")
-                for p in configured_pairs
+                p.upper().removesuffix("USDT").removesuffix("BUSD") for p in configured_pairs
             }
 
     async def connect(self) -> None:
@@ -118,9 +117,7 @@ class BinanceClient:
 
         self._filters_loaded_at = time.monotonic()
         if self._symbol_filters:
-            logger.info(
-                "Loaded exchange filters for %d symbols", len(self._symbol_filters)
-            )
+            logger.info("Loaded exchange filters for %d symbols", len(self._symbol_filters))
 
     async def refresh_symbol_filters_if_stale(self) -> None:
         """Reload symbol filters if they haven't been refreshed within the interval."""
@@ -250,7 +247,7 @@ class BinanceClient:
                 price = float(ticker["price"])
                 self._latest_price_cache[f"{asset}USDT"] = price
                 return price
-            except (BinanceAPIException, KeyError, TimeoutError, asyncio.TimeoutError):
+            except BinanceAPIException, KeyError, TimeoutError, asyncio.TimeoutError:
                 return None
 
         if to_price:

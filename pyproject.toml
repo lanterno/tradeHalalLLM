@@ -61,6 +61,8 @@ dev = [
     "pytest",
     "pytest-asyncio",
     "ruff",
+    "mypy",
+    "pre-commit",
 ]
 
 [project.scripts]
@@ -86,3 +88,17 @@ select = ["E", "F", "I", "W"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+
+# ── mypy ────────────────────────────────────────────────────────
+# CI gates only on the contract / lifecycle layer (`domain` Protocols +
+# `core` base classes) where correctness drift is most expensive. Other
+# packages are intentionally NOT in `files` — run `mypy src/` ad-hoc to
+# survey and tighten incrementally.
+[tool.mypy]
+python_version = "3.14"
+files = ["src/halal_trader/domain", "src/halal_trader/core"]
+ignore_missing_imports = true
+warn_redundant_casts = true
+warn_unused_ignores = false
+no_implicit_optional = true
+strict = true

@@ -43,9 +43,7 @@ class CryptoPortfolioTracker(BasePortfolioTracker):
     async def _persist_day_start(self, equity: float) -> None:
         await self._repo.start_crypto_day(equity)
 
-    async def _persist_day_end(
-        self, equity: float, pnl: float, count: int
-    ) -> None:
+    async def _persist_day_end(self, equity: float, pnl: float, count: int) -> None:
         await self._repo.end_crypto_day(
             ending_equity=equity,
             realized_pnl=pnl,
@@ -72,8 +70,7 @@ class CryptoPortfolioTracker(BasePortfolioTracker):
         """Format current balances with entry price, unrealized P&L, and hold duration."""
         if configured_pairs:
             relevant_assets = {
-                p.upper().removesuffix("USDT").removesuffix("BUSD")
-                for p in configured_pairs
+                p.upper().removesuffix("USDT").removesuffix("BUSD") for p in configured_pairs
             }
             relevant_assets.add("USDT")
         else:

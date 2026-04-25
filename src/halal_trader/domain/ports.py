@@ -143,7 +143,7 @@ class TradeRepository(Protocol):
         model: str,
         prompt_summary: str | None = None,
         raw_response: str | None = None,
-        parsed_action: dict | None = None,
+        parsed_action: dict[str, Any] | None = None,
         symbols: list[str] | None = None,
         execution_ms: int | None = None,
         thinking: str | None = None,
@@ -165,16 +165,14 @@ class TradeRepository(Protocol):
         target_price: float | None = None,
     ) -> int: ...
 
-    async def update_crypto_trade_stop_loss(
-        self, trade_id: int, new_stop_loss: float
-    ) -> None: ...
+    async def update_crypto_trade_stop_loss(self, trade_id: int, new_stop_loss: float) -> None: ...
 
     async def close_crypto_trade(
         self, trade_id: int, exit_price: float, exit_reason: str
     ) -> None: ...
 
-    async def get_open_crypto_trades(self) -> list: ...
-    async def get_open_crypto_trades_for_pair(self, pair: str) -> list: ...
+    async def get_open_crypto_trades(self) -> list[Any]: ...
+    async def get_open_crypto_trades_for_pair(self, pair: str) -> list[Any]: ...
     async def close_open_crypto_trades_for_pair(
         self,
         pair: str,
@@ -216,9 +214,7 @@ class TradeRepository(Protocol):
     async def label_indicator_snapshot(
         self, trade_id: int, label: int, return_pct: float
     ) -> None: ...
-    async def get_labeled_snapshots(
-        self, min_samples: int = 50
-    ) -> list[dict[str, Any]]: ...
+    async def get_labeled_snapshots(self, min_samples: int = 50) -> list[dict[str, Any]]: ...
 
     # Strategy adjustments
     async def record_strategy_adjustment(

@@ -77,11 +77,7 @@ class TelegramNotifier:
     ) -> None:
         """Send a trade execution alert."""
         emoji = "\U0001f7e2" if side.lower() == "buy" else "\U0001f534"
-        msg = (
-            f"{emoji} <b>{side.upper()}</b> {pair}\n"
-            f"Qty: {quantity:.6f}\n"
-            f"Price: ${price:,.2f}\n"
-        )
+        msg = f"{emoji} <b>{side.upper()}</b> {pair}\nQty: {quantity:.6f}\nPrice: ${price:,.2f}\n"
         if reasoning:
             msg += f"Reason: {reasoning[:200]}\n"
         await self.send(msg)
@@ -122,10 +118,7 @@ class TelegramNotifier:
 
     async def notify_error(self, error_type: str, details: str) -> None:
         """Send a system error alert."""
-        msg = (
-            f"\u26a0\ufe0f <b>System Alert: {error_type}</b>\n"
-            f"{details[:500]}\n"
-        )
+        msg = f"\u26a0\ufe0f <b>System Alert: {error_type}</b>\n{details[:500]}\n"
         await self.send(msg)
 
     async def notify_buzz(self, pair: str, buzz_score: float, sentiment: float) -> None:

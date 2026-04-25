@@ -105,7 +105,7 @@ class AlpacaMCPClient:
         logger.debug("Raw MCP response for %s: %s", name, combined[:500])
         try:
             return json.loads(combined)
-        except (json.JSONDecodeError, TypeError):
+        except json.JSONDecodeError, TypeError:
             return combined
 
     # ── Convenience wrappers ────────────────────────────────────

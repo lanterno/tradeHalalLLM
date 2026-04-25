@@ -62,9 +62,7 @@ class PriceForecaster:
             logger.warning("Failed to load Chronos model: %s", e)
             return False
 
-    def forecast(
-        self, pair: str, closes: list[float], horizon: int = 5
-    ) -> PriceForecast | None:
+    def forecast(self, pair: str, closes: list[float], horizon: int = 5) -> PriceForecast | None:
         """Forecast next N candle prices from historical closes."""
         if not self._ensure_loaded() or len(closes) < 20:
             return None
@@ -82,10 +80,7 @@ class PriceForecaster:
             lower = np.percentile(samples, 10, axis=0).tolist()
 
             med_mean = np.mean(median)
-            spread = (
-                (np.mean(upper) - np.mean(lower)) / med_mean
-                if med_mean > 0 else 1.0
-            )
+            spread = (np.mean(upper) - np.mean(lower)) / med_mean if med_mean > 0 else 1.0
             confidence = max(0.0, min(1.0, 1.0 - spread * 5))
 
             return PriceForecast(

@@ -1,0 +1,38 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-merge-conflict
+      - id: detect-private-key
+      - id: check-added-large-files
+        args: ["--maxkb=500"]
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.0
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.13.0
+    hooks:
+      - id: mypy
+        # Match CI: only gate on the strict layer.
+        files: ^src/halal_trader/(domain|core)/
+        additional_dependencies:
+          - sqlmodel
+          - pydantic-settings
+          - sqlalchemy
+        args: [--config-file=pyproject.toml]
+
+  - repo: local
+    hooks:
+      - id: block-secret-files
+        name: block .env / halal_trader.db / *.pkl
+        entry: bash -c 'for f in "$@"; do case "$f" in .env|halal_trader.db|*.pkl|backups/*) echo "Refusing to commit $f"; exit 1;; esac; done'
+        language: system
+        stages: [pre-commit]
+        pass_filenames: true

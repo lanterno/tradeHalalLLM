@@ -30,12 +30,13 @@ def _serialize(obj: Any) -> Any:
         return obj.isoformat()
     return obj
 
+
 app_state: dict[str, Any] = {}
 
 
 def create_app() -> Any:
     """Create and configure the FastAPI application."""
-    from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query
+    from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
     from fastapi.middleware.cors import CORSMiddleware
     from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
     from fastapi.staticfiles import StaticFiles
@@ -84,15 +85,9 @@ def create_app() -> Any:
         if status:
             result = [t for t in result if t.get("status") == status]
         if from_date:
-            result = [
-                t for t in result
-                if (t.get("timestamp") or "") >= from_date
-            ]
+            result = [t for t in result if (t.get("timestamp") or "") >= from_date]
         if to_date:
-            result = [
-                t for t in result
-                if (t.get("timestamp") or "") <= to_date
-            ]
+            result = [t for t in result if (t.get("timestamp") or "") <= to_date]
 
         return JSONResponse(_serialize(result[:limit]))
 
@@ -109,23 +104,25 @@ def create_app() -> Any:
         pf = stats.profit_factor
         if pf == float("inf"):
             pf = 999999.0
-        return JSONResponse({
-            "total_trades": stats.total_trades,
-            "wins": stats.wins,
-            "losses": stats.losses,
-            "win_rate": stats.win_rate,
-            "avg_win_pct": stats.avg_win_pct,
-            "avg_loss_pct": stats.avg_loss_pct,
-            "total_pnl": stats.total_pnl,
-            "profit_factor": pf,
-            "max_drawdown_pct": stats.max_drawdown_pct,
-            "avg_hold_minutes": stats.avg_hold_minutes,
-            "best_pair": stats.best_pair,
-            "worst_pair": stats.worst_pair,
-            "streak": stats.streak,
-            "streak_type": stats.streak_type,
-            "by_exit_reason": stats.by_exit_reason,
-        })
+        return JSONResponse(
+            {
+                "total_trades": stats.total_trades,
+                "wins": stats.wins,
+                "losses": stats.losses,
+                "win_rate": stats.win_rate,
+                "avg_win_pct": stats.avg_win_pct,
+                "avg_loss_pct": stats.avg_loss_pct,
+                "total_pnl": stats.total_pnl,
+                "profit_factor": pf,
+                "max_drawdown_pct": stats.max_drawdown_pct,
+                "avg_hold_minutes": stats.avg_hold_minutes,
+                "best_pair": stats.best_pair,
+                "worst_pair": stats.worst_pair,
+                "streak": stats.streak,
+                "streak_type": stats.streak_type,
+                "by_exit_reason": stats.by_exit_reason,
+            }
+        )
 
     @app.get("/api/positions")
     async def api_positions() -> JSONResponse:
@@ -173,30 +170,34 @@ def create_app() -> Any:
 
         signals = []
         for pair, sig in mgr.latest_signals.items():
-            signals.append({
-                "pair": pair,
-                "score": getattr(sig, "score", 0),
-                "buzz": getattr(sig, "buzz", 0),
-                "confidence": getattr(sig, "confidence", 0),
-                "top_narratives": getattr(sig, "top_narratives", []) or [],
-                "news_headlines": getattr(sig, "news_headlines", []) or [],
-                "data_sources": getattr(sig, "data_sources", []) or [],
-            })
+            signals.append(
+                {
+                    "pair": pair,
+                    "score": getattr(sig, "score", 0),
+                    "buzz": getattr(sig, "buzz", 0),
+                    "confidence": getattr(sig, "confidence", 0),
+                    "top_narratives": getattr(sig, "top_narratives", []) or [],
+                    "news_headlines": getattr(sig, "news_headlines", []) or [],
+                    "data_sources": getattr(sig, "data_sources", []) or [],
+                }
+            )
         return JSONResponse(signals)
 
     @app.get("/api/config")
     async def api_config() -> JSONResponse:
         settings = get_settings()
-        return JSONResponse({
-            "llm_provider": settings.llm_provider.value,
-            "llm_model": settings.llm_model,
-            "crypto_pairs": settings.crypto_pairs,
-            "crypto_trading_interval_seconds": settings.crypto_trading_interval_seconds,
-            "crypto_max_position_pct": settings.crypto_max_position_pct,
-            "crypto_daily_loss_limit": settings.crypto_daily_loss_limit,
-            "crypto_daily_return_target": settings.crypto_daily_return_target,
-            "db_path": str(settings.db_path),
-        })
+        return JSONResponse(
+            {
+                "llm_provider": settings.llm_provider.value,
+                "llm_model": settings.llm_model,
+                "crypto_pairs": settings.crypto_pairs,
+                "crypto_trading_interval_seconds": settings.crypto_trading_interval_seconds,
+                "crypto_max_position_pct": settings.crypto_max_position_pct,
+                "crypto_daily_loss_limit": settings.crypto_daily_loss_limit,
+                "crypto_daily_return_target": settings.crypto_daily_return_target,
+                "db_path": str(settings.db_path),
+            }
+        )
 
     @app.get("/api/system/status")
     async def api_system_status() -> JSONResponse:
@@ -210,21 +211,25 @@ def create_app() -> Any:
         if ws_mgr and hasattr(ws_mgr, "health_status"):
             ws_health = ws_mgr.health_status()
 
-        return JSONResponse({
-            "bot_running": app_state.get("bot_running", False),
-            "last_cycle": app_state.get("last_cycle"),
-            "cycle_interval_seconds": get_settings().crypto_trading_interval_seconds,
-            "ws_health": ws_health,
-            "uptime_seconds": uptime,
-        })
+        return JSONResponse(
+            {
+                "bot_running": app_state.get("bot_running", False),
+                "last_cycle": app_state.get("last_cycle"),
+                "cycle_interval_seconds": get_settings().crypto_trading_interval_seconds,
+                "ws_health": ws_health,
+                "uptime_seconds": uptime,
+            }
+        )
 
     @app.get("/api/health")
     async def api_health() -> JSONResponse:
-        return JSONResponse({
-            "status": "running",
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "version": "0.2.0",
-        })
+        return JSONResponse(
+            {
+                "status": "running",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "version": "0.2.0",
+            }
+        )
 
     # ── SSE Live Updates ───────────────────────────────────────
 

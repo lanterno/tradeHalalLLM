@@ -281,14 +281,11 @@ class BacktestEngine:
         end_ts = klines[-1].close_time if klines else 0
 
         from datetime import datetime
+
         start_date = (
-            datetime.fromtimestamp(start_ts / 1000).strftime("%Y-%m-%d")
-            if start_ts else ""
+            datetime.fromtimestamp(start_ts / 1000).strftime("%Y-%m-%d") if start_ts else ""
         )
-        end_date = (
-            datetime.fromtimestamp(end_ts / 1000).strftime("%Y-%m-%d")
-            if end_ts else ""
-        )
+        end_date = datetime.fromtimestamp(end_ts / 1000).strftime("%Y-%m-%d") if end_ts else ""
 
         return BacktestResult(
             pair=pair,
@@ -349,6 +346,7 @@ class LLMBacktestEngine:
     def _load_cache(self) -> None:
         import json
         from pathlib import Path
+
         cache_path = Path(self._cache_dir) / "llm_backtest_cache.json"
         if cache_path.exists():
             try:
@@ -362,6 +360,7 @@ class LLMBacktestEngine:
             return
         import json
         from pathlib import Path
+
         cache_path = Path(self._cache_dir) / "llm_backtest_cache.json"
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         cache_path.write_text(json.dumps(self._cache))
@@ -369,6 +368,7 @@ class LLMBacktestEngine:
     def _cache_key(self, pair: str, step: int, indicators: dict) -> str:
         import hashlib
         import json
+
         data = json.dumps({"pair": pair, "step": step, "ind": indicators}, sort_keys=True)
         return hashlib.sha256(data.encode()).hexdigest()[:16]
 
@@ -452,8 +452,12 @@ class LLMBacktestEngine:
                 sl = current.close * (1 - self._sl_pct)
                 tp = current.close * (1 + self._tp_pct)
                 executor.buy(
-                    pair, current.close, current.close_time,
-                    stop_loss=sl, target_price=tp, reasoning=reasoning,
+                    pair,
+                    current.close,
+                    current.close_time,
+                    stop_loss=sl,
+                    target_price=tp,
+                    reasoning=reasoning,
                 )
             elif action == "sell" and executor.position is not None:
                 executor.sell(current.close, current.close_time, "llm_sell")
@@ -464,8 +468,11 @@ class LLMBacktestEngine:
             executor.sell(klines[-1].close, klines[-1].close_time, "backtest_end")
 
         self._save_cache()
-        logger.info("LLM backtest complete: %d LLM calls, %d cached hits",
-                     llm_calls, len(self._cache) - llm_calls)
+        logger.info(
+            "LLM backtest complete: %d LLM calls, %d cached hits",
+            llm_calls,
+            len(self._cache) - llm_calls,
+        )
 
         result = BacktestEngine(
             initial_balance=self._initial_balance,

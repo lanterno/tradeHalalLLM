@@ -119,7 +119,9 @@ class TradeSelfReview:
                     if param in _SAFE_BOUNDS:
                         self._active_adjustments[param] = value
                 if self._active_adjustments:
-                    logger.info("Loaded %d strategy adjustments from DB", len(self._active_adjustments))
+                    logger.info(
+                        "Loaded %d strategy adjustments from DB", len(self._active_adjustments)
+                    )
                     self._apply_to_strategy()
         except Exception as e:
             logger.debug("Failed to load strategy adjustments from DB: %s", e)
@@ -156,6 +158,7 @@ class TradeSelfReview:
         lines = ["=== EXECUTION FAILURES ==="]
         for pair, errors in sorted(self._exec_failures.items()):
             from collections import Counter
+
             counts = Counter(errors)
             summary = ", ".join(f"{err}: {cnt}" for err, cnt in counts.most_common(5))
             lines.append(f"  {pair}: {len(errors)} failures ({summary})")
@@ -164,6 +167,7 @@ class TradeSelfReview:
     async def should_trigger_review(self) -> bool:
         """Check if conditions warrant a review (losses or repeated failures)."""
         import time as _time
+
         now = _time.monotonic()
         if now - self._last_review_time < self._review_cooldown:
             return False
@@ -178,12 +182,13 @@ class TradeSelfReview:
         if len(round_trips) < self._consecutive_loss_trigger:
             return False
 
-        recent = round_trips[:self._consecutive_loss_trigger]
+        recent = round_trips[: self._consecutive_loss_trigger]
         return all(rt["pnl"] < 0 for rt in recent)
 
     async def review(self, lookback_days: int = 1) -> ReviewResult:
         """Run a self-review session on recent trades."""
         import time as _time
+
         self._last_review_time = _time.monotonic()
 
         round_trips = await self._repo.get_completed_round_trips(
@@ -210,9 +215,9 @@ class TradeSelfReview:
 
 === SUMMARY ===
 Total trades: {len(round_trips)}
-Winners: {sum(1 for rt in round_trips if rt['pnl'] > 0)}
-Losers: {sum(1 for rt in round_trips if rt['pnl'] <= 0)}
-Total P&L: ${sum(rt['pnl'] for rt in round_trips):+,.2f}
+Winners: {sum(1 for rt in round_trips if rt["pnl"] > 0)}
+Losers: {sum(1 for rt in round_trips if rt["pnl"] <= 0)}
+Total P&L: ${sum(rt["pnl"] for rt in round_trips):+,.2f}
 
 Analyze these trades and execution failures, and suggest improvements.
 """
@@ -281,12 +286,14 @@ Analyze these trades and execution failures, and suggest improvements.
             if old_value is not None and abs(clamped - old_value) < _NOOP_EPSILON:
                 continue
 
-            result.adjustments.append(StrategyAdjustment(
-                parameter=param,
-                old_value=old_value,
-                new_value=clamped,
-                reasoning=f"Self-review suggested {param}={value}, clamped to [{low}, {high}]",
-            ))
+            result.adjustments.append(
+                StrategyAdjustment(
+                    parameter=param,
+                    old_value=old_value,
+                    new_value=clamped,
+                    reasoning=f"Self-review suggested {param}={value}, clamped to [{low}, {high}]",
+                )
+            )
 
         return result
 

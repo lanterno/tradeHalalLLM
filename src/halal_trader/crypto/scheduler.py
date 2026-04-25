@@ -112,6 +112,7 @@ class CryptoTradingBot(BaseTradingBot):
 
         # Telegram notifier
         from halal_trader.notifications.telegram import TelegramNotifier
+
         self._notifier = TelegramNotifier(
             bot_token=self.settings.telegram_bot_token,
             chat_id=self.settings.telegram_chat_id,
@@ -121,6 +122,7 @@ class CryptoTradingBot(BaseTradingBot):
 
         # Sentiment manager (Reddit + CryptoPanic)
         from halal_trader.sentiment.manager import SentimentManager
+
         self._sentiment_manager = SentimentManager(
             trading_pairs=self.settings.crypto_pairs,
             reddit_client_id=self.settings.reddit_client_id,
@@ -133,10 +135,12 @@ class CryptoTradingBot(BaseTradingBot):
 
         # Multi-timeframe analyzer
         from halal_trader.crypto.timeframes import TimeframeAnalyzer
+
         timeframe_analyzer = TimeframeAnalyzer(self._binance)
 
         # Market regime detector
         from halal_trader.crypto.regime import RegimeDetector
+
         regime_detector = RegimeDetector(models_dir=self.settings.ml_models_dir)
 
         # ML models (optional)
@@ -162,11 +166,13 @@ class CryptoTradingBot(BaseTradingBot):
 
         # Self-improvement loop (load saved adjustments from DB)
         from halal_trader.crypto.self_improve import TradeSelfReview
+
         self._self_review = TradeSelfReview(llm, repo, strategy=strategy)
         await self._self_review.load_from_db()
 
         # Portfolio-level risk engine
         from halal_trader.crypto.risk import PortfolioRiskEngine
+
         risk_engine = PortfolioRiskEngine(
             base_max_position_pct=self.settings.crypto_max_position_pct,
             max_portfolio_heat_pct=self.settings.crypto_max_portfolio_heat_pct,
@@ -199,6 +205,7 @@ class CryptoTradingBot(BaseTradingBot):
 
         # ML retrainer (labels closed trades and retrains models)
         from halal_trader.ml.retrainer import RetrainingScheduler
+
         self._retrainer = RetrainingScheduler(
             repo,
             models_dir=self.settings.ml_models_dir,
@@ -221,6 +228,7 @@ class CryptoTradingBot(BaseTradingBot):
 
         # News event reactor (real-time CryptoPanic stream)
         from halal_trader.sentiment.events import NewsEventReactor
+
         self._news_reactor = NewsEventReactor(
             api_key=self.settings.cryptopanic_api_key,
             trading_pairs=self.settings.crypto_pairs,
@@ -233,6 +241,7 @@ class CryptoTradingBot(BaseTradingBot):
 
         # Expose live components to the dashboard
         from halal_trader.web.app import app_state as _web_state
+
         _web_state["ws_manager"] = self._ws
         _web_state["sentiment_manager"] = self._sentiment_manager
         _web_state["exchange"] = self._binance
@@ -331,6 +340,7 @@ class CryptoTradingBot(BaseTradingBot):
         self._running = False
 
         from halal_trader.web.app import app_state as _web_state
+
         _web_state["bot_running"] = False
 
         components: list[tuple[str, object | None]] = [
@@ -414,8 +424,10 @@ class CryptoTradingBot(BaseTradingBot):
                         cycle_timeout,
                     )
 
-                from halal_trader.web.app import app_state as _web_state
                 from datetime import datetime, timezone
+
+                from halal_trader.web.app import app_state as _web_state
+
                 _web_state["last_cycle"] = datetime.now(timezone.utc).isoformat()
 
                 # Sleep for remaining interval time
@@ -435,7 +447,7 @@ class CryptoTradingBot(BaseTradingBot):
                         interval,
                     )
 
-        except (KeyboardInterrupt, asyncio.CancelledError):
+        except KeyboardInterrupt, asyncio.CancelledError:
             logger.info("Crypto bot interrupted")
         finally:
             await self._daily_end()

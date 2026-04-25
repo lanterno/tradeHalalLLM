@@ -124,23 +124,32 @@ class TimeframeAnalyzer:
                 continue
 
             if "bb_upper" in ind:
-                levels.append({
-                    "level": ind["bb_upper"], "type": "resistance",
-                    "source": f"BB upper ({tf})",
-                })
-                levels.append({
-                    "level": ind["bb_lower"], "type": "support",
-                    "source": f"BB lower ({tf})",
-                })
+                levels.append(
+                    {
+                        "level": ind["bb_upper"],
+                        "type": "resistance",
+                        "source": f"BB upper ({tf})",
+                    }
+                )
+                levels.append(
+                    {
+                        "level": ind["bb_lower"],
+                        "type": "support",
+                        "source": f"BB lower ({tf})",
+                    }
+                )
 
             if "vwap" in ind:
                 levels.append({"level": ind["vwap"], "type": "pivot", "source": f"VWAP ({tf})"})
 
             if "ema_50" in ind:
-                levels.append({
-                    "level": ind["ema_50"], "type": "dynamic",
-                    "source": f"EMA50 ({tf})",
-                })
+                levels.append(
+                    {
+                        "level": ind["ema_50"],
+                        "type": "dynamic",
+                        "source": f"EMA50 ({tf})",
+                    }
+                )
 
         levels.sort(key=lambda x: x["level"])
         return levels
@@ -185,9 +194,7 @@ def format_timeframes_for_prompt(tf_results: dict[str, dict[str, Any]]) -> str:
         sr = data.get("support_resistance", [])
         if sr:
             nearest = sr[:3] + sr[-3:] if len(sr) > 6 else sr
-            sr_text = ", ".join(
-                f"${lv['level']:,.2f} ({lv['source']})" for lv in nearest[:4]
-            )
+            sr_text = ", ".join(f"${lv['level']:,.2f} ({lv['source']})" for lv in nearest[:4])
             lines.append(f"    Key levels: {sr_text}")
 
     return "\n".join(lines)

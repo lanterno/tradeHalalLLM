@@ -90,7 +90,8 @@ class NewsEventReactor:
         self._task = asyncio.create_task(self._poll_loop(), name="news-reactor")
         logger.info(
             "News reactor started (poll every %ds, filter: %s)",
-            self._poll_interval, self._importance_filter,
+            self._poll_interval,
+            self._importance_filter,
         )
 
     async def stop(self) -> None:
@@ -116,7 +117,8 @@ class NewsEventReactor:
                 for event in events:
                     logger.info(
                         "Breaking news event: [%s] %s (affects %s)",
-                        event.importance, event.title[:80],
+                        event.importance,
+                        event.title[:80],
                         ", ".join(event.affected_pairs) or "general",
                     )
                     for cb in self._callbacks:
@@ -176,9 +178,7 @@ class NewsEventReactor:
                 for u in to_remove:
                     self._seen_urls.discard(u)
 
-            item_currencies = {
-                c.get("code", "") for c in item.get("currencies", [])
-            }
+            item_currencies = {c.get("code", "") for c in item.get("currencies", [])}
 
             affected = []
             for currency in item_currencies:
@@ -197,14 +197,16 @@ class NewsEventReactor:
             kind = item.get("kind", "news")
             importance = "breaking" if kind == "media" else "hot"
 
-            events.append(NewsEvent(
-                title=item.get("title", ""),
-                source=item.get("source", {}).get("title", ""),
-                url=item_url,
-                published_at=item.get("published_at", ""),
-                sentiment=sentiment,
-                affected_pairs=affected,
-                importance=importance,
-            ))
+            events.append(
+                NewsEvent(
+                    title=item.get("title", ""),
+                    source=item.get("source", {}).get("title", ""),
+                    url=item_url,
+                    published_at=item.get("published_at", ""),
+                    sentiment=sentiment,
+                    affected_pairs=affected,
+                    importance=importance,
+                )
+            )
 
         return events

@@ -205,13 +205,16 @@ class CryptoTradingStrategy(BaseStrategy):
         self._consecutive_llm_failures += 1
         logger.error(
             "Crypto LLM analysis failed after %dms (%d consecutive): %s",
-            elapsed_ms, self._consecutive_llm_failures, error,
+            elapsed_ms,
+            self._consecutive_llm_failures,
+            error,
         )
         if self._consecutive_llm_failures >= self._llm_failure_threshold:
             self._llm_cooldown_until = time.monotonic() + self._llm_cooldown_seconds
             logger.warning(
                 "LLM failed %d times consecutively — entering %ds cooldown",
-                self._consecutive_llm_failures, self._llm_cooldown_seconds,
+                self._consecutive_llm_failures,
+                self._llm_cooldown_seconds,
             )
 
     async def analyze(
@@ -239,7 +242,10 @@ class CryptoTradingStrategy(BaseStrategy):
             logger.warning("LLM in cooldown (%ds remaining) — holding positions", remaining)
             return CryptoTradingPlan(
                 market_outlook="LLM cooldown active — holding",
-                risk_notes=f"Cooldown for {remaining}s after {self._consecutive_llm_failures} consecutive failures",
+                risk_notes=(
+                    f"Cooldown for {remaining}s after "
+                    f"{self._consecutive_llm_failures} consecutive failures"
+                ),
             )
 
         portfolio_value = account.total_balance_usdt
@@ -293,13 +299,15 @@ class CryptoTradingStrategy(BaseStrategy):
                 "position to open a slot for a better opportunity."
             )
         elif open_position_count >= self._max_simultaneous_positions - 1:
-            position_limit_warning = (
-                "⚠ Only 1 position slot remaining — be selective with buys."
-            )
+            position_limit_warning = "⚠ Only 1 position slot remaining — be selective with buys."
 
         optional_sections: list[tuple[str, str, str]] = [
             ("=== SOCIAL SENTIMENT ===", sentiment_text, "No sentiment data available."),
-            ("=== MULTI-TIMEFRAME ANALYSIS ===", timeframe_text, "No multi-timeframe data available."),
+            (
+                "=== MULTI-TIMEFRAME ANALYSIS ===",
+                timeframe_text,
+                "No multi-timeframe data available.",
+            ),
             ("=== ML MODEL SIGNALS ===", ml_signals_text, "No ML model data available."),
             ("=== MARKET REGIME ===", regime_text, "No regime data available."),
             ("=== PORTFOLIO RISK ===", risk_text, "No portfolio risk data available."),
@@ -332,9 +340,7 @@ class CryptoTradingStrategy(BaseStrategy):
 
         for header, value, placeholder in optional_sections:
             if not value:
-                user_prompt = user_prompt.replace(
-                    f"{header}\n{placeholder}\n\n", ""
-                )
+                user_prompt = user_prompt.replace(f"{header}\n{placeholder}\n\n", "")
 
         return await self._run_llm_analysis(
             system,

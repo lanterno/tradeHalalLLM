@@ -10,8 +10,6 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from halal_trader.core.llm import create_llm
-from halal_trader.trading.sentiment import SentimentAnalyzer
-from halal_trader.trading.strategy import TradingStrategy
 from halal_trader.core.scheduler import BaseTradingBot
 from halal_trader.domain.ports import Broker, ComplianceScreener
 from halal_trader.halal.cache import HalalScreener
@@ -27,6 +25,8 @@ from halal_trader.mcp.client import AlpacaMCPClient
 from halal_trader.trading.cycle import TradingCycleService
 from halal_trader.trading.executor import TradeExecutor
 from halal_trader.trading.portfolio import PortfolioTracker
+from halal_trader.trading.sentiment import SentimentAnalyzer
+from halal_trader.trading.strategy import TradingStrategy
 
 logger = logging.getLogger(__name__)
 
@@ -376,7 +376,7 @@ class TradingBot(BaseTradingBot):
             while self._running:
                 await asyncio.sleep(1)
 
-        except (KeyboardInterrupt, asyncio.CancelledError):
+        except KeyboardInterrupt, asyncio.CancelledError:
             logger.info("Bot interrupted")
         finally:
             await self.shutdown()

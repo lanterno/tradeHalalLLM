@@ -11,7 +11,11 @@ from halal_trader.domain.ports import TradeRepository
 logger = logging.getLogger(__name__)
 
 _FEATURE_KEYS = [
-    "rsi_14", "macd_histogram", "volume_ratio", "atr_14", "bb_position",
+    "rsi_14",
+    "macd_histogram",
+    "volume_ratio",
+    "atr_14",
+    "bb_position",
 ]
 
 
@@ -42,7 +46,9 @@ class RetrainingScheduler:
             await self._repo.label_indicator_snapshot(trade_id, label, return_pct)
             logger.debug(
                 "Labeled snapshot for trade #%d: %s (%.2f%%)",
-                trade_id, "profitable" if label else "unprofitable", return_pct * 100,
+                trade_id,
+                "profitable" if label else "unprofitable",
+                return_pct * 100,
             )
         except Exception as e:
             logger.debug("Failed to label snapshot for trade #%d: %s", trade_id, e)
@@ -57,9 +63,7 @@ class RetrainingScheduler:
         results: dict[str, Any] = {"anomaly": False, "classifier": False, "samples": 0}
 
         try:
-            snapshots = await self._repo.get_labeled_snapshots(
-                min_samples=self._min_samples
-            )
+            snapshots = await self._repo.get_labeled_snapshots(min_samples=self._min_samples)
         except Exception as e:
             logger.warning("Failed to fetch labeled snapshots: %s", e)
             return results
@@ -92,7 +96,8 @@ class RetrainingScheduler:
         if len(features) < self._min_samples:
             logger.info(
                 "Not enough valid snapshots after filtering: %d/%d",
-                len(features), self._min_samples,
+                len(features),
+                self._min_samples,
             )
             return results
 
@@ -100,9 +105,11 @@ class RetrainingScheduler:
 
         try:
             from halal_trader.ml.hub import ModelHub
+
             hub = ModelHub(models_dir=self._models_dir)
 
             from halal_trader.ml.anomaly import MarketAnomalyDetector
+
             detector = MarketAnomalyDetector(hub, min_samples=self._min_samples)
             for feat in features:
                 detector._samples.append(feat)
@@ -115,6 +122,7 @@ class RetrainingScheduler:
         try:
             from halal_trader.ml.anomaly import MLSignalClassifier
             from halal_trader.ml.hub import ModelHub
+
             hub = ModelHub(models_dir=self._models_dir)
             classifier = MLSignalClassifier(hub)
             if classifier.train(features, labels):
@@ -125,6 +133,8 @@ class RetrainingScheduler:
 
         logger.info(
             "Retraining complete: %d samples, anomaly=%s, classifier=%s",
-            len(features), results["anomaly"], results["classifier"],
+            len(features),
+            results["anomaly"],
+            results["classifier"],
         )
         return results

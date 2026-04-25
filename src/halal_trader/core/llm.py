@@ -69,7 +69,9 @@ class BaseLLM(ABC):
                 self._last_threshold_logged = threshold
                 logger.info(
                     "LLM daily token usage crossed %dk (%d total today, model: %s)",
-                    threshold // 1000, self._daily_tokens, self.model,
+                    threshold // 1000,
+                    self._daily_tokens,
+                    self.model,
                 )
                 break
 
@@ -85,7 +87,8 @@ class BaseLLM(ABC):
         self.last_thinking = thinking
         if thinking:
             logger.debug("LLM thinking (%d chars): %.200s…", len(thinking), thinking)
-        return json.loads(_clean_json_body(body))
+        parsed: dict[str, Any] = json.loads(_clean_json_body(body))
+        return parsed
 
 
 class OllamaLLM(BaseLLM):
@@ -130,7 +133,7 @@ class OllamaLLM(BaseLLM):
         elapsed = time.monotonic() - t0
         logger.debug("Ollama response in %.1fs", elapsed)
 
-        content = response["message"]["content"]
+        content: str = response["message"]["content"]
         if not content or not content.strip():
             raise ValueError("Ollama returned empty response")
         return content
@@ -229,7 +232,8 @@ class AnthropicLLM(BaseLLM):
         else:
             logger.debug("Anthropic response in %.1fs", elapsed)
 
-        return response.content[0].text
+        text: str = response.content[0].text
+        return text
 
 
 class FallbackLLM(BaseLLM):
@@ -247,7 +251,7 @@ class FallbackLLM(BaseLLM):
         self._chain_backoff_until: float = 0
 
     @property
-    def model(self) -> str:  # type: ignore[override]
+    def model(self) -> str:
         return self._active_model
 
     @model.setter
@@ -268,9 +272,9 @@ class FallbackLLM(BaseLLM):
         if now >= self._backoff_until:
             providers.append(self._primary)
         else:
-            remaining = self._backoff_until - now
+            backoff_remaining = self._backoff_until - now
             logger.debug(
-                "Primary LLM in backoff for %.0fs more, trying fallbacks", remaining
+                "Primary LLM in backoff for %.0fs more, trying fallbacks", backoff_remaining
             )
 
         providers.extend(self._fallbacks)
@@ -304,7 +308,8 @@ class FallbackLLM(BaseLLM):
                         self._backoff_until = time.monotonic() + backoff_min * 60
                         logger.warning(
                             "Primary LLM failed %d times — backing off for %d minutes",
-                            self._consecutive_failures, backoff_min,
+                            self._consecutive_failures,
+                            backoff_min,
                         )
 
         self._chain_failures += 1
@@ -312,7 +317,8 @@ class FallbackLLM(BaseLLM):
         self._chain_backoff_until = time.monotonic() + chain_backoff_sec
         logger.error(
             "All LLM providers failed (%d consecutive) — chain backoff for %ds",
-            self._chain_failures, chain_backoff_sec,
+            self._chain_failures,
+            chain_backoff_sec,
         )
         raise last_error or RuntimeError("No LLM providers available")
 
@@ -331,9 +337,9 @@ class FallbackLLM(BaseLLM):
         if now >= self._backoff_until:
             providers.append(self._primary)
         else:
-            remaining = self._backoff_until - now
+            backoff_remaining = self._backoff_until - now
             logger.debug(
-                "Primary LLM in backoff for %.0fs more, trying fallbacks", remaining
+                "Primary LLM in backoff for %.0fs more, trying fallbacks", backoff_remaining
             )
 
         providers.extend(self._fallbacks)
@@ -367,7 +373,8 @@ class FallbackLLM(BaseLLM):
                         self._backoff_until = time.monotonic() + backoff_min * 60
                         logger.warning(
                             "Primary LLM failed %d times — backing off for %d minutes",
-                            self._consecutive_failures, backoff_min,
+                            self._consecutive_failures,
+                            backoff_min,
                         )
 
         self._chain_failures += 1
@@ -375,7 +382,8 @@ class FallbackLLM(BaseLLM):
         self._chain_backoff_until = time.monotonic() + chain_backoff_sec
         logger.error(
             "All LLM providers failed (%d consecutive) — chain backoff for %ds",
-            self._chain_failures, chain_backoff_sec,
+            self._chain_failures,
+            chain_backoff_sec,
         )
         raise last_error or RuntimeError("No LLM providers available")
 
@@ -406,9 +414,7 @@ def create_llm(settings: Settings | None = None) -> BaseLLM:
 
     primary = _create_single_llm(settings.llm_provider, settings.llm_model, settings)
     if primary is None:
-        raise ValueError(
-            f"Primary LLM provider {settings.llm_provider.value} is not configured"
-        )
+        raise ValueError(f"Primary LLM provider {settings.llm_provider.value} is not configured")
 
     fallback_models = {
         LLMProvider.OLLAMA: settings.ollama_fallback_model or settings.llm_model,

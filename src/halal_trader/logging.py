@@ -24,7 +24,7 @@ class SafeRichHandler(RichHandler):
     def emit(self, record: logging.LogRecord) -> None:
         try:
             super().emit(record)
-        except (BrokenPipeError, SystemExit, OSError):
+        except BrokenPipeError, SystemExit, OSError:
             # Console output is gone — nothing we can do, but don't
             # let it crash the process.  File handlers still work.
             pass

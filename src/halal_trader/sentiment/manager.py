@@ -149,9 +149,7 @@ class SentimentManager:
             logger.info(
                 "Sentiment updated for %d pairs: %s",
                 len(signals),
-                ", ".join(
-                    f"{p}={s.score:+.2f}" for p, s in signals.items()
-                ),
+                ", ".join(f"{p}={s.score:+.2f}" for p, s in signals.items()),
             )
 
         return signals

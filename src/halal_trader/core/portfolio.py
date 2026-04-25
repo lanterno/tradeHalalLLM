@@ -41,9 +41,7 @@ class BasePortfolioTracker(ABC):
     async def _persist_day_start(self, equity: float) -> None: ...
 
     @abstractmethod
-    async def _persist_day_end(
-        self, equity: float, pnl: float, count: int
-    ) -> None: ...
+    async def _persist_day_end(self, equity: float, pnl: float, count: int) -> None: ...
 
     # ── Template methods ───────────────────────────────────────
 
