@@ -4,7 +4,7 @@ import logging
 from abc import ABC, abstractmethod
 from typing import Any
 
-from halal_trader.domain.ports import TradeRepository
+from halal_trader.db.repository import Repository
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +21,7 @@ class BasePortfolioTracker(ABC):
 
     def __init__(
         self,
-        repo: TradeRepository,
+        repo: Repository,
         *,
         daily_loss_limit: float,
     ) -> None:

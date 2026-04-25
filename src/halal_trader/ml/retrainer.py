@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from halal_trader.domain.ports import TradeRepository
+from halal_trader.db.repository import Repository
 from halal_trader.ml.features import FEATURE_KEYS
 
 logger = logging.getLogger(__name__)
@@ -22,7 +22,7 @@ class RetrainingScheduler:
 
     def __init__(
         self,
-        repo: TradeRepository,
+        repo: Repository,
         *,
         models_dir: Path = Path("models"),
         min_samples: int = 50,

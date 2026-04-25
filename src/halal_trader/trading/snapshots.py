@@ -18,7 +18,7 @@ from typing import Any
 
 from halal_trader.crypto.indicators import compute_all
 from halal_trader.domain.models import Kline
-from halal_trader.domain.ports import TradeRepository
+from halal_trader.db.repository import Repository
 from halal_trader.trading.risk import _bars_to_klines
 
 logger = logging.getLogger(__name__)
@@ -39,7 +39,7 @@ _FEATURE_KEYS = (
 
 async def record_stock_snapshot(
     *,
-    repo: TradeRepository,
+    repo: Repository,
     trade_id: int,
     symbol: str,
     bars: Any,

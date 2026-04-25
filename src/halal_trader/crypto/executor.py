@@ -16,7 +16,7 @@ from halal_trader.domain.models import (
     CryptoAccount,
     CryptoTradingPlan,
 )
-from halal_trader.domain.ports import TradeRepository
+from halal_trader.db.repository import Repository
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +31,7 @@ class CryptoExecutor(BaseExecutor):
     def __init__(
         self,
         broker: BinanceClient,
-        repo: TradeRepository,
+        repo: Repository,
         *,
         max_position_pct: float,
         max_simultaneous_positions: int,

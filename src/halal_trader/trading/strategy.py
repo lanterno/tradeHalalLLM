@@ -7,7 +7,8 @@ from typing import Any
 
 from halal_trader.core.strategy import BaseStrategy
 from halal_trader.domain.models import Account, Position, TradingPlan
-from halal_trader.domain.ports import LLMBackend, TradeRepository
+from halal_trader.db.repository import Repository
+from halal_trader.domain.ports import LLMBackend
 
 logger = logging.getLogger(__name__)
 
@@ -144,7 +145,7 @@ class TradingStrategy(BaseStrategy):
     def __init__(
         self,
         llm: LLMBackend,
-        repo: TradeRepository,
+        repo: Repository,
         *,
         llm_provider_name: str,
         max_position_pct: float,

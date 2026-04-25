@@ -8,7 +8,7 @@ from halal_trader.core.portfolio import BasePortfolioTracker
 from halal_trader.crypto.exchange import BinanceClient
 from halal_trader.db.models import CryptoTrade
 from halal_trader.domain.models import CryptoBalance
-from halal_trader.domain.ports import TradeRepository
+from halal_trader.db.repository import Repository
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +22,7 @@ class CryptoPortfolioTracker(BasePortfolioTracker):
     def __init__(
         self,
         broker: BinanceClient,
-        repo: TradeRepository,
+        repo: Repository,
         *,
         daily_loss_limit: float,
     ) -> None:

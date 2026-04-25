@@ -13,7 +13,8 @@ from halal_trader.domain.models import (
     CryptoTradingPlan,
     Kline,
 )
-from halal_trader.domain.ports import LLMBackend, TradeRepository
+from halal_trader.db.repository import Repository
+from halal_trader.domain.ports import LLMBackend
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +25,7 @@ class CryptoTradingStrategy(BaseStrategy):
     def __init__(
         self,
         llm: LLMBackend,
-        repo: TradeRepository,
+        repo: Repository,
         *,
         llm_provider_name: str,
         max_position_pct: float,
