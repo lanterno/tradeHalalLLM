@@ -9,14 +9,16 @@ from sqlmodel import SQLModel
 
 from alembic import context
 
-# Import all models so SQLModel.metadata is populated for autogenerate.
+# Import every table so SQLModel.metadata is fully populated for autogenerate.
 from halal_trader.db.models import (  # noqa: F401
     CryptoDailyPnl,
     CryptoHalalCache,
     CryptoTrade,
     DailyPnl,
     HalalCache,
+    IndicatorSnapshot,
     LlmDecision,
+    StrategyAdjustment,
     Trade,
 )
 
@@ -29,12 +31,27 @@ if config.config_file_name is not None:
 target_metadata = SQLModel.metadata
 
 
+def _resolve_url() -> str:
+    """Return the DB URL — Settings.resolve_db_path takes precedence over alembic.ini.
+
+    This keeps `alembic upgrade` and `init_db` in sync regardless of CWD or
+    relative-path quirks. Falls back to the alembic.ini value if Settings
+    cannot be loaded (e.g. running offline migrations without an env).
+    """
+    try:
+        from halal_trader.config import get_settings
+
+        settings = get_settings()
+        return f"sqlite+aiosqlite:///{settings.resolve_db_path()}"
+    except Exception:
+        return config.get_main_option("sqlalchemy.url") or ""
+
+
 # ── Offline mode (SQL script generation) ────────────────────────
 def run_migrations_offline() -> None:
     """Run migrations in 'offline' mode — emit SQL to stdout."""
-    url = config.get_main_option("sqlalchemy.url")
     context.configure(
-        url=url,
+        url=_resolve_url(),
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
@@ -60,8 +77,10 @@ def do_run_migrations(connection) -> None:  # noqa: ANN001
 
 async def run_async_migrations() -> None:
     """Create an async engine and run migrations inside a connection."""
+    section = config.get_section(config.config_ini_section, {}) or {}
+    section["sqlalchemy.url"] = _resolve_url()
     connectable = async_engine_from_config(
-        config.get_section(config.config_ini_section, {}),
+        section,
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
     )

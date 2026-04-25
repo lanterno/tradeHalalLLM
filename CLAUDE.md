@@ -40,7 +40,7 @@ Backtest: `uv run halal-trader crypto backtest --pair BTCUSDT --candles 1000 [--
 
 Dashboard frontend: `cd dashboard && npm install && npm run build` (Vite output goes to `dashboard/dist`, which `web/app.py` serves). `npm run dev` for hot reload.
 
-DB migrations: `uv run alembic upgrade head` (alembic envs in `alembic/versions/`). `init_db()` also creates tables via `SQLModel.metadata.create_all` — Alembic is for incremental schema changes only.
+DB migrations: Alembic is the single schema authority. `init_db()` opens the engine and verifies the DB is at head; it never runs DDL. Use `halal-trader db migrate` (forwards), `halal-trader db current` (status), `halal-trader db stamp head` (one-time adoption of a pre-Alembic DB), `halal-trader db revision -m "..."` (new migration). The bot refuses to start with `SchemaError` if the DB is at the wrong revision.
 
 ## Architecture
 

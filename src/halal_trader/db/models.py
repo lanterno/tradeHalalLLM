@@ -1,9 +1,13 @@
 """SQLModel table definitions and database initialization."""
 
+import logging
 from datetime import UTC, datetime
+from pathlib import Path
 
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlmodel import Field, SQLModel
+
+logger = logging.getLogger(__name__)
 
 # ── Stock Tables ────────────────────────────────────────────────
 
@@ -155,45 +159,95 @@ class StrategyAdjustment(SQLModel, table=True):
     reasoning: str | None = None
 
 
-async def init_db(db_path: str) -> AsyncEngine:
-    """Create the async engine and ensure all tables exist.
+# ── Schema authority ────────────────────────────────────────────
+#
+# Alembic is the single source of truth for schema. `init_db` opens the
+# engine and verifies the DB is on the expected revision; it never runs
+# DDL itself. Apply migrations explicitly with `halal-trader db migrate`.
 
-    Uses SQLModel create_all for new tables, then adds any missing columns
-    to existing tables (SQLite ALTER TABLE ADD COLUMN).
+
+class SchemaError(RuntimeError):
+    """Raised when the DB schema is not at the expected Alembic revision."""
+
+
+async def init_db(db_path: str | Path) -> AsyncEngine:
+    """Open the async engine after verifying Alembic is at head.
+
+    Behavior:
+      * If `alembic_version` is missing AND any expected table exists, the DB
+        was populated by a pre-Alembic `create_all` codepath. Raise
+        `SchemaError` directing the operator to `halal-trader db stamp head`.
+      * If `alembic_version` is missing AND the DB is empty, raise
+        `SchemaError` directing the operator to `halal-trader db migrate`.
+      * If `alembic_version` is present but != head, raise `SchemaError`
+        directing the operator to `halal-trader db migrate`.
+      * Otherwise, return the engine.
     """
     import sqlalchemy as sa
 
     engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}")
 
-    async with engine.begin() as conn:
-        await conn.run_sync(SQLModel.metadata.create_all)
+    expected_head = _alembic_head_revision()
+    expected_tables = set(SQLModel.metadata.tables.keys())
 
-        # Ensure new columns exist on pre-existing crypto_trades tables
-        _NEW_CRYPTO_TRADE_COLUMNS = [
-            ("entry_price", "REAL"),
-            ("stop_loss", "REAL"),
-            ("target_price", "REAL"),
-            ("exit_price", "REAL"),
-            ("exit_reason", "TEXT"),
-            ("closed_at", "TIMESTAMP"),
-        ]
-        existing = await conn.execute(sa.text("PRAGMA table_info(crypto_trades)"))
-        existing_names = {row[1] for row in existing}
-        for col_name, col_type in _NEW_CRYPTO_TRADE_COLUMNS:
-            if col_name not in existing_names:
-                await conn.execute(
-                    sa.text(f"ALTER TABLE crypto_trades ADD COLUMN {col_name} {col_type}")
-                )
+    async with engine.connect() as conn:
+        version_row = await conn.execute(
+            sa.text(
+                "SELECT name FROM sqlite_master "
+                "WHERE type='table' AND name='alembic_version'"
+            )
+        )
+        alembic_table_present = version_row.first() is not None
 
-        _NEW_LLM_DECISION_COLUMNS = [
-            ("thinking", "TEXT"),
-        ]
-        existing = await conn.execute(sa.text("PRAGMA table_info(llm_decisions)"))
-        existing_names = {row[1] for row in existing}
-        for col_name, col_type in _NEW_LLM_DECISION_COLUMNS:
-            if col_name not in existing_names:
-                await conn.execute(
-                    sa.text(f"ALTER TABLE llm_decisions ADD COLUMN {col_name} {col_type}")
-                )
+        existing_tables: set[str] = set()
+        result = await conn.execute(
+            sa.text("SELECT name FROM sqlite_master WHERE type='table'")
+        )
+        existing_tables = {row[0] for row in result}
 
-    return engine
+        current_revision: str | None = None
+        if alembic_table_present:
+            row = await conn.execute(sa.text("SELECT version_num FROM alembic_version"))
+            first = row.first()
+            current_revision = first[0] if first else None
+
+    if current_revision == expected_head:
+        return engine
+
+    await engine.dispose()
+    adopted = expected_tables.intersection(existing_tables)
+
+    if current_revision is None:
+        if adopted:
+            raise SchemaError(
+                f"Database at {db_path} has tables {sorted(adopted)} but no "
+                f"recorded Alembic revision. This DB pre-dates Alembic-managed "
+                f"schema. Run `halal-trader db stamp head` once to adopt it."
+            )
+        raise SchemaError(
+            f"Database at {db_path} is empty and not initialized. "
+            f"Run `halal-trader db migrate` to create the schema."
+        )
+
+    raise SchemaError(
+        f"Database at {db_path} is at revision {current_revision!r}, "
+        f"expected {expected_head!r}. Run `halal-trader db migrate`."
+    )
+
+
+def _alembic_head_revision() -> str:
+    """Return the head revision id from the local alembic config."""
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    cfg = Config(str(_alembic_ini_path()))
+    script = ScriptDirectory.from_config(cfg)
+    head = script.get_current_head()
+    if head is None:
+        raise SchemaError("Alembic has no head revision — migration tree is empty.")
+    return head
+
+
+def _alembic_ini_path() -> Path:
+    """Locate alembic.ini at the project root."""
+    return Path(__file__).resolve().parent.parent.parent.parent / "alembic.ini"
