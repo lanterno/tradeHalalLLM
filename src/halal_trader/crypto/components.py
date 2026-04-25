@@ -89,26 +89,26 @@ def _build_sentiment(settings: Settings) -> Any:
     from halal_trader.sentiment.manager import SentimentManager
 
     return SentimentManager(
-        trading_pairs=settings.crypto_pairs,
-        reddit_client_id=settings.reddit_client_id,
-        reddit_client_secret=settings.reddit_client_secret,
-        cryptopanic_api_key=settings.cryptopanic_api_key,
-        use_finbert=settings.sentiment_use_finbert,
-        update_interval_seconds=settings.sentiment_update_interval_seconds,
+        trading_pairs=settings.crypto.pairs,
+        reddit_client_id=settings.sentiment.reddit.client_id,
+        reddit_client_secret=settings.sentiment.reddit.client_secret,
+        cryptopanic_api_key=settings.sentiment.cryptopanic.api_key,
+        use_finbert=settings.sentiment.use_finbert,
+        update_interval_seconds=settings.sentiment.update_interval_seconds,
     )
 
 
 def _build_ml(settings: Settings) -> tuple[Any, Any, Any]:
     """Return (forecaster, anomaly_detector, signal_classifier) or all-None."""
-    if not settings.ml_enabled:
+    if not settings.ml.enabled:
         return None, None, None
     try:
         from halal_trader.ml.anomaly import MarketAnomalyDetector, MLSignalClassifier
         from halal_trader.ml.forecaster import PriceForecaster
         from halal_trader.ml.hub import ModelHub
 
-        hub = ModelHub(device=settings.ml_device, models_dir=settings.ml_models_dir)
-        logger.info("ML models enabled (device: %s)", settings.ml_device)
+        hub = ModelHub(device=settings.ml.device, models_dir=settings.ml.models_dir)
+        logger.info("ML models enabled (device: %s)", settings.ml.device)
         return PriceForecaster(hub), MarketAnomalyDetector(hub), MLSignalClassifier(hub)
     except Exception as e:
         logger.warning("ML models initialization failed: %s", e)
@@ -117,8 +117,8 @@ def _build_ml(settings: Settings) -> tuple[Any, Any, Any]:
 
 def _build_news_reactor(settings: Settings) -> NewsEventReactor:
     return NewsEventReactor(
-        api_key=settings.cryptopanic_api_key,
-        trading_pairs=settings.crypto_pairs,
+        api_key=settings.sentiment.cryptopanic.api_key,
+        trading_pairs=settings.crypto.pairs,
         poll_interval_seconds=30,
         importance_filter="hot",
     )
@@ -145,48 +145,48 @@ async def build_components(
 
     await binance.connect()
 
-    ws = BinanceWSManager(binance.client, symbols=settings.crypto_pairs)
+    ws = BinanceWSManager(binance.client, symbols=settings.crypto.pairs)
     await ws.start()
 
     llm = create_llm(settings)
 
     screener = CryptoHalalScreener(
         repo,
-        coingecko_api_key=settings.coingecko_api_key,
-        min_market_cap=settings.crypto_min_market_cap,
+        coingecko_api_key=settings.coingecko.api_key,
+        min_market_cap=settings.crypto.min_market_cap,
     )
 
     strategy = CryptoTradingStrategy(
         llm,
         repo,
-        llm_provider_name=settings.llm_provider.value,
-        max_position_pct=settings.crypto_max_position_pct,
-        daily_loss_limit=settings.crypto_daily_loss_limit,
-        daily_return_target=settings.crypto_daily_return_target,
-        max_simultaneous_positions=settings.crypto_max_simultaneous_positions,
-        llm_failure_threshold=settings.crypto_llm_failure_threshold,
-        llm_cooldown_seconds=settings.crypto_llm_cooldown_seconds,
+        llm_provider_name=settings.llm.provider.value,
+        max_position_pct=settings.crypto.max_position_pct,
+        daily_loss_limit=settings.crypto.daily_loss_limit,
+        daily_return_target=settings.crypto.daily_return_target,
+        max_simultaneous_positions=settings.crypto.max_simultaneous_positions,
+        llm_failure_threshold=settings.crypto.llm_failure_threshold,
+        llm_cooldown_seconds=settings.crypto.llm_cooldown_seconds,
     )
 
     executor = CryptoExecutor(
         binance,
         repo,
-        max_position_pct=settings.crypto_max_position_pct,
-        max_simultaneous_positions=settings.crypto_max_simultaneous_positions,
-        configured_pairs=settings.crypto_pairs,
-        circuit_breaker_threshold=settings.crypto_circuit_breaker_threshold,
-        circuit_breaker_window=settings.crypto_circuit_breaker_window,
-        circuit_breaker_cooldown=settings.crypto_circuit_breaker_cooldown,
+        max_position_pct=settings.crypto.max_position_pct,
+        max_simultaneous_positions=settings.crypto.max_simultaneous_positions,
+        configured_pairs=settings.crypto.pairs,
+        circuit_breaker_threshold=settings.crypto.circuit_breaker_threshold,
+        circuit_breaker_window=settings.crypto.circuit_breaker_window,
+        circuit_breaker_cooldown=settings.crypto.circuit_breaker_cooldown,
         exiting_pairs=exiting_pairs,
     )
 
     portfolio = CryptoPortfolioTracker(
-        binance, repo, daily_loss_limit=settings.crypto_daily_loss_limit
+        binance, repo, daily_loss_limit=settings.crypto.daily_loss_limit
     )
     analytics = PerformanceAnalytics(repo)
 
     notifier = TelegramNotifier(
-        bot_token=settings.telegram_bot_token, chat_id=settings.telegram_chat_id
+        bot_token=settings.telegram.bot_token, chat_id=settings.telegram.chat_id
     )
     alerts = AlertSink(notifier)
     if notifier.enabled:
@@ -197,30 +197,30 @@ async def build_components(
         await sentiment_manager.start()
 
     timeframe_analyzer = TimeframeAnalyzer(binance)
-    regime_detector = RegimeDetector(models_dir=settings.ml_models_dir)
+    regime_detector = RegimeDetector(models_dir=settings.ml.models_dir)
     ml_forecaster, ml_anomaly, ml_signal = _build_ml(settings)
 
     self_review = TradeSelfReview(llm, repo, strategy=strategy)
     await self_review.load_from_db()
 
     risk_engine = PortfolioRiskEngine(
-        base_max_position_pct=settings.crypto_max_position_pct,
-        max_portfolio_heat_pct=settings.crypto_max_portfolio_heat_pct,
-        max_drawdown_pct=settings.crypto_max_drawdown_pct,
-        high_correlation_threshold=settings.crypto_high_correlation_threshold,
-        correlation_reduction_factor=settings.crypto_correlation_reduction_factor,
-        atr_baseline=settings.crypto_atr_baseline,
+        base_max_position_pct=settings.crypto.max_position_pct,
+        max_portfolio_heat_pct=settings.crypto.max_portfolio_heat_pct,
+        max_drawdown_pct=settings.crypto.max_drawdown_pct,
+        high_correlation_threshold=settings.crypto.high_correlation_threshold,
+        correlation_reduction_factor=settings.crypto.correlation_reduction_factor,
+        atr_baseline=settings.crypto.atr_baseline,
     )
 
-    retrainer = RetrainingScheduler(repo, models_dir=settings.ml_models_dir)
+    retrainer = RetrainingScheduler(repo, models_dir=settings.ml.models_dir)
 
     monitor = PositionMonitor(
         broker=binance,
         repo=repo,
         ws_manager=ws,
-        check_interval=settings.crypto_monitor_interval,
-        trailing_stop_activation_pct=settings.crypto_trailing_stop_activation_pct,
-        trailing_stop_distance_pct=settings.crypto_trailing_stop_distance_pct,
+        check_interval=settings.crypto.monitor_interval,
+        trailing_stop_activation_pct=settings.crypto.trailing_stop_activation_pct,
+        trailing_stop_distance_pct=settings.crypto.trailing_stop_distance_pct,
         notifier=notifier if notifier.enabled else None,
         retrainer=retrainer,
         exiting_pairs=exiting_pairs,

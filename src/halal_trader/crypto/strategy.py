@@ -8,12 +8,12 @@ from typing import Any
 
 from halal_trader.core.strategy import BaseStrategy
 from halal_trader.crypto.prompts import PromptContext, StrategyParams, build_prompts
+from halal_trader.db.repository import Repository
 from halal_trader.domain.models import (
     CryptoAccount,
     CryptoTradingPlan,
     Kline,
 )
-from halal_trader.db.repository import Repository
 from halal_trader.domain.ports import LLMBackend
 
 logger = logging.getLogger(__name__)

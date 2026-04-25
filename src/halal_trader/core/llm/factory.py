@@ -18,13 +18,13 @@ def _create_single_llm(provider: LLMProvider, model: str, settings: Settings) ->
     """Create a single LLM instance for a given provider, or None if unconfigured."""
     match provider:
         case LLMProvider.OLLAMA:
-            return OllamaLLM(model=model, host=settings.ollama_host)
+            return OllamaLLM(model=model, host=settings.llm.ollama.host)
         case LLMProvider.OPENAI:
-            if settings.openai_api_key:
-                return OpenAILLM(model=model, api_key=settings.openai_api_key)
+            if settings.llm.openai.api_key:
+                return OpenAILLM(model=model, api_key=settings.llm.openai.api_key)
         case LLMProvider.ANTHROPIC:
-            if settings.anthropic_api_key:
-                return AnthropicLLM(model=model, api_key=settings.anthropic_api_key)
+            if settings.llm.anthropic.api_key:
+                return AnthropicLLM(model=model, api_key=settings.llm.anthropic.api_key)
     return None
 
 
@@ -32,32 +32,34 @@ def create_llm(settings: Settings | None = None) -> BaseLLM:
     """Factory: create the appropriate LLM with opt-in fallback chain.
 
     Fallbacks are only created for providers explicitly listed in
-    ``settings.llm_fallback_providers``.  An empty list (the default)
+    ``settings.llm.fallback_providers``.  An empty list (the default)
     means primary-only with no cloud fallback.
     """
     if settings is None:
         settings = get_settings()
 
-    primary = _create_single_llm(settings.llm_provider, settings.llm_model, settings)
+    primary = _create_single_llm(settings.llm.provider, settings.llm.model, settings)
     if primary is None:
-        raise ValueError(f"Primary LLM provider {settings.llm_provider.value} is not configured")
+        raise ValueError(f"Primary LLM provider {settings.llm.provider.value} is not configured")
 
     fallback_models = {
-        LLMProvider.OLLAMA: settings.ollama_fallback_model or settings.llm_model,
-        LLMProvider.OPENAI: settings.openai_fallback_model or "gpt-4o-mini",
-        LLMProvider.ANTHROPIC: (settings.anthropic_fallback_model or "claude-sonnet-4-20250514"),
+        LLMProvider.OLLAMA: settings.llm.ollama.fallback_model or settings.llm.model,
+        LLMProvider.OPENAI: settings.llm.openai.fallback_model or "gpt-4o-mini",
+        LLMProvider.ANTHROPIC: (
+            settings.llm.anthropic.fallback_model or "claude-sonnet-4-20250514"
+        ),
     }
 
     fallbacks: list[BaseLLM] = []
-    for name in settings.llm_fallback_providers:
+    for name in settings.llm.fallback_providers:
         try:
             provider = LLMProvider(name.lower())
         except ValueError:
             logger.warning("Unknown fallback provider '%s' — skipping", name)
             continue
-        if provider == settings.llm_provider:
+        if provider == settings.llm.provider:
             continue
-        model = fallback_models.get(provider, settings.llm_model)
+        model = fallback_models.get(provider, settings.llm.model)
         fb = _create_single_llm(provider, model, settings)
         if fb is not None:
             fallbacks.append(fb)

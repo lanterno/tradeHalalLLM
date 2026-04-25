@@ -197,7 +197,7 @@ def test_reconcile_recent_caps_limit(client):
 def test_backups_endpoint_empty(client, tmp_path, monkeypatch):
     from halal_trader.config import get_settings
 
-    monkeypatch.setattr(get_settings(), "backup_dir", tmp_path / "noexist")
+    monkeypatch.setattr(get_settings().backup, "dir", tmp_path / "noexist")
     r = client.get("/api/system/backups")
     assert r.status_code == 200
     assert r.json() == []
@@ -209,7 +209,7 @@ def test_backups_endpoint_empty(client, tmp_path, monkeypatch):
 def test_metrics_cycles_returns_zero_count_with_no_log(client, tmp_path, monkeypatch):
     from halal_trader.config import get_settings
 
-    monkeypatch.setattr(get_settings(), "log_dir", tmp_path)
+    monkeypatch.setattr(get_settings().log, "dir", tmp_path)
     r = client.get("/api/metrics/cycles?window=3600")
     assert r.status_code == 200
     body = r.json()
@@ -220,7 +220,7 @@ def test_metrics_cycles_returns_zero_count_with_no_log(client, tmp_path, monkeyp
 def test_metrics_llm_returns_zero_calls_with_no_log(client, tmp_path, monkeypatch):
     from halal_trader.config import get_settings
 
-    monkeypatch.setattr(get_settings(), "log_dir", tmp_path)
+    monkeypatch.setattr(get_settings().log, "dir", tmp_path)
     r = client.get("/api/metrics/llm?window=86400")
     assert r.status_code == 200
     assert r.json()["calls"] == 0

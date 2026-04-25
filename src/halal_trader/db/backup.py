@@ -2,7 +2,7 @@
 
 Operationally simple: copy the live DB via the ``sqlite3`` CLI's
 ``.backup`` command (which is concurrent-safe), gzip the result, drop it
-in ``settings.backup_dir`` named ``halal_trader_YYYY-MM-DD.db.gz``. The
+in ``settings.backup.dir`` named ``halal_trader_YYYY-MM-DD.db.gz``. The
 prune step keeps the last ``retention_days`` daily files and the last
 ``weekly_count`` Sunday files on top of that.
 

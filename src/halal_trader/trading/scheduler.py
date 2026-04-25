@@ -65,8 +65,8 @@ class TradingBot(BaseTradingBot):
         from halal_trader.notifications.telegram import AlertSink, TelegramNotifier
 
         self._notifier = TelegramNotifier(
-            bot_token=self.settings.telegram_bot_token,
-            chat_id=self.settings.telegram_chat_id,
+            bot_token=self.settings.telegram.bot_token,
+            chat_id=self.settings.telegram.chat_id,
         )
         self._alerts = AlertSink(self._notifier)
 
@@ -78,10 +78,10 @@ class TradingBot(BaseTradingBot):
 
         # Halal screener
         zoya = None
-        if self.settings.zoya_api_key:
+        if self.settings.zoya.api_key:
             zoya = ZoyaClient(
-                api_key=self.settings.zoya_api_key,
-                use_sandbox=self.settings.zoya_use_sandbox,
+                api_key=self.settings.zoya.api_key,
+                use_sandbox=self.settings.zoya.use_sandbox,
             )
         self.screener = HalalScreener(repo, zoya)
 
@@ -89,22 +89,22 @@ class TradingBot(BaseTradingBot):
         strategy = TradingStrategy(
             llm,
             repo,
-            llm_provider_name=self.settings.llm_provider.value,
-            max_position_pct=self.settings.max_position_pct,
-            daily_loss_limit=self.settings.daily_loss_limit,
-            daily_return_target=self.settings.daily_return_target,
-            max_simultaneous_positions=self.settings.max_simultaneous_positions,
+            llm_provider_name=self.settings.llm.provider.value,
+            max_position_pct=self.settings.stocks.max_position_pct,
+            daily_loss_limit=self.settings.stocks.daily_loss_limit,
+            daily_return_target=self.settings.stocks.daily_return_target,
+            max_simultaneous_positions=self.settings.stocks.max_simultaneous_positions,
         )
         self.executor = TradeExecutor(
             self.broker,
             repo,
-            max_position_pct=self.settings.max_position_pct,
-            max_simultaneous_positions=self.settings.max_simultaneous_positions,
+            max_position_pct=self.settings.stocks.max_position_pct,
+            max_simultaneous_positions=self.settings.stocks.max_simultaneous_positions,
         )
         self.portfolio = PortfolioTracker(
             self.broker,
             repo,
-            daily_loss_limit=self.settings.daily_loss_limit,
+            daily_loss_limit=self.settings.stocks.daily_loss_limit,
         )
 
         # Sentiment analyzer (supplementary — gracefully degrades if deps missing)
@@ -298,9 +298,9 @@ class TradingBot(BaseTradingBot):
 
             await run_with_alerts(
                 db_path=self.settings.resolve_db_path(),
-                backup_dir=self.settings.backup_dir,
-                retention_days=self.settings.backup_retention_days,
-                weekly_count=self.settings.backup_weekly_count,
+                backup_dir=self.settings.backup.dir,
+                retention_days=self.settings.backup.retention_days,
+                weekly_count=self.settings.backup.weekly_count,
                 alerts=self._alerts,
             )
 
@@ -333,7 +333,7 @@ class TradingBot(BaseTradingBot):
         try:
             self._running = True
 
-            interval = self.settings.trading_interval_minutes
+            interval = self.settings.stocks.trading_interval_minutes
 
             # Schedule pre-market at 9:00 AM ET (Mon-Fri).
             # The job itself checks is_trading_day() and skips on holidays.
@@ -400,8 +400,8 @@ class TradingBot(BaseTradingBot):
             logger.info(
                 "Trading bot started — interval: %d min, target: %.1f%%, loss limit: %.1f%%",
                 interval,
-                self.settings.daily_return_target * 100,
-                self.settings.daily_loss_limit * 100,
+                self.settings.stocks.daily_return_target * 100,
+                self.settings.stocks.daily_loss_limit * 100,
             )
 
             # Run pre-market once at startup to ensure cache and equity are

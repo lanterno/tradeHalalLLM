@@ -7,8 +7,8 @@ from typing import Any
 from halal_trader.core.portfolio import BasePortfolioTracker
 from halal_trader.crypto.exchange import BinanceClient
 from halal_trader.db.models import CryptoTrade
-from halal_trader.domain.models import CryptoBalance
 from halal_trader.db.repository import Repository
+from halal_trader.domain.models import CryptoBalance
 
 logger = logging.getLogger(__name__)
 

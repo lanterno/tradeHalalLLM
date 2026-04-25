@@ -34,10 +34,10 @@ def reconcile(market: str, threshold: float) -> None:
                 from halal_trader.crypto.exchange import BinanceClient
 
                 broker = BinanceClient(
-                    api_key=settings.binance_api_key,
-                    secret_key=settings.binance_secret_key,
-                    testnet=settings.binance_testnet,
-                    configured_pairs=settings.crypto_pairs,
+                    api_key=settings.binance.api_key,
+                    secret_key=settings.binance.secret_key,
+                    testnet=settings.binance.testnet,
+                    configured_pairs=settings.crypto.pairs,
                 )
                 await broker.connect()
                 try:
@@ -66,9 +66,7 @@ def reconcile(market: str, threshold: float) -> None:
                 console.print(f"[green]No drift detected for {market}.[/green]")
                 return
 
-            tbl = Table(
-                title=f"Reconciliation Drift ({market})", header_style="bold cyan"
-            )
+            tbl = Table(title=f"Reconciliation Drift ({market})", header_style="bold cyan")
             tbl.add_column("Symbol")
             tbl.add_column("DB Qty", justify="right")
             tbl.add_column("Broker Qty", justify="right")

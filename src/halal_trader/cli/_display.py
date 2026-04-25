@@ -19,25 +19,21 @@ def print_config() -> None:
     table.add_column("Setting", style="dim")
     table.add_column("Value")
 
-    table.add_row("LLM Provider", settings.llm_provider.value)
-    table.add_row("LLM Model", settings.llm_model)
-    table.add_row("Trading Interval", f"{settings.trading_interval_minutes} min")
-    table.add_row("Daily Return Target", f"{settings.daily_return_target:.1%}")
-    table.add_row("Max Position Size", f"{settings.max_position_pct:.0%}")
-    table.add_row("Daily Loss Limit", f"{settings.daily_loss_limit:.1%}")
-    table.add_row("Max Positions", str(settings.max_simultaneous_positions))
-    table.add_row("Paper Trading", str(settings.alpaca_paper_trade))
+    table.add_row("LLM Provider", settings.llm.provider.value)
+    table.add_row("LLM Model", settings.llm.model)
+    table.add_row("Trading Interval", f"{settings.stocks.trading_interval_minutes} min")
+    table.add_row("Daily Return Target", f"{settings.stocks.daily_return_target:.1%}")
+    table.add_row("Max Position Size", f"{settings.stocks.max_position_pct:.0%}")
+    table.add_row("Daily Loss Limit", f"{settings.stocks.daily_loss_limit:.1%}")
+    table.add_row("Max Positions", str(settings.stocks.max_simultaneous_positions))
+    table.add_row("Paper Trading", str(settings.alpaca.paper_trade))
     table.add_row(
         "Alpaca API Key",
-        settings.alpaca_api_key[:8] + "..."
-        if settings.alpaca_api_key
-        else "[red]NOT SET[/red]",
+        settings.alpaca.api_key[:8] + "..." if settings.alpaca.api_key else "[red]NOT SET[/red]",
     )
     table.add_row(
         "Zoya API",
-        "Configured"
-        if settings.zoya_api_key
-        else "[yellow]Not configured (defaults)[/yellow]",
+        "Configured" if settings.zoya.api_key else "[yellow]Not configured (defaults)[/yellow]",
     )
     table.add_row("Database", str(settings.db_path))
 
@@ -54,20 +50,18 @@ def print_crypto_config() -> None:
     table.add_column("Setting", style="dim")
     table.add_column("Value")
 
-    table.add_row("LLM Provider", settings.llm_provider.value)
-    table.add_row("LLM Model", settings.llm_model)
-    table.add_row("Trading Interval", f"{settings.crypto_trading_interval_seconds}s")
-    table.add_row("Daily Return Target", f"{settings.crypto_daily_return_target:.1%}")
-    table.add_row("Max Position Size", f"{settings.crypto_max_position_pct:.0%}")
-    table.add_row("Daily Loss Limit", f"{settings.crypto_daily_loss_limit:.1%}")
-    table.add_row("Max Positions", str(settings.crypto_max_simultaneous_positions))
-    table.add_row("Trading Pairs", ", ".join(settings.crypto_pairs))
-    table.add_row("Testnet", str(settings.binance_testnet))
+    table.add_row("LLM Provider", settings.llm.provider.value)
+    table.add_row("LLM Model", settings.llm.model)
+    table.add_row("Trading Interval", f"{settings.crypto.trading_interval_seconds}s")
+    table.add_row("Daily Return Target", f"{settings.crypto.daily_return_target:.1%}")
+    table.add_row("Max Position Size", f"{settings.crypto.max_position_pct:.0%}")
+    table.add_row("Daily Loss Limit", f"{settings.crypto.daily_loss_limit:.1%}")
+    table.add_row("Max Positions", str(settings.crypto.max_simultaneous_positions))
+    table.add_row("Trading Pairs", ", ".join(settings.crypto.pairs))
+    table.add_row("Testnet", str(settings.binance.testnet))
     table.add_row(
         "Binance API Key",
-        settings.binance_api_key[:8] + "..."
-        if settings.binance_api_key
-        else "[red]NOT SET[/red]",
+        settings.binance.api_key[:8] + "..." if settings.binance.api_key else "[red]NOT SET[/red]",
     )
     table.add_row("Database", str(settings.db_path))
 
@@ -126,9 +120,7 @@ def print_clock(clock: object) -> None:
 
     if isinstance(clock, MarketClock):
         status_text = (
-            "[bold green]OPEN[/bold green]"
-            if clock.is_open
-            else "[bold red]CLOSED[/bold red]"
+            "[bold green]OPEN[/bold green]" if clock.is_open else "[bold red]CLOSED[/bold red]"
         )
         console.print(f"\nMarket (US Eastern): {status_text}")
         if clock.timestamp:
@@ -327,9 +319,7 @@ def print_liquidation(results: list) -> None:
     tbl.add_column("Status")
     tbl.add_column("Detail")
     for r in results:
-        style = (
-            "green" if r.status == "closed" else "yellow" if r.status == "skipped" else "red"
-        )
+        style = "green" if r.status == "closed" else "yellow" if r.status == "skipped" else "red"
         tbl.add_row(
             r.market,
             r.symbol,

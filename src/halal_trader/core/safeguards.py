@@ -49,9 +49,9 @@ def expected_token(today: datetime | None = None) -> str:
 def is_live_mode(settings: Settings, *, market: str) -> bool:
     """Return True if the configured market is operating against real money."""
     if market == "crypto":
-        return not settings.binance_testnet
+        return not settings.binance.testnet
     if market == "stocks":
-        return not settings.alpaca_paper_trade
+        return not settings.alpaca.paper_trade
     raise ValueError(f"unknown market: {market}")
 
 
@@ -60,7 +60,7 @@ def check_live_mode_token(settings: Settings, *, market: str, now: datetime | No
     if not is_live_mode(settings, market=market):
         return
     expected = expected_token(now)
-    actual = settings.live_mode_confirmation.strip()
+    actual = settings.live_mode.confirmation.strip()
     if actual == expected:
         return
 
@@ -93,14 +93,14 @@ class LiveModeChecker:
 
     def _effective_loss_limit(self) -> float:
         if self.market == "crypto":
-            return self.settings.crypto_daily_loss_limit
-        return self.settings.daily_loss_limit
+            return self.settings.crypto.daily_loss_limit
+        return self.settings.stocks.daily_loss_limit
 
     def _effective_max_position_notional(self, account_balance: float) -> float:
         if self.market == "crypto":
-            pct = self.settings.crypto_max_position_pct
+            pct = self.settings.crypto.max_position_pct
         else:
-            pct = self.settings.max_position_pct
+            pct = self.settings.stocks.max_position_pct
         return max(account_balance * pct, 0.0)
 
     async def assert_safe(
@@ -121,25 +121,25 @@ class LiveModeChecker:
 
         violations: list[str] = []
 
-        if account_balance > self.settings.max_account_balance_usd:
+        if account_balance > self.settings.live_mode.max_account_balance_usd:
             violations.append(
                 f"Account balance ${account_balance:,.2f} exceeds "
-                f"max_account_balance_usd ${self.settings.max_account_balance_usd:,.2f}."
+                f"max_account_balance_usd ${self.settings.live_mode.max_account_balance_usd:,.2f}."
             )
 
         single_order_notional = self._effective_max_position_notional(account_balance)
-        if single_order_notional > self.settings.max_single_order_usd:
+        if single_order_notional > self.settings.live_mode.max_single_order_usd:
             violations.append(
                 f"Implied single-order notional ${single_order_notional:,.2f} "
                 f"(={self._max_position_pct():.0%} of balance) exceeds "
-                f"max_single_order_usd ${self.settings.max_single_order_usd:,.2f}."
+                f"max_single_order_usd ${self.settings.live_mode.max_single_order_usd:,.2f}."
             )
 
         loss_limit = self._effective_loss_limit()
-        if loss_limit > self.settings.live_mode_max_daily_loss_pct:
+        if loss_limit > self.settings.live_mode.max_daily_loss_pct:
             violations.append(
                 f"daily_loss_limit {loss_limit:.2%} exceeds the live-mode floor "
-                f"{self.settings.live_mode_max_daily_loss_pct:.2%}."
+                f"{self.settings.live_mode.max_daily_loss_pct:.2%}."
             )
 
         if not violations:
@@ -176,5 +176,5 @@ class LiveModeChecker:
 
     def _max_position_pct(self) -> float:
         if self.market == "crypto":
-            return self.settings.crypto_max_position_pct
-        return self.settings.max_position_pct
+            return self.settings.crypto.max_position_pct
+        return self.settings.stocks.max_position_pct

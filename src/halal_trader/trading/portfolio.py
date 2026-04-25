@@ -4,8 +4,8 @@ import logging
 from typing import Any
 
 from halal_trader.core.portfolio import BasePortfolioTracker
-from halal_trader.domain.models import Position
 from halal_trader.db.repository import Repository
+from halal_trader.domain.models import Position
 from halal_trader.domain.ports import Broker
 
 logger = logging.getLogger(__name__)

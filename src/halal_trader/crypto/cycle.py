@@ -115,11 +115,11 @@ class CryptoCycleService(BaseCycleService):
 
         if not has_open_positions and self._should_skip_llm(indicators_cache):
             self._consecutive_flat_skips += 1
-            if self._consecutive_flat_skips < self._settings.crypto_max_consecutive_flat_skips:
+            if self._consecutive_flat_skips < self._settings.crypto.max_consecutive_flat_skips:
                 logger.info(
                     "All pairs flat — skipping LLM analysis (%d/%d)",
                     self._consecutive_flat_skips,
-                    self._settings.crypto_max_consecutive_flat_skips,
+                    self._settings.crypto.max_consecutive_flat_skips,
                 )
                 return
             logger.info(
@@ -407,17 +407,17 @@ class CryptoCycleService(BaseCycleService):
             rsi = indicators.get("rsi_14", 50)
             vol_ratio = indicators.get("volume_ratio", 1.0)
             if (
-                price_change_5m > s.crypto_flat_price_threshold
-                or rsi < s.crypto_flat_rsi_lower
-                or rsi > s.crypto_flat_rsi_upper
-                or vol_ratio > s.crypto_flat_vol_threshold
+                price_change_5m > s.crypto.flat_price_threshold
+                or rsi < s.crypto.flat_rsi_lower
+                or rsi > s.crypto.flat_rsi_upper
+                or vol_ratio > s.crypto.flat_vol_threshold
             ):
                 return False
         return True
 
     async def _get_tradeable_pairs(self) -> list[str]:
         """Get the intersection of configured pairs and halal-screened pairs."""
-        max_pairs = self._settings.crypto_max_pairs_per_cycle
+        max_pairs = self._settings.crypto.max_pairs_per_cycle
         halal_symbols = await self._screener.get_halal_pairs()
 
         if not halal_symbols:

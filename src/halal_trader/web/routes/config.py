@@ -18,13 +18,13 @@ def register(app: FastAPI, app_state: dict[str, Any]) -> None:
         settings = get_settings()
         return JSONResponse(
             {
-                "llm_provider": settings.llm_provider.value,
-                "llm_model": settings.llm_model,
-                "crypto_pairs": settings.crypto_pairs,
-                "crypto_trading_interval_seconds": settings.crypto_trading_interval_seconds,
-                "crypto_max_position_pct": settings.crypto_max_position_pct,
-                "crypto_daily_loss_limit": settings.crypto_daily_loss_limit,
-                "crypto_daily_return_target": settings.crypto_daily_return_target,
+                "llm_provider": settings.llm.provider.value,
+                "llm_model": settings.llm.model,
+                "crypto_pairs": settings.crypto.pairs,
+                "crypto_trading_interval_seconds": settings.crypto.trading_interval_seconds,
+                "crypto_max_position_pct": settings.crypto.max_position_pct,
+                "crypto_daily_loss_limit": settings.crypto.daily_loss_limit,
+                "crypto_daily_return_target": settings.crypto.daily_return_target,
                 "db_path": str(settings.db_path),
             }
         )

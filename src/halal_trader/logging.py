@@ -71,10 +71,10 @@ def setup_logging(settings: Settings, *, cli_log_level: str | None = None) -> No
         cli_log_level: Optional CLI override for the console log level.
     """
     # Create log directory
-    settings.log_dir.mkdir(parents=True, exist_ok=True)
+    settings.log.dir.mkdir(parents=True, exist_ok=True)
 
     # Resolve console level (CLI flag takes priority)
-    console_level = (cli_log_level or settings.log_level).upper()
+    console_level = (cli_log_level or settings.log.level).upper()
 
     root = logging.getLogger()
     root.setLevel(logging.DEBUG)  # Capture everything; handlers filter by level
@@ -100,21 +100,21 @@ def setup_logging(settings: Settings, *, cli_log_level: str | None = None) -> No
     )
 
     file_handler = RotatingFileHandler(
-        settings.log_dir / "halal_trader.log",
-        maxBytes=settings.log_max_bytes,
-        backupCount=settings.log_backup_count,
+        settings.log.dir / "halal_trader.log",
+        maxBytes=settings.log.max_bytes,
+        backupCount=settings.log.backup_count,
         encoding="utf-8",
     )
-    file_handler.setLevel(settings.log_file_level.upper())
+    file_handler.setLevel(settings.log.file_level.upper())
     file_handler.setFormatter(json_formatter)
     file_handler.addFilter(ThirdPartyConsoleFilter())
     file_handler.addFilter(ObservabilityFilter())
 
     # ── Error-only file handler ───────────────────────────────
     error_handler = RotatingFileHandler(
-        settings.log_dir / "error.log",
-        maxBytes=settings.log_max_bytes,
-        backupCount=settings.log_backup_count,
+        settings.log.dir / "error.log",
+        maxBytes=settings.log.max_bytes,
+        backupCount=settings.log.backup_count,
         encoding="utf-8",
     )
     error_handler.setLevel(logging.ERROR)

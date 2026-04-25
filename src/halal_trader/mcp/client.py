@@ -50,9 +50,9 @@ class AlpacaMCPClient:
             command="uvx",
             args=["alpaca-mcp-server", "serve"],
             env={
-                "ALPACA_API_KEY": settings.alpaca_api_key,
-                "ALPACA_SECRET_KEY": settings.alpaca_secret_key,
-                "ALPACA_PAPER_TRADE": str(settings.alpaca_paper_trade),
+                "ALPACA_API_KEY": settings.alpaca.api_key,
+                "ALPACA_SECRET_KEY": settings.alpaca.secret_key,
+                "ALPACA_PAPER_TRADE": str(settings.alpaca.paper_trade),
             },
         )
 

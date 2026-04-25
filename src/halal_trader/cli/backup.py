@@ -30,21 +30,19 @@ def backup(retention_days: int | None, weekly_count: int | None) -> None:
         from halal_trader.db.backup import prune_backups, run_backup
 
         settings = get_settings()
-        retention = (
-            retention_days if retention_days is not None else settings.backup_retention_days
-        )
-        weekly = weekly_count if weekly_count is not None else settings.backup_weekly_count
+        retention = retention_days if retention_days is not None else settings.backup.retention_days
+        weekly = weekly_count if weekly_count is not None else settings.backup.weekly_count
 
         result = run_backup(
             db_path=settings.resolve_db_path(),
-            backup_dir=settings.backup_dir,
+            backup_dir=settings.backup.dir,
         )
         console.print(
             f"[green]Backup written[/green]: {result.path} "
             f"([dim]{result.size_bytes / 1024:.1f} KB[/dim])"
         )
         deleted = prune_backups(
-            backup_dir=settings.backup_dir,
+            backup_dir=settings.backup.dir,
             retention_days=retention,
             weekly_count=weekly,
         )

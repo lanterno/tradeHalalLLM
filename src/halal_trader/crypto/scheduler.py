@@ -25,10 +25,10 @@ class CryptoTradingBot(BaseTradingBot):
     def __init__(self) -> None:
         super().__init__()
         self._binance = BinanceClient(
-            api_key=self.settings.binance_api_key,
-            secret_key=self.settings.binance_secret_key,
-            testnet=self.settings.binance_testnet,
-            configured_pairs=self.settings.crypto_pairs,
+            api_key=self.settings.binance.api_key,
+            secret_key=self.settings.binance.secret_key,
+            testnet=self.settings.binance.testnet,
+            configured_pairs=self.settings.crypto.pairs,
         )
         self._ws: BinanceWSManager | None = None
         self._screener: CryptoHalalScreener | None = None
@@ -79,7 +79,7 @@ class CryptoTradingBot(BaseTradingBot):
             executor=comps.executor,
             portfolio=comps.portfolio,
             ws_manager=comps.ws,
-            configured_pairs=self.settings.crypto_pairs,
+            configured_pairs=self.settings.crypto.pairs,
             analytics=comps.analytics,
             sentiment_manager=comps.sentiment_manager,
             timeframe_analyzer=comps.timeframe_analyzer,
@@ -214,9 +214,9 @@ class CryptoTradingBot(BaseTradingBot):
 
             await run_with_alerts(
                 db_path=self.settings.resolve_db_path(),
-                backup_dir=self.settings.backup_dir,
-                retention_days=self.settings.backup_retention_days,
-                weekly_count=self.settings.backup_weekly_count,
+                backup_dir=self.settings.backup.dir,
+                retention_days=self.settings.backup.retention_days,
+                weekly_count=self.settings.backup.weekly_count,
                 alerts=self._alerts,
             )
         except Exception as e:
@@ -290,16 +290,16 @@ class CryptoTradingBot(BaseTradingBot):
         # Initial daily start
         await self._daily_start()
 
-        interval = self.settings.crypto_trading_interval_seconds
+        interval = self.settings.crypto.trading_interval_seconds
 
         logger.info(
             "Crypto bot started — interval: %ds, target: %.1f%%, loss limit: %.1f%%, "
             "pairs: %s, testnet: %s",
             interval,
-            self.settings.crypto_daily_return_target * 100,
-            self.settings.crypto_daily_loss_limit * 100,
-            ", ".join(self.settings.crypto_pairs),
-            self.settings.binance_testnet,
+            self.settings.crypto.daily_return_target * 100,
+            self.settings.crypto.daily_loss_limit * 100,
+            ", ".join(self.settings.crypto.pairs),
+            self.settings.binance.testnet,
         )
 
         try:

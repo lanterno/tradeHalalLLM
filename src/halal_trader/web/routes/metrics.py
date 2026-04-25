@@ -18,7 +18,7 @@ def register(app: FastAPI, app_state: dict[str, Any]) -> None:
         from halal_trader.web.metrics import cycle_metrics
 
         settings = get_settings()
-        log_path = settings.log_dir / "halal_trader.log"
+        log_path = settings.log.dir / "halal_trader.log"
         m = cycle_metrics(log_path, window_seconds=window)
         return JSONResponse(
             {
@@ -37,7 +37,7 @@ def register(app: FastAPI, app_state: dict[str, Any]) -> None:
         from halal_trader.web.metrics import llm_metrics
 
         settings = get_settings()
-        log_path = settings.log_dir / "halal_trader.log"
+        log_path = settings.log.dir / "halal_trader.log"
         m = llm_metrics(log_path, window_seconds=window)
         return JSONResponse(
             {

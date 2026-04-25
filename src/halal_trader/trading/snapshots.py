@@ -17,8 +17,8 @@ import logging
 from typing import Any
 
 from halal_trader.crypto.indicators import compute_all
-from halal_trader.domain.models import Kline
 from halal_trader.db.repository import Repository
+from halal_trader.domain.models import Kline
 from halal_trader.trading.risk import _bars_to_klines
 
 logger = logging.getLogger(__name__)

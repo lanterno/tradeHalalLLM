@@ -1,4 +1,12 @@
-"""Application configuration via Pydantic Settings."""
+"""Application configuration via nested Pydantic Settings sub-models.
+
+The top-level ``Settings`` exposes domain-grouped sub-models (``settings.binance``,
+``settings.crypto``, ``settings.llm.openai``, …). Each sub-model is its own
+``BaseSettings`` class with an ``env_prefix`` chosen to match the existing
+``.env`` variable names so operators don't have to migrate their config.
+"""
+
+from __future__ import annotations
 
 from enum import Enum
 from pathlib import Path
@@ -13,252 +21,227 @@ class LLMProvider(str, Enum):
     ANTHROPIC = "anthropic"
 
 
-class Settings(BaseSettings):
-    """All application settings, loaded from .env or environment variables."""
+_BASE_CONFIG = SettingsConfigDict(
+    env_file=".env",
+    env_file_encoding="utf-8",
+    extra="ignore",
+)
 
-    model_config = SettingsConfigDict(
-        env_file=".env",
-        env_file_encoding="utf-8",
-        extra="ignore",
-    )
 
-    # ── Alpaca API ──────────────────────────────────────────────
-    alpaca_api_key: str = Field(default="", description="Alpaca Trading API key")
-    alpaca_secret_key: str = Field(default="", description="Alpaca Trading API secret")
-    alpaca_paper_trade: bool = Field(
-        default=True, description="Use paper trading (True) or live (False)"
-    )
+# ── Brokers ────────────────────────────────────────────────────
 
-    # ── Binance API ────────────────────────────────────────────
-    binance_api_key: str = Field(default="", description="Binance API key")
-    binance_secret_key: str = Field(default="", description="Binance API secret")
-    binance_testnet: bool = Field(
-        default=True, description="Use Binance testnet (True) or production (False)"
-    )
 
-    # ── Zoya API ───────────────────────────────────────────────
-    zoya_api_key: str = Field(default="", description="Zoya API key for halal screening")
-    zoya_use_sandbox: bool = Field(
-        default=False, description="Use Zoya sandbox environment (free, randomized data)"
-    )
+class AlpacaSettings(BaseSettings):
+    model_config = SettingsConfigDict(**_BASE_CONFIG, env_prefix="ALPACA_")
+    api_key: str = Field(default="")
+    secret_key: str = Field(default="")
+    paper_trade: bool = Field(default=True)
 
-    # ── CoinGecko API ──────────────────────────────────────────
-    coingecko_api_key: str = Field(
-        default="", description="CoinGecko API key (optional, for higher rate limits)"
-    )
 
-    # ── LLM ─────────────────────────────────────────────────────
-    llm_provider: LLMProvider = Field(default=LLMProvider.OLLAMA, description="LLM backend")
-    llm_model: str = Field(
-        default="qwen2.5:32b", description="Model name for the selected provider"
-    )
-    ollama_host: str = Field(default="http://localhost:11434", description="Ollama server URL")
-    openai_api_key: str | None = Field(default=None, description="OpenAI API key")
-    anthropic_api_key: str | None = Field(default=None, description="Anthropic API key")
-    llm_fallback_providers: list[str] = Field(
-        default=[],
-        description=(
-            "Ordered list of fallback LLM providers (e.g. ['openai', 'anthropic']). "
-            "Empty = no fallbacks."
-        ),
-    )
-    ollama_fallback_model: str = Field(
-        default="",
-        description="Model name for Ollama when used as fallback (empty = same as llm_model)",
-    )
-    openai_fallback_model: str = Field(
-        default="gpt-4o-mini", description="Model name for OpenAI when used as fallback"
-    )
-    anthropic_fallback_model: str = Field(
-        default="claude-sonnet-4-20250514",
-        description="Model name for Anthropic when used as fallback",
-    )
+class BinanceSettings(BaseSettings):
+    model_config = SettingsConfigDict(**_BASE_CONFIG, env_prefix="BINANCE_")
+    api_key: str = Field(default="")
+    secret_key: str = Field(default="")
+    testnet: bool = Field(default=True)
 
-    # ── Stock Trading Parameters ────────────────────────────────
-    trading_interval_minutes: int = Field(default=15, description="Minutes between analysis cycles")
-    daily_return_target: float = Field(
-        default=0.01, gt=0, le=0.5, description="Target daily return (1% = 0.01)"
-    )
-    max_position_pct: float = Field(
-        default=0.20, gt=0, le=1.0, description="Max portfolio % per position"
-    )
-    daily_loss_limit: float = Field(
-        default=0.02, ge=0, le=0.5, description="Max daily loss before halting (2% = 0.02)"
-    )
-    max_simultaneous_positions: int = Field(
-        default=5, ge=1, description="Max number of open positions"
-    )
 
-    # ── Crypto Trading Parameters ──────────────────────────────
-    crypto_trading_interval_seconds: int = Field(
-        default=60, ge=5, description="Seconds between crypto analysis cycles"
-    )
-    crypto_pairs: list[str] = Field(
-        default=["BTCUSDT", "ETHUSDT", "SOLUSDT", "ADAUSDT"],
-        description="Crypto trading pairs to monitor",
-    )
-    crypto_max_position_pct: float = Field(
-        default=0.25, gt=0, le=1.0, description="Max portfolio % per crypto position"
-    )
-    crypto_daily_loss_limit: float = Field(
-        default=0.03, ge=0, le=0.5, description="Max daily crypto loss before halting (3% = 0.03)"
-    )
-    crypto_daily_return_target: float = Field(
-        default=0.01, gt=0, le=0.5, description="Target daily crypto return (1% = 0.01)"
-    )
-    crypto_max_simultaneous_positions: int = Field(
-        default=4, ge=1, description="Max number of open crypto positions"
-    )
-    crypto_min_market_cap: float = Field(
-        default=1_000_000_000, ge=0, description="Minimum market cap for halal screening ($1B)"
-    )
-    crypto_max_pairs_per_cycle: int = Field(
-        default=10, ge=1, description="Max trading pairs per cycle"
-    )
+# ── Halal Screening ────────────────────────────────────────────
 
-    # ── Portfolio-level risk ─────────────────────────────────
-    crypto_max_portfolio_heat_pct: float = Field(
-        default=0.05,
-        ge=0.01,
-        le=0.5,
-        description="Max unrealized loss before blocking entries",
-    )
-    crypto_max_drawdown_pct: float = Field(
-        default=0.08,
-        ge=0.01,
-        le=0.5,
-        description="Max peak-to-trough drawdown before halt",
-    )
-    crypto_high_correlation_threshold: float = Field(
-        default=0.7,
-        ge=0.0,
-        le=1.0,
-        description="Correlation threshold for size reduction",
-    )
-    crypto_correlation_reduction_factor: float = Field(
-        default=0.5,
-        ge=0.1,
-        le=1.0,
-        description="Size multiplier when correlated with open",
-    )
-    crypto_atr_baseline: float = Field(
-        default=0.02, gt=0, description="ATR baseline for volatility-adjusted sizing"
-    )
 
-    # ── Flat-market skip thresholds ───────────────────────────
-    crypto_flat_price_threshold: float = Field(
-        default=0.03, ge=0, description="Min 5m price change (%) to consider non-flat"
-    )
-    crypto_flat_rsi_lower: float = Field(
-        default=40.0, ge=0, le=50, description="RSI below this = non-flat (oversold)"
-    )
-    crypto_flat_rsi_upper: float = Field(
-        default=60.0, ge=50, le=100, description="RSI above this = non-flat (overbought)"
-    )
-    crypto_flat_vol_threshold: float = Field(
-        default=1.2, ge=1.0, description="Volume ratio above this = non-flat"
-    )
-    crypto_max_consecutive_flat_skips: int = Field(
-        default=5, ge=1, description="Max consecutive flat-market skips before forcing LLM"
-    )
+class ZoyaSettings(BaseSettings):
+    model_config = SettingsConfigDict(**_BASE_CONFIG, env_prefix="ZOYA_")
+    api_key: str = Field(default="")
+    use_sandbox: bool = Field(default=False)
 
-    # ── Trailing stop / monitor ───────────────────────────────
-    crypto_trailing_stop_activation_pct: float = Field(
-        default=0.005, ge=0, description="% above entry to activate trailing stop"
-    )
-    crypto_trailing_stop_distance_pct: float = Field(
-        default=0.003, gt=0, description="Trailing stop distance from high water mark"
-    )
-    crypto_monitor_interval: float = Field(
-        default=2.0, gt=0, description="Seconds between position monitor checks"
-    )
 
-    # ── Circuit breaker (per-pair) ──────────────────────────────
-    crypto_circuit_breaker_threshold: int = Field(
-        default=5, ge=1, description="Errors before blocking a pair"
-    )
-    crypto_circuit_breaker_window: int = Field(
-        default=600, ge=60, description="Window in seconds for counting errors"
-    )
-    crypto_circuit_breaker_cooldown: int = Field(
-        default=1800, ge=60, description="Cooldown in seconds after circuit break"
-    )
+class CoinGeckoSettings(BaseSettings):
+    model_config = SettingsConfigDict(**_BASE_CONFIG, env_prefix="COINGECKO_")
+    api_key: str = Field(default="")
 
-    # ── LLM circuit breaker ───────────────────────────────────
-    crypto_llm_failure_threshold: int = Field(
-        default=5, ge=1, description="Consecutive LLM failures before cooldown"
-    )
-    crypto_llm_cooldown_seconds: int = Field(
-        default=600, ge=60, description="Seconds to pause LLM calls after threshold failures"
-    )
 
-    # ── Sentiment ──────────────────────────────────────────────
-    reddit_client_id: str = Field(default="", description="Reddit API client ID (for sentiment)")
-    reddit_client_secret: str = Field(
-        default="", description="Reddit API client secret (for sentiment)"
-    )
-    cryptopanic_api_key: str = Field(
-        default="", description="CryptoPanic API key (for news sentiment)"
-    )
-    sentiment_update_interval_seconds: int = Field(
-        default=300, description="Seconds between sentiment updates"
-    )
-    sentiment_use_finbert: bool = Field(
-        default=False, description="Use FinBERT model for sentiment scoring"
-    )
+# ── LLM Providers ──────────────────────────────────────────────
 
-    # ── ML Models ──────────────────────────────────────────────
-    ml_enabled: bool = Field(default=False, description="Enable HuggingFace ML models")
-    ml_device: str = Field(default="cpu", description="Device for ML models (cpu/cuda/mps)")
-    ml_models_dir: Path = Field(
-        default=Path("models"), description="Directory for cached ML model files"
-    )
-    # ── Telegram Notifications ─────────────────────────────────
-    telegram_bot_token: str = Field(default="", description="Telegram bot API token")
-    telegram_chat_id: str = Field(default="", description="Telegram chat ID for alerts")
 
-    # ── Live-mode safeguards ─────────────────────────────────
-    live_mode_confirmation: str = Field(
-        default="",
-        description=(
-            "Required to start in live mode (testnet=false / paper_trade=false). "
-            "Must equal 'I-UNDERSTAND-REAL-MONEY-YYYY-MM-DD' for today's date."
-        ),
-    )
+class OllamaSettings(BaseSettings):
+    model_config = SettingsConfigDict(**_BASE_CONFIG, env_prefix="OLLAMA_")
+    host: str = Field(default="http://localhost:11434")
+    fallback_model: str = Field(default="")
+
+
+class OpenAISettings(BaseSettings):
+    model_config = SettingsConfigDict(**_BASE_CONFIG, env_prefix="OPENAI_")
+    api_key: str | None = Field(default=None)
+    fallback_model: str = Field(default="gpt-4o-mini")
+
+
+class AnthropicSettings(BaseSettings):
+    model_config = SettingsConfigDict(**_BASE_CONFIG, env_prefix="ANTHROPIC_")
+    api_key: str | None = Field(default=None)
+    fallback_model: str = Field(default="claude-sonnet-4-20250514")
+
+
+class LLMSettings(BaseSettings):
+    model_config = SettingsConfigDict(**_BASE_CONFIG, env_prefix="LLM_")
+    provider: LLMProvider = Field(default=LLMProvider.OLLAMA)
+    model: str = Field(default="qwen2.5:32b")
+    fallback_providers: list[str] = Field(default_factory=list)
+    ollama: OllamaSettings = Field(default_factory=OllamaSettings)
+    openai: OpenAISettings = Field(default_factory=OpenAISettings)
+    anthropic: AnthropicSettings = Field(default_factory=AnthropicSettings)
+
+
+# ── Trading parameters ─────────────────────────────────────────
+
+
+class StockSettings(BaseSettings):
+    """Stock-side trading parameters; legacy unprefixed env names preserved."""
+
+    model_config = SettingsConfigDict(**_BASE_CONFIG)
+    trading_interval_minutes: int = Field(default=15)
+    daily_return_target: float = Field(default=0.01, gt=0, le=0.5)
+    max_position_pct: float = Field(default=0.20, gt=0, le=1.0)
+    daily_loss_limit: float = Field(default=0.02, ge=0, le=0.5)
+    max_simultaneous_positions: int = Field(default=5, ge=1)
+
+
+class CryptoSettings(BaseSettings):
+    model_config = SettingsConfigDict(**_BASE_CONFIG, env_prefix="CRYPTO_")
+    trading_interval_seconds: int = Field(default=60, ge=5)
+    pairs: list[str] = Field(default_factory=lambda: ["BTCUSDT", "ETHUSDT", "SOLUSDT", "ADAUSDT"])
+    max_position_pct: float = Field(default=0.25, gt=0, le=1.0)
+    daily_loss_limit: float = Field(default=0.03, ge=0, le=0.5)
+    daily_return_target: float = Field(default=0.01, gt=0, le=0.5)
+    max_simultaneous_positions: int = Field(default=4, ge=1)
+    min_market_cap: float = Field(default=1_000_000_000, ge=0)
+    max_pairs_per_cycle: int = Field(default=10, ge=1)
+
+    # Portfolio risk
+    max_portfolio_heat_pct: float = Field(default=0.05, ge=0.01, le=0.5)
+    max_drawdown_pct: float = Field(default=0.08, ge=0.01, le=0.5)
+    high_correlation_threshold: float = Field(default=0.7, ge=0.0, le=1.0)
+    correlation_reduction_factor: float = Field(default=0.5, ge=0.1, le=1.0)
+    atr_baseline: float = Field(default=0.02, gt=0)
+
+    # Flat-market skip
+    flat_price_threshold: float = Field(default=0.03, ge=0)
+    flat_rsi_lower: float = Field(default=40.0, ge=0, le=50)
+    flat_rsi_upper: float = Field(default=60.0, ge=50, le=100)
+    flat_vol_threshold: float = Field(default=1.2, ge=1.0)
+    max_consecutive_flat_skips: int = Field(default=5, ge=1)
+
+    # Trailing stop / monitor
+    trailing_stop_activation_pct: float = Field(default=0.005, ge=0)
+    trailing_stop_distance_pct: float = Field(default=0.003, gt=0)
+    monitor_interval: float = Field(default=2.0, gt=0)
+
+    # Per-pair circuit breaker
+    circuit_breaker_threshold: int = Field(default=5, ge=1)
+    circuit_breaker_window: int = Field(default=600, ge=60)
+    circuit_breaker_cooldown: int = Field(default=1800, ge=60)
+
+    # LLM circuit breaker
+    llm_failure_threshold: int = Field(default=5, ge=1)
+    llm_cooldown_seconds: int = Field(default=600, ge=60)
+
+
+# ── Sentiment ──────────────────────────────────────────────────
+
+
+class RedditSettings(BaseSettings):
+    model_config = SettingsConfigDict(**_BASE_CONFIG, env_prefix="REDDIT_")
+    client_id: str = Field(default="")
+    client_secret: str = Field(default="")
+
+
+class CryptoPanicSettings(BaseSettings):
+    model_config = SettingsConfigDict(**_BASE_CONFIG, env_prefix="CRYPTOPANIC_")
+    api_key: str = Field(default="")
+
+
+class SentimentSettings(BaseSettings):
+    model_config = SettingsConfigDict(**_BASE_CONFIG, env_prefix="SENTIMENT_")
+    update_interval_seconds: int = Field(default=300)
+    use_finbert: bool = Field(default=False)
+    reddit: RedditSettings = Field(default_factory=RedditSettings)
+    cryptopanic: CryptoPanicSettings = Field(default_factory=CryptoPanicSettings)
+
+
+# ── ML / Notifications / Live-mode / Backup / Logging ─────────
+
+
+class MLSettings(BaseSettings):
+    model_config = SettingsConfigDict(**_BASE_CONFIG, env_prefix="ML_")
+    enabled: bool = Field(default=False)
+    device: str = Field(default="cpu")
+    models_dir: Path = Field(default=Path("models"))
+
+
+class TelegramSettings(BaseSettings):
+    model_config = SettingsConfigDict(**_BASE_CONFIG, env_prefix="TELEGRAM_")
+    bot_token: str = Field(default="")
+    chat_id: str = Field(default="")
+
+
+class LiveModeSettings(BaseSettings):
+    """Live-mode safeguards. ``confirmation`` and ``max_daily_loss_pct`` use
+    the ``LIVE_MODE_`` prefix; the two ``MAX_*_USD`` ceilings predate that
+    prefix and are read via explicit aliases for backward compatibility."""
+
+    model_config = SettingsConfigDict(**_BASE_CONFIG, env_prefix="LIVE_MODE_")
+    confirmation: str = Field(default="")
+    max_daily_loss_pct: float = Field(default=0.02, ge=0, le=0.5)
     max_account_balance_usd: float = Field(
-        default=500.0,
-        gt=0,
-        description="Hard ceiling on account balance in live mode; halts above this",
+        default=500.0, gt=0, validation_alias="MAX_ACCOUNT_BALANCE_USD"
     )
     max_single_order_usd: float = Field(
-        default=100.0,
-        gt=0,
-        description="Hard ceiling on a single order's notional in live mode",
-    )
-    live_mode_max_daily_loss_pct: float = Field(
-        default=0.02,
-        ge=0,
-        le=0.5,
-        description=(
-            "Hard floor on daily_loss_limit in live mode. "
-            "Cannot be loosened beyond this regardless of crypto/stock config."
-        ),
+        default=100.0, gt=0, validation_alias="MAX_SINGLE_ORDER_USD"
     )
 
-    # ── Database ────────────────────────────────────────────────
-    db_path: Path = Field(default=Path("halal_trader.db"), description="SQLite database path")
-    backup_dir: Path = Field(
-        default=Path("backups"),
-        description="Directory for daily SQLite gzipped backups",
-    )
-    backup_retention_days: int = Field(
-        default=30, ge=1, description="Keep this many daily backups before pruning"
-    )
-    backup_weekly_count: int = Field(
-        default=12,
-        ge=0,
-        description="On top of daily retention, keep this many Sunday backups",
-    )
+
+class BackupSettings(BaseSettings):
+    model_config = SettingsConfigDict(**_BASE_CONFIG, env_prefix="BACKUP_")
+    dir: Path = Field(default=Path("backups"))
+    retention_days: int = Field(default=30, ge=1)
+    weekly_count: int = Field(default=12, ge=0)
+
+
+class LogSettings(BaseSettings):
+    model_config = SettingsConfigDict(**_BASE_CONFIG, env_prefix="LOG_")
+    level: str = Field(default="INFO")
+    dir: Path = Field(default=Path("logs"))
+    file_level: str = Field(default="DEBUG")
+    max_bytes: int = Field(default=10_485_760)
+    backup_count: int = Field(default=5)
+
+
+# ── Top-level Settings ─────────────────────────────────────────
+
+
+class Settings(BaseSettings):
+    """All application settings, grouped by domain.
+
+    Each sub-model loads its own slice of ``.env`` independently, so
+    individual sub-models can be constructed in tests without bringing
+    the whole tree along.
+    """
+
+    model_config = SettingsConfigDict(**_BASE_CONFIG)
+
+    alpaca: AlpacaSettings = Field(default_factory=AlpacaSettings)
+    binance: BinanceSettings = Field(default_factory=BinanceSettings)
+    zoya: ZoyaSettings = Field(default_factory=ZoyaSettings)
+    coingecko: CoinGeckoSettings = Field(default_factory=CoinGeckoSettings)
+    llm: LLMSettings = Field(default_factory=LLMSettings)
+    stocks: StockSettings = Field(default_factory=StockSettings)
+    crypto: CryptoSettings = Field(default_factory=CryptoSettings)
+    sentiment: SentimentSettings = Field(default_factory=SentimentSettings)
+    ml: MLSettings = Field(default_factory=MLSettings)
+    telegram: TelegramSettings = Field(default_factory=TelegramSettings)
+    live_mode: LiveModeSettings = Field(default_factory=LiveModeSettings)
+    backup: BackupSettings = Field(default_factory=BackupSettings)
+    log: LogSettings = Field(default_factory=LogSettings)
+
+    db_path: Path = Field(default=Path("halal_trader.db"))
 
     def resolve_db_path(self) -> Path:
         """Return an absolute db_path, resolving relative paths from the project root."""
@@ -267,15 +250,7 @@ class Settings(BaseSettings):
         project_root = Path(__file__).resolve().parent.parent.parent
         return project_root / self.db_path
 
-    # ── Logging ─────────────────────────────────────────────────
-    log_level: str = Field(default="INFO", description="Console logging level")
-    log_dir: Path = Field(default=Path("logs"), description="Directory for log files")
-    log_file_level: str = Field(default="DEBUG", description="File logging level")
-    log_max_bytes: int = Field(default=10_485_760, description="Max log file size in bytes (10 MB)")
-    log_backup_count: int = Field(default=5, description="Number of rotated log files to keep")
 
-
-# Singleton instance
 _settings: Settings | None = None
 
 

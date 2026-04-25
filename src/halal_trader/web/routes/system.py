@@ -38,7 +38,7 @@ def register(app: FastAPI, app_state: dict[str, Any]) -> None:
             {
                 "bot_running": app_state.get("bot_running", False),
                 "last_cycle": app_state.get("last_cycle"),
-                "cycle_interval_seconds": get_settings().crypto_trading_interval_seconds,
+                "cycle_interval_seconds": get_settings().crypto.trading_interval_seconds,
                 "ws_health": ws_health,
                 "uptime_seconds": uptime,
             }
@@ -118,7 +118,7 @@ def register(app: FastAPI, app_state: dict[str, Any]) -> None:
         from halal_trader.db.backup import list_backups
 
         settings = get_settings()
-        rows = list_backups(settings.backup_dir)
+        rows = list_backups(settings.backup.dir)
         return JSONResponse(
             [
                 {

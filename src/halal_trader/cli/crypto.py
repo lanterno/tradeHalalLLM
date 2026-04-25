@@ -33,7 +33,7 @@ def crypto_start(once: bool) -> None:
     from halal_trader.crypto.scheduler import CryptoTradingBot
 
     settings = get_settings()
-    mode = "TESTNET" if settings.binance_testnet else "PRODUCTION"
+    mode = "TESTNET" if settings.binance.testnet else "PRODUCTION"
 
     console.print(
         Panel(
@@ -65,16 +65,16 @@ def crypto_status() -> None:
 
         settings = get_settings()
         client = BinanceClient(
-            api_key=settings.binance_api_key,
-            secret_key=settings.binance_secret_key,
-            testnet=settings.binance_testnet,
-            configured_pairs=settings.crypto_pairs,
+            api_key=settings.binance.api_key,
+            secret_key=settings.binance.secret_key,
+            testnet=settings.binance.testnet,
+            configured_pairs=settings.crypto.pairs,
         )
         try:
             await client.connect()
             print_crypto_account(await client.get_account())
             print_crypto_balances(await client.get_balances())
-            for pair in settings.crypto_pairs:
+            for pair in settings.crypto.pairs:
                 try:
                     price = await client.get_ticker_price(pair)
                     console.print(f"  {pair}: [bold]${price:,.2f}[/bold]")
@@ -175,9 +175,7 @@ def crypto_stats(days: int) -> None:
         console.print(summary)
 
         if stats.by_exit_reason:
-            reasons_table = Table(
-                title="Exit Reasons", show_header=True, header_style="bold cyan"
-            )
+            reasons_table = Table(title="Exit Reasons", show_header=True, header_style="bold cyan")
             reasons_table.add_column("Reason")
             reasons_table.add_column("Count", justify="right")
             for reason, count in sorted(
@@ -188,9 +186,7 @@ def crypto_stats(days: int) -> None:
 
         round_trips = await repo.get_completed_round_trips(limit=10, lookback_days=days)
         if round_trips:
-            rt_table = Table(
-                title="Recent Round-Trips", show_header=True, header_style="bold cyan"
-            )
+            rt_table = Table(title="Recent Round-Trips", show_header=True, header_style="bold cyan")
             rt_table.add_column("Pair")
             rt_table.add_column("Entry", justify="right")
             rt_table.add_column("Exit", justify="right")
@@ -228,9 +224,7 @@ def crypto_stats(days: int) -> None:
 @click.option("--sl", default=0.01, help="Stop-loss percentage")
 @click.option("--tp", default=0.015, help="Take-profit percentage")
 @click.option("--llm", is_flag=True, help="Use LLM strategy instead of rule-based")
-@click.option(
-    "--cycle-interval", default=5, help="LLM: run every N candles (reduces API calls)"
-)
+@click.option("--cycle-interval", default=5, help="LLM: run every N candles (reduces API calls)")
 def crypto_backtest(
     pair: str,
     candles: int,
@@ -251,9 +245,9 @@ def crypto_backtest(
 
         settings = get_settings()
         client = BinanceClient(
-            api_key=settings.binance_api_key,
-            secret_key=settings.binance_secret_key,
-            testnet=settings.binance_testnet,
+            api_key=settings.binance.api_key,
+            secret_key=settings.binance.secret_key,
+            testnet=settings.binance.testnet,
             configured_pairs=[pair],
         )
         try:
@@ -261,9 +255,7 @@ def crypto_backtest(
             console.print(f"[yellow]Fetching {candles} candles for {pair}...[/yellow]")
             klines = await fetch_historical_klines(client, pair, limit=candles)
             if len(klines) < 100:
-                console.print(
-                    f"[red]Insufficient data: {len(klines)} candles (need 100+)[/red]"
-                )
+                console.print(f"[red]Insufficient data: {len(klines)} candles (need 100+)[/red]")
                 return
 
             if llm:
@@ -280,7 +272,7 @@ def crypto_backtest(
                     initial_balance=balance,
                     sl_pct=sl,
                     tp_pct=tp,
-                    cache_dir=str(settings.ml_models_dir),
+                    cache_dir=str(settings.ml.models_dir),
                 )
                 result = await engine.run(pair, klines, cycle_interval=cycle_interval)
             else:
@@ -319,16 +311,14 @@ def crypto_screen() -> None:
         repo = Repository(engine)
         screener = CryptoHalalScreener(
             repo,
-            coingecko_api_key=settings.coingecko_api_key,
-            min_market_cap=settings.crypto_min_market_cap,
+            coingecko_api_key=settings.coingecko.api_key,
+            min_market_cap=settings.crypto.min_market_cap,
         )
         console.print("[yellow]Refreshing crypto halal screening...[/yellow]")
         await screener.refresh_screening()
         halal_symbols = await screener.get_halal_pairs()
         if halal_symbols:
-            table = Table(
-                title="Halal Crypto Tokens", show_header=True, header_style="bold cyan"
-            )
+            table = Table(title="Halal Crypto Tokens", show_header=True, header_style="bold cyan")
             table.add_column("#", style="dim", justify="right")
             table.add_column("Symbol")
             for i, sym in enumerate(sorted(halal_symbols), 1):

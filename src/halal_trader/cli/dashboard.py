@@ -20,8 +20,7 @@ def dashboard(port: int, host: str) -> None:
 
         console.print(
             Panel(
-                f"[bold green]Halal Trader Dashboard[/bold green]\n"
-                f"[dim]http://{host}:{port}[/dim]",
+                f"[bold green]Halal Trader Dashboard[/bold green]\n[dim]http://{host}:{port}[/dim]",
                 title="Starting",
                 border_style="green",
             )

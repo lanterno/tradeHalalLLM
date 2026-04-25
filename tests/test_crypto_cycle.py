@@ -27,18 +27,20 @@ def _make_klines(close=50000.0, n=30):
 
 
 def _mock_settings(**overrides):
+    """Build a MagicMock settings tree mirroring the nested config layout."""
     defaults = {
-        "crypto_flat_price_threshold": 0.03,
-        "crypto_flat_rsi_lower": 40.0,
-        "crypto_flat_rsi_upper": 60.0,
-        "crypto_flat_vol_threshold": 1.2,
-        "crypto_max_consecutive_flat_skips": 5,
-        "crypto_max_pairs_per_cycle": 10,
+        "flat_price_threshold": 0.03,
+        "flat_rsi_lower": 40.0,
+        "flat_rsi_upper": 60.0,
+        "flat_vol_threshold": 1.2,
+        "max_consecutive_flat_skips": 5,
+        "max_pairs_per_cycle": 10,
     }
     defaults.update(overrides)
     settings = MagicMock()
+    settings.crypto = MagicMock()
     for k, v in defaults.items():
-        setattr(settings, k, v)
+        setattr(settings.crypto, k, v)
     return settings
 
 

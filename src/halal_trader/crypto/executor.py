@@ -12,11 +12,11 @@ from halal_trader.core import events
 from halal_trader.core.executor import BaseExecutor
 from halal_trader.core.fills import confirm_binance
 from halal_trader.crypto.exchange import DUST_NOTIONAL_USD, BinanceClient
+from halal_trader.db.repository import Repository
 from halal_trader.domain.models import (
     CryptoAccount,
     CryptoTradingPlan,
 )
-from halal_trader.db.repository import Repository
 
 logger = logging.getLogger(__name__)
 

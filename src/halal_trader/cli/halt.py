@@ -40,16 +40,14 @@ def halt(reason: str, close_all: str | None) -> None:
                 from halal_trader.crypto.exchange import BinanceClient
 
                 client = BinanceClient(
-                    api_key=settings.binance_api_key,
-                    secret_key=settings.binance_secret_key,
-                    testnet=settings.binance_testnet,
-                    configured_pairs=settings.crypto_pairs,
+                    api_key=settings.binance.api_key,
+                    secret_key=settings.binance.secret_key,
+                    testnet=settings.binance.testnet,
+                    configured_pairs=settings.crypto.pairs,
                 )
                 try:
                     await client.connect()
-                    print_liquidation(
-                        await liquidate_crypto(client, settings.crypto_pairs)
-                    )
+                    print_liquidation(await liquidate_crypto(client, settings.crypto.pairs))
                 finally:
                     await client.disconnect()
 
@@ -112,15 +110,11 @@ def halt_status() -> None:
         try:
             s = await get_status(engine)
             if s.enabled:
-                console.print(
-                    f"[red]HALTED[/red] (by {s.set_by} at {s.set_at}): {s.reason}"
-                )
+                console.print(f"[red]HALTED[/red] (by {s.set_by} at {s.set_at}): {s.reason}")
             else:
                 console.print("[green]Running[/green] — kill-switch is off.")
                 if s.set_by:
-                    console.print(
-                        f"[dim]Last set by {s.set_by} at {s.set_at}: {s.reason}[/dim]"
-                    )
+                    console.print(f"[dim]Last set by {s.set_by} at {s.set_at}: {s.reason}[/dim]")
         finally:
             await engine.dispose()
 

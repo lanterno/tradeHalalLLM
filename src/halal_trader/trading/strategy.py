@@ -6,8 +6,8 @@ import logging
 from typing import Any
 
 from halal_trader.core.strategy import BaseStrategy
-from halal_trader.domain.models import Account, Position, TradingPlan
 from halal_trader.db.repository import Repository
+from halal_trader.domain.models import Account, Position, TradingPlan
 from halal_trader.domain.ports import LLMBackend
 
 logger = logging.getLogger(__name__)

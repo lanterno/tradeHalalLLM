@@ -13,7 +13,7 @@ indicator + position context. This adapter:
      LLM prompt.
 
 The atr_baseline default (2%) is reasonable for daily stock bars; the
-operator can override via ``Settings.crypto_atr_baseline`` if they want
+operator can override via ``Settings.crypto.atr_baseline`` if they want
 a different floor.  A future split would add stock-specific settings,
 but they aren't load-bearing today.
 """
@@ -114,12 +114,12 @@ def evaluate_stock_risk(
     unrealized_pnl: dict[str, float] = {p.symbol: float(p.unrealized_pl) for p in positions}
 
     engine = PortfolioRiskEngine(
-        base_max_position_pct=settings.max_position_pct,
-        max_portfolio_heat_pct=settings.crypto_max_portfolio_heat_pct,
-        max_drawdown_pct=settings.crypto_max_drawdown_pct,
-        high_correlation_threshold=settings.crypto_high_correlation_threshold,
-        correlation_reduction_factor=settings.crypto_correlation_reduction_factor,
-        atr_baseline=settings.crypto_atr_baseline,
+        base_max_position_pct=settings.stocks.max_position_pct,
+        max_portfolio_heat_pct=settings.crypto.max_portfolio_heat_pct,
+        max_drawdown_pct=settings.crypto.max_drawdown_pct,
+        high_correlation_threshold=settings.crypto.high_correlation_threshold,
+        correlation_reduction_factor=settings.crypto.correlation_reduction_factor,
+        atr_baseline=settings.crypto.atr_baseline,
     )
     state = engine.evaluate(
         klines_by_symbol=klines_by_symbol,

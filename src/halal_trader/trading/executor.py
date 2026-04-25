@@ -7,8 +7,8 @@ from typing import Any
 from halal_trader.core import events
 from halal_trader.core.executor import BaseExecutor
 from halal_trader.core.fills import confirm_alpaca
-from halal_trader.domain.models import TradingPlan
 from halal_trader.db.repository import Repository
+from halal_trader.domain.models import TradingPlan
 from halal_trader.domain.ports import Broker
 
 logger = logging.getLogger(__name__)
