@@ -14,9 +14,7 @@ from halal_trader.core.llm.openai import OpenAILLM
 logger = logging.getLogger(__name__)
 
 
-def _create_single_llm(
-    provider: LLMProvider, model: str, settings: Settings
-) -> BaseLLM | None:
+def _create_single_llm(provider: LLMProvider, model: str, settings: Settings) -> BaseLLM | None:
     """Create a single LLM instance for a given provider, or None if unconfigured."""
     match provider:
         case LLMProvider.OLLAMA:
@@ -42,16 +40,12 @@ def create_llm(settings: Settings | None = None) -> BaseLLM:
 
     primary = _create_single_llm(settings.llm_provider, settings.llm_model, settings)
     if primary is None:
-        raise ValueError(
-            f"Primary LLM provider {settings.llm_provider.value} is not configured"
-        )
+        raise ValueError(f"Primary LLM provider {settings.llm_provider.value} is not configured")
 
     fallback_models = {
         LLMProvider.OLLAMA: settings.ollama_fallback_model or settings.llm_model,
         LLMProvider.OPENAI: settings.openai_fallback_model or "gpt-4o-mini",
-        LLMProvider.ANTHROPIC: (
-            settings.anthropic_fallback_model or "claude-sonnet-4-20250514"
-        ),
+        LLMProvider.ANTHROPIC: (settings.anthropic_fallback_model or "claude-sonnet-4-20250514"),
     }
 
     fallbacks: list[BaseLLM] = []
