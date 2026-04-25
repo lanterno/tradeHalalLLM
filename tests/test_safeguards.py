@@ -90,10 +90,7 @@ async def test_checker_inactive_in_paper_mode(engine):
     s = Settings(binance_testnet=True, alpaca_paper_trade=True)
     chk = LiveModeChecker(settings=s, market="crypto")
     assert chk.active is False
-    assert (
-        await chk.assert_safe(account_balance=10_000, engine=engine, alerts=None)
-        is True
-    )
+    assert await chk.assert_safe(account_balance=10_000, engine=engine, alerts=None) is True
 
 
 @pytest.mark.asyncio

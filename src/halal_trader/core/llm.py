@@ -137,6 +137,17 @@ class OllamaLLM(BaseLLM):
         content: str = response["message"]["content"]
         if not content or not content.strip():
             raise ValueError("Ollama returned empty response")
+        logger.info(
+            "ollama call complete in %.1fs",
+            elapsed,
+            extra={
+                "event": events.LLM_CALL_COMPLETE,
+                "provider": "ollama",
+                "model": self.model,
+                "elapsed_ms": int(elapsed * 1000),
+                "tokens": None,
+            },
+        )
         return content
 
 
@@ -175,6 +186,7 @@ class OpenAILLM(BaseLLM):
             timeout=self._TIMEOUT_SECONDS,
         )
         elapsed = time.monotonic() - t0
+        tokens = response.usage.total_tokens if response.usage else None
         if response.usage:
             logger.debug(
                 "OpenAI response in %.1fs — %d tokens (prompt: %d, completion: %d)",
@@ -187,6 +199,18 @@ class OpenAILLM(BaseLLM):
         else:
             logger.debug("OpenAI response in %.1fs", elapsed)
 
+        logger.info(
+            "openai call complete in %.1fs (tokens=%s)",
+            elapsed,
+            tokens,
+            extra={
+                "event": events.LLM_CALL_COMPLETE,
+                "provider": "openai",
+                "model": self.model,
+                "elapsed_ms": int(elapsed * 1000),
+                "tokens": tokens,
+            },
+        )
         return response.choices[0].message.content or ""
 
 
@@ -221,18 +245,31 @@ class AnthropicLLM(BaseLLM):
             timeout=self._TIMEOUT_SECONDS,
         )
         elapsed = time.monotonic() - t0
+        tokens: int | None = None
         if hasattr(response, "usage") and response.usage:
-            total = response.usage.input_tokens + response.usage.output_tokens
+            tokens = response.usage.input_tokens + response.usage.output_tokens
             logger.debug(
                 "Anthropic response in %.1fs — input: %d, output: %d tokens",
                 elapsed,
                 response.usage.input_tokens,
                 response.usage.output_tokens,
             )
-            self._track_usage(total)
+            self._track_usage(tokens)
         else:
             logger.debug("Anthropic response in %.1fs", elapsed)
 
+        logger.info(
+            "anthropic call complete in %.1fs (tokens=%s)",
+            elapsed,
+            tokens,
+            extra={
+                "event": events.LLM_CALL_COMPLETE,
+                "provider": "anthropic",
+                "model": self.model,
+                "elapsed_ms": int(elapsed * 1000),
+                "tokens": tokens,
+            },
+        )
         text: str = response.content[0].text
         return text
 

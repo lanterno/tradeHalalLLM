@@ -55,9 +55,7 @@ def is_live_mode(settings: Settings, *, market: str) -> bool:
     raise ValueError(f"unknown market: {market}")
 
 
-def check_live_mode_token(
-    settings: Settings, *, market: str, now: datetime | None = None
-) -> None:
+def check_live_mode_token(settings: Settings, *, market: str, now: datetime | None = None) -> None:
     """Raise ``LiveModeError`` unless the operator confirmed live mode today."""
     if not is_live_mode(settings, market=market):
         return
