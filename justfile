@@ -65,21 +65,18 @@ dashboard:
 
 # Show last 50 JSON log entries (app only)
 logs:
-    @tail -50 logs/halal_trader.log 2>/dev/null | \
-        python3 -c "import sys,json; [print(f'{d[\"timestamp\"][-12:]} {d[\"level\"]:7s} {d[\"message\"][:120]}') for line in sys.stdin if (d:=json.loads(line)) and d['name'].startswith('halal_trader')]" \
-        2>/dev/null || echo "No log file found"
+    @tail -50 logs/halal_trader.log 2>/dev/null | python3 scripts/format_logs.py 2>/dev/null \
+        || echo "No log file found"
 
 # Follow the log file live (app messages only)
 logs-tail:
-    @tail -f logs/halal_trader.log 2>/dev/null | \
-        python3 -u -c "import sys,json; [print(f'{d[\"timestamp\"][-12:]} {d[\"level\"]:7s} {d[\"message\"][:120]}', flush=True) for line in sys.stdin if (d:=json.loads(line)) and d['name'].startswith('halal_trader')]" \
-        2>/dev/null || echo "No log file found"
+    @tail -f logs/halal_trader.log 2>/dev/null | python3 -u scripts/format_logs.py 2>/dev/null \
+        || echo "No log file found"
 
 # Show recent errors
 logs-errors:
-    @tail -100 logs/error.log 2>/dev/null | \
-        python3 -c "import sys,json; [print(f'{d[\"timestamp\"][-12:]} {d[\"message\"][:140]}') for line in sys.stdin if (d:=json.loads(line))]" \
-        2>/dev/null || echo "No error log found"
+    @tail -100 logs/error.log 2>/dev/null | python3 scripts/format_logs.py --errors 2>/dev/null \
+        || echo "No error log found"
 
 # ── Development ───────────────────────────────────────────
 

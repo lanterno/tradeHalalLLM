@@ -47,6 +47,9 @@ class CryptoExecutor(BaseExecutor):
         self._tracked_bases = {
             p.upper().removesuffix("USDT").removesuffix("BUSD") for p in (configured_pairs or [])
         }
+        # NOTE: `_pair_errors` and `_exiting_pairs` are single-asyncio-loop only —
+        # not thread-safe. The monitor and executor share the SAME `_exiting_pairs`
+        # set; mutations there are guarded by `PositionMonitor._exit_lock`.
         self._pair_errors: dict[str, list[float]] = {}
         self._cb_threshold = circuit_breaker_threshold
         self._cb_window = circuit_breaker_window

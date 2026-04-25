@@ -8,6 +8,7 @@ from rich.console import Console
 from rich.logging import RichHandler
 
 from halal_trader.config import Settings
+from halal_trader.core.observability import ObservabilityFilter
 
 console = Console()
 
@@ -107,6 +108,7 @@ def setup_logging(settings: Settings, *, cli_log_level: str | None = None) -> No
     file_handler.setLevel(settings.log_file_level.upper())
     file_handler.setFormatter(json_formatter)
     file_handler.addFilter(ThirdPartyConsoleFilter())
+    file_handler.addFilter(ObservabilityFilter())
 
     # ── Error-only file handler ───────────────────────────────
     error_handler = RotatingFileHandler(
@@ -117,6 +119,7 @@ def setup_logging(settings: Settings, *, cli_log_level: str | None = None) -> No
     )
     error_handler.setLevel(logging.ERROR)
     error_handler.setFormatter(json_formatter)
+    error_handler.addFilter(ObservabilityFilter())
 
     root.addHandler(console_handler)
     root.addHandler(file_handler)

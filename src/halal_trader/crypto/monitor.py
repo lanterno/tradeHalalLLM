@@ -8,6 +8,8 @@ from typing import TYPE_CHECKING
 
 from binance import BinanceAPIException
 
+from halal_trader.core import events
+from halal_trader.core.observability import monitor_context
 from halal_trader.crypto.exchange import BinanceClient, extract_fill_price
 from halal_trader.crypto.websocket import BinanceWSManager
 from halal_trader.db.models import CryptoTrade
@@ -54,9 +56,14 @@ class PositionMonitor:
         self._retrainer = retrainer
         self._running = False
         self._task: asyncio.Task[None] | None = None
+        # NOTE: the dicts and the shared `exiting_pairs` set below are
+        # single-asyncio-loop only — not thread-safe. Mutations to
+        # `_exiting_pairs` are guarded by `_exit_lock` so the executor and
+        # monitor can't race on the same pair.
         self._high_water: dict[int, float] = {}
         self._exit_failures: dict[int, int] = {}
         self._exiting_pairs: set[str] = exiting_pairs if exiting_pairs is not None else set()
+        self._exit_lock = asyncio.Lock()
 
     async def start(self) -> None:
         """Start the monitor as a background task."""
@@ -114,6 +121,13 @@ class PositionMonitor:
                 trade_id,
                 price,
                 trade.stop_loss,
+                extra={
+                    "event": events.TRADE_EXIT_SL,
+                    "trade_id": trade_id,
+                    "pair": trade.pair,
+                    "price": price,
+                    "stop_loss": trade.stop_loss,
+                },
             )
             await self._exit_position(trade, price, "stop_loss")
 
@@ -124,6 +138,13 @@ class PositionMonitor:
                 trade_id,
                 price,
                 trade.target_price,
+                extra={
+                    "event": events.TRADE_EXIT_TP,
+                    "trade_id": trade_id,
+                    "pair": trade.pair,
+                    "price": price,
+                    "target_price": trade.target_price,
+                },
             )
             await self._exit_position(trade, price, "take_profit")
 
@@ -133,14 +154,24 @@ class PositionMonitor:
         if trade_id is None:
             return
 
-        if trade.pair in self._exiting_pairs:
-            return
-        self._exiting_pairs.add(trade.pair)
+        async with self._exit_lock:
+            if trade.pair in self._exiting_pairs:
+                return
+            self._exiting_pairs.add(trade.pair)
 
-        try:
-            await self._exit_position_inner(trade, current_price, reason)
-        finally:
-            self._exiting_pairs.discard(trade.pair)
+        with monitor_context() as mid:
+            logger.debug(
+                "Monitor exit started for %s #%d (%s)",
+                trade.pair,
+                trade_id,
+                mid,
+                extra={"trade_id": trade_id, "pair": trade.pair, "reason": reason},
+            )
+            try:
+                await self._exit_position_inner(trade, current_price, reason)
+            finally:
+                async with self._exit_lock:
+                    self._exiting_pairs.discard(trade.pair)
 
     async def _exit_position_inner(
         self, trade: CryptoTrade, current_price: float, reason: str

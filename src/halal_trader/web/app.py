@@ -36,10 +36,12 @@ app_state: dict[str, Any] = {}
 
 def create_app() -> Any:
     """Create and configure the FastAPI application."""
-    from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
+    from fastapi import FastAPI, Query, Request, WebSocket, WebSocketDisconnect
     from fastapi.middleware.cors import CORSMiddleware
-    from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+    from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
     from fastapi.staticfiles import StaticFiles
+
+    from halal_trader.core.observability import new_id, request_id_var
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
@@ -61,6 +63,17 @@ def create_app() -> Any:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    @app.middleware("http")
+    async def correlate_request(request: Request, call_next):  # type: ignore[no-untyped-def]
+        rid = request.headers.get("X-Request-ID") or new_id("req")
+        token = request_id_var.set(rid)
+        try:
+            response: Response = await call_next(request)
+        finally:
+            request_id_var.reset(token)
+        response.headers["X-Request-ID"] = rid
+        return response
 
     # ── REST API ───────────────────────────────────────────────
 
