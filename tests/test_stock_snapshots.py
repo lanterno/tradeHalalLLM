@@ -48,9 +48,7 @@ async def test_record_stock_snapshot_skips_when_too_few_bars():
 async def test_record_stock_snapshot_writes_with_enough_bars():
     repo = _FakeRepo()
     bars = _series(180.0, 60, 0.3)
-    result = await record_stock_snapshot(
-        repo=repo, trade_id=42, symbol="AAPL", bars=bars
-    )
+    result = await record_stock_snapshot(repo=repo, trade_id=42, symbol="AAPL", bars=bars)
     assert result == 99
     assert len(repo.calls) == 1
     call = repo.calls[0]
@@ -64,9 +62,7 @@ async def test_record_stock_snapshot_writes_with_enough_bars():
 async def test_record_stock_snapshot_handles_alpaca_dict_form():
     repo = _FakeRepo()
     bars = {"bars": _series(50.0, 60, 0.5)}
-    result = await record_stock_snapshot(
-        repo=repo, trade_id=7, symbol="MSFT", bars=bars
-    )
+    result = await record_stock_snapshot(repo=repo, trade_id=7, symbol="MSFT", bars=bars)
     assert result == 99
 
 
@@ -75,18 +71,14 @@ async def test_record_stock_snapshot_swallows_repo_failure():
     repo = _FakeRepo(fail=True)
     bars = _series(100.0, 60, 0.5)
     # Must not raise — snapshotting is best-effort.
-    result = await record_stock_snapshot(
-        repo=repo, trade_id=1, symbol="AAPL", bars=bars
-    )
+    result = await record_stock_snapshot(repo=repo, trade_id=1, symbol="AAPL", bars=bars)
     assert result is None
 
 
 @pytest.mark.asyncio
 async def test_record_stock_snapshot_handles_empty_bars():
     repo = _FakeRepo()
-    result = await record_stock_snapshot(
-        repo=repo, trade_id=1, symbol="AAPL", bars={}
-    )
+    result = await record_stock_snapshot(repo=repo, trade_id=1, symbol="AAPL", bars={})
     assert result is None
 
 
@@ -97,7 +89,5 @@ async def test_record_stock_snapshot_skips_on_indicator_error():
     # All-zero closes are filtered by _bars_to_klines (zero-close skip),
     # leaving < 30 klines → indicator pass returns no row.
     bars = [{"o": 1, "h": 1, "l": 1, "c": 0} for _ in range(50)]
-    result = await record_stock_snapshot(
-        repo=repo, trade_id=1, symbol="AAPL", bars=bars
-    )
+    result = await record_stock_snapshot(repo=repo, trade_id=1, symbol="AAPL", bars=bars)
     assert result is None

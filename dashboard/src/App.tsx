@@ -7,6 +7,8 @@ import Analytics from "./pages/Analytics";
 import Sentiment from "./pages/Sentiment";
 import Decisions from "./pages/Decisions";
 import System from "./pages/System";
+import Observability from "./pages/Observability";
+import RiskAndSystem from "./pages/RiskAndSystem";
 
 export default function App() {
   return (
@@ -18,6 +20,8 @@ export default function App() {
         <Route path="analytics" element={<Analytics />} />
         <Route path="sentiment" element={<Sentiment />} />
         <Route path="decisions" element={<Decisions />} />
+        <Route path="risk" element={<RiskAndSystem />} />
+        <Route path="observability" element={<Observability />} />
         <Route path="system" element={<System />} />
       </Route>
     </Routes>

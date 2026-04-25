@@ -115,10 +115,12 @@ async def test_liquidate_crypto_round_quantity_to_zero_skipped():
 async def test_liquidate_stocks_calls_broker_close_all():
     broker = MagicMock()
     broker.close_all_positions = AsyncMock(return_value={"ok": True})
-    broker.get_all_positions = AsyncMock(return_value=[
-        SimpleNamespace(symbol="AAPL", qty=10),
-        SimpleNamespace(symbol="MSFT", qty=5),
-    ])
+    broker.get_all_positions = AsyncMock(
+        return_value=[
+            SimpleNamespace(symbol="AAPL", qty=10),
+            SimpleNamespace(symbol="MSFT", qty=5),
+        ]
+    )
     results = await liquidate_stocks(broker)
     broker.close_all_positions.assert_awaited_once()
     assert {r.symbol for r in results} == {"AAPL", "MSFT"}

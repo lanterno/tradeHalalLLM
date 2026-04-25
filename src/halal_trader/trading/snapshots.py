@@ -76,7 +76,7 @@ async def record_stock_snapshot(
             continue
         try:
             payload[key] = float(val)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             continue
 
     try:

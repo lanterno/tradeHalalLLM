@@ -65,9 +65,7 @@ class _StubLLM:
 @pytest.mark.asyncio
 async def test_engine_runs_and_invokes_llm():
     klines = _series(100.0, 200)
-    llm = _StubLLM(
-        response={"decisions": [{"action": "hold", "confidence": 0.5}]}
-    )
+    llm = _StubLLM(response={"decisions": [{"action": "hold", "confidence": 0.5}]})
     engine = LLMBacktestEngine(llm, initial_balance=10_000.0)
     result = await engine.run("BTCUSDT", klines, window_size=100, cycle_interval=10)
     assert result is not None
@@ -93,15 +91,11 @@ async def test_engine_caches_identical_prompts(tmp_path):
     """Two runs with the same inputs hit the cache → fewer LLM calls."""
     klines = _series(100.0, 200)
     llm = _StubLLM(response={"decisions": [{"action": "hold", "confidence": 0.5}]})
-    engine = LLMBacktestEngine(
-        llm, initial_balance=10_000.0, cache_dir=str(tmp_path)
-    )
+    engine = LLMBacktestEngine(llm, initial_balance=10_000.0, cache_dir=str(tmp_path))
     await engine.run("BTCUSDT", klines, window_size=100, cycle_interval=10)
     first_calls = llm.calls
 
-    engine2 = LLMBacktestEngine(
-        llm, initial_balance=10_000.0, cache_dir=str(tmp_path)
-    )
+    engine2 = LLMBacktestEngine(llm, initial_balance=10_000.0, cache_dir=str(tmp_path))
     await engine2.run("BTCUSDT", klines, window_size=100, cycle_interval=10)
     # Cache from first run survives → second run shouldn't re-hit the LLM.
     assert llm.calls == first_calls

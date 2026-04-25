@@ -113,3 +113,65 @@ export interface AppConfig {
   crypto_daily_return_target: number;
   db_path: string;
 }
+
+// ── Phase 2 / 3 surfaces ─────────────────────────────────────
+
+export interface CycleMetrics {
+  window_seconds: number;
+  count: number;
+  p50_ms: number | null;
+  p95_ms: number | null;
+  p99_ms: number | null;
+  failed: number;
+  halted: number;
+}
+
+export interface LlmProviderStats {
+  calls: number;
+  tokens: number;
+  p50_ms: number;
+}
+
+export interface LlmMetrics {
+  window_seconds: number;
+  calls: number;
+  total_tokens: number;
+  p50_ms: number | null;
+  p95_ms: number | null;
+  by_provider: Record<string, LlmProviderStats>;
+}
+
+export interface RiskState {
+  available: boolean;
+  is_halted?: boolean;
+  halt_reason?: string | null;
+  portfolio_heat_pct?: number | null;
+  drawdown_pct?: number | null;
+  avg_correlation?: number | null;
+  summary?: string;
+}
+
+export interface HaltStatus {
+  enabled: boolean;
+  reason: string | null;
+  set_by: string | null;
+  set_at: string | null;
+}
+
+export interface ReconcileLogRow {
+  id: number;
+  timestamp: string;
+  market: "crypto" | "stocks";
+  symbol: string;
+  db_quantity: number;
+  broker_quantity: number;
+  drift_pct: number;
+  drift_usd: number | null;
+  notes: string | null;
+}
+
+export interface BackupRow {
+  path: string;
+  size_bytes: number;
+  backed_up_at: string;
+}
