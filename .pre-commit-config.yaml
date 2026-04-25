@@ -16,17 +16,17 @@ repos:
         args: [--fix]
       - id: ruff-format
 
-  - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.13.0
+  - repo: local
     hooks:
+      # Use the project's own mypy via uv so the hook agrees with CI on
+      # version + dependencies. Defers to [tool.mypy] `files` in
+      # pyproject.toml (strict on `domain/` + `core/`).
       - id: mypy
-        # Match CI: only gate on the strict layer.
-        files: ^src/halal_trader/(domain|core)/
-        additional_dependencies:
-          - sqlmodel
-          - pydantic-settings
-          - sqlalchemy
-        args: [--config-file=pyproject.toml]
+        name: mypy
+        entry: uv run mypy
+        language: system
+        pass_filenames: false
+        always_run: true
 
   - repo: local
     hooks:

@@ -40,9 +40,7 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
     )
     # Seed the singleton row.
-    op.execute(
-        sa.text("INSERT INTO kill_switch (id, enabled) VALUES (1, 0)")
-    )
+    op.execute(sa.text("INSERT INTO kill_switch (id, enabled) VALUES (1, 0)"))
 
 
 def downgrade() -> None:

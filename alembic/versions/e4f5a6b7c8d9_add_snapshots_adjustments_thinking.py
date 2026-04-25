@@ -77,9 +77,7 @@ def upgrade() -> None:
         )
 
     if not _column_exists("llm_decisions", "thinking"):
-        op.add_column(
-            "llm_decisions", sa.Column("thinking", sa.String(), nullable=True)
-        )
+        op.add_column("llm_decisions", sa.Column("thinking", sa.String(), nullable=True))
 
 
 def downgrade() -> None:
@@ -88,7 +86,5 @@ def downgrade() -> None:
     if _table_exists("strategy_adjustments"):
         op.drop_table("strategy_adjustments")
     if _table_exists("indicator_snapshots"):
-        op.drop_index(
-            "ix_indicator_snapshots_trade_id", table_name="indicator_snapshots"
-        )
+        op.drop_index("ix_indicator_snapshots_trade_id", table_name="indicator_snapshots")
         op.drop_table("indicator_snapshots")

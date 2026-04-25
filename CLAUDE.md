@@ -33,8 +33,16 @@ just crypto-stats       # win rate / profit factor / drawdown
 just crypto-screen      # refresh CoinGecko-based halal list
 
 just dashboard          # FastAPI + React SPA on :8082 (serves dashboard/dist)
-just logs / logs-tail   # pretty-print JSON log files
+just logs / logs-tail   # pretty-print JSON log files (cycle_id + event tags)
 just db-reset           # ⚠ wipes halal_trader.db
+
+# Operator
+halal-trader halt --reason "..."     # engage kill-switch (bots refuse new entries)
+halal-trader resume                  # disengage kill-switch
+halal-trader halt-status             # show current state + last audit row
+halal-trader db migrate              # apply pending Alembic revisions
+halal-trader db current              # show current vs head revision
+halal-trader db stamp head           # one-time adopt a pre-Alembic DB
 ```
 
 Run a single test file/case: `uv run pytest tests/test_crypto_executor.py -k test_name`.
@@ -70,7 +78,11 @@ Authoritative diagrams + tables live in `docs/ARCHITECTURE.md`. Key points that 
 - **Settings are a singleton.** `config.py:get_settings()` caches a `Settings()` instance. Don't construct `Settings` directly elsewhere — pass `settings` via DI.
 - **`db_path` resolution.** `Settings.resolve_db_path()` makes relative paths absolute from the project root. Use it instead of `settings.db_path` directly so behavior is consistent regardless of CWD.
 - **Async repository.** `db/repository.py` is fully async; `Repository(engine)` is constructed once in `BaseTradingBot.initialize()` and shared. Don't open new engines per cycle.
-- **Three logger sinks.** `logging.py` configures Rich console + JSON `logs/halal_trader.log` (rotated) + `logs/error.log`. The `just logs*` recipes parse the JSON format — don't switch to plain-text logging without updating those.
+- **Three logger sinks.** `logging.py` configures Rich console + JSON `logs/halal_trader.log` (rotated) + `logs/error.log`. The `just logs*` recipes parse the JSON format via `scripts/format_logs.py` — don't switch to plain-text logging without updating those.
+- **Structured event logging.** Use `extra={"event": events.X, ...}` with constants from `core/events.py`. `cycle_id`/`monitor_id`/`request_id` ContextVars in `core/observability.py` are auto-attached to every JSON record by `ObservabilityFilter`. `BaseCycleService.run_cycle()` already wraps each cycle in `cycle_context()` — don't manage these manually unless you're starting a sub-scope (e.g. per-trade `monitor_context()` in `crypto/monitor.py`).
+- **Operator alerts.** Errors that need human attention go through `AlertSink.notify(error_type, details)` in `notifications/telegram.py`, NOT directly via `notifier.notify_error`. The sink rate-limits per `error_type` (15-min sliding window). The cycle's `cycle.failed` exception path already fires it; surface new failure modes by adding an `extra={"event": ...}` log + a sink call site.
+- **Kill-switch is a first-class gate.** `BaseCycleService.run_cycle` checks `core/halt.is_halted(engine)` BEFORE any other logic. Use `halal-trader halt --reason "..."` to engage; the monitor's per-trade SL/TP loop still runs (closing risk is preferred to holding under failure).
+- **Fill confirmation.** `core/fills.py:confirm_binance` (immediate-fill response parser) and `confirm_alpaca` (poll loop) populate `submitted_at`/`filled_at`/`filled_price`/`filled_quantity` on every trade row. Don't conflate `submitted` with `filled` anywhere downstream — reconciliation in Phase 2 depends on these being distinct.
 - **CLI lazy-imports.** Heavy modules (binance, fastapi, ml) are imported inside command functions in `cli.py` so `--help` stays fast. Keep that pattern when adding commands.
 - **Halal compliance is non-negotiable.** Every new tradable asset path must go through the relevant screener (Zoya for stocks, `crypto/screener.py` for crypto). See `.cursor/rules/project-strategy.mdc`.
 - **Optional extras.** `[ml]`, `[sentiment]`, `[dashboard]`, `[fingpt]` extras gate their respective imports. Code that uses them must degrade gracefully when the extras aren't installed (see `cli.py:dashboard` for the pattern).
