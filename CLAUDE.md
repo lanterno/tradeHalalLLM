@@ -1,0 +1,79 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Project
+
+LLM-powered halal day-trading bot for **stocks** (Alpaca paper trading via MCP) and **crypto** (Binance testnet/prod). Python 3.14+, managed with `uv`. Single-user, paper/testnet only — never real money.
+
+## Common commands
+
+Use the `justfile` recipes (each wraps `uv run halal-trader …`). `just` with no args lists recipes.
+
+```bash
+just install            # uv sync
+just dev                # uv sync --extra dev --extra all  (ml + sentiment + dashboard)
+just test               # pytest (asyncio_mode=auto, testpaths=tests)
+just lint               # ruff check src/ tests/
+just format             # ruff format + ruff check --fix
+
+# Stocks
+just stocks             # halal-trader start  (APScheduler, market hours)
+just stocks-once        # halal-trader start --once
+just status             # halal-trader status
+
+# Crypto (24/7 asyncio loop)
+just crypto             # halal-trader crypto start
+just crypto-once        # halal-trader crypto start --once
+just crypto-status      # Binance balances + ticker prices
+just crypto-stats       # win rate / profit factor / drawdown
+just crypto-screen      # refresh CoinGecko-based halal list
+
+just dashboard          # FastAPI + React SPA on :8082 (serves dashboard/dist)
+just logs / logs-tail   # pretty-print JSON log files
+just db-reset           # ⚠ wipes halal_trader.db
+```
+
+Run a single test file/case: `uv run pytest tests/test_crypto_executor.py -k test_name`.
+
+Backtest: `uv run halal-trader crypto backtest --pair BTCUSDT --candles 1000 [--llm --cycle-interval 5]`. The `--llm` mode caches results in `models/llm_backtest_cache.json` keyed by prompt hash, so repeated runs skip LLM calls.
+
+Dashboard frontend: `cd dashboard && npm install && npm run build` (Vite output goes to `dashboard/dist`, which `web/app.py` serves). `npm run dev` for hot reload.
+
+DB migrations: `uv run alembic upgrade head` (alembic envs in `alembic/versions/`). `init_db()` also creates tables via `SQLModel.metadata.create_all` — Alembic is for incremental schema changes only.
+
+## Architecture
+
+Authoritative diagrams + tables live in `docs/ARCHITECTURE.md`. Key points that span multiple files:
+
+**Two parallel bots, shared infrastructure.** The stock bot (`trading/`) and crypto bot (`crypto/`) are independent composition roots that both extend `core/scheduler.py:BaseTradingBot`. They share the LLM abstraction (`core/llm.py`), DB layer (`db/`), domain models/ports (`domain/`), and `Settings` (`config.py`). Don't merge their cycle logic — they have very different cadences (15min cron vs 60s asyncio loop) and execution paths (Alpaca MCP subprocess vs `python-binance` async REST + WebSocket).
+
+**Hex-ish layering.** `domain/ports.py` defines `Protocol`s (Broker, LLMProvider, ComplianceScreener, …); concrete adapters live under `mcp/` (Alpaca MCP stdio client), `crypto/exchange.py` (Binance), `core/llm.py` (Ollama/OpenAI/Anthropic + `FallbackLLM` chain), `halal/` (Zoya), `crypto/screener.py` (CoinGecko). When adding a provider, implement the port — don't import concrete classes into cycle/strategy code.
+
+**Crypto cycle = `CryptoCycleService.run_cycle()`** in `crypto/cycle.py`. Each cycle: refresh symbol filters → check `PortfolioTracker.should_halt_trading()` → fetch halal pairs → pull klines (throttled, 5 concurrent) via WebSocket buffer → compute indicators → run `PortfolioRiskEngine` (correlation/heat/drawdown) → call LLM with the full prompt context (see ARCHITECTURE.md "What the LLM Receives") → regime gate → `CryptoExecutor.execute_plan()` → snapshot indicators for filled buys. The whole cycle is wrapped in `asyncio.wait_for(interval * 2)` so a stuck cycle doesn't block the bot.
+
+**Position monitor is independent of the cycle.** `crypto/monitor.py:PositionMonitor` runs as a background task every `crypto_monitor_interval` seconds (default 2s), enforcing SL/TP/trailing stops via WebSocket prices. It coordinates with the executor via a shared `exiting_pairs` set to prevent concurrent buy/sell on the same pair. After closing a trade, it calls `retrainer.on_trade_closed()` to label the indicator snapshot for ML training. **Don't put SL/TP enforcement in the cycle** — the cycle's cadence is too slow.
+
+**News reactor can preempt the cycle.** `sentiment/events.py:NewsEventReactor` polls CryptoPanic every 30s; on a high-impact event, it triggers an emergency mini-cycle outside the normal loop. Be mindful of this when adding state that assumes cycles run on a fixed cadence.
+
+**LLM provider selection.** `core/llm.py:create_llm(settings)` picks Ollama/OpenAI/Anthropic from `LLM_PROVIDER`. If `LLM_FALLBACK_PROVIDERS` is set, the primary is wrapped in `FallbackLLM` (tries each in order; exponential backoff 60s→30min after all fail). All providers strip `<think>…</think>` reasoning blocks — keep that behavior when adding a new provider.
+
+**Self-improvement.** After each crypto cycle, `crypto/self_improve.py` lets the LLM tune `max_position_pct`, `stop_loss_pct`, `take_profit_pct` within bounded ranges. Changes below `1e-6` are silently dropped. Records `StrategyAdjustment` rows.
+
+**ML retraining loop.** Buys record an `IndicatorSnapshot` (RSI, MACD, volume ratio, ATR, BB position). When the position closes, `ml/retrainer.py:RetrainingScheduler.on_trade_closed()` labels the snapshot with `return_pct` and (every 20 trades) retrains the IsolationForest anomaly detector + signal classifier. The anomaly detector also supports incremental updates (`add_sample` / `auto_train`) — don't re-read the full DB on every cycle.
+
+## Conventions / gotchas
+
+- **Settings are a singleton.** `config.py:get_settings()` caches a `Settings()` instance. Don't construct `Settings` directly elsewhere — pass `settings` via DI.
+- **`db_path` resolution.** `Settings.resolve_db_path()` makes relative paths absolute from the project root. Use it instead of `settings.db_path` directly so behavior is consistent regardless of CWD.
+- **Async repository.** `db/repository.py` is fully async; `Repository(engine)` is constructed once in `BaseTradingBot.initialize()` and shared. Don't open new engines per cycle.
+- **Three logger sinks.** `logging.py` configures Rich console + JSON `logs/halal_trader.log` (rotated) + `logs/error.log`. The `just logs*` recipes parse the JSON format — don't switch to plain-text logging without updating those.
+- **CLI lazy-imports.** Heavy modules (binance, fastapi, ml) are imported inside command functions in `cli.py` so `--help` stays fast. Keep that pattern when adding commands.
+- **Halal compliance is non-negotiable.** Every new tradable asset path must go through the relevant screener (Zoya for stocks, `crypto/screener.py` for crypto). See `.cursor/rules/project-strategy.mdc`.
+- **Optional extras.** `[ml]`, `[sentiment]`, `[dashboard]`, `[fingpt]` extras gate their respective imports. Code that uses them must degrade gracefully when the extras aren't installed (see `cli.py:dashboard` for the pattern).
+- **Binance error codes.** `-1013` (invalid quantity) and `-2010` (insufficient balance) are treated as rejections, NOT circuit-breaker errors. `-1003` triggers ~30s rate-limit backoff. The per-pair circuit breaker is for *unexpected* errors only.
+- **Min buy notional is $50.** Below that the executor refuses the order. Many tests assume this — don't lower it without checking `tests/test_crypto_executor.py`.
+
+## Product strategy (from `.cursor/rules/project-strategy.mdc`)
+
+This is a small home-built bot competing against institutions. The edge is aggressive adoption of new tech (LLMs, HuggingFace models), alternative data (Reddit, news APIs), and rapid iteration. When choosing between conservative and aggressive approaches, lean aggressive. Always prefer integrating an existing OSS model or API over building from scratch. Halal compliance applies to every feature regardless of profitability.
