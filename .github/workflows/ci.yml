@@ -36,5 +36,10 @@ jobs:
       - name: Type check (domain + core, strict)
         run: uv run mypy
 
-      - name: Test
-        run: uv run pytest -q
+      - name: Test (with coverage gate on domain + core)
+        run: >
+          uv run pytest -q
+          --cov=src/halal_trader/domain
+          --cov=src/halal_trader/core
+          --cov-report=term-missing
+          --cov-fail-under=85

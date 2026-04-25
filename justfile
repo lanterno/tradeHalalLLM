@@ -61,6 +61,18 @@ config:
 dashboard:
     uv run halal-trader dashboard
 
+# Build the React SPA (production)
+dashboard-build:
+    cd dashboard && npm run build
+
+# Start the Vite dev server with HMR
+dashboard-dev:
+    cd dashboard && npm run dev
+
+# Lint the React SPA
+dashboard-lint:
+    cd dashboard && npm run lint
+
 # ── Logs ──────────────────────────────────────────────────
 
 # Show last 50 JSON log entries (app only)

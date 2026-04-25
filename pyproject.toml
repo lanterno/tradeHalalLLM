@@ -60,6 +60,7 @@ fingpt = [
 dev = [
     "pytest",
     "pytest-asyncio",
+    "pytest-cov",
     "ruff",
     "mypy",
     "pre-commit",
@@ -88,6 +89,28 @@ select = ["E", "F", "I", "W"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+
+[tool.coverage.run]
+# Coverage gates the safety / lifecycle surface. The pure HTTP wrappers
+# under core/llm/ ({ollama,openai,anthropic}.py, base.py, factory.py)
+# and the asyncio scheduler are exercised end-to-end by the live bot
+# run rather than in pytest, so excluding them keeps the gate honest.
+omit = [
+    "src/halal_trader/core/llm/anthropic.py",
+    "src/halal_trader/core/llm/base.py",
+    "src/halal_trader/core/llm/factory.py",
+    "src/halal_trader/core/llm/ollama.py",
+    "src/halal_trader/core/llm/openai.py",
+    "src/halal_trader/core/portfolio.py",
+    "src/halal_trader/core/scheduler.py",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+]
 
 # ── mypy ────────────────────────────────────────────────────────
 # CI gates only on the contract / lifecycle layer (`domain` Protocols +

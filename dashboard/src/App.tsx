@@ -1,28 +1,94 @@
+import { lazy, Suspense } from "react";
 import { Routes, Route } from "react-router-dom";
 import { Layout } from "./components/Layout";
-import Dashboard from "./pages/Dashboard";
-import Positions from "./pages/Positions";
-import Trades from "./pages/Trades";
-import Analytics from "./pages/Analytics";
-import Sentiment from "./pages/Sentiment";
-import Decisions from "./pages/Decisions";
-import System from "./pages/System";
-import Observability from "./pages/Observability";
-import RiskAndSystem from "./pages/RiskAndSystem";
+import { PageSkeleton } from "./components/PageSkeleton";
+
+const Dashboard = lazy(() => import("./pages/Dashboard"));
+const Positions = lazy(() => import("./pages/Positions"));
+const Trades = lazy(() => import("./pages/Trades"));
+const Analytics = lazy(() => import("./pages/Analytics"));
+const Sentiment = lazy(() => import("./pages/Sentiment"));
+const Decisions = lazy(() => import("./pages/Decisions"));
+const System = lazy(() => import("./pages/System"));
+const Observability = lazy(() => import("./pages/Observability"));
+const RiskAndSystem = lazy(() => import("./pages/RiskAndSystem"));
 
 export default function App() {
   return (
     <Routes>
       <Route element={<Layout />}>
-        <Route index element={<Dashboard />} />
-        <Route path="positions" element={<Positions />} />
-        <Route path="trades" element={<Trades />} />
-        <Route path="analytics" element={<Analytics />} />
-        <Route path="sentiment" element={<Sentiment />} />
-        <Route path="decisions" element={<Decisions />} />
-        <Route path="risk" element={<RiskAndSystem />} />
-        <Route path="observability" element={<Observability />} />
-        <Route path="system" element={<System />} />
+        <Route
+          index
+          element={
+            <Suspense fallback={<PageSkeleton />}>
+              <Dashboard />
+            </Suspense>
+          }
+        />
+        <Route
+          path="positions"
+          element={
+            <Suspense fallback={<PageSkeleton />}>
+              <Positions />
+            </Suspense>
+          }
+        />
+        <Route
+          path="trades"
+          element={
+            <Suspense fallback={<PageSkeleton />}>
+              <Trades />
+            </Suspense>
+          }
+        />
+        <Route
+          path="analytics"
+          element={
+            <Suspense fallback={<PageSkeleton />}>
+              <Analytics />
+            </Suspense>
+          }
+        />
+        <Route
+          path="sentiment"
+          element={
+            <Suspense fallback={<PageSkeleton />}>
+              <Sentiment />
+            </Suspense>
+          }
+        />
+        <Route
+          path="decisions"
+          element={
+            <Suspense fallback={<PageSkeleton />}>
+              <Decisions />
+            </Suspense>
+          }
+        />
+        <Route
+          path="risk"
+          element={
+            <Suspense fallback={<PageSkeleton />}>
+              <RiskAndSystem />
+            </Suspense>
+          }
+        />
+        <Route
+          path="observability"
+          element={
+            <Suspense fallback={<PageSkeleton />}>
+              <Observability />
+            </Suspense>
+          }
+        />
+        <Route
+          path="system"
+          element={
+            <Suspense fallback={<PageSkeleton />}>
+              <System />
+            </Suspense>
+          }
+        />
       </Route>
     </Routes>
   );

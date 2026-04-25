@@ -25,3 +25,9 @@ Thumbs.db
 # Logs
 *.log
 logs/
+
+# Coverage
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
