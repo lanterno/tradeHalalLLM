@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import pickle
 
-import pytest
-
 from halal_trader.ml.anomaly import (
     _FEATURES,
     _MODEL_VERSION,

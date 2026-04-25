@@ -35,13 +35,22 @@ _MODEL_VERSION = 2
 class MarketAnomalyDetector:
     """Detects unusual market microstructure using IsolationForest."""
 
+    # Persist incremental sample buffer + last-train timestamp every
+    # _PERSIST_EVERY_N additions so a restart doesn't lose the warm-up.
+    _PERSIST_EVERY_N = 25
+    _MAX_BUFFER_SIZE = 5000
+
     def __init__(self, hub: ModelHub, *, min_samples: int = 100) -> None:
         self._hub = hub
         self._min_samples = min_samples
         self._model = None
         self._samples: list[list[float]] = []
+        self._last_trained_at: float | None = None
+        self._adds_since_persist = 0
         self._model_path = hub.models_dir / "anomaly_detector.pkl"
+        self._state_path = hub.models_dir / "anomaly_state.pkl"
         self._load_model()
+        self._load_state()
 
     def _load_model(self) -> None:
         """Load a previously trained model from disk."""
@@ -63,11 +72,68 @@ class MarketAnomalyDetector:
         self._model = payload["model"]
         logger.info("Anomaly detector loaded from %s", self._model_path)
 
+    def _load_state(self) -> None:
+        """Restore the incremental sample buffer + last-train timestamp."""
+        if not self._state_path.exists():
+            return
+        try:
+            with open(self._state_path, "rb") as f:
+                state = pickle.load(f)
+        except Exception as e:
+            logger.warning("Failed to load anomaly state: %s", e)
+            return
+
+        if not isinstance(state, dict):
+            return
+        if state.get("version") != _MODEL_VERSION:
+            logger.info(
+                "Discarding stale anomaly state at %s (version mismatch)",
+                self._state_path,
+            )
+            return
+        if list(state.get("features") or []) != list(_FEATURES):
+            return
+
+        samples = state.get("samples")
+        if isinstance(samples, list):
+            self._samples = [list(s) for s in samples][-self._MAX_BUFFER_SIZE :]
+        last_trained = state.get("last_trained_at")
+        if isinstance(last_trained, (int, float)):
+            self._last_trained_at = float(last_trained)
+        logger.info(
+            "Anomaly state restored: %d samples buffered, last_trained_at=%s",
+            len(self._samples),
+            self._last_trained_at,
+        )
+
+    def _save_state(self) -> None:
+        """Persist the sample buffer + metadata so a restart resumes warm."""
+        try:
+            self._state_path.parent.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "version": _MODEL_VERSION,
+                "features": list(_FEATURES),
+                "samples": self._samples,
+                "last_trained_at": self._last_trained_at,
+            }
+            with open(self._state_path, "wb") as f:
+                pickle.dump(payload, f)
+        except Exception as e:
+            logger.debug("Could not persist anomaly state: %s", e)
+
     def add_sample(self, indicators: dict) -> None:
         """Add an indicator snapshot as a training sample."""
         features = self._extract_features(indicators)
-        if features is not None:
-            self._samples.append(features)
+        if features is None:
+            return
+        self._samples.append(features)
+        # Cap buffer so memory doesn't grow unbounded.
+        if len(self._samples) > self._MAX_BUFFER_SIZE:
+            self._samples = self._samples[-self._MAX_BUFFER_SIZE :]
+        self._adds_since_persist += 1
+        if self._adds_since_persist >= self._PERSIST_EVERY_N:
+            self._save_state()
+            self._adds_since_persist = 0
 
     def train(self) -> bool:
         """Train the IsolationForest on collected samples."""
@@ -88,6 +154,10 @@ class MarketAnomalyDetector:
             with open(self._model_path, "wb") as f:
                 pickle.dump(_versioned_payload(self._model), f)
 
+            import time as _time
+
+            self._last_trained_at = _time.time()
+            self._save_state()
             logger.info("Anomaly detector trained on %d samples", len(X))
             return True
         except ImportError:
@@ -96,6 +166,16 @@ class MarketAnomalyDetector:
         except Exception as e:
             logger.warning("Anomaly detector training failed: %s", e)
             return False
+
+    def auto_train(self) -> bool:
+        """Train if enough samples have accumulated since the last training.
+
+        Used by the hot path so we don't need a separate scheduler tick.
+        Returns ``True`` when training actually ran.
+        """
+        if len(self._samples) < self._min_samples:
+            return False
+        return self.train()
 
     def detect(self, indicators: dict) -> tuple[bool, float]:
         """Check if the current indicator snapshot is anomalous.
