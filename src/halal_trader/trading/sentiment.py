@@ -97,7 +97,7 @@ class SentimentAnalyzer:
         texts = headlines or [h.format(symbol=symbol) for h in _PLACEHOLDER_HEADLINES]
 
         try:
-            results = pipe(texts)  # type: ignore[operator]
+            results = pipe(texts)
 
             # Aggregate scores across all headlines
             total_score = 0.0

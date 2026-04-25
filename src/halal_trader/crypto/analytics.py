@@ -90,9 +90,9 @@ class PerformanceAnalytics:
 
         # Best/worst pair
         if pair_pnl:
-            stats.best_pair = max(pair_pnl, key=pair_pnl.get)  # type: ignore[arg-type]
+            stats.best_pair = max(pair_pnl, key=pair_pnl.get)
             stats.best_pair_pnl = pair_pnl[stats.best_pair]
-            stats.worst_pair = min(pair_pnl, key=pair_pnl.get)  # type: ignore[arg-type]
+            stats.worst_pair = min(pair_pnl, key=pair_pnl.get)
             stats.worst_pair_pnl = pair_pnl[stats.worst_pair]
 
         # Max drawdown (peak-to-trough on cumulative P&L)

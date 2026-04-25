@@ -15,6 +15,13 @@ logger = logging.getLogger(__name__)
 
 _MAX_CONCURRENT_REQUESTS = 10
 
+# Notional value (in USDT) below which we treat a balance / order as dust.
+# Shared by the executor, monitor, and liquidator so any tuning happens in
+# one place. Binance enforces a per-symbol min-notional on top of this; the
+# constant is the floor we use for housekeeping decisions (skip auto-exit,
+# refuse to place a buy that's smaller than the floor, etc.).
+DUST_NOTIONAL_USD: float = 5.0
+
 
 @dataclass
 class SymbolFilter:

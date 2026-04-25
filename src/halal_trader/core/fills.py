@@ -22,6 +22,7 @@ from datetime import UTC, datetime
 from typing import Any, Callable
 
 from halal_trader.core import events
+from halal_trader.domain.status import TradeStatus
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +49,12 @@ class FillResult:
     raw: dict[str, Any]
 
 
-_TERMINAL_STATES = {"filled", "rejected", "canceled", "expired"}
+_TERMINAL_STATES = {
+    TradeStatus.FILLED.value,
+    TradeStatus.REJECTED.value,
+    TradeStatus.CANCELED.value,
+    "expired",
+}
 
 
 def confirm_binance(order_response: dict[str, Any], submitted_at: datetime) -> FillResult:
@@ -74,18 +80,18 @@ def confirm_binance(order_response: dict[str, Any], submitted_at: datetime) -> F
         filled_qty = executed
         filled_price = (cumulative / executed) if executed > 0 and cumulative > 0 else None
 
-    status_map = {
-        "filled": "filled",
-        "partially_filled": "partially_filled",
-        "rejected": "rejected",
-        "canceled": "canceled",
-        "expired": "rejected",
-        "new": "pending",
-        "pending_new": "pending",
+    status_map: dict[str, str] = {
+        "filled": TradeStatus.FILLED,
+        "partially_filled": TradeStatus.PARTIALLY_FILLED,
+        "rejected": TradeStatus.REJECTED,
+        "canceled": TradeStatus.CANCELED,
+        "expired": TradeStatus.REJECTED,
+        "new": TradeStatus.PENDING,
+        "pending_new": TradeStatus.PENDING,
     }
     status = status_map.get(raw_status, raw_status)
 
-    filled_at = datetime.now(UTC) if status == "filled" and filled_qty > 0 else None
+    filled_at = datetime.now(UTC) if status == TradeStatus.FILLED and filled_qty > 0 else None
 
     return FillResult(
         status=status,

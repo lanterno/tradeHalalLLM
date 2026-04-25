@@ -301,7 +301,7 @@ class TradingBot(BaseTradingBot):
                 backup_dir=self.settings.backup_dir,
                 retention_days=self.settings.backup_retention_days,
                 weekly_count=self.settings.backup_weekly_count,
-                alerts=self._alerts,  # type: ignore[arg-type]
+                alerts=self._alerts,
             )
 
         except Exception as e:

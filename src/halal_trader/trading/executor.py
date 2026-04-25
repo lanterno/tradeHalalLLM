@@ -51,7 +51,7 @@ class TradeExecutor(BaseExecutor):
     def _get_buys(self, plan: Any) -> list[Any]:
         return plan.buys
 
-    async def _get_current_position_count(self, **kwargs: Any) -> int:
+    async def _get_current_position_count(self, **_kwargs: Any) -> int:
         current_positions = await self._broker.get_all_positions()
         return len(current_positions)
 
@@ -151,7 +151,7 @@ class TradeExecutor(BaseExecutor):
                 "reason": str(e),
             }
 
-    async def _execute_sell(self, decision: Any, **kwargs: Any) -> dict[str, Any]:
+    async def _execute_sell(self, decision: Any, **_kwargs: Any) -> dict[str, Any]:
         """Execute a sell order (close or reduce position)."""
         try:
             submitted_at = datetime.now(UTC)

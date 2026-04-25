@@ -400,7 +400,7 @@ class CryptoCycleService(BaseCycleService):
         if not indicators_cache:
             return True
         s = self._settings
-        for symbol, indicators in indicators_cache.items():
+        for _symbol, indicators in indicators_cache.items():
             if indicators.get("error"):
                 continue
             price_change_5m = abs(indicators.get("price_change_5m", 0))

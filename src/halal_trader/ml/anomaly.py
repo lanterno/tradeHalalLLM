@@ -7,21 +7,13 @@ import pickle
 
 import numpy as np
 
+from halal_trader.ml.features import FEATURE_KEYS
 from halal_trader.ml.hub import ModelHub
 
 logger = logging.getLogger(__name__)
 
-_FEATURES = [
-    "rsi_14",
-    "macd_histogram",
-    "volume_ratio",
-    "atr_14",
-    "bb_position",
-    "ema_9",
-    "ema_21",
-    "vwap",
-    "price_change_5m",
-]
+# Backwards-compat alias; the canonical list now lives in ml/features.py.
+_FEATURES = list(FEATURE_KEYS)
 
 # Bump on any feature-set / preprocessing change. Pickles tagged with
 # a different version are discarded on load so retraining picks up the

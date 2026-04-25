@@ -10,7 +10,11 @@ from binance import BinanceAPIException
 
 from halal_trader.core import events
 from halal_trader.core.observability import monitor_context
-from halal_trader.crypto.exchange import BinanceClient, extract_fill_price
+from halal_trader.crypto.exchange import (
+    DUST_NOTIONAL_USD,
+    BinanceClient,
+    extract_fill_price,
+)
 from halal_trader.crypto.websocket import BinanceWSManager
 from halal_trader.db.models import CryptoTrade
 from halal_trader.db.repository import Repository
@@ -21,8 +25,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_FALLBACK_MIN_NOTIONAL = 5.0
-_DUST_NOTIONAL_THRESHOLD = 5.0
+_FALLBACK_MIN_NOTIONAL = DUST_NOTIONAL_USD
+_DUST_NOTIONAL_THRESHOLD = DUST_NOTIONAL_USD
 _MAX_EXIT_FAILURES = 3
 
 

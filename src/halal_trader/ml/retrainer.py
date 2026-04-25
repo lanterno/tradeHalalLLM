@@ -7,20 +7,11 @@ from pathlib import Path
 from typing import Any
 
 from halal_trader.domain.ports import TradeRepository
+from halal_trader.ml.features import FEATURE_KEYS
 
 logger = logging.getLogger(__name__)
 
-_FEATURE_KEYS = [
-    "rsi_14",
-    "macd_histogram",
-    "volume_ratio",
-    "atr_14",
-    "bb_position",
-    "ema_9",
-    "ema_21",
-    "vwap",
-    "price_change_5m",
-]
+_FEATURE_KEYS = list(FEATURE_KEYS)
 
 
 class RetrainingScheduler:

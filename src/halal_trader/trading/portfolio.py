@@ -25,7 +25,7 @@ class PortfolioTracker(BasePortfolioTracker):
 
     # ── Hook implementations ───────────────────────────────────
 
-    async def _get_equity(self, **kwargs: Any) -> float:
+    async def _get_equity(self, **_kwargs: Any) -> float:
         account = await self._broker.get_account_info()
         return account.effective_equity or self._DEFAULT_EQUITY
 

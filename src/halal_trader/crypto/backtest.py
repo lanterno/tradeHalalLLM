@@ -365,16 +365,6 @@ class LLMBacktestEngine:
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         cache_path.write_text(json.dumps(self._cache))
 
-    def _cache_key(self, pair: str, step: int, indicators: dict) -> str:
-        """Legacy key — kept so old caches still hit. New writes use the
-        prompt-hash via :func:`prompts.prompt_cache_key` once the prompt
-        is built."""
-        import hashlib
-        import json
-
-        data = json.dumps({"pair": pair, "step": step, "ind": indicators}, sort_keys=True)
-        return hashlib.sha256(data.encode()).hexdigest()[:16]
-
     async def run(
         self,
         pair: str,

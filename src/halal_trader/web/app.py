@@ -44,7 +44,7 @@ def create_app() -> Any:
     from halal_trader.core.observability import new_id, request_id_var
 
     @asynccontextmanager
-    async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
+    async def lifespan(_app: FastAPI):
         settings = get_settings()
         engine = await init_db(str(settings.resolve_db_path()))
         app_state["engine"] = engine
@@ -65,7 +65,7 @@ def create_app() -> Any:
     )
 
     @app.middleware("http")
-    async def correlate_request(request: Request, call_next):  # type: ignore[no-untyped-def]
+    async def correlate_request(request: Request, call_next):
         rid = request.headers.get("X-Request-ID") or new_id("req")
         token = request_id_var.set(rid)
         try:
@@ -381,7 +381,7 @@ def create_app() -> Any:
 
     @app.get("/api/sse")
     async def sse() -> StreamingResponse:
-        async def event_stream():  # type: ignore[return]
+        async def event_stream():
             while True:
                 repo: Repository = app_state["repo"]
                 trades = await repo.get_recent_crypto_trades(5)

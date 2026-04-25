@@ -161,19 +161,19 @@ def llm_metrics(
             provider,
             {"calls": 0, "tokens": 0, "elapsed_ms_list": []},
         )
-        bucket["calls"] = int(bucket["calls"]) + 1  # type: ignore[operator]
+        bucket["calls"] = int(bucket["calls"]) + 1
         if isinstance(tokens, (int, float)):
-            bucket["tokens"] = int(bucket["tokens"]) + int(tokens)  # type: ignore[operator]
+            bucket["tokens"] = int(bucket["tokens"]) + int(tokens)
             total_tokens += int(tokens)
         if isinstance(ms, (int, float)):
-            bucket["elapsed_ms_list"].append(float(ms))  # type: ignore[union-attr]
+            bucket["elapsed_ms_list"].append(float(ms))
             elapsed_all.append(float(ms))
         calls += 1
 
     # Collapse the per-provider list into p50.
     for bucket in by_provider.values():
-        ms_list = bucket.pop("elapsed_ms_list", [])  # type: ignore[arg-type]
-        bucket["p50_ms"] = _percentile(ms_list, 0.50) or 0.0  # type: ignore[arg-type, assignment]
+        ms_list = bucket.pop("elapsed_ms_list", [])
+        bucket["p50_ms"] = _percentile(ms_list, 0.50) or 0.0
 
     return LlmMetrics(
         window_seconds=window_seconds,

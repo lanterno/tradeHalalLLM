@@ -24,9 +24,9 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
-logger = logging.getLogger(__name__)
+from halal_trader.crypto.exchange import DUST_NOTIONAL_USD as _DUST_NOTIONAL_USD
 
-_DUST_NOTIONAL_USD = 5.0
+logger = logging.getLogger(__name__)
 
 
 @dataclass

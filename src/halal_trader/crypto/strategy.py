@@ -55,7 +55,7 @@ class CryptoTradingStrategy(BaseStrategy):
     def _on_llm_success(self) -> None:
         self._consecutive_llm_failures = 0
 
-    def _on_llm_failure(self, error: Exception, elapsed_ms: int, prefix: str) -> None:
+    def _on_llm_failure(self, error: Exception, elapsed_ms: int, _prefix: str) -> None:
         self._consecutive_llm_failures += 1
         logger.error(
             "Crypto LLM analysis failed after %dms (%d consecutive): %s",

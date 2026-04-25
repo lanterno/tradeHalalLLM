@@ -11,7 +11,7 @@ from binance import BinanceAPIException
 from halal_trader.core import events
 from halal_trader.core.executor import BaseExecutor
 from halal_trader.core.fills import confirm_binance
-from halal_trader.crypto.exchange import BinanceClient
+from halal_trader.crypto.exchange import DUST_NOTIONAL_USD, BinanceClient
 from halal_trader.domain.models import (
     CryptoAccount,
     CryptoTradingPlan,
@@ -20,7 +20,7 @@ from halal_trader.domain.ports import TradeRepository
 
 logger = logging.getLogger(__name__)
 
-_DUST_NOTIONAL_THRESHOLD = 5.0
+_DUST_NOTIONAL_THRESHOLD = DUST_NOTIONAL_USD
 _MIN_BUY_NOTIONAL = 50.0
 _MAX_SLIPPAGE_PCT = 0.005  # 0.5%
 
@@ -113,7 +113,7 @@ class CryptoExecutor(BaseExecutor):
     def _get_buys(self, plan: Any) -> list[Any]:
         return plan.buys
 
-    async def _get_current_position_count(self, **kwargs: Any) -> int:
+    async def _get_current_position_count(self, **_kwargs: Any) -> int:
         balances = await self._broker.get_balances()
         open_count = 0
         if self._tracked_bases:
@@ -127,7 +127,7 @@ class CryptoExecutor(BaseExecutor):
             open_count = sum(1 for b in balances if b.asset != "USDT" and b.free > 0)
         return open_count
 
-    def _validate_order(self, symbol: str, side: str, quantity: float, price: float) -> str | None:
+    def _validate_order(self, symbol: str, _side: str, quantity: float, price: float) -> str | None:
         """Pre-validate an order against Binance filters. Returns error message or None."""
         sf = self._broker.get_symbol_filter(symbol)
         if sf is None:
@@ -370,7 +370,7 @@ class CryptoExecutor(BaseExecutor):
                 "reason": str(e),
             }
 
-    async def _execute_sell(self, decision: Any, **kwargs: Any) -> dict[str, Any]:
+    async def _execute_sell(self, decision: Any, **_kwargs: Any) -> dict[str, Any]:
         """Execute a crypto sell order, clamping quantity to actual holdings."""
         if self.is_pair_blocked(decision.symbol):
             logger.info("Skipping SELL %s — pair temporarily blocked", decision.symbol)

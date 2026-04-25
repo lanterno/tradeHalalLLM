@@ -94,7 +94,7 @@ class CryptoHalalScreener:
 
     # ── CryptoComplianceScreener protocol ──────────────────────
 
-    async def refresh_screening(self, symbols: list[str] | None = None) -> None:
+    async def refresh_screening(self, _symbols: list[str] | None = None) -> None:
         """Refresh the halal screening cache for all or specified tokens.
 
         If symbols is None, screens the top coins by market cap from CoinGecko.

@@ -3,7 +3,7 @@
 import logging
 from logging.handlers import RotatingFileHandler
 
-from pythonjsonlogger.json import JsonFormatter  # type: ignore[import-untyped]
+from pythonjsonlogger.json import JsonFormatter
 from rich.console import Console
 from rich.logging import RichHandler
 
