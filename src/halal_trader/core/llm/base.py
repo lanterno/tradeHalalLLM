@@ -1,0 +1,88 @@
+"""Base LLM contract + thinking-mode helpers shared by every provider."""
+
+from __future__ import annotations
+
+import json
+import logging
+import re
+from abc import ABC, abstractmethod
+from datetime import UTC, datetime
+from typing import Any
+
+logger = logging.getLogger(__name__)
+
+_TOKEN_LOG_THRESHOLDS = (10_000, 50_000, 100_000, 250_000, 500_000, 1_000_000)
+_THINK_RE = re.compile(r"<think>(.*?)</think>", re.DOTALL)
+
+
+def strip_thinking(text: str) -> tuple[str, str]:
+    """Separate ``<think>`` reasoning from the final answer.
+
+    Returns (thinking_chain, clean_body).  If no ``<think>`` tags are
+    present, *thinking_chain* is empty.
+    """
+    parts = _THINK_RE.findall(text)
+    thinking = "\n\n".join(p.strip() for p in parts if p.strip())
+    body = _THINK_RE.sub("", text).strip()
+    return thinking, body
+
+
+def _clean_json_body(raw: str) -> str:
+    """Strip markdown code fences and leading prose from a raw LLM response."""
+    cleaned = raw.strip()
+    if cleaned.startswith("```"):
+        lines = cleaned.split("\n")
+        lines = [ln for ln in lines if not ln.strip().startswith("```")]
+        cleaned = "\n".join(lines)
+
+    brace = cleaned.find("{")
+    if brace > 0:
+        cleaned = cleaned[brace:]
+    return cleaned
+
+
+class BaseLLM(ABC):
+    """Abstract base for all LLM providers."""
+
+    def __init__(self, model: str) -> None:
+        self.model = model
+        self.last_thinking: str = ""
+        self._daily_tokens: int = 0
+        self._daily_reset_date: str = ""
+        self._last_threshold_logged: int = 0
+
+    def _track_usage(self, tokens: int) -> None:
+        """Accumulate daily token usage and log at key thresholds."""
+        today = datetime.now(UTC).strftime("%Y-%m-%d")
+        if today != self._daily_reset_date:
+            self._daily_tokens = 0
+            self._daily_reset_date = today
+            self._last_threshold_logged = 0
+
+        self._daily_tokens += tokens
+
+        for threshold in _TOKEN_LOG_THRESHOLDS:
+            if self._daily_tokens >= threshold > self._last_threshold_logged:
+                self._last_threshold_logged = threshold
+                logger.info(
+                    "LLM daily token usage crossed %dk (%d total today, model: %s)",
+                    threshold // 1000,
+                    self._daily_tokens,
+                    self.model,
+                )
+                break
+
+    @abstractmethod
+    async def generate(self, prompt: str, system: str | None = None) -> str:
+        """Send a prompt and return the raw text response."""
+        ...
+
+    async def generate_json(self, prompt: str, system: str | None = None) -> dict[str, Any]:
+        """Generate a response and parse it as JSON."""
+        raw = await self.generate(prompt, system)
+        thinking, body = strip_thinking(raw)
+        self.last_thinking = thinking
+        if thinking:
+            logger.debug("LLM thinking (%d chars): %.200s…", len(thinking), thinking)
+        parsed: dict[str, Any] = json.loads(_clean_json_body(body))
+        return parsed

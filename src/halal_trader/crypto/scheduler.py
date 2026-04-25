@@ -7,16 +7,12 @@ import logging
 import signal
 import time
 
-from halal_trader.core.llm import create_llm
 from halal_trader.core.scheduler import BaseTradingBot
-from halal_trader.crypto.analytics import PerformanceAnalytics
 from halal_trader.crypto.cycle import CryptoCycleService
 from halal_trader.crypto.exchange import BinanceClient
-from halal_trader.crypto.executor import CryptoExecutor
 from halal_trader.crypto.monitor import PositionMonitor
 from halal_trader.crypto.portfolio import CryptoPortfolioTracker
 from halal_trader.crypto.screener import CryptoHalalScreener
-from halal_trader.crypto.strategy import CryptoTradingStrategy
 from halal_trader.crypto.websocket import BinanceWSManager
 from halal_trader.market_hours import today_eastern
 
@@ -47,213 +43,66 @@ class CryptoTradingBot(BaseTradingBot):
         self._reconcile_task: asyncio.Task[None] | None = None
 
     async def _create_components(self) -> None:
-        """Create crypto-specific trading components."""
+        """Build the full crypto wiring via :mod:`crypto.components`."""
         logger.info("Initializing crypto trading bot...")
-
-        # Live-mode token check: refuse to start without a daily confirmation.
-        from halal_trader.core.safeguards import LiveModeChecker, check_live_mode_token
-
-        check_live_mode_token(self.settings, market="crypto")
-        self._live_mode_checker = LiveModeChecker(settings=self.settings, market="crypto")
-
         repo = self._repo
         assert repo is not None
 
-        # Binance connection
-        await self._binance.connect()
+        from halal_trader.crypto.components import build_components
 
-        # WebSocket manager for real-time klines
-        self._ws = BinanceWSManager(
-            self._binance.client,
-            symbols=self.settings.crypto_pairs,
-        )
-        await self._ws.start()
-
-        # LLM (reuse existing provider system)
-        llm = create_llm(self.settings)
-
-        # Halal screener
-        self._screener = CryptoHalalScreener(
-            repo,
-            coingecko_api_key=self.settings.coingecko_api_key,
-            min_market_cap=self.settings.crypto_min_market_cap,
-        )
-
-        # Strategy
-        strategy = CryptoTradingStrategy(
-            llm,
-            repo,
-            llm_provider_name=self.settings.llm_provider.value,
-            max_position_pct=self.settings.crypto_max_position_pct,
-            daily_loss_limit=self.settings.crypto_daily_loss_limit,
-            daily_return_target=self.settings.crypto_daily_return_target,
-            max_simultaneous_positions=self.settings.crypto_max_simultaneous_positions,
-            llm_failure_threshold=self.settings.crypto_llm_failure_threshold,
-            llm_cooldown_seconds=self.settings.crypto_llm_cooldown_seconds,
-        )
-
-        # Executor
-        executor = CryptoExecutor(
-            self._binance,
-            repo,
-            max_position_pct=self.settings.crypto_max_position_pct,
-            max_simultaneous_positions=self.settings.crypto_max_simultaneous_positions,
-            configured_pairs=self.settings.crypto_pairs,
-            circuit_breaker_threshold=self.settings.crypto_circuit_breaker_threshold,
-            circuit_breaker_window=self.settings.crypto_circuit_breaker_window,
-            circuit_breaker_cooldown=self.settings.crypto_circuit_breaker_cooldown,
+        comps = await build_components(
+            settings=self.settings,
+            repo=repo,
+            engine=self._engine,
+            binance=self._binance,
             exiting_pairs=self._exiting_pairs,
         )
 
-        # Portfolio tracker
-        self._portfolio = CryptoPortfolioTracker(
-            self._binance,
-            repo,
-            daily_loss_limit=self.settings.crypto_daily_loss_limit,
-        )
+        # Hand long-lived components back to the scheduler.
+        self._live_mode_checker = comps.live_mode_checker
+        self._ws = comps.ws
+        self._screener = comps.screener
+        self._portfolio = comps.portfolio
+        self._notifier = comps.notifier
+        self._alerts = comps.alerts
+        self._sentiment_manager = comps.sentiment_manager
+        self._self_review = comps.self_review
+        self._retrainer = comps.retrainer
+        self._monitor = comps.monitor
+        self._news_reactor = comps.news_reactor
 
-        # Performance analytics
-        analytics = PerformanceAnalytics(repo)
-
-        # ── New Feature Components ─────────────────────────────
-
-        # Telegram notifier + rate-limited error sink
-        from halal_trader.notifications.telegram import AlertSink, TelegramNotifier
-
-        self._notifier = TelegramNotifier(
-            bot_token=self.settings.telegram_bot_token,
-            chat_id=self.settings.telegram_chat_id,
-        )
-        self._alerts = AlertSink(self._notifier)
-        if self._notifier.enabled:
-            logger.info("Telegram notifications enabled")
-
-        # Sentiment manager (Reddit + CryptoPanic)
-        from halal_trader.sentiment.manager import SentimentManager
-
-        self._sentiment_manager = SentimentManager(
-            trading_pairs=self.settings.crypto_pairs,
-            reddit_client_id=self.settings.reddit_client_id,
-            reddit_client_secret=self.settings.reddit_client_secret,
-            cryptopanic_api_key=self.settings.cryptopanic_api_key,
-            use_finbert=self.settings.sentiment_use_finbert,
-            update_interval_seconds=self.settings.sentiment_update_interval_seconds,
-        )
-        await self._sentiment_manager.start()
-
-        # Multi-timeframe analyzer
-        from halal_trader.crypto.timeframes import TimeframeAnalyzer
-
-        timeframe_analyzer = TimeframeAnalyzer(self._binance)
-
-        # Market regime detector
-        from halal_trader.crypto.regime import RegimeDetector
-
-        regime_detector = RegimeDetector(models_dir=self.settings.ml_models_dir)
-
-        # ML models (optional)
-        ml_forecaster = None
-        ml_anomaly = None
-        ml_signal = None
-        if self.settings.ml_enabled:
-            try:
-                from halal_trader.ml.anomaly import MarketAnomalyDetector, MLSignalClassifier
-                from halal_trader.ml.forecaster import PriceForecaster
-                from halal_trader.ml.hub import ModelHub
-
-                hub = ModelHub(
-                    device=self.settings.ml_device,
-                    models_dir=self.settings.ml_models_dir,
-                )
-                ml_forecaster = PriceForecaster(hub)
-                ml_anomaly = MarketAnomalyDetector(hub)
-                ml_signal = MLSignalClassifier(hub)
-                logger.info("ML models enabled (device: %s)", self.settings.ml_device)
-            except Exception as e:
-                logger.warning("ML models initialization failed: %s", e)
-
-        # Self-improvement loop (load saved adjustments from DB)
-        from halal_trader.crypto.self_improve import TradeSelfReview
-
-        self._self_review = TradeSelfReview(llm, repo, strategy=strategy)
-        await self._self_review.load_from_db()
-
-        # Portfolio-level risk engine
-        from halal_trader.crypto.risk import PortfolioRiskEngine
-
-        risk_engine = PortfolioRiskEngine(
-            base_max_position_pct=self.settings.crypto_max_position_pct,
-            max_portfolio_heat_pct=self.settings.crypto_max_portfolio_heat_pct,
-            max_drawdown_pct=self.settings.crypto_max_drawdown_pct,
-            high_correlation_threshold=self.settings.crypto_high_correlation_threshold,
-            correlation_reduction_factor=self.settings.crypto_correlation_reduction_factor,
-            atr_baseline=self.settings.crypto_atr_baseline,
-        )
-
-        # Cycle service (wired with all new components)
+        # Cycle service holds many of the optional components by reference.
         self._cycle_service = CryptoCycleService(
             broker=self._binance,
-            screener=self._screener,
-            strategy=strategy,
-            executor=executor,
-            portfolio=self._portfolio,
-            ws_manager=self._ws,
+            screener=comps.screener,
+            strategy=comps.strategy,
+            executor=comps.executor,
+            portfolio=comps.portfolio,
+            ws_manager=comps.ws,
             configured_pairs=self.settings.crypto_pairs,
-            analytics=analytics,
-            sentiment_manager=self._sentiment_manager,
-            timeframe_analyzer=timeframe_analyzer,
-            regime_detector=regime_detector,
-            ml_forecaster=ml_forecaster,
-            ml_anomaly_detector=ml_anomaly,
-            ml_signal_classifier=ml_signal,
-            self_review=self._self_review,
-            notifier=self._notifier if self._notifier.enabled else None,
-            risk_engine=risk_engine,
-            alerts=self._alerts,
+            analytics=comps.analytics,
+            sentiment_manager=comps.sentiment_manager,
+            timeframe_analyzer=comps.timeframe_analyzer,
+            regime_detector=comps.regime_detector,
+            ml_forecaster=comps.ml_forecaster,
+            ml_anomaly_detector=comps.ml_anomaly,
+            ml_signal_classifier=comps.ml_signal,
+            self_review=comps.self_review,
+            notifier=comps.notifier if comps.notifier.enabled else None,
+            risk_engine=comps.risk_engine,
+            alerts=comps.alerts,
             engine=self._engine,
-            live_mode_checker=self._live_mode_checker,
+            live_mode_checker=comps.live_mode_checker,
         )
 
-        # ML retrainer (labels closed trades and retrains models)
-        from halal_trader.ml.retrainer import RetrainingScheduler
-
-        self._retrainer = RetrainingScheduler(
-            repo,
-            models_dir=self.settings.ml_models_dir,
-        )
-
-        # Position monitor (SL/TP enforcement)
-        notifier_for_monitor = self._notifier if self._notifier.enabled else None
-        self._monitor = PositionMonitor(
-            broker=self._binance,
-            repo=repo,
-            ws_manager=self._ws,
-            check_interval=self.settings.crypto_monitor_interval,
-            trailing_stop_activation_pct=self.settings.crypto_trailing_stop_activation_pct,
-            trailing_stop_distance_pct=self.settings.crypto_trailing_stop_distance_pct,
-            notifier=notifier_for_monitor,
-            retrainer=self._retrainer,
-            exiting_pairs=self._exiting_pairs,
-        )
+        # Start background tasks the scheduler owns.
         await self._monitor.start()
-
-        # News event reactor (real-time CryptoPanic stream)
-        from halal_trader.sentiment.events import NewsEventReactor
-
-        self._news_reactor = NewsEventReactor(
-            api_key=self.settings.cryptopanic_api_key,
-            trading_pairs=self.settings.crypto_pairs,
-            poll_interval_seconds=30,
-            importance_filter="hot",
-        )
         if self._news_reactor.enabled:
             self._news_reactor.on_event(self._on_news_event)
             await self._news_reactor.start()
-
-        # Reconciliation loop — every 5 min compare DB open trades to broker.
         self._reconcile_task = asyncio.create_task(self._reconcile_loop(), name="crypto-reconcile")
 
-        # Expose live components to the dashboard
+        # Expose live components to the dashboard.
         from halal_trader.web.app import app_state as _web_state
 
         _web_state["ws_manager"] = self._ws
