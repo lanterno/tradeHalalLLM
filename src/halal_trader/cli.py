@@ -172,6 +172,93 @@ def db_revision(message: str, autogenerate: bool) -> None:
     console.print(f"[green]Created revision: {message}[/green]")
 
 
+# ── Kill-switch ────────────────────────────────────────────────
+
+
+@cli.command("halt")
+@click.option("--reason", required=True, help="Why are you halting? (audit trail)")
+@click.option(
+    "--close-all",
+    is_flag=True,
+    help="Also close all open positions immediately (panic button).",
+)
+def halt(reason: str, close_all: bool) -> None:
+    """Engage the operator kill-switch — bots refuse new entries until resumed."""
+
+    async def _halt() -> None:
+        from halal_trader.config import get_settings
+        from halal_trader.core import halt as halt_module
+        from halal_trader.db.models import init_db
+
+        settings = get_settings()
+        engine = await init_db(str(settings.resolve_db_path()))
+        try:
+            status = await halt_module.set_halt(engine, reason=reason)
+            console.print(
+                f"[red]KILL-SWITCH ENGAGED[/red] "
+                f"(by {status.set_by} at {status.set_at}): {status.reason}"
+            )
+
+            if close_all:
+                console.print(
+                    "[yellow]--close-all is set. To liquidate positions, "
+                    "run `halal-trader status` / `crypto status` and use the "
+                    "broker UI for now. Auto-liquidation lands in a follow-up.[/yellow]"
+                )
+        finally:
+            await engine.dispose()
+
+    asyncio.run(_halt())
+
+
+@cli.command("resume")
+def resume() -> None:
+    """Disengage the operator kill-switch."""
+
+    async def _resume() -> None:
+        from halal_trader.config import get_settings
+        from halal_trader.core import halt as halt_module
+        from halal_trader.db.models import init_db
+
+        settings = get_settings()
+        engine = await init_db(str(settings.resolve_db_path()))
+        try:
+            status = await halt_module.clear_halt(engine)
+            console.print(
+                f"[green]Kill-switch cleared[/green] "
+                f"(was set by {status.set_by} at {status.set_at} — reason: {status.reason})"
+            )
+        finally:
+            await engine.dispose()
+
+    asyncio.run(_resume())
+
+
+@cli.command("halt-status")
+def halt_status() -> None:
+    """Show the current kill-switch state."""
+
+    async def _status() -> None:
+        from halal_trader.config import get_settings
+        from halal_trader.core.halt import get_status
+        from halal_trader.db.models import init_db
+
+        settings = get_settings()
+        engine = await init_db(str(settings.resolve_db_path()))
+        try:
+            s = await get_status(engine)
+            if s.enabled:
+                console.print(f"[red]HALTED[/red] (by {s.set_by} at {s.set_at}): {s.reason}")
+            else:
+                console.print("[green]Running[/green] — kill-switch is off.")
+                if s.set_by:
+                    console.print(f"[dim]Last set by {s.set_by} at {s.set_at}: {s.reason}[/dim]")
+        finally:
+            await engine.dispose()
+
+    asyncio.run(_status())
+
+
 # ── Crypto Command Group ───────────────────────────────────────
 
 

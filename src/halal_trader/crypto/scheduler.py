@@ -203,6 +203,7 @@ class CryptoTradingBot(BaseTradingBot):
             notifier=self._notifier if self._notifier.enabled else None,
             risk_engine=risk_engine,
             alerts=self._alerts,
+            engine=self._engine,
         )
 
         # ML retrainer (labels closed trades and retrains models)

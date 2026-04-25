@@ -159,6 +159,24 @@ class StrategyAdjustment(SQLModel, table=True):
     reasoning: str | None = None
 
 
+class KillSwitch(SQLModel, table=True):
+    """Single-row operator kill-switch.
+
+    Both bots check this row at the top of every cycle and refuse to
+    enter new positions while ``enabled`` is True. The monitor still
+    enforces SL/TP exits — closing risk is *less* dangerous than holding
+    overnight under unknown failure.
+    """
+
+    __tablename__ = "kill_switch"
+
+    id: int = Field(default=1, primary_key=True)
+    enabled: bool = Field(default=False)
+    reason: str | None = None
+    set_by: str | None = None
+    set_at: datetime | None = None
+
+
 # ── Schema authority ────────────────────────────────────────────
 #
 # Alembic is the single source of truth for schema. `init_db` opens the

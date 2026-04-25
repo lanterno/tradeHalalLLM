@@ -113,6 +113,7 @@ class TradingBot(BaseTradingBot):
             portfolio=self.portfolio,
             sentiment=sentiment,
             alerts=self._alerts,
+            engine=self._engine,
         )
 
         logger.info("Trading bot initialized successfully")

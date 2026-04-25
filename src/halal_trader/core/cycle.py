@@ -9,6 +9,8 @@ from halal_trader.core import events
 from halal_trader.core.observability import cycle_context
 
 if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncEngine
+
     from halal_trader.notifications.telegram import AlertSink
 
 logger = logging.getLogger(__name__)
@@ -17,13 +19,20 @@ logger = logging.getLogger(__name__)
 class BaseCycleService(ABC):
     """Thin base for stock and crypto trading cycle services.
 
-    Provides the run_cycle() template: pre-checks → halt check →
-    market-specific work → post-cycle hook.  Subclasses fill in the
-    abstract hooks with their own data flows.
+    Provides the run_cycle() template: kill-switch → pre-checks →
+    halt check → market-specific work → post-cycle hook.  Subclasses
+    fill in the abstract hooks with their own data flows.
     """
 
-    def __init__(self, alerts: "AlertSink | None" = None) -> None:
+    def __init__(
+        self,
+        alerts: "AlertSink | None" = None,
+        engine: "AsyncEngine | None" = None,
+    ) -> None:
         self._alerts = alerts
+        # The engine is only needed for the kill-switch lookup. Tests that
+        # exercise the cycle template can leave it None — the check skips.
+        self._engine = engine
 
     async def run_cycle(self) -> None:
         """Execute one complete trading cycle (template method)."""
@@ -35,6 +44,17 @@ class BaseCycleService(ABC):
             )
             t0 = time.monotonic()
             try:
+                if await self._kill_switch_engaged():
+                    logger.warning(
+                        "Cycle halted by operator kill-switch",
+                        extra={
+                            "event": events.CYCLE_HALTED,
+                            "reason": "kill_switch",
+                            "elapsed_ms": int((time.monotonic() - t0) * 1000),
+                        },
+                    )
+                    return
+
                 if not await self._pre_cycle_checks():
                     logger.info(
                         "Cycle skipped (pre-cycle gate)",
@@ -48,9 +68,10 @@ class BaseCycleService(ABC):
 
                 if await self._should_halt():
                     logger.info(
-                        "Cycle halted (loss limit / kill-switch)",
+                        "Cycle halted (loss limit)",
                         extra={
                             "event": events.CYCLE_HALTED,
+                            "reason": "loss_limit",
                             "elapsed_ms": int((time.monotonic() - t0) * 1000),
                         },
                     )
@@ -100,3 +121,11 @@ class BaseCycleService(ABC):
 
     async def _post_cycle(self) -> None:
         """Optional post-cycle hook (no-op by default)."""
+
+    async def _kill_switch_engaged(self) -> bool:
+        """Return True if the operator kill-switch is set."""
+        if self._engine is None:
+            return False
+        from halal_trader.core.halt import is_halted
+
+        return await is_halted(self._engine)
