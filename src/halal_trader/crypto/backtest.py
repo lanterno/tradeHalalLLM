@@ -313,6 +313,169 @@ class BacktestEngine:
         )
 
 
+class LLMBacktestEngine:
+    """Replays historical klines through the full LLM strategy pipeline.
+
+    Caches LLM responses keyed by a hash of the prompt inputs so that
+    repeated runs with the same data don't re-invoke the LLM — useful
+    for prompt engineering iterations.
+    """
+
+    def __init__(
+        self,
+        llm,
+        *,
+        initial_balance: float = 10000.0,
+        slippage_pct: float = 0.0005,
+        fee_pct: float = 0.001,
+        max_position_pct: float = 0.25,
+        sl_pct: float = 0.01,
+        tp_pct: float = 0.015,
+        cache_dir: str | None = None,
+    ) -> None:
+        self._llm = llm
+        self._initial_balance = initial_balance
+        self._slippage_pct = slippage_pct
+        self._fee_pct = fee_pct
+        self._max_position_pct = max_position_pct
+        self._sl_pct = sl_pct
+        self._tp_pct = tp_pct
+        self._cache: dict[str, dict] = {}
+        self._cache_dir = cache_dir
+
+        if cache_dir:
+            self._load_cache()
+
+    def _load_cache(self) -> None:
+        import json
+        from pathlib import Path
+        cache_path = Path(self._cache_dir) / "llm_backtest_cache.json"
+        if cache_path.exists():
+            try:
+                self._cache = json.loads(cache_path.read_text())
+                logger.info("Loaded %d cached LLM responses", len(self._cache))
+            except Exception:
+                pass
+
+    def _save_cache(self) -> None:
+        if not self._cache_dir:
+            return
+        import json
+        from pathlib import Path
+        cache_path = Path(self._cache_dir) / "llm_backtest_cache.json"
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_path.write_text(json.dumps(self._cache))
+
+    def _cache_key(self, pair: str, step: int, indicators: dict) -> str:
+        import hashlib
+        import json
+        data = json.dumps({"pair": pair, "step": step, "ind": indicators}, sort_keys=True)
+        return hashlib.sha256(data.encode()).hexdigest()[:16]
+
+    async def run(
+        self,
+        pair: str,
+        klines: list[Kline],
+        *,
+        window_size: int = 100,
+        cycle_interval: int = 5,
+    ) -> BacktestResult:
+        """Run the LLM backtest on historical klines.
+
+        Args:
+            pair: Trading pair (e.g. BTCUSDT).
+            klines: Historical candlestick data.
+            window_size: Number of candles to include in each analysis window.
+            cycle_interval: Run LLM every N candles (to avoid excessive API calls).
+        """
+        from halal_trader.crypto.indicators import compute_all, format_indicators_for_prompt
+
+        executor = SimulatedExecutor(
+            initial_balance=self._initial_balance,
+            slippage_pct=self._slippage_pct,
+            fee_pct=self._fee_pct,
+            max_position_pct=self._max_position_pct,
+        )
+
+        llm_calls = 0
+
+        for i in range(window_size, len(klines)):
+            current = klines[i]
+
+            executor.check_sl_tp(current)
+
+            if (i - window_size) % cycle_interval != 0:
+                executor.update_equity(current.close)
+                continue
+
+            window = klines[i - window_size : i]
+            indicators = compute_all(window)
+            if "error" in indicators:
+                executor.update_equity(current.close)
+                continue
+
+            cache_key = self._cache_key(pair, i, indicators)
+            if cache_key in self._cache:
+                raw = self._cache[cache_key]
+            else:
+                balance = executor.balance
+                if executor.position:
+                    balance += executor.position.quantity * current.close
+
+                prompt = (
+                    f"Pair: {pair}\nPrice: ${current.close:,.2f}\n"
+                    f"Balance: ${balance:,.2f}\n"
+                    f"Position: {'LONG' if executor.position else 'NONE'}\n"
+                    f"Indicators:\n{format_indicators_for_prompt(pair, indicators)}\n\n"
+                    f"Should I buy, sell, or hold? Respond with JSON: "
+                    f'{{"action": "buy"|"sell"|"hold", "confidence": 0.0-1.0, '
+                    f'"reasoning": "..."}}'
+                )
+                system = (
+                    "You are a crypto scalping AI analyzing 1-minute candle data. "
+                    "Respond ONLY with valid JSON."
+                )
+                try:
+                    raw = await self._llm.generate_json(prompt, system=system)
+                    self._cache[cache_key] = raw
+                    llm_calls += 1
+                except Exception as e:
+                    logger.debug("LLM backtest call failed at step %d: %s", i, e)
+                    executor.update_equity(current.close)
+                    continue
+
+            action = raw.get("action", "hold").lower()
+            confidence = float(raw.get("confidence", 0.5))
+            reasoning = raw.get("reasoning", "")
+
+            if action == "buy" and executor.position is None and confidence >= 0.5:
+                sl = current.close * (1 - self._sl_pct)
+                tp = current.close * (1 + self._tp_pct)
+                executor.buy(
+                    pair, current.close, current.close_time,
+                    stop_loss=sl, target_price=tp, reasoning=reasoning,
+                )
+            elif action == "sell" and executor.position is not None:
+                executor.sell(current.close, current.close_time, "llm_sell")
+
+            executor.update_equity(current.close)
+
+        if executor.position is not None:
+            executor.sell(klines[-1].close, klines[-1].close_time, "backtest_end")
+
+        self._save_cache()
+        logger.info("LLM backtest complete: %d LLM calls, %d cached hits",
+                     llm_calls, len(self._cache) - llm_calls)
+
+        result = BacktestEngine(
+            initial_balance=self._initial_balance,
+            slippage_pct=self._slippage_pct,
+            fee_pct=self._fee_pct,
+            max_position_pct=self._max_position_pct,
+        )._compute_results(pair, klines, executor)
+        return result
+
+
 async def fetch_historical_klines(
     broker, pair: str, interval: str = "1m", limit: int = 1000
 ) -> list[Kline]:

@@ -347,6 +347,8 @@ def crypto_stats(days: int) -> None:
 @click.option("--rsi-sell", default=65.0, help="RSI sell threshold")
 @click.option("--sl", default=0.01, help="Stop-loss percentage")
 @click.option("--tp", default=0.015, help="Take-profit percentage")
+@click.option("--llm", is_flag=True, help="Use LLM strategy instead of rule-based")
+@click.option("--cycle-interval", default=5, help="LLM: run every N candles (reduces API calls)")
 def crypto_backtest(
     pair: str,
     candles: int,
@@ -355,8 +357,10 @@ def crypto_backtest(
     rsi_sell: float,
     sl: float,
     tp: float,
+    llm: bool,
+    cycle_interval: int,
 ) -> None:
-    """Run a backtest on historical data."""
+    """Run a backtest on historical data (rule-based or LLM-driven)."""
 
     async def _backtest() -> None:
         from halal_trader.config import get_settings
@@ -380,47 +384,40 @@ def crypto_backtest(
                 console.print(f"[red]Insufficient data: {len(klines)} candles (need 100+)[/red]")
                 return
 
-            console.print(
-                f"[yellow]Running backtest on {len(klines)} candles "
-                f"(RSI buy<{rsi_buy}, sell>{rsi_sell}, SL={sl:.1%}, TP={tp:.1%})...[/yellow]"
-            )
+            if llm:
+                from halal_trader.core.llm import create_llm
+                from halal_trader.crypto.backtest import LLMBacktestEngine
 
-            engine = BacktestEngine(
-                initial_balance=balance,
-                rsi_buy=rsi_buy,
-                rsi_sell=rsi_sell,
-                sl_pct=sl,
-                tp_pct=tp,
-            )
-            result = await engine.run(pair, klines)
+                llm_backend = create_llm(settings)
+                console.print(
+                    f"[yellow]Running LLM backtest on {len(klines)} candles "
+                    f"(every {cycle_interval} candles, SL={sl:.1%}, TP={tp:.1%})...[/yellow]"
+                )
 
-            # Display results
-            table = Table(
-                title=f"Backtest Results: {pair} ({result.start_date} to {result.end_date})",
-                show_header=True,
-                header_style="bold cyan",
-            )
-            table.add_column("Metric", style="dim")
-            table.add_column("Value", justify="right")
+                engine = LLMBacktestEngine(
+                    llm_backend,
+                    initial_balance=balance,
+                    sl_pct=sl,
+                    tp_pct=tp,
+                    cache_dir=str(settings.ml_models_dir),
+                )
+                result = await engine.run(pair, klines, cycle_interval=cycle_interval)
+            else:
+                console.print(
+                    f"[yellow]Running rule-based backtest on {len(klines)} candles "
+                    f"(RSI buy<{rsi_buy}, sell>{rsi_sell}, SL={sl:.1%}, TP={tp:.1%})...[/yellow]"
+                )
 
-            ret_style = "green" if result.total_return_pct >= 0 else "red"
-            table.add_row("Initial Balance", f"${result.initial_balance:,.2f}")
-            table.add_row("Final Balance", Text(f"${result.final_balance:,.2f}", style=ret_style))
-            table.add_row("Total Return", Text(f"{result.total_return_pct:+.2%}", style=ret_style))
-            table.add_row("Total Trades", str(result.total_trades))
-            table.add_row("Wins / Losses", f"{result.wins} / {result.losses}")
+                engine = BacktestEngine(
+                    initial_balance=balance,
+                    rsi_buy=rsi_buy,
+                    rsi_sell=rsi_sell,
+                    sl_pct=sl,
+                    tp_pct=tp,
+                )
+                result = await engine.run(pair, klines)
 
-            wr_style = "green" if result.win_rate >= 0.5 else "red"
-            table.add_row("Win Rate", Text(f"{result.win_rate:.0%}", style=wr_style))
-
-            pf_str = f"{result.profit_factor:.2f}" if result.profit_factor < 100 else "inf"
-            table.add_row("Profit Factor", pf_str)
-            table.add_row("Max Drawdown", Text(f"{result.max_drawdown_pct:.2%}", style="red"))
-            table.add_row("Sharpe Ratio", f"{result.sharpe_ratio:.2f}")
-            table.add_row("Sortino Ratio", f"{result.sortino_ratio:.2f}")
-            table.add_row("Avg Hold", f"{result.avg_hold_candles:.0f} candles")
-
-            console.print(table)
+            _print_backtest_results(result, pair, is_llm=llm)
 
         finally:
             await client.disconnect()
@@ -725,6 +722,36 @@ def _print_crypto_trades(trades: list) -> None:
             str(t.get("status", "")),
             str(t.get("llm_reasoning", ""))[:35],
         )
+
+    console.print(table)
+
+
+def _print_backtest_results(result, pair: str, *, is_llm: bool = False) -> None:
+    mode = "LLM" if is_llm else "Rule-Based"
+    table = Table(
+        title=f"{mode} Backtest: {pair} ({result.start_date} to {result.end_date})",
+        show_header=True,
+        header_style="bold cyan",
+    )
+    table.add_column("Metric", style="dim")
+    table.add_column("Value", justify="right")
+
+    ret_style = "green" if result.total_return_pct >= 0 else "red"
+    table.add_row("Initial Balance", f"${result.initial_balance:,.2f}")
+    table.add_row("Final Balance", Text(f"${result.final_balance:,.2f}", style=ret_style))
+    table.add_row("Total Return", Text(f"{result.total_return_pct:+.2%}", style=ret_style))
+    table.add_row("Total Trades", str(result.total_trades))
+    table.add_row("Wins / Losses", f"{result.wins} / {result.losses}")
+
+    wr_style = "green" if result.win_rate >= 0.5 else "red"
+    table.add_row("Win Rate", Text(f"{result.win_rate:.0%}", style=wr_style))
+
+    pf_str = f"{result.profit_factor:.2f}" if result.profit_factor < 100 else "inf"
+    table.add_row("Profit Factor", pf_str)
+    table.add_row("Max Drawdown", Text(f"{result.max_drawdown_pct:.2%}", style="red"))
+    table.add_row("Sharpe Ratio", f"{result.sharpe_ratio:.2f}")
+    table.add_row("Sortino Ratio", f"{result.sortino_ratio:.2f}")
+    table.add_row("Avg Hold", f"{result.avg_hold_candles:.0f} candles")
 
     console.print(table)
 
