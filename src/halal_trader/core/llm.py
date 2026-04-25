@@ -1,5 +1,6 @@
 """LLM provider abstraction supporting Ollama, OpenAI, and Anthropic."""
 
+import asyncio
 import json
 import logging
 import re
@@ -95,6 +96,8 @@ class OllamaLLM(BaseLLM):
     captured in ``last_thinking`` for audit and self-improvement.
     """
 
+    _TIMEOUT_SECONDS = 45
+
     def __init__(self, model: str, host: str = "http://localhost:11434") -> None:
         super().__init__(model)
         self.host = host
@@ -115,20 +118,28 @@ class OllamaLLM(BaseLLM):
         messages.append({"role": "user", "content": prompt})
 
         t0 = time.monotonic()
-        response = await client.chat(
-            model=self.model,
-            messages=messages,
-            format="json",
-            options={"temperature": 0.2},
+        response = await asyncio.wait_for(
+            client.chat(
+                model=self.model,
+                messages=messages,
+                format="json",
+                options={"temperature": 0.2},
+            ),
+            timeout=self._TIMEOUT_SECONDS,
         )
         elapsed = time.monotonic() - t0
         logger.debug("Ollama response in %.1fs", elapsed)
 
-        return response["message"]["content"]
+        content = response["message"]["content"]
+        if not content or not content.strip():
+            raise ValueError("Ollama returned empty response")
+        return content
 
 
 class OpenAILLM(BaseLLM):
     """Cloud LLM via OpenAI API."""
+
+    _TIMEOUT_SECONDS = 30
 
     def __init__(self, model: str, api_key: str) -> None:
         super().__init__(model)
@@ -150,11 +161,14 @@ class OpenAILLM(BaseLLM):
         messages.append({"role": "user", "content": prompt})
 
         t0 = time.monotonic()
-        response = await client.chat.completions.create(
-            model=self.model,
-            messages=messages,
-            response_format={"type": "json_object"},
-            temperature=0.2,
+        response = await asyncio.wait_for(
+            client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                response_format={"type": "json_object"},
+                temperature=0.2,
+            ),
+            timeout=self._TIMEOUT_SECONDS,
         )
         elapsed = time.monotonic() - t0
         if response.usage:
@@ -175,6 +189,8 @@ class OpenAILLM(BaseLLM):
 class AnthropicLLM(BaseLLM):
     """Cloud LLM via Anthropic API."""
 
+    _TIMEOUT_SECONDS = 30
+
     def __init__(self, model: str, api_key: str) -> None:
         super().__init__(model)
         self.api_key = api_key
@@ -191,11 +207,14 @@ class AnthropicLLM(BaseLLM):
         client = self._get_client()
 
         t0 = time.monotonic()
-        response = await client.messages.create(
-            model=self.model,
-            max_tokens=4096,
-            system=system or "",
-            messages=[{"role": "user", "content": prompt}],
+        response = await asyncio.wait_for(
+            client.messages.create(
+                model=self.model,
+                max_tokens=4096,
+                system=system or "",
+                messages=[{"role": "user", "content": prompt}],
+            ),
+            timeout=self._TIMEOUT_SECONDS,
         )
         elapsed = time.monotonic() - t0
         if hasattr(response, "usage") and response.usage:
@@ -224,6 +243,8 @@ class FallbackLLM(BaseLLM):
         self._backoff_until: float = 0
         self._max_backoff_minutes = 30
         self._active_model = primary.model
+        self._chain_failures = 0
+        self._chain_backoff_until: float = 0
 
     @property
     def model(self) -> str:  # type: ignore[override]
@@ -234,9 +255,16 @@ class FallbackLLM(BaseLLM):
         self._active_model = value
 
     async def generate(self, prompt: str, system: str | None = None) -> str:
+        now = time.monotonic()
+        if now < self._chain_backoff_until:
+            remaining = int(self._chain_backoff_until - now)
+            raise RuntimeError(
+                f"All LLM providers in backoff for {remaining}s more "
+                f"after {self._chain_failures} consecutive full-chain failures"
+            )
+
         providers: list[BaseLLM] = []
 
-        now = time.monotonic()
         if now >= self._backoff_until:
             providers.append(self._primary)
         else:
@@ -254,6 +282,8 @@ class FallbackLLM(BaseLLM):
                 if provider is self._primary:
                     self._consecutive_failures = 0
                     self._backoff_until = 0
+                self._chain_failures = 0
+                self._chain_backoff_until = 0
                 self._active_model = provider.model
                 self.last_thinking = provider.last_thinking
                 return result
@@ -277,13 +307,27 @@ class FallbackLLM(BaseLLM):
                             self._consecutive_failures, backoff_min,
                         )
 
+        self._chain_failures += 1
+        chain_backoff_sec = min(60 * 2 ** (self._chain_failures - 1), 1800)
+        self._chain_backoff_until = time.monotonic() + chain_backoff_sec
+        logger.error(
+            "All LLM providers failed (%d consecutive) — chain backoff for %ds",
+            self._chain_failures, chain_backoff_sec,
+        )
         raise last_error or RuntimeError("No LLM providers available")
 
     async def generate_json(self, prompt: str, system: str | None = None) -> dict[str, Any]:
         """Delegate to each provider's generate_json (preserving thinking-mode retry)."""
+        now = time.monotonic()
+        if now < self._chain_backoff_until:
+            remaining = int(self._chain_backoff_until - now)
+            raise RuntimeError(
+                f"All LLM providers in backoff for {remaining}s more "
+                f"after {self._chain_failures} consecutive full-chain failures"
+            )
+
         providers: list[BaseLLM] = []
 
-        now = time.monotonic()
         if now >= self._backoff_until:
             providers.append(self._primary)
         else:
@@ -301,6 +345,8 @@ class FallbackLLM(BaseLLM):
                 if provider is self._primary:
                     self._consecutive_failures = 0
                     self._backoff_until = 0
+                self._chain_failures = 0
+                self._chain_backoff_until = 0
                 self._active_model = provider.model
                 self.last_thinking = provider.last_thinking
                 return result
@@ -324,6 +370,13 @@ class FallbackLLM(BaseLLM):
                             self._consecutive_failures, backoff_min,
                         )
 
+        self._chain_failures += 1
+        chain_backoff_sec = min(60 * 2 ** (self._chain_failures - 1), 1800)
+        self._chain_backoff_until = time.monotonic() + chain_backoff_sec
+        logger.error(
+            "All LLM providers failed (%d consecutive) — chain backoff for %ds",
+            self._chain_failures, chain_backoff_sec,
+        )
         raise last_error or RuntimeError("No LLM providers available")
 
 
@@ -342,7 +395,12 @@ def _create_single_llm(provider: LLMProvider, model: str, settings: Settings) ->
 
 
 def create_llm(settings: Settings | None = None) -> BaseLLM:
-    """Factory: create the appropriate LLM with automatic fallback chain."""
+    """Factory: create the appropriate LLM with opt-in fallback chain.
+
+    Fallbacks are only created for providers explicitly listed in
+    ``settings.llm_fallback_providers``.  An empty list (the default)
+    means Ollama-only with no cloud fallback.
+    """
     if settings is None:
         settings = get_settings()
 
@@ -359,14 +417,22 @@ def create_llm(settings: Settings | None = None) -> BaseLLM:
     }
 
     fallbacks: list[BaseLLM] = []
-    all_providers = [LLMProvider.OPENAI, LLMProvider.ANTHROPIC, LLMProvider.OLLAMA]
-    for provider in all_providers:
+    for name in settings.llm_fallback_providers:
+        try:
+            provider = LLMProvider(name.lower())
+        except ValueError:
+            logger.warning("Unknown fallback provider '%s' — skipping", name)
+            continue
         if provider == settings.llm_provider:
             continue
         model = fallback_models.get(provider, settings.llm_model)
         fb = _create_single_llm(provider, model, settings)
         if fb is not None:
             fallbacks.append(fb)
+        else:
+            logger.warning(
+                "Fallback provider '%s' requested but not configured (missing API key?)", name
+            )
 
     if fallbacks:
         logger.info(
@@ -376,4 +442,5 @@ def create_llm(settings: Settings | None = None) -> BaseLLM:
         )
         return FallbackLLM(primary, fallbacks)
 
+    logger.info("LLM provider: %s (no fallbacks)", type(primary).__name__)
     return primary

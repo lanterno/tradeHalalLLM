@@ -55,6 +55,10 @@ class Settings(BaseSettings):
     ollama_host: str = Field(default="http://localhost:11434", description="Ollama server URL")
     openai_api_key: str | None = Field(default=None, description="OpenAI API key")
     anthropic_api_key: str | None = Field(default=None, description="Anthropic API key")
+    llm_fallback_providers: list[str] = Field(
+        default=[],
+        description="Ordered list of fallback LLM providers (e.g. ['openai', 'anthropic']). Empty = no fallbacks.",
+    )
     ollama_fallback_model: str = Field(
         default="", description="Model name for Ollama when used as fallback (empty = same as llm_model)"
     )
