@@ -216,9 +216,7 @@ def build_orderbook_text(orderbooks: dict[str, dict[str, Any]]) -> str:
     return "\n".join(lines) if lines else "No order book data available."
 
 
-def build_prompts(
-    ctx: PromptContext, params: StrategyParams
-) -> tuple[str, str]:
+def build_prompts(ctx: PromptContext, params: StrategyParams) -> tuple[str, str]:
     """Render the (system, user) prompt pair from a ``PromptContext``.
 
     Pure function; no IO, no LLM calls.  Both live ``analyze`` and the
@@ -262,9 +260,7 @@ def build_prompts(
 
     pct_limit = portfolio_value * params.max_position_pct
     spendable = (
-        ctx.account.usdt_free
-        if ctx.account.usdt_free > 0
-        else ctx.account.available_balance_usdt
+        ctx.account.usdt_free if ctx.account.usdt_free > 0 else ctx.account.available_balance_usdt
     )
     max_position_value = min(pct_limit, spendable) if spendable > 0 else pct_limit
 

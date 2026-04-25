@@ -11,7 +11,25 @@ from halal_trader.ml.hub import ModelHub
 
 logger = logging.getLogger(__name__)
 
-_FEATURES = ["rsi_14", "macd_histogram", "volume_ratio", "atr_14", "bb_position"]
+_FEATURES = [
+    "rsi_14",
+    "macd_histogram",
+    "volume_ratio",
+    "atr_14",
+    "bb_position",
+    "ema_9",
+    "ema_21",
+    "vwap",
+    "price_change_5m",
+]
+
+# Bump on any feature-set / preprocessing change. Pickles tagged with
+# a different version are discarded on load so retraining picks up the
+# new shape automatically.
+_MODEL_VERSION = 2
+
+# Pickled payload format (both detector + classifier):
+#   {"version": int, "features": list[str], "model": <sklearn / xgb model>}
 
 
 class MarketAnomalyDetector:
@@ -27,13 +45,23 @@ class MarketAnomalyDetector:
 
     def _load_model(self) -> None:
         """Load a previously trained model from disk."""
-        if self._model_path.exists():
-            try:
-                with open(self._model_path, "rb") as f:
-                    self._model = pickle.load(f)
-                logger.info("Anomaly detector loaded from %s", self._model_path)
-            except Exception as e:
-                logger.warning("Failed to load anomaly model: %s", e)
+        if not self._model_path.exists():
+            return
+        try:
+            with open(self._model_path, "rb") as f:
+                payload = pickle.load(f)
+        except Exception as e:
+            logger.warning("Failed to load anomaly model: %s", e)
+            return
+
+        if not _is_current_payload(payload):
+            logger.info(
+                "Discarding stale anomaly model at %s (version mismatch)",
+                self._model_path,
+            )
+            return
+        self._model = payload["model"]
+        logger.info("Anomaly detector loaded from %s", self._model_path)
 
     def add_sample(self, indicators: dict) -> None:
         """Add an indicator snapshot as a training sample."""
@@ -58,7 +86,7 @@ class MarketAnomalyDetector:
             self._model.fit(X)
 
             with open(self._model_path, "wb") as f:
-                pickle.dump(self._model, f)
+                pickle.dump(_versioned_payload(self._model), f)
 
             logger.info("Anomaly detector trained on %d samples", len(X))
             return True
@@ -130,13 +158,23 @@ class MLSignalClassifier:
         return self.train(self._samples[-5000:], self._labels[-5000:])
 
     def _load_model(self) -> None:
-        if self._model_path.exists():
-            try:
-                with open(self._model_path, "rb") as f:
-                    self._model = pickle.load(f)
-                logger.info("Signal classifier loaded from %s", self._model_path)
-            except Exception as e:
-                logger.warning("Failed to load signal classifier: %s", e)
+        if not self._model_path.exists():
+            return
+        try:
+            with open(self._model_path, "rb") as f:
+                payload = pickle.load(f)
+        except Exception as e:
+            logger.warning("Failed to load signal classifier: %s", e)
+            return
+
+        if not _is_current_payload(payload):
+            logger.info(
+                "Discarding stale signal classifier at %s (version mismatch)",
+                self._model_path,
+            )
+            return
+        self._model = payload["model"]
+        logger.info("Signal classifier loaded from %s", self._model_path)
 
     def train(self, features: list[list[float]], labels: list[int]) -> bool:
         """Train the classifier on historical trade outcomes.
@@ -161,7 +199,7 @@ class MLSignalClassifier:
             self._model.fit(X, y)
 
             with open(self._model_path, "wb") as f:
-                pickle.dump(self._model, f)
+                pickle.dump(_versioned_payload(self._model), f)
 
             logger.info("Signal classifier trained on %d samples", len(features))
             return True
@@ -190,6 +228,22 @@ class MLSignalClassifier:
             return float(proba[1])
         except Exception:
             return None
+
+
+def _versioned_payload(model: object) -> dict:
+    """Wrap ``model`` with a (version, features) tag so loaders can validate it."""
+    return {"version": _MODEL_VERSION, "features": list(_FEATURES), "model": model}
+
+
+def _is_current_payload(payload: object) -> bool:
+    """Return True if the loaded pickle is tagged for the current feature set."""
+    if not isinstance(payload, dict):
+        return False
+    if payload.get("version") != _MODEL_VERSION:
+        return False
+    if list(payload.get("features") or []) != list(_FEATURES):
+        return False
+    return "model" in payload
 
 
 def format_ml_signals_for_prompt(

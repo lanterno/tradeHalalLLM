@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from halal_trader.crypto.prompts import (
     PromptContext,
     StrategyParams,

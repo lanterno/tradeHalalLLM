@@ -16,6 +16,10 @@ _FEATURE_KEYS = [
     "volume_ratio",
     "atr_14",
     "bb_position",
+    "ema_9",
+    "ema_21",
+    "vwap",
+    "price_change_5m",
 ]
 
 
