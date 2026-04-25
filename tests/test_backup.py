@@ -84,9 +84,7 @@ def test_prune_keeps_weekly_sundays(tmp_path):
     sunday_path = _seed_backup(backup_dir, sunday)
     weekday_path = _seed_backup(backup_dir, sunday + timedelta(days=1))  # Monday
 
-    backup.prune_backups(
-        backup_dir=backup_dir, retention_days=7, weekly_count=4, today=today
-    )
+    backup.prune_backups(backup_dir=backup_dir, retention_days=7, weekly_count=4, today=today)
     assert sunday_path.exists(), "Sunday should be retained as a weekly"
     assert not weekday_path.exists(), "Off-week Monday should have been pruned"
 
@@ -99,9 +97,7 @@ def test_prune_keeps_only_most_recent_n_sundays(tmp_path):
     s2 = _seed_backup(backup_dir, date(2026, 2, 1))
     s3 = _seed_backup(backup_dir, date(2026, 3, 1))
 
-    backup.prune_backups(
-        backup_dir=backup_dir, retention_days=1, weekly_count=2, today=today
-    )
+    backup.prune_backups(backup_dir=backup_dir, retention_days=1, weekly_count=2, today=today)
     # Only the two most recent Sundays survive; the oldest is gone.
     assert not s1.exists()
     assert s2.exists()

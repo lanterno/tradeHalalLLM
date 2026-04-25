@@ -50,6 +50,12 @@ class CryptoTradingBot(BaseTradingBot):
         """Create crypto-specific trading components."""
         logger.info("Initializing crypto trading bot...")
 
+        # Live-mode token check: refuse to start without a daily confirmation.
+        from halal_trader.core.safeguards import LiveModeChecker, check_live_mode_token
+
+        check_live_mode_token(self.settings, market="crypto")
+        self._live_mode_checker = LiveModeChecker(settings=self.settings, market="crypto")
+
         repo = self._repo
         assert repo is not None
 
@@ -205,6 +211,7 @@ class CryptoTradingBot(BaseTradingBot):
             risk_engine=risk_engine,
             alerts=self._alerts,
             engine=self._engine,
+            live_mode_checker=self._live_mode_checker,
         )
 
         # ML retrainer (labels closed trades and retrains models)

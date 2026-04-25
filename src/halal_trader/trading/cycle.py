@@ -37,8 +37,10 @@ class TradingCycleService(BaseCycleService):
         sentiment: SentimentAnalyzer | None = None,
         alerts=None,
         engine=None,
+        live_mode_checker=None,
     ) -> None:
         super().__init__(alerts=alerts, engine=engine)
+        self._live_mode_checker = live_mode_checker
         self._broker = broker
         self._screener = screener
         self._strategy = strategy
@@ -94,6 +96,17 @@ class TradingCycleService(BaseCycleService):
 
     async def _run_cycle_impl(self) -> None:
         account = await self._broker.get_account_info()
+
+        if self._live_mode_checker is not None and self._live_mode_checker.active:
+            safe = await self._live_mode_checker.assert_safe(
+                account_balance=account.effective_equity,
+                engine=self._engine,
+                alerts=self._alerts,
+            )
+            if not safe:
+                logger.error("Stock live-mode safeguard tripped — refusing to trade.")
+                return
+
         positions = await self._broker.get_all_positions()
 
         halal_symbols = await self._screener.get_halal_symbols()

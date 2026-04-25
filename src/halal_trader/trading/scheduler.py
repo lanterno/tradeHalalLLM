@@ -52,6 +52,12 @@ class TradingBot(BaseTradingBot):
         """Create stock-specific trading components."""
         logger.info("Initializing trading bot...")
 
+        # Live-mode token check: refuse to start without a daily confirmation.
+        from halal_trader.core.safeguards import LiveModeChecker, check_live_mode_token
+
+        check_live_mode_token(self.settings, market="stocks")
+        self._live_mode_checker = LiveModeChecker(settings=self.settings, market="stocks")
+
         repo = self._repo
         assert repo is not None
 
@@ -114,6 +120,7 @@ class TradingBot(BaseTradingBot):
             sentiment=sentiment,
             alerts=self._alerts,
             engine=self._engine,
+            live_mode_checker=self._live_mode_checker,
         )
 
         logger.info("Trading bot initialized successfully")

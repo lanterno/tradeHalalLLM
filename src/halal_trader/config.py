@@ -217,6 +217,34 @@ class Settings(BaseSettings):
     telegram_bot_token: str = Field(default="", description="Telegram bot API token")
     telegram_chat_id: str = Field(default="", description="Telegram chat ID for alerts")
 
+    # ── Live-mode safeguards ─────────────────────────────────
+    live_mode_confirmation: str = Field(
+        default="",
+        description=(
+            "Required to start in live mode (testnet=false / paper_trade=false). "
+            "Must equal 'I-UNDERSTAND-REAL-MONEY-YYYY-MM-DD' for today's date."
+        ),
+    )
+    max_account_balance_usd: float = Field(
+        default=500.0,
+        gt=0,
+        description="Hard ceiling on account balance in live mode; halts above this",
+    )
+    max_single_order_usd: float = Field(
+        default=100.0,
+        gt=0,
+        description="Hard ceiling on a single order's notional in live mode",
+    )
+    live_mode_max_daily_loss_pct: float = Field(
+        default=0.02,
+        ge=0,
+        le=0.5,
+        description=(
+            "Hard floor on daily_loss_limit in live mode. "
+            "Cannot be loosened beyond this regardless of crypto/stock config."
+        ),
+    )
+
     # ── Database ────────────────────────────────────────────────
     db_path: Path = Field(default=Path("halal_trader.db"), description="SQLite database path")
     backup_dir: Path = Field(
