@@ -5,8 +5,6 @@ from __future__ import annotations
 import pickle
 import time
 
-import pytest
-
 from halal_trader.ml.anomaly import _FEATURES, _MODEL_VERSION, MarketAnomalyDetector
 from halal_trader.ml.hub import ModelHub
 

@@ -118,6 +118,7 @@ class TradingCycleService(BaseCycleService):
         today_pnl = await self._portfolio.get_current_pnl()
 
         sentiment_text = await self._gather_sentiment(halal_symbols)
+        risk_text = self._build_risk_text(bars, positions, account.effective_equity)
 
         plan = await self._strategy.analyze(
             account=account,
@@ -127,6 +128,7 @@ class TradingCycleService(BaseCycleService):
             bars=bars,
             today_pnl=today_pnl,
             sentiment_text=sentiment_text,
+            risk_text=risk_text,
         )
 
         logger.info(
@@ -163,6 +165,23 @@ class TradingCycleService(BaseCycleService):
             except Exception as e:
                 logger.debug("Failed to get bars for %s: %s", sym, e)
         return snapshots, bars
+
+    def _build_risk_text(self, bars: dict[str, Any], positions: list[Any], equity: float) -> str:
+        """Run the shared portfolio-risk engine and return a prompt-ready string."""
+        try:
+            from halal_trader.config import get_settings
+            from halal_trader.trading.risk import evaluate_stock_risk
+
+            output = evaluate_stock_risk(
+                settings=get_settings(),
+                bars_by_symbol=bars,
+                positions=positions,
+                total_equity=equity,
+            )
+        except Exception as exc:
+            logger.debug("Stock risk engine evaluation failed: %s", exc)
+            return ""
+        return output.risk_text
 
     async def _gather_sentiment(self, halal_symbols: list[str]) -> str:
         """Run sentiment analysis if available, returning formatted text."""
