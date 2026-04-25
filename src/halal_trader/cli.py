@@ -179,36 +179,87 @@ def db_revision(message: str, autogenerate: bool) -> None:
 @click.option("--reason", required=True, help="Why are you halting? (audit trail)")
 @click.option(
     "--close-all",
-    is_flag=True,
-    help="Also close all open positions immediately (panic button).",
+    type=click.Choice(["crypto", "stocks", "both"]),
+    default=None,
+    help="Also liquidate every open position on this market before halting.",
 )
-def halt(reason: str, close_all: bool) -> None:
-    """Engage the operator kill-switch — bots refuse new entries until resumed."""
+def halt(reason: str, close_all: str | None) -> None:
+    """Engage the operator kill-switch — bots refuse new entries until resumed.
+
+    With ``--close-all``, every open position on the named market is
+    liquidated FIRST (best-effort, surfaces per-symbol errors), then the
+    kill-switch is engaged so no new positions can open while you
+    investigate.
+    """
 
     async def _halt() -> None:
         from halal_trader.config import get_settings
         from halal_trader.core import halt as halt_module
+        from halal_trader.core.liquidate import liquidate_crypto, liquidate_stocks
         from halal_trader.db.models import init_db
 
         settings = get_settings()
         engine = await init_db(str(settings.resolve_db_path()))
         try:
+            if close_all:
+                if close_all in ("crypto", "both"):
+                    from halal_trader.crypto.exchange import BinanceClient
+
+                    client = BinanceClient(
+                        api_key=settings.binance_api_key,
+                        secret_key=settings.binance_secret_key,
+                        testnet=settings.binance_testnet,
+                        configured_pairs=settings.crypto_pairs,
+                    )
+                    try:
+                        await client.connect()
+                        results = await liquidate_crypto(client, settings.crypto_pairs)
+                    finally:
+                        await client.disconnect()
+                    _print_liquidation(results)
+
+                if close_all in ("stocks", "both"):
+                    from halal_trader.mcp.client import AlpacaMCPClient
+
+                    mcp = AlpacaMCPClient()
+                    try:
+                        await mcp.connect()
+                        results = await liquidate_stocks(mcp)
+                    finally:
+                        await mcp.disconnect()
+                    _print_liquidation(results)
+
             status = await halt_module.set_halt(engine, reason=reason)
             console.print(
                 f"[red]KILL-SWITCH ENGAGED[/red] "
                 f"(by {status.set_by} at {status.set_at}): {status.reason}"
             )
-
-            if close_all:
-                console.print(
-                    "[yellow]--close-all is set. To liquidate positions, "
-                    "run `halal-trader status` / `crypto status` and use the "
-                    "broker UI for now. Auto-liquidation lands in a follow-up.[/yellow]"
-                )
         finally:
             await engine.dispose()
 
     asyncio.run(_halt())
+
+
+def _print_liquidation(results: list) -> None:
+    if not results:
+        console.print("[dim]No positions to close.[/dim]")
+        return
+    tbl = Table(title="Liquidation", header_style="bold cyan")
+    tbl.add_column("Market")
+    tbl.add_column("Symbol")
+    tbl.add_column("Qty", justify="right")
+    tbl.add_column("Status")
+    tbl.add_column("Detail")
+    for r in results:
+        style = "green" if r.status == "closed" else "yellow" if r.status == "skipped" else "red"
+        tbl.add_row(
+            r.market,
+            r.symbol,
+            f"{r.quantity:g}",
+            Text(r.status, style=style),
+            r.detail or "",
+        )
+    console.print(tbl)
 
 
 @cli.command("resume")

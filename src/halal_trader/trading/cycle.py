@@ -139,7 +139,7 @@ class TradingCycleService(BaseCycleService):
         )
 
         if plan.decisions:
-            results = await self._executor.execute_plan(plan)
+            results = await self._executor.execute_plan(plan, bars=bars)
             for r in results:
                 logger.info("Execution result: %s", r)
         else:

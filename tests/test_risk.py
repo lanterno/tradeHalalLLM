@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from halal_trader.crypto.risk import PortfolioRiskEngine
 from halal_trader.domain.models import Kline
 
@@ -91,9 +89,7 @@ def test_heat_below_threshold_no_halt():
 
 
 def test_high_correlation_shrinks_size_for_open_pair():
-    eng = _engine(
-        high_correlation_threshold=0.7, correlation_reduction_factor=0.5
-    )
+    eng = _engine(high_correlation_threshold=0.7, correlation_reduction_factor=0.5)
     klines = {
         "BTC": _series(100, 50, 1.0),  # rising linearly
         "ETH": _series(200, 50, 2.0),  # also rising linearly → corr ≈ 1

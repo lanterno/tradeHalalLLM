@@ -15,9 +15,7 @@ class _FakeRepo:
         self.labelled = labelled or []
         self.label_calls: list[tuple[int, int, float]] = []
 
-    async def label_indicator_snapshot(
-        self, trade_id: int, label: int, return_pct: float
-    ) -> None:
+    async def label_indicator_snapshot(self, trade_id: int, label: int, return_pct: float) -> None:
         self.label_calls.append((trade_id, label, return_pct))
 
     async def get_labeled_snapshots(self, *, min_samples: int) -> list[dict[str, Any]]:
@@ -86,9 +84,7 @@ async def test_retrain_skips_snapshots_with_missing_features(monkeypatch, tmp_pa
     missing["ema_9"] = None  # one None makes the row invalid
 
     repo = _FakeRepo(labelled=[full, missing] * 30)  # 60 rows, half valid
-    sched = RetrainingScheduler(
-        repo, models_dir=tmp_path, min_samples=20
-    )
+    sched = RetrainingScheduler(repo, models_dir=tmp_path, min_samples=20)
 
     # Replace the actual ML training so we can inspect what was passed in.
     captured: dict[str, list] = {}

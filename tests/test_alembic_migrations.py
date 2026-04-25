@@ -10,9 +10,9 @@ import sqlite3
 from pathlib import Path
 
 import pytest
-from alembic import command
 from alembic.config import Config
 
+from alembic import command
 from halal_trader.db import admin
 
 
@@ -52,9 +52,7 @@ def db_path(tmp_path, monkeypatch):
 
 def _tables_in(db_path: Path) -> set[str]:
     with sqlite3.connect(str(db_path)) as conn:
-        rows = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-        ).fetchall()
+        rows = conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
     return {r[0] for r in rows}
 
 

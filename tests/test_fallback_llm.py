@@ -96,9 +96,7 @@ async def test_chain_backoff_grows_exponentially(monkeypatch):
 
     real_monotonic = time.monotonic
     fake_now = [real_monotonic()]
-    monkeypatch.setattr(
-        "halal_trader.core.llm.time.monotonic", lambda: fake_now[0]
-    )
+    monkeypatch.setattr("halal_trader.core.llm.time.monotonic", lambda: fake_now[0])
 
     backoffs: list[float] = []
     for _ in range(4):

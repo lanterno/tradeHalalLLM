@@ -34,9 +34,16 @@ class TradeExecutor(BaseExecutor):
         )
         self._broker = broker
 
-    async def execute_plan(self, plan: TradingPlan) -> list[dict[str, Any]]:
-        """Execute all decisions in a TradingPlan, returning execution results."""
-        return await self._execute_plan_common(plan)
+    async def execute_plan(
+        self, plan: TradingPlan, *, bars: dict[str, Any] | None = None
+    ) -> list[dict[str, Any]]:
+        """Execute all decisions in a TradingPlan, returning execution results.
+
+        ``bars`` is the per-symbol bar payload from the cycle. When passed,
+        every successful BUY records a stock-side IndicatorSnapshot for the
+        shared retrainer.
+        """
+        return await self._execute_plan_common(plan, bars=bars or {})
 
     def _get_sells(self, plan: Any) -> list[Any]:
         return plan.sells
@@ -101,7 +108,7 @@ class TradeExecutor(BaseExecutor):
                 },
             )
 
-            await self._repo.record_trade(
+            trade_id = await self._repo.record_trade(
                 symbol=decision.symbol,
                 side="buy",
                 quantity=decision.quantity,
@@ -115,12 +122,25 @@ class TradeExecutor(BaseExecutor):
                 filled_quantity=fill.filled_quantity,
             )
 
+            # Stock-side ML snapshot — best-effort, never aborts the buy.
+            bars_for_symbol = (kwargs.get("bars") or {}).get(decision.symbol)
+            if fill.status in ("filled", "partially_filled") and bars_for_symbol:
+                from halal_trader.trading.snapshots import record_stock_snapshot
+
+                await record_stock_snapshot(
+                    repo=self._repo,
+                    trade_id=trade_id,
+                    symbol=decision.symbol,
+                    bars=bars_for_symbol,
+                )
+
             return {
                 "symbol": decision.symbol,
                 "action": "buy",
                 "quantity": decision.quantity,
                 "status": fill.status,
                 "order": order_result,
+                "trade_id": trade_id,
             }
         except Exception as e:
             logger.error("Failed to place BUY order for %s: %s", decision.symbol, e)
