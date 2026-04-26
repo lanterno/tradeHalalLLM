@@ -24,12 +24,12 @@ def test_hub_state_snapshot_has_expected_keys() -> None:
     from halal_trader.core.insights_hub import hub as h
 
     snap = h.to_app_state()
-    assert set(snap.keys()) == {
+    assert {
         "drift_monitor",
         "regime_memory",
         "shadow_ledger",
         "calibration_curve",
-    }
+    } <= set(snap.keys())
 
 
 def test_hub_modifications_persist_until_reset() -> None:

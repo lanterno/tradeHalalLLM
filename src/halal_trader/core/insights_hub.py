@@ -24,6 +24,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from halal_trader.core.shadow import ShadowLedger
+from halal_trader.crypto.basis import BasisTracker
 from halal_trader.ml.calibration import CalibrationCurve
 from halal_trader.ml.drift import DriftMonitor
 from halal_trader.ml.regime_memory import RegimeMemory
@@ -37,6 +38,10 @@ class InsightsHub:
     regime: RegimeMemory = field(default_factory=RegimeMemory)
     shadow: ShadowLedger = field(default_factory=ShadowLedger)
     calibration: CalibrationCurve = field(default_factory=CalibrationCurve.identity)
+    basis: BasisTracker = field(default_factory=BasisTracker)
+    # Latest computed velocity result per symbol; populated by the
+    # sentiment manager once it exposes raw mention timestamps.
+    velocity: dict = field(default_factory=dict)
 
     def to_app_state(self) -> dict:
         """Snapshot suitable for ``app_state["insights"]`` (web routes)."""
@@ -45,6 +50,8 @@ class InsightsHub:
             "regime_memory": self.regime,
             "shadow_ledger": self.shadow,
             "calibration_curve": self.calibration,
+            "basis_tracker": self.basis,
+            "velocity": self.velocity,
         }
 
 
