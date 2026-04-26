@@ -51,7 +51,9 @@ class BinanceSettings(BaseSettings):
 class ZoyaSettings(BaseSettings):
     model_config = SettingsConfigDict(**_BASE_CONFIG, env_prefix="ZOYA_")
     api_key: str = Field(default="")
-    use_sandbox: bool = Field(default=False)
+    # Default to sandbox so a fresh checkout doesn't burn the operator's
+    # paid quota on first run. Flip to ``false`` once a prod key is wired.
+    use_sandbox: bool = Field(default=True)
 
 
 class CoinGeckoSettings(BaseSettings):
