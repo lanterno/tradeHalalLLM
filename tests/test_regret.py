@@ -18,7 +18,6 @@ from halal_trader.core.regret import (
     review_closed_trades,
 )
 
-
 _seq = iter(range(10_000))
 
 
@@ -150,9 +149,7 @@ class _ScriptedLLM(BaseLLM):
 
 @pytest.mark.asyncio
 async def test_counter_factual_basic() -> None:
-    llm = _ScriptedLLM(
-        {"would_repeat": False, "regret": 0.6, "alt_action": "skip"}
-    )
+    llm = _ScriptedLLM({"would_repeat": False, "regret": 0.6, "alt_action": "skip"})
     v = await counter_factual_review(
         llm,
         context_excerpt="rsi=85 momentum=high",
@@ -204,9 +201,7 @@ async def test_review_closed_trades_no_llm_yields_only_records() -> None:
 @pytest.mark.asyncio
 async def test_review_closed_trades_with_llm_runs_cf() -> None:
     trades = [_winner(size=0.5, pnl=0.02)]
-    llm = _ScriptedLLM(
-        {"would_repeat": True, "regret": 0.1, "alt_action": "buy"}
-    )
+    llm = _ScriptedLLM({"would_repeat": True, "regret": 0.1, "alt_action": "buy"})
 
     async def fetch_ctx(_tid: str) -> str:
         return "ctx"

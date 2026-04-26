@@ -42,12 +42,8 @@ def upgrade() -> None:
         sa.Column("paid_at", sa.DateTime(), nullable=True),
         sa.PrimaryKeyConstraint("id"),
     )
-    op.create_index(
-        "ix_purification_entries_symbol", "purification_entries", ["symbol"]
-    )
-    op.create_index(
-        "ix_purification_entries_paid_at", "purification_entries", ["paid_at"]
-    )
+    op.create_index("ix_purification_entries_symbol", "purification_entries", ["symbol"])
+    op.create_index("ix_purification_entries_paid_at", "purification_entries", ["paid_at"])
 
 
 def downgrade() -> None:

@@ -179,9 +179,6 @@ class BasisRiskPolicy:
     def buy_size_multiplier(self, f: BasisFeatures) -> float:
         if f.regime == "contango" and f.basis_bps >= self.extreme_contango_bps:
             return self.extreme_size_multiplier
-        if (
-            f.regime == "backwardation"
-            and f.basis_bps <= self.extreme_backwardation_bps
-        ):
+        if f.regime == "backwardation" and f.basis_bps <= self.extreme_backwardation_bps:
             return self.extreme_size_multiplier
         return 1.0

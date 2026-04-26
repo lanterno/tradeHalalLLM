@@ -6,13 +6,6 @@ import logging
 import time
 from typing import Any
 
-
-async def _wrap_existing(plan):
-    """Trivial awaitable that returns ``plan`` — feeds the primary into
-    :func:`run_ensemble` as one of the variants without re-calling the LLM.
-    """
-    return plan
-
 from halal_trader.core.llm.adversarial import apply_review_to_buys, critique_plan
 from halal_trader.core.llm.ensemble import EnsembleVariant, run_ensemble
 from halal_trader.core.strategy import BaseStrategy
@@ -33,6 +26,13 @@ from halal_trader.domain.models import (
 from halal_trader.domain.ports import LLMBackend
 
 logger = logging.getLogger(__name__)
+
+
+async def _wrap_existing(plan: Any) -> Any:
+    """Trivial awaitable that returns ``plan`` — feeds the primary into
+    :func:`run_ensemble` as one of the variants without re-calling the LLM.
+    """
+    return plan
 
 
 class CryptoTradingStrategy(BaseStrategy):
@@ -265,11 +265,7 @@ class CryptoTradingStrategy(BaseStrategy):
                 action = d.action.value if hasattr(d.action, "value") else str(d.action)
                 if action.lower() == "buy":
                     new_decisions.append(
-                        d.model_copy(
-                            update={
-                                "quantity": d.quantity * verdict.sizing_multiplier
-                            }
-                        )
+                        d.model_copy(update={"quantity": d.quantity * verdict.sizing_multiplier})
                     )
                 else:
                     new_decisions.append(d)

@@ -165,9 +165,7 @@ async def test_strategy_attacker_downsizes_buys() -> None:
             "risk_notes": "",
         }
     )
-    attacker = _ScriptedLLM(
-        {"severity": 0.55, "counter_thesis": "rsi extended"}
-    )
+    attacker = _ScriptedLLM({"severity": 0.55, "counter_thesis": "rsi extended"})
     repo = AsyncMock()
     repo.record_decision = AsyncMock()
 

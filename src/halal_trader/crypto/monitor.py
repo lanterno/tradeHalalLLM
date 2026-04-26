@@ -297,7 +297,8 @@ class PositionMonitor:
 
                     hold_seconds = 0
                     if trade.timestamp:
-                        from datetime import UTC, datetime as _dt
+                        from datetime import UTC
+                        from datetime import datetime as _dt
 
                         now_ts = _dt.now(UTC)
                         if trade.timestamp.tzinfo is None:

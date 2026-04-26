@@ -273,6 +273,95 @@ def register(app: FastAPI, app_state: dict[str, Any]) -> None:
             }
         )
 
+    @app.get("/api/insights/exceptions")
+    async def api_exceptions(status: str = "pending") -> JSONResponse:
+        from halal_trader.config import get_settings
+        from halal_trader.halal.exception_queue import ExceptionQueue
+
+        settings = get_settings()
+        path = settings.resolve_db_path().parent / "analytics" / "sharia_exceptions.json"
+        if not path.exists():
+            return JSONResponse({"available": False})
+        q = ExceptionQueue(path=path)
+        if status not in ("pending", "approved", "rejected", "deferred", "all"):
+            return JSONResponse({"error": f"unknown status {status!r}"}, status_code=400)
+        rows = q.all() if status == "all" else q.by_status(status)  # type: ignore[arg-type]
+        return JSONResponse(
+            {
+                "available": True,
+                "n": len(rows),
+                "entries": [
+                    {
+                        "entry_id": e.entry_id,
+                        "instrument": e.instrument,
+                        "kind": e.kind,
+                        "reasoning": e.reasoning,
+                        "status": e.status,
+                        "created_at": e.created_at,
+                        "decided_at": e.decided_at,
+                        "decided_by": e.decided_by,
+                        "operator_note": e.operator_note,
+                    }
+                    for e in rows
+                ],
+            }
+        )
+
+    @app.post("/api/insights/exceptions/{entry_id}/decide")
+    async def api_exceptions_decide(
+        entry_id: str,
+        status: str,
+        decided_by: str = "",
+        note: str = "",
+    ) -> JSONResponse:
+        from halal_trader.config import get_settings
+        from halal_trader.halal.exception_queue import ExceptionQueue
+
+        settings = get_settings()
+        path = settings.resolve_db_path().parent / "analytics" / "sharia_exceptions.json"
+        q = ExceptionQueue(path=path)
+        try:
+            ok = q.decide(entry_id, status=status, decided_by=decided_by, operator_note=note)  # type: ignore[arg-type]
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        if not ok:
+            return JSONResponse({"error": "entry not found"}, status_code=404)
+        return JSONResponse({"ok": True, "entry_id": entry_id, "status": status})
+
+    @app.get("/api/insights/rag")
+    async def api_rag(query: str = "", k: int = 5) -> JSONResponse:
+        from halal_trader.config import get_settings
+        from halal_trader.core.llm.rag import RationaleStore
+
+        settings = get_settings()
+        path = settings.resolve_db_path().parent / "analytics" / "rag_rationales.json"
+        if not path.exists():
+            return JSONResponse({"available": False})
+        store = RationaleStore(path=path)
+        if store.size == 0:
+            return JSONResponse({"available": False})
+        if not query:
+            return JSONResponse({"available": True, "size": store.size, "hits": []})
+        hits = store.query(query, k=k, min_similarity=0.0)
+        return JSONResponse(
+            {
+                "available": True,
+                "size": store.size,
+                "hits": [
+                    {
+                        "trade_id": r.trade_id,
+                        "symbol": r.symbol,
+                        "text": r.text[:200],
+                        "outcome_pnl_pct": r.outcome_pnl_pct,
+                        "outcome_win": r.outcome_win,
+                        "similarity": sim,
+                    }
+                    for r, sim in hits
+                ],
+                "aggregate": store.aggregate(hits),
+            }
+        )
+
     @app.get("/api/insights/calibration")
     async def api_calibration() -> JSONResponse:
         insights = app_state.get("insights") or {}

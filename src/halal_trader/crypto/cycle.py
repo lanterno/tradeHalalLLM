@@ -338,6 +338,25 @@ class CryptoCycleService(BaseCycleService):
         )
         news_text = self._build_news_text(halal_pairs)
 
+        # RAG over our own past rationales — query with a compact summary
+        # of the current setup and append analogues to the regime block.
+        try:
+            rag_store = getattr(insights_hub, "rag", None)
+            if rag_store is not None and rag_store.size > 0:
+                from halal_trader.core.llm.rag import format_rag_for_prompt
+
+                rag_query = self._build_rag_query(
+                    indicators_cache=indicators_cache,
+                    sentiment_text=sentiment_text,
+                    regime_text=regime_text,
+                )
+                hits = rag_store.query(rag_query, k=5, min_similarity=0.0)
+                rag_text = format_rag_for_prompt(hits)
+                if rag_text:
+                    regime_text = regime_text + "\n\n" + rag_text if regime_text else rag_text
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("RAG query failed: %s", exc)
+
         # Inject the most analogous past regimes into the regime block.
         # Best-effort — silently degrade if memory is empty / fails.
         try:
@@ -352,9 +371,7 @@ class CryptoCycleService(BaseCycleService):
                 hits = insights_hub.regime.query(features, k=3)
                 analog_text = format_for_prompt(features, hits)
                 if analog_text and "No analogous" not in analog_text:
-                    regime_text = (
-                        regime_text + "\n\n" + analog_text if regime_text else analog_text
-                    )
+                    regime_text = regime_text + "\n\n" + analog_text if regime_text else analog_text
         except Exception as exc:  # noqa: BLE001
             logger.debug("regime memory query failed: %s", exc)
 
@@ -427,9 +444,7 @@ class CryptoCycleService(BaseCycleService):
         )
 
         if plan.decisions:
-            async with tracer.aspan(
-                "cycle.execute_plan", decision_count=len(plan.decisions)
-            ):
+            async with tracer.aspan("cycle.execute_plan", decision_count=len(plan.decisions)):
                 results = await self._executor.execute_plan(plan, account=account)
 
         # Shadow strategy: drive a frozen-prompt parallel plan + simulator.
@@ -564,9 +579,8 @@ class CryptoCycleService(BaseCycleService):
 
         # Daily regime snapshot — only on first cycle of the day.
         try:
-            from datetime import UTC, date, datetime as _dt
-
-            from halal_trader.ml.regime_memory import RegimeFeatures
+            from datetime import UTC
+            from datetime import datetime as _dt
 
             today = _dt.now(UTC).date()
             if getattr(self, "_last_regime_snapshot_date", None) != today:
@@ -586,6 +600,48 @@ class CryptoCycleService(BaseCycleService):
             self._log_treasury_plan(account=account)
         except Exception as exc:  # noqa: BLE001
             logger.debug("treasury plan failed: %s", exc)
+
+    def _build_rag_query(
+        self,
+        *,
+        indicators_cache: dict,
+        sentiment_text: str,
+        regime_text: str,
+    ) -> str:
+        """Render a short text query summarising the current setup.
+
+        The query is hashed by HashingEmbedder, so we want token overlap
+        with what the LLM typically writes in its ``reasoning`` field —
+        keep it terse, technical-language-flavoured.
+        """
+        parts: list[str] = []
+        for pair, inds in (indicators_cache or {}).items():
+            if not inds or "error" in inds:
+                continue
+            rsi = inds.get("rsi_14")
+            macd = inds.get("macd_histogram")
+            bb = inds.get("bb_position")
+            ev: list[str] = [pair]
+            if rsi is not None:
+                if rsi < 35:
+                    ev.append("rsi oversold")
+                elif rsi > 65:
+                    ev.append("rsi overbought")
+                else:
+                    ev.append("rsi neutral")
+            if macd is not None:
+                ev.append("macd bullish" if macd > 0 else "macd bearish")
+            if bb is not None:
+                if bb < 0.2:
+                    ev.append("bb lower")
+                elif bb > 0.8:
+                    ev.append("bb upper")
+            parts.append(" ".join(ev))
+        if regime_text:
+            parts.append(regime_text[:80])
+        if sentiment_text:
+            parts.append(sentiment_text[:80])
+        return " | ".join(parts)[:600]
 
     async def _augment_with_basis(
         self,
@@ -635,13 +691,9 @@ class CryptoCycleService(BaseCycleService):
         basis_text = format_basis_for_prompt(features)
         if not basis_text:
             return microstructure_text
-        return (
-            microstructure_text + "\n\n" + basis_text if microstructure_text else basis_text
-        )
+        return microstructure_text + "\n\n" + basis_text if microstructure_text else basis_text
 
-    def _build_regime_features(
-        self, *, indicators_cache: dict, today_pnl: float, equity: float
-    ):
+    def _build_regime_features(self, *, indicators_cache: dict, today_pnl: float, equity: float):
         """Aggregate per-pair indicators into a daily ``RegimeFeatures``."""
         from halal_trader.ml.regime_memory import RegimeFeatures
 

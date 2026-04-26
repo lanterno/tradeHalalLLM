@@ -96,6 +96,13 @@ logs-errors:
 test:
     uv run pytest
 
+# Pre-deploy gate — stress harness over the standard scenarios
+stress:
+    uv run halal-trader insights stress
+
+# Run the full pre-deploy gate suite (lint + tests + stress harness)
+predeploy: lint test stress
+
 # Run linter
 lint:
     uv run ruff check src/ tests/

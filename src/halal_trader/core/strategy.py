@@ -92,9 +92,7 @@ class BaseStrategy(ABC):
                 prompt_version=prompt_version or "",
             ):
                 initial_raw = await self._llm.generate_json(user_prompt, system=system_prompt)
-            async with tracer.aspan(
-                "strategy.validate", log_prefix=log_prefix
-            ):
+            async with tracer.aspan("strategy.validate", log_prefix=log_prefix):
                 plan, raw, repair_used = await self._validate_with_repair(
                     raw=initial_raw,
                     validate=validate,

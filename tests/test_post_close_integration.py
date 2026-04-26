@@ -12,7 +12,6 @@ queries with light mocks.
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import AsyncMock
 
 from halal_trader.core.insights_hub import InsightsHub
 from halal_trader.core.post_close import (
@@ -111,8 +110,12 @@ def test_multiple_closes_aggregate(tmp_path: Path) -> None:
     for i in range(20):
         sym = "AAPL" if i % 2 == 0 else "MSFT"
         record_close(
-            _e(sym, pnl=0.01 if i % 3 == 0 else -0.005, gain=50 if i % 3 == 0 else -25,
-               trade_id=f"{sym}-{i}"),
+            _e(
+                sym,
+                pnl=0.01 if i % 3 == 0 else -0.005,
+                gain=50 if i % 3 == 0 else -25,
+                trade_id=f"{sym}-{i}",
+            ),
             rec,
         )
     assert hub.drift.n == 20

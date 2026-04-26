@@ -110,9 +110,7 @@ def test_crossover_handles_disjoint_slots() -> None:
 async def test_evolve_finds_known_optimum() -> None:
     """Fitness counts how many slots match a target genome."""
     pool = _pool()
-    target = PromptGenome(
-        slots={"tone": "ruthless", "sizing": "kelly", "format": "json+thinking"}
-    )
+    target = PromptGenome(slots={"tone": "ruthless", "sizing": "kelly", "format": "json+thinking"})
 
     async def fitness(g: PromptGenome) -> float:
         return float(sum(1 for k, v in g.slots.items() if target.slots.get(k) == v))
@@ -139,9 +137,7 @@ async def test_evolve_caches_repeat_evaluations() -> None:
         calls += 1
         return 1.0 if g.slots["only"] == "a" else 0.0
 
-    ga = PromptGA(
-        pool=pool, fitness=fitness, population_size=4, elite_count=1, seed=0
-    )
+    ga = PromptGA(pool=pool, fitness=fitness, population_size=4, elite_count=1, seed=0)
     await ga.evolve(generations=6)
     # Only 2 unique genomes possible — cache must have prevented many repeats.
     assert calls <= 4
@@ -163,16 +159,12 @@ async def test_evolve_failed_fitness_scored_zero() -> None:
 @pytest.mark.asyncio
 async def test_evolve_seed_genomes_present_in_initial_population() -> None:
     pool = _pool()
-    seed = PromptGenome(
-        slots={"tone": "ruthless", "sizing": "conservative", "format": "json-only"}
-    )
+    seed = PromptGenome(slots={"tone": "ruthless", "sizing": "conservative", "format": "json-only"})
 
     async def fitness(g: PromptGenome) -> float:
         return 1.0 if g == seed else 0.0
 
-    ga = PromptGA(
-        pool=pool, fitness=fitness, population_size=6, elite_count=1, seed=0
-    )
+    ga = PromptGA(pool=pool, fitness=fitness, population_size=6, elite_count=1, seed=0)
     best = await ga.evolve(generations=1, seed_genomes=[seed])
     assert best.fitness == 1.0
 

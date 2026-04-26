@@ -175,14 +175,14 @@ async def llm_tag(llm: LLMBackend, ctx: TaggedTradeContext) -> TagVerdict:
     tag = raw_tag if raw_tag in THESIS_TAGS else "unknown"
     try:
         conf = max(0.0, min(1.0, float(raw.get("confidence", 0.5))))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError) as _exc:  # noqa: F841 — keep parens, ruff format strips them otherwise
         conf = 0.5
     reason = str(raw.get("reason", ""))[:200]
 
     usage = getattr(llm, "last_usage", None)
     try:
         cost = float(getattr(usage, "cost_usd", 0) or 0)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError) as _exc:  # noqa: F841 — keep parens, ruff format strips them otherwise
         cost = 0.0
     return TagVerdict(tag=tag, confidence=conf, reason=reason, elapsed_ms=elapsed, cost_usd=cost)
 
@@ -208,7 +208,10 @@ class ThesisTagStore:
         if not self.path.exists():
             return {}
         try:
-            return json.loads(self.path.read_text())
+            data = json.loads(self.path.read_text())
+            if not isinstance(data, dict):
+                return {}
+            return {str(k): dict(v) for k, v in data.items() if isinstance(v, dict)}
         except Exception as exc:  # noqa: BLE001
             logger.warning("thesis tag sidecar unreadable, starting fresh: %s", exc)
             return {}
@@ -314,7 +317,6 @@ def render_attribution(rows: Sequence[AttributionRow]) -> str:
     lines.append("-" * 38)
     for row in sorted(rows, key=lambda r: -r.n_trades):
         lines.append(
-            f"{row.tag:<16} {row.n_trades:>3}  {row.win_rate * 100:>4.0f}%  "
-            f"{row.avg_pnl_pct:+.2%}"
+            f"{row.tag:<16} {row.n_trades:>3}  {row.win_rate * 100:>4.0f}%  {row.avg_pnl_pct:+.2%}"
         )
     return "\n".join(lines)

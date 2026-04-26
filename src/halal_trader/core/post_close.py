@@ -74,21 +74,21 @@ class RegretSidecar:
         self.path = Path(self.path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
 
-    def _load(self) -> list[dict]:
+    def _load(self) -> list[dict[str, Any]]:
         if not self.path.exists():
             return []
         try:
-            return json.loads(self.path.read_text())
+            return list(json.loads(self.path.read_text()))
         except Exception as exc:  # noqa: BLE001
             logger.warning("regret sidecar unreadable: %s — starting fresh", exc)
             return []
 
-    def append(self, record: dict) -> None:
+    def append(self, record: dict[str, Any]) -> None:
         records = self._load()
         records.append(record)
         self.path.write_text(json.dumps(records, indent=2))
 
-    def all(self) -> list[dict]:
+    def all(self) -> list[dict[str, Any]]:
         return self._load()
 
 
@@ -107,6 +107,7 @@ class CloseRecorders:
     regret_sidecar: RegretSidecar | None = None
     purification_ledger: Any | None = None  # RoundTripLedger
     purification_rules: Mapping[str, Any] | None = None
+    rag_store: Any | None = None  # RationaleStore
 
 
 # ── Main entry point ─────────────────────────────────────────────
@@ -197,6 +198,21 @@ def record_close(event: CloseEvent, recorders: CloseRecorders) -> dict[str, Any]
             summary["regret"] = rec.regret
         except Exception as exc:  # noqa: BLE001
             logger.debug("regret recorder failed: %s", exc)
+
+    # RAG store — embed the rationale + outcome for later retrieval.
+    if recorders.rag_store is not None and event.reasoning:
+        try:
+            recorders.rag_store.add(
+                trade_id=event.trade_id,
+                symbol=event.symbol,
+                text=event.reasoning,
+                outcome_pnl_pct=event.return_pct,
+                setup_type=event.setup_type,
+                timestamp=(event.closed_at or datetime.now(UTC)).isoformat(),
+            )
+            summary["rag_added"] = True
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("rag store add failed: %s", exc)
 
     # Round-trip purification.
     if (

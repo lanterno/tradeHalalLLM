@@ -146,8 +146,7 @@ def aggregate_plans(
         per_variant=plans_by_variant,
         counts=counts,
         notes=[
-            f"variants={n_variants} quorum={quorum} kept={len(surviving)} "
-            f"agreement={agreement:.2f}"
+            f"variants={n_variants} quorum={quorum} kept={len(surviving)} agreement={agreement:.2f}"
         ],
     )
 
@@ -170,8 +169,7 @@ def _build_consensus_plan(base_plan: Any, decisions: list[Any]) -> Any:
             update={
                 "decisions": decisions,
                 "risk_notes": (
-                    (getattr(base_plan, "risk_notes", "") or "")
-                    + " | ensemble consensus"
+                    (getattr(base_plan, "risk_notes", "") or "") + " | ensemble consensus"
                 ).strip(" |"),
             }
         )

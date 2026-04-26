@@ -16,7 +16,6 @@ from halal_trader.domain.models import (
     TradeAction,
 )
 
-
 # ── Simulator ────────────────────────────────────────────────────
 
 

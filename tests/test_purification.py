@@ -21,7 +21,6 @@ from halal_trader.halal.round_trip_purification import (
     record_round_trip,
 )
 
-
 # ── Pure compute ─────────────────────────────────────────────────
 
 

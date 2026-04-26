@@ -12,7 +12,7 @@ module directly.
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from halal_trader.crypto.analytics import PerformanceAnalytics, PerformanceStats
 from halal_trader.db.repository import Repository
@@ -46,7 +46,9 @@ class CrossAssetAnalytics:
         return self._inner.format_for_prompt(stats)
 
 
-def _stats_from_trips(inner: PerformanceAnalytics, round_trips: list[dict]) -> PerformanceStats:
+def _stats_from_trips(
+    inner: PerformanceAnalytics, round_trips: list[dict[str, Any]]
+) -> PerformanceStats:
     """Recreate the crypto analytics flow over a precomputed round-trip list.
 
     We can't reuse ``inner.compute_stats`` directly because it always
@@ -96,9 +98,9 @@ def _stats_from_trips(inner: PerformanceAnalytics, round_trips: list[dict]) -> P
     stats.by_exit_reason = exit_reasons
 
     if pair_pnl:
-        stats.best_pair = max(pair_pnl, key=pair_pnl.get)
+        stats.best_pair = max(pair_pnl, key=lambda k: pair_pnl[k])
         stats.best_pair_pnl = pair_pnl[stats.best_pair]
-        stats.worst_pair = min(pair_pnl, key=pair_pnl.get)
+        stats.worst_pair = min(pair_pnl, key=lambda k: pair_pnl[k])
         stats.worst_pair_pnl = pair_pnl[stats.worst_pair]
 
     stats.max_drawdown_pct = inner._compute_max_drawdown(round_trips)

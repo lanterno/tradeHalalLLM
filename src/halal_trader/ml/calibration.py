@@ -175,8 +175,7 @@ def fit_isotonic(
     # merge sparse bins
     edges = [i / n_bins for i in range(n_bins + 1)]
     grouped = [
-        {"x_lo": edges[i], "x_hi": edges[i + 1], "wins": w, "n": n}
-        for i, (w, n) in enumerate(bins)
+        {"x_lo": edges[i], "x_hi": edges[i + 1], "wins": w, "n": n} for i, (w, n) in enumerate(bins)
     ]
     grouped = _merge_sparse(grouped, min_per_bin=min_per_bin)
     # PAV — pool adjacent violators

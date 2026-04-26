@@ -19,7 +19,6 @@ from halal_trader.domain.models import (
     TradeAction,
 )
 
-
 # ── Ledger ────────────────────────────────────────────────────────
 
 
@@ -63,9 +62,7 @@ def test_metrics_live_better_when_outperforming() -> None:
     led = ShadowLedger()
     for i in range(40):
         # live grows faster
-        led.record(
-            cycle_id=f"c{i}", live_equity=100 + i * 0.6, shadow_equity=100 + i * 0.3
-        )
+        led.record(cycle_id=f"c{i}", live_equity=100 + i * 0.6, shadow_equity=100 + i * 0.3)
     m = divergence_metrics(led.entries)
     assert m is not None
     assert m.direction == "live_better"

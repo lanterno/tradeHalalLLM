@@ -29,7 +29,7 @@ import logging
 import time
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable
+from typing import Awaitable, Callable
 
 from halal_trader.domain.ports import LLMBackend
 
@@ -229,7 +229,7 @@ async def counter_factual_review(
     would = bool(raw.get("would_repeat", True))
     try:
         regret = float(raw.get("regret", 0.0))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError) as _exc:  # noqa: F841 — keep parens, ruff format strips them otherwise
         regret = 0.0
     regret = max(0.0, min(1.0, regret))
     alt = str(raw.get("alt_action", "")).lower() or "unknown"
@@ -237,7 +237,7 @@ async def counter_factual_review(
     usage = getattr(llm, "last_usage", None)
     try:
         cost = float(getattr(usage, "cost_usd", 0) or 0)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError) as _exc:  # noqa: F841 — keep parens, ruff format strips them otherwise
         cost = 0.0
 
     return CounterFactualVerdict(

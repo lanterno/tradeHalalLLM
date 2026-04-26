@@ -244,9 +244,7 @@ class TradingStrategy(BaseStrategy):
 
         return plan
 
-    async def _apply_adversarial_review(
-        self, plan: TradingPlan, user_prompt: str
-    ) -> TradingPlan:
+    async def _apply_adversarial_review(self, plan: TradingPlan, user_prompt: str) -> TradingPlan:
         """Run the co-bot critic and shrink/skip buys when convincing."""
         from halal_trader.core.llm.adversarial import (
             apply_review_to_buys,

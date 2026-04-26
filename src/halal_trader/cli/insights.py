@@ -19,7 +19,6 @@ import asyncio
 
 import click
 
-
 # ── shared helper ────────────────────────────────────────────────
 
 
@@ -330,6 +329,117 @@ def replay_cmd(limit: int) -> None:
     _run()
 
 
+@insights.command("rag")
+@click.option("--query", "-q", default="", help="Text to retrieve analogues for")
+@click.option("--k", default=5, show_default=True)
+def rag_cmd(query: str, k: int) -> None:
+    """Top-K most-similar past trade rationales by cosine of hashed BoW."""
+
+    def _run() -> None:
+        from halal_trader.config import get_settings
+        from halal_trader.core.llm.rag import (
+            RationaleStore,
+            format_rag_for_prompt,
+        )
+        from halal_trader.logging import console
+
+        settings = get_settings()
+        path = settings.resolve_db_path().parent / "analytics" / "rag_rationales.json"
+        if not path.exists():
+            console.print("[yellow]RAG store empty — close some trades first.[/]")
+            return
+        store = RationaleStore(path=path)
+        if store.size == 0:
+            console.print("[yellow]RAG store empty — close some trades first.[/]")
+            return
+        if not query:
+            console.print(f"[bold]RAG store:[/] {store.size} rationale(s)")
+            for r in store.rows[-10:]:
+                outcome = "WIN" if r.outcome_win else "LOSS"
+                console.print(f"  {outcome} {r.outcome_pnl_pct:+.2%} {r.symbol}: {r.text[:80]}")
+            return
+        hits = store.query(query, k=k, min_similarity=0.0)
+        console.print(format_rag_for_prompt(hits, max_rows=k))
+        agg = store.aggregate(hits)
+        console.print(
+            f"\n[bold]Weighted outcome:[/] pnl={agg['weighted_pnl_pct']:+.2%} "
+            f"win-rate={agg['weighted_win_rate']:.0%} (n={agg['n']})"
+        )
+
+    _run()
+
+
+@insights.command("exceptions")
+@click.option("--status", default="pending", show_default=True)
+def exceptions_cmd(status: str) -> None:
+    """List Sharia exception queue entries (pending by default)."""
+
+    def _run() -> None:
+        from halal_trader.config import get_settings
+        from halal_trader.halal.exception_queue import (
+            ExceptionQueue,
+            render_summary,
+        )
+        from halal_trader.logging import console
+
+        settings = get_settings()
+        path = settings.resolve_db_path().parent / "analytics" / "sharia_exceptions.json"
+        if not path.exists():
+            console.print("[yellow]Exception queue empty.[/]")
+            return
+        q = ExceptionQueue(path=path)
+        rows = q.all() if status == "all" else q.by_status(status)
+        console.print(render_summary(rows))
+
+    _run()
+
+
+@insights.command("calibrate")
+def calibrate_cmd() -> None:
+    """Refit the calibration curve from recent closed trades and save it.
+
+    Run this on a cron (weekly) to keep the live sizing engine reading
+    a fresh calibrator. Refits via fit_auto: isotonic when n>=200,
+    Platt for smaller samples, identity below the floor.
+    """
+
+    async def _run() -> None:
+
+        from halal_trader.cli.insights import (
+            _load_closed_crypto_trades,
+            _trades_to_closed_views,
+        )
+        from halal_trader.config import get_settings
+        from halal_trader.core.insights_hub import hub
+        from halal_trader.logging import console
+        from halal_trader.ml.calibration import (
+            CalibrationSample,
+            calibration_metrics,
+            fit_auto,
+        )
+
+        trades = await _load_closed_crypto_trades(2000)
+        views = _trades_to_closed_views(trades)
+        if not views:
+            console.print("[yellow]No closed trades — calibration unchanged.[/]")
+            return
+        samples = [CalibrationSample(raw_confidence=0.5, win=v.pnl_pct > 0) for v in views]
+        curve = fit_auto(samples)
+        metrics = calibration_metrics(curve, samples)
+
+        settings = get_settings()
+        out = settings.resolve_db_path().parent / "analytics" / "calibration.json"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        curve.save(out)
+        hub.calibration = curve  # update process-wide state if running
+
+        console.print(f"[bold]Refit:[/] method={curve.method}, n={curve.n_samples}")
+        console.print(f"  ECE={metrics['ece']:.3f}  Brier={metrics['brier']:.3f}")
+        console.print(f"  saved to {out}")
+
+    asyncio.run(_run())
+
+
 @insights.command("calibration")
 @click.option("--limit", default=200, show_default=True)
 def calibration_cmd(limit: int) -> None:
@@ -353,9 +463,7 @@ def calibration_cmd(limit: int) -> None:
         if not views:
             console.print("[yellow]No closed trades found.[/]")
             return
-        samples = [
-            CalibrationSample(raw_confidence=0.5, win=v.pnl_pct > 0) for v in views
-        ]
+        samples = [CalibrationSample(raw_confidence=0.5, win=v.pnl_pct > 0) for v in views]
         curve = fit_auto(samples)
         metrics = calibration_metrics(curve, samples)
         console.print(f"method        : {curve.method}")

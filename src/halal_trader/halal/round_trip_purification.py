@@ -111,14 +111,10 @@ class RoundTripLedger:
         try:
             raw = json.loads(self.path.read_text())
         except Exception as exc:  # noqa: BLE001
-            logger.warning(
-                "round-trip purification ledger unreadable: %s — starting fresh", exc
-            )
+            logger.warning("round-trip purification ledger unreadable: %s — starting fresh", exc)
             return
         entries = raw.get("entries", {})
-        self.entries = {
-            k: RoundTripEntry(**v) for k, v in entries.items() if isinstance(v, dict)
-        }
+        self.entries = {k: RoundTripEntry(**v) for k, v in entries.items() if isinstance(v, dict)}
 
     def _save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -148,14 +144,10 @@ class RoundTripLedger:
         return True
 
     def outstanding(self) -> float:
-        return sum(
-            e.purification_due_usd for e in self.entries.values() if not e.disbursed
-        )
+        return sum(e.purification_due_usd for e in self.entries.values() if not e.disbursed)
 
     def disbursed_total(self) -> float:
-        return sum(
-            e.purification_due_usd for e in self.entries.values() if e.disbursed
-        )
+        return sum(e.purification_due_usd for e in self.entries.values() if e.disbursed)
 
     def by_symbol(self) -> dict[str, float]:
         out: dict[str, float] = {}
@@ -223,7 +215,7 @@ def load_rules_from_dicts(rows: Iterable[Mapping]) -> dict[str, RoundTripRule]:
             continue
         try:
             ratio = float(row.get("impure_ratio", 0))
-        except (TypeError, ValueError):
+        except (TypeError, ValueError) as _exc:  # noqa: F841 — keep parens, ruff format strips them otherwise
             continue
         out[sym] = RoundTripRule(
             symbol=sym,

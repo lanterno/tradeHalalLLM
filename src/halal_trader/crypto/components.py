@@ -182,6 +182,7 @@ async def build_components(
     # Build the post-close analytics recorder bundle. The hub is
     # process-wide; sidecar paths anchor under the data dir.
     from halal_trader.core.insights_hub import hub as insights_hub
+    from halal_trader.core.llm.rag import RationaleStore
     from halal_trader.core.post_close import CloseRecorders, RegretSidecar
     from halal_trader.core.thesis import ThesisTagStore
     from halal_trader.halal.round_trip_purification import (
@@ -190,12 +191,15 @@ async def build_components(
 
     data_dir = settings.resolve_db_path().parent / "analytics"
     data_dir.mkdir(parents=True, exist_ok=True)
+    rag_store = RationaleStore(path=data_dir / "rag_rationales.json")
+    insights_hub.rag = rag_store
     close_recorders = CloseRecorders(
         hub=insights_hub,
         thesis_store=ThesisTagStore(path=data_dir / "thesis_tags.json"),
         regret_sidecar=RegretSidecar(path=data_dir / "regret_records.json"),
         purification_ledger=RoundTripLedger(path=data_dir / "round_trip_purification.json"),
         purification_rules={},  # Operator wires per-symbol rules later
+        rag_store=rag_store,
     )
 
     strategy = CryptoTradingStrategy(
@@ -276,7 +280,6 @@ async def build_components(
     shadow_runner = None
     if getattr(settings.llm, "shadow_enabled", False):
         try:
-            from halal_trader.core.llm.prompts import register as _register
             from halal_trader.core.shadow_runner import (
                 FrozenPromptStrategy,
                 ShadowRunner,

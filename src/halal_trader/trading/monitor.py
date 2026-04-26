@@ -184,7 +184,8 @@ class StockPositionMonitor:
 
         if self._close_recorders is not None:
             try:
-                from datetime import UTC, datetime as _dt
+                from datetime import UTC
+                from datetime import datetime as _dt
 
                 from halal_trader.core.post_close import (
                     CloseEvent,

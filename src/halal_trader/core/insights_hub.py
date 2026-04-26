@@ -22,6 +22,7 @@ Tests reset the hub via :func:`reset_hub` (called from a fixture).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
 from halal_trader.core.shadow import ShadowLedger
 from halal_trader.crypto.basis import BasisTracker
@@ -41,9 +42,13 @@ class InsightsHub:
     basis: BasisTracker = field(default_factory=BasisTracker)
     # Latest computed velocity result per symbol; populated by the
     # sentiment manager once it exposes raw mention timestamps.
-    velocity: dict = field(default_factory=dict)
+    velocity: dict[str, Any] = field(default_factory=dict)
+    # RAG store over closed-trade rationales — populated by the post-
+    # close fan-out, queried by the cycle to surface analogous
+    # past setups.
+    rag: object | None = None
 
-    def to_app_state(self) -> dict:
+    def to_app_state(self) -> dict[str, Any]:
         """Snapshot suitable for ``app_state["insights"]`` (web routes)."""
         return {
             "drift_monitor": self.drift,
@@ -52,6 +57,7 @@ class InsightsHub:
             "calibration_curve": self.calibration,
             "basis_tracker": self.basis,
             "velocity": self.velocity,
+            "rag": self.rag,
         }
 
 

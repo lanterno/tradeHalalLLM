@@ -168,9 +168,7 @@ class RegimeMemory:
         out = [p for p in scored if p[1] >= min_similarity]
         return out[:k]
 
-    def aggregate_outcome(
-        self, hits: Iterable[tuple[RegimeSnapshot, float]]
-    ) -> dict[str, float]:
+    def aggregate_outcome(self, hits: Iterable[tuple[RegimeSnapshot, float]]) -> dict[str, float]:
         """Similarity-weighted outcome aggregate from a query result."""
         hits = list(hits)
         if not hits:
@@ -196,9 +194,7 @@ class RegimeMemory:
     def save(self, path: Path | str) -> None:
         data = {
             "capacity": self.capacity,
-            "snapshots": [
-                {**asdict(s), "features": asdict(s.features)} for s in self.snapshots
-            ],
+            "snapshots": [{**asdict(s), "features": asdict(s.features)} for s in self.snapshots],
         }
         Path(path).write_text(json.dumps(data, indent=2))
 

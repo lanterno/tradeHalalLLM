@@ -106,4 +106,5 @@ def klines_to_returns(closes: Sequence[float]) -> list[float]:
     arr = np.asarray(closes, dtype=float)
     if arr.size < 2:
         return []
-    return (np.diff(arr) / arr[:-1]).tolist()
+    out: list[float] = (np.diff(arr) / arr[:-1]).tolist()
+    return out

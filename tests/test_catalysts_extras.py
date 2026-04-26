@@ -197,9 +197,7 @@ async def test_feed_combines_static_plus_earnings() -> None:
     static = StaticCatalystSource(
         [Catalyst(symbol="AAPL", kind="news", title="news", timestamp=_t(-1))]
     )
-    cal = EarningsCalendarSource(
-        _CalendarStub([{"symbol": "AAPL", "date": _t(48).isoformat()}])
-    )
+    cal = EarningsCalendarSource(_CalendarStub([{"symbol": "AAPL", "date": _t(48).isoformat()}]))
     feed = StockCatalystFeed(sources=[static, cal])
     out = await feed.fetch_all(["AAPL"])
     kinds = {c.kind for c in out}

@@ -36,7 +36,7 @@ from collections.abc import Iterable, Sequence
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 logger = logging.getLogger(__name__)
 
@@ -194,9 +194,7 @@ def shadow_alert_state(
     return "ok"
 
 
-def render_status(
-    metrics: DivergenceMetrics | None, level: AlertLevel
-) -> str:
+def render_status(metrics: DivergenceMetrics | None, level: AlertLevel) -> str:
     if metrics is None:
         return "shadow status: warming up (insufficient samples)"
     sign = "+" if metrics.mean_diff_pct >= 0 else ""
@@ -212,7 +210,7 @@ def render_status(
 # ── Compare-cycles helper ─────────────────────────────────────────
 
 
-def diff_plans(live_plan, shadow_plan) -> dict[str, int]:
+def diff_plans(live_plan: Any, shadow_plan: Any) -> dict[str, int]:
     """Compute simple structural diff between two cycle plans.
 
     Pure helper for the operator: how many decisions disagree by
@@ -220,10 +218,10 @@ def diff_plans(live_plan, shadow_plan) -> dict[str, int]:
     waiting for the equity curve to bend.
     """
 
-    def _decisions(plan):
+    def _decisions(plan: Any) -> list[Any]:
         return list(getattr(plan, "decisions", []) or [])
 
-    def _key(d):
+    def _key(d: Any) -> tuple[str, str]:
         a = getattr(d, "action", "")
         a = a.value if hasattr(a, "value") else str(a)
         return (a.lower(), getattr(d, "symbol", ""))

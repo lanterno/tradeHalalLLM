@@ -90,8 +90,6 @@ class TradingBot(BaseTradingBot):
         attacker_llm = None
         if getattr(self.settings.llm, "adversarial_enabled", False):
             try:
-                from halal_trader.core.llm import create_llm
-
                 attacker_llm = create_llm(self.settings)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("stocks adversarial LLM init failed: %s — disabling", exc)

@@ -156,9 +156,7 @@ class ReplayStore:
     def _gc(self) -> None:
         if self.max_keep <= 0:
             return
-        files = sorted(
-            self.root.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True
-        )
+        files = sorted(self.root.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
         for stale in files[self.max_keep :]:
             try:
                 stale.unlink()

@@ -151,7 +151,7 @@ async def critique_plan(
 
     try:
         severity = float(raw.get("severity", 0.0))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError) as _exc:  # noqa: F841 — keep parens, ruff format strips them otherwise
         severity = 0.0
     severity = max(0.0, min(1.0, severity))
     counter = str(raw.get("counter_thesis", ""))[:240]
@@ -159,7 +159,7 @@ async def critique_plan(
     usage = getattr(attacker, "last_usage", None)
     try:
         cost = float(getattr(usage, "cost_usd", 0) or 0)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError) as _exc:  # noqa: F841 — keep parens, ruff format strips them otherwise
         cost = 0.0
 
     rec = _classify(severity, downsize_at=downsize_at, skip_at=skip_at)

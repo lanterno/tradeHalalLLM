@@ -93,9 +93,8 @@ def test_plan_holds_when_redeem_below_threshold() -> None:
         positions_value=20.0,
         current_treasury_value=20.0,
         policy=_policy(min_idle_pct=0.10, redeem_threshold_usd=50.0),
-        # equity 120, floor 12. cash 80 > floor → no redeem, plus excess 68 > 100? no, threshold deploy 100
+        # equity 120, floor 12. cash 80 > floor → excess 68 < deploy 100 → hold
     )
-    # actually cash 80, floor 12 → excess 68 < deploy 100 → hold
     assert plan.action == "hold"
 
 

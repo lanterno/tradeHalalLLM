@@ -119,10 +119,11 @@ async def heartbeat_guard(
     Caller is responsible for actually closing/reconnecting in the
     callback.
     """
-    if is_running is None:
-        running = lambda: True  # noqa: E731
-    else:
-        running = is_running
+
+    def _always() -> bool:
+        return True
+
+    running: Callable[[], bool] = _always if is_running is None else is_running
 
     loop = asyncio.get_event_loop()
     while running():

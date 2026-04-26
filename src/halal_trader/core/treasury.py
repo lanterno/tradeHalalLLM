@@ -25,7 +25,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal
 
-
 # ── Policy ───────────────────────────────────────────────────────
 
 
@@ -162,9 +161,7 @@ def plan_idle_cash(
 
     excess = cash_balance - floor
     if excess < policy.deploy_threshold_usd:
-        notes.append(
-            f"excess ${excess:.2f} below deploy threshold ${policy.deploy_threshold_usd}"
-        )
+        notes.append(f"excess ${excess:.2f} below deploy threshold ${policy.deploy_threshold_usd}")
         return IdleCashPlan(
             action="hold",
             instrument=policy.target_instrument,

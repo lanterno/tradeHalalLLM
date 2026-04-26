@@ -76,7 +76,7 @@ def test_record_snapshot_does_not_raise_on_io_error(tmp_path: Path) -> None:
     # would by going through it.
     try:
         store = ReplayStore(root=bad_root)
-    except (FileExistsError, NotADirectoryError):
+    except (FileExistsError, NotADirectoryError) as _exc:  # noqa: F841
         pytest.skip("OS prevents constructing the store on a file path")
     record_snapshot(store, _make_snapshot())  # must not raise
 

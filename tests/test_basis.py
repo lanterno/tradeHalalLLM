@@ -12,7 +12,6 @@ from halal_trader.crypto.basis import (
     format_basis_for_prompt,
 )
 
-
 # ── compute_basis ────────────────────────────────────────────────
 
 
@@ -144,25 +143,19 @@ def test_format_writes_each_pair() -> None:
 
 def test_risk_policy_normal_full_size() -> None:
     pol = BasisRiskPolicy()
-    f = compute_basis(
-        pair="BTCUSDT", spot_price=100.0, perp_price=100.5, funding_rate_pct=0.0001
-    )
+    f = compute_basis(pair="BTCUSDT", spot_price=100.0, perp_price=100.5, funding_rate_pct=0.0001)
     assert pol.buy_size_multiplier(f) == 1.0
 
 
 def test_risk_policy_extreme_contango_shrinks() -> None:
     pol = BasisRiskPolicy(extreme_contango_bps=100.0, extreme_size_multiplier=0.4)
-    f = compute_basis(
-        pair="BTCUSDT", spot_price=100.0, perp_price=102.0, funding_rate_pct=0.001
-    )
+    f = compute_basis(pair="BTCUSDT", spot_price=100.0, perp_price=102.0, funding_rate_pct=0.001)
     assert pol.buy_size_multiplier(f) == 0.4
 
 
 def test_risk_policy_extreme_backwardation_shrinks() -> None:
     pol = BasisRiskPolicy(extreme_backwardation_bps=-100.0, extreme_size_multiplier=0.3)
-    f = compute_basis(
-        pair="BTCUSDT", spot_price=100.0, perp_price=98.0, funding_rate_pct=-0.001
-    )
+    f = compute_basis(pair="BTCUSDT", spot_price=100.0, perp_price=98.0, funding_rate_pct=-0.001)
     assert pol.buy_size_multiplier(f) == 0.3
 
 

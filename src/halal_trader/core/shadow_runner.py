@@ -57,7 +57,7 @@ class FrozenPromptStrategy:
     inner: Any  # any strategy with an async analyze(...) method
     frozen_prompt_version: str
 
-    async def analyze(self, *args, **kwargs) -> Any:
+    async def analyze(self, *args: Any, **kwargs: Any) -> Any:
         plan = await self.inner.analyze(*args, **kwargs)
         # Tag the plan for traceability — best-effort, no hard schema.
         try:
@@ -66,11 +66,7 @@ class FrozenPromptStrategy:
             if tag not in existing:
                 if hasattr(plan, "model_copy"):
                     plan = plan.model_copy(
-                        update={
-                            "risk_notes": (
-                                existing + " | " + tag if existing else tag
-                            )
-                        }
+                        update={"risk_notes": (existing + " | " + tag if existing else tag)}
                     )
         except Exception:  # noqa: BLE001
             pass
@@ -151,7 +147,7 @@ class ShadowRunner:
         cycle_id: str,
         live_equity: float,
         latest_prices: dict[str, float],
-        analyze_kwargs: dict,
+        analyze_kwargs: dict[str, Any],
         plan_filter: Callable[[Any], Awaitable[Any] | Any] | None = None,
     ) -> float:
         """Run the shadow plan and apply it to the simulated account.

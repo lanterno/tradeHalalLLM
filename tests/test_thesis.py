@@ -12,8 +12,8 @@ from halal_trader.core.llm.base import BaseLLM, CallUsage
 from halal_trader.core.thesis import (
     THESIS_TAGS,
     AttributionRow,
-    TagVerdict,
     TaggedTradeContext,
+    TagVerdict,
     ThesisTagStore,
     attribute_pnl_by_thesis,
     deprecated_thesis_kill_list,
@@ -216,8 +216,12 @@ def test_attribution_row_metrics() -> None:
 
 def test_kill_list_gates_on_min_trades_and_pnl() -> None:
     rows = {
-        "breakout": AttributionRow(tag="breakout", n_trades=50, wins=10, losses=40, sum_pnl_pct=-0.5),
-        "trend_follow": AttributionRow(tag="trend_follow", n_trades=20, wins=2, losses=18, sum_pnl_pct=-0.3),
+        "breakout": AttributionRow(
+            tag="breakout", n_trades=50, wins=10, losses=40, sum_pnl_pct=-0.5
+        ),
+        "trend_follow": AttributionRow(
+            tag="trend_follow", n_trades=20, wins=2, losses=18, sum_pnl_pct=-0.3
+        ),
         "scalp": AttributionRow(tag="scalp", n_trades=50, wins=30, losses=20, sum_pnl_pct=0.2),
     }
     kills = deprecated_thesis_kill_list(rows, min_trades=30)

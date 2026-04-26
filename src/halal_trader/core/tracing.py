@@ -85,9 +85,7 @@ class Span:
         self.attrs[key] = value
 
     def add_event(self, name: str, **attrs: Any) -> None:
-        self.events.append(
-            SpanEvent(name=name, timestamp_ns=time.monotonic_ns(), attrs=attrs)
-        )
+        self.events.append(SpanEvent(name=name, timestamp_ns=time.monotonic_ns(), attrs=attrs))
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -97,8 +95,7 @@ class Span:
             "duration_ms": round(self.duration_ms, 3),
             "attrs": self.attrs,
             "events": [
-                {"name": e.name, "ts_ns": e.timestamp_ns, "attrs": e.attrs}
-                for e in self.events
+                {"name": e.name, "ts_ns": e.timestamp_ns, "attrs": e.attrs} for e in self.events
             ],
             "error": self.error,
             "cycle_id": self.cycle_id,
@@ -237,7 +234,7 @@ class AsyncSpanContext:
         self._span = sp
         return sp
 
-    async def __aexit__(self, exc_type, exc, tb) -> None:
+    async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
         assert self._span is not None
         _active_span_var.reset(self._token)
         self._tracer._close(self._span, exc)

@@ -33,7 +33,6 @@ import logging
 import random
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
-from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -91,9 +90,7 @@ class AllelePool:
         return PromptGenome(slots={k: v[0] for k, v in self.slots.items() if v})
 
     def random_genome(self, rng: random.Random) -> PromptGenome:
-        return PromptGenome(
-            slots={k: rng.choice(v) for k, v in self.slots.items() if v}
-        )
+        return PromptGenome(slots={k: rng.choice(v) for k, v in self.slots.items() if v})
 
     def mutate(self, genome: PromptGenome, rng: random.Random) -> PromptGenome:
         """Mutate one slot to a different allele (if possible)."""
@@ -180,7 +177,9 @@ class PromptGA:
         self._cache[fp] = score
         return score
 
-    def _initial_population(self, seed_genomes: Sequence[PromptGenome] | None) -> list[PromptGenome]:
+    def _initial_population(
+        self, seed_genomes: Sequence[PromptGenome] | None
+    ) -> list[PromptGenome]:
         seeds = list(seed_genomes or [])
         # Always include the base genome so we never *lose* the current default.
         seeds.append(self.pool.base_genome())
@@ -188,7 +187,7 @@ class PromptGA:
         while len(seeds) < self.population_size:
             seeds.append(self.pool.random_genome(self._rng))
         # de-dupe while preserving order
-        seen: set = set()
+        seen: set[tuple[tuple[str, str], ...]] = set()
         out: list[PromptGenome] = []
         for g in seeds:
             fp = g.fingerprint()
@@ -211,9 +210,7 @@ class PromptGA:
     ) -> ScoredGenome:
         """Run the GA and return the best-scored genome ever seen."""
         population = self._initial_population(seed_genomes)
-        scored = [
-            ScoredGenome(genome=g, fitness=await self._score(g)) for g in population
-        ]
+        scored = [ScoredGenome(genome=g, fitness=await self._score(g)) for g in population]
         scored.sort(reverse=True)
         self.history.append(list(scored))
         best = scored[0]
@@ -228,9 +225,7 @@ class PromptGA:
                 if self._rng.random() < self.mutation_rate:
                     child = self.pool.mutate(child, self._rng)
                 next_pop.append(child)
-            scored = [
-                ScoredGenome(genome=g, fitness=await self._score(g)) for g in next_pop
-            ]
+            scored = [ScoredGenome(genome=g, fitness=await self._score(g)) for g in next_pop]
             scored.sort(reverse=True)
             self.history.append(list(scored))
             if scored[0].fitness > best.fitness:
@@ -247,9 +242,7 @@ class PromptGA:
     def best(self) -> ScoredGenome | None:
         if not self.history:
             return None
-        return max(
-            (s for gen in self.history for s in gen), key=lambda s: s.fitness
-        )
+        return max((s for gen in self.history for s in gen), key=lambda s: s.fitness)
 
     def cache_size(self) -> int:
         return len(self._cache)
