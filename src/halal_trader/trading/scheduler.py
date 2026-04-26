@@ -5,6 +5,7 @@ import fcntl
 import logging
 import os
 from pathlib import Path
+from typing import Any
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -22,6 +23,7 @@ from halal_trader.market_hours import (
     today_eastern,
 )
 from halal_trader.mcp.client import AlpacaMCPClient
+from halal_trader.trading.catalysts import StockCatalystFeed
 from halal_trader.trading.cycle import TradingCycleService
 from halal_trader.trading.executor import TradeExecutor
 from halal_trader.trading.portfolio import PortfolioTracker
@@ -121,6 +123,19 @@ class TradingBot(BaseTradingBot):
         # Sentiment analyzer (supplementary — gracefully degrades if deps missing)
         sentiment = SentimentAnalyzer()
 
+        # Catalyst feed — wires whichever sources are configured. The
+        # FRED feed pulls scheduled CPI/FOMC/NFP/GDP release dates so
+        # CatalystRiskPolicy can shrink position sizing in the 4h
+        # window before each. Empty FRED key → source skipped cleanly.
+        catalyst_sources: list[Any] = []
+        if self.settings.fred.api_key:
+            from halal_trader.trading.fred_catalysts import (
+                FREDReleaseCalendarSource,
+            )
+
+            catalyst_sources.append(FREDReleaseCalendarSource(api_key=self.settings.fred.api_key))
+        catalyst_feed = StockCatalystFeed(sources=catalyst_sources) if catalyst_sources else None
+
         # Cycle service — owns the intraday trading logic
         self.cycle_service = TradingCycleService(
             broker=self.broker,
@@ -132,6 +147,7 @@ class TradingBot(BaseTradingBot):
             alerts=self._alerts,
             engine=self._engine,
             live_mode_checker=self._live_mode_checker,
+            catalyst_feed=catalyst_feed,
         )
 
         logger.info("Trading bot initialized successfully")

@@ -61,6 +61,20 @@ class CoinGeckoSettings(BaseSettings):
     api_key: str = Field(default="")
 
 
+class FREDSettings(BaseSettings):
+    """St. Louis Fed economic-data API.
+
+    Drives the macro-catalyst calendar (CPI, FOMC, NFP, GDP release
+    dates) so the stock cycle can shrink position sizing in the 4h
+    window before a high-impact release. ``api_key=""`` disables the
+    feed cleanly — the catalyst module degrades to whatever other
+    sources are configured.
+    """
+
+    model_config = SettingsConfigDict(**_BASE_CONFIG, env_prefix="FRED_")
+    api_key: str = Field(default="")
+
+
 class HalalSettings(BaseSettings):
     """Cross-cutting halal-screening cadence + safety knobs."""
 
@@ -286,6 +300,7 @@ class Settings(BaseSettings):
     binance: BinanceSettings = Field(default_factory=BinanceSettings)
     zoya: ZoyaSettings = Field(default_factory=ZoyaSettings)
     coingecko: CoinGeckoSettings = Field(default_factory=CoinGeckoSettings)
+    fred: FREDSettings = Field(default_factory=FREDSettings)
     halal: HalalSettings = Field(default_factory=HalalSettings)
     web: WebSettings = Field(default_factory=WebSettings)
     llm: LLMSettings = Field(default_factory=LLMSettings)

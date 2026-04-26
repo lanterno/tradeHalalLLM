@@ -279,7 +279,14 @@ class CatalystRiskPolicy:
     window: full size.
     """
 
-    high_impact_kinds: tuple[str, ...] = ("earnings", "fomc", "fda")
+    high_impact_kinds: tuple[str, ...] = (
+        "earnings",
+        "fomc",
+        "fda",
+        "cpi",
+        "nfp",
+        "gdp",
+    )
     pre_event_hours: float = 4.0
     pre_event_size_multiplier: float = 0.5
 
