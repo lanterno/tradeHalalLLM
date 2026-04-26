@@ -10,6 +10,8 @@ from binance import BinanceAPIException
 
 from halal_trader.config import get_settings
 from halal_trader.core.cycle import BaseCycleService
+from halal_trader.core.insights_hub import hub as insights_hub
+from halal_trader.core.observability import cycle_id_var
 from halal_trader.core.tracing import tracer
 from halal_trader.crypto.analytics import PerformanceAnalytics
 from halal_trader.crypto.exchange import BinanceClient
@@ -138,10 +140,12 @@ class CryptoCycleService(BaseCycleService):
 
         self._consecutive_flat_skips = 0
 
-        orderbooks = await self._fetch_orderbooks(halal_pairs)
+        async with tracer.aspan("cycle.fetch_orderbooks", pair_count=len(halal_pairs)):
+            orderbooks = await self._fetch_orderbooks(halal_pairs)
 
-        account = await self._broker.get_account()
-        balances = await self._broker.get_balances()
+        async with tracer.aspan("cycle.fetch_account"):
+            account = await self._broker.get_account()
+            balances = await self._broker.get_balances()
 
         # Live-mode safeguards run on every cycle — they short-circuit cheaply
         # when the bot is on testnet, and trip the kill-switch on first violation.
@@ -327,7 +331,30 @@ class CryptoCycleService(BaseCycleService):
         exchange_rules_text = self._broker.format_filters_for_prompt()
 
         microstructure_text = self._build_microstructure_text(orderbooks)
+        microstructure_text = await self._augment_with_basis(
+            microstructure_text, halal_pairs, klines_by_symbol
+        )
         news_text = self._build_news_text(halal_pairs)
+
+        # Inject the most analogous past regimes into the regime block.
+        # Best-effort — silently degrade if memory is empty / fails.
+        try:
+            from halal_trader.ml.regime_memory import format_for_prompt
+
+            features = self._build_regime_features(
+                indicators_cache=indicators_cache,
+                today_pnl=today_pnl,
+                equity=account.total_balance_usdt or 0.0,
+            )
+            if features is not None and insights_hub.regime.size > 0:
+                hits = insights_hub.regime.query(features, k=3)
+                analog_text = format_for_prompt(features, hits)
+                if analog_text and "No analogous" not in analog_text:
+                    regime_text = (
+                        regime_text + "\n\n" + analog_text if regime_text else analog_text
+                    )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("regime memory query failed: %s", exc)
 
         async with tracer.aspan(
             "cycle.strategy_analyze",
@@ -383,8 +410,25 @@ class CryptoCycleService(BaseCycleService):
             len(plan.sells),
         )
 
+        # Analytics: record this cycle's equity to the shadow ledger
+        # and snapshot inputs for replay. Best-effort — never blocks.
+        self._record_cycle_analytics(
+            account=account,
+            klines_by_symbol=klines_by_symbol,
+            indicators_cache=indicators_cache,
+            halal_pairs=halal_pairs,
+            today_pnl=today_pnl,
+            sentiment_text=sentiment_text,
+            regime_text=regime_text,
+            risk_text=risk_text,
+            microstructure_text=microstructure_text,
+        )
+
         if plan.decisions:
-            results = await self._executor.execute_plan(plan, account=account)
+            async with tracer.aspan(
+                "cycle.execute_plan", decision_count=len(plan.decisions)
+            ):
+                results = await self._executor.execute_plan(plan, account=account)
             for r in results:
                 logger.info("Crypto execution: %s", r)
                 if r.get("status") in ("submitted", "filled") and r.get("action") == "buy":
@@ -413,6 +457,209 @@ class CryptoCycleService(BaseCycleService):
             logger.info("No crypto trades to execute this cycle")
 
     # ── Private helpers ────────────────────────────────────────
+
+    def _record_cycle_analytics(
+        self,
+        *,
+        account,
+        klines_by_symbol,
+        indicators_cache,
+        halal_pairs,
+        today_pnl,
+        sentiment_text,
+        regime_text,
+        risk_text,
+        microstructure_text,
+    ) -> None:
+        """Per-cycle bookkeeping: shadow ledger + replay store + regime memory.
+
+        Each step is best-effort; failures are debug-logged but never
+        bubble up to the cycle loop. Wired here (not in the executor)
+        so paper / live / dry-run cycles all populate analytics
+        identically.
+        """
+        cycle_id = cycle_id_var.get() or "cycle-unknown"
+        equity = account.total_balance_usdt or 0.0
+
+        try:
+            insights_hub.shadow.record(
+                cycle_id=cycle_id,
+                live_equity=equity,
+                shadow_equity=equity,  # placeholder until shadow strategy lands
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("shadow ledger record failed: %s", exc)
+
+        replay_root = getattr(self, "_replay_store", None)
+        if replay_root is not None:
+            try:
+                from halal_trader.core.replay import (
+                    CycleSnapshot,
+                    record_snapshot,
+                )
+
+                snap = CycleSnapshot.from_inputs(
+                    cycle_id=cycle_id,
+                    market="crypto",
+                    klines_by_symbol=klines_by_symbol,
+                    indicators_cache=indicators_cache,
+                    halal_pairs=list(halal_pairs),
+                    today_pnl=today_pnl,
+                    sentiment_text=sentiment_text,
+                    regime_text=regime_text,
+                    risk_text=risk_text,
+                    microstructure_text=microstructure_text,
+                    account={
+                        "total_balance_usdt": equity,
+                        "available_balance_usdt": account.available_balance_usdt,
+                        "in_order_usdt": account.in_order_usdt,
+                    },
+                )
+                record_snapshot(replay_root, snap)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("replay snapshot failed: %s", exc)
+
+        # Daily regime snapshot — only on first cycle of the day.
+        try:
+            from datetime import UTC, date, datetime as _dt
+
+            from halal_trader.ml.regime_memory import RegimeFeatures
+
+            today = _dt.now(UTC).date()
+            if getattr(self, "_last_regime_snapshot_date", None) != today:
+                feats = self._build_regime_features(
+                    indicators_cache=indicators_cache,
+                    today_pnl=today_pnl,
+                    equity=equity,
+                )
+                if feats is not None:
+                    insights_hub.regime.add_today(feats, today=today)
+                    self._last_regime_snapshot_date = today
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("regime memory snapshot failed: %s", exc)
+
+        # Idle-cash treasury policy log — emit a plan when fully flat.
+        try:
+            self._log_treasury_plan(account=account)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("treasury plan failed: %s", exc)
+
+    async def _augment_with_basis(
+        self,
+        microstructure_text: str,
+        halal_pairs,
+        klines_by_symbol,
+    ) -> str:
+        """Compute spot-perp basis features and append them to the
+        microstructure block. Best-effort — skip silently if the broker
+        doesn't expose ``get_funding_signal`` or any pair query fails.
+        """
+        if not halal_pairs:
+            return microstructure_text
+        if not hasattr(self._broker, "get_funding_signal"):
+            return microstructure_text
+        try:
+            from halal_trader.crypto.basis import format_basis_for_prompt
+        except Exception:  # noqa: BLE001
+            return microstructure_text
+
+        features = {}
+        for pair in halal_pairs:
+            try:
+                sig = await self._broker.get_funding_signal(pair)
+            except Exception:  # noqa: BLE001
+                continue
+            if not sig:
+                continue
+            try:
+                spot_klines = klines_by_symbol.get(pair) or []
+                spot_price = (
+                    spot_klines[-1].close if spot_klines else self._broker.get_cached_price(pair)
+                )
+                if not spot_price:
+                    continue
+                features[pair] = insights_hub.basis.observe(
+                    pair=pair,
+                    spot_price=float(spot_price),
+                    perp_price=float(sig.get("mark_price", spot_price)),
+                    funding_rate_pct=float(sig.get("funding_rate", 0.0)),
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("basis observe failed for %s: %s", pair, exc)
+
+        if not features:
+            return microstructure_text
+        basis_text = format_basis_for_prompt(features)
+        if not basis_text:
+            return microstructure_text
+        return (
+            microstructure_text + "\n\n" + basis_text if microstructure_text else basis_text
+        )
+
+    def _build_regime_features(
+        self, *, indicators_cache: dict, today_pnl: float, equity: float
+    ):
+        """Aggregate per-pair indicators into a daily ``RegimeFeatures``."""
+        from halal_trader.ml.regime_memory import RegimeFeatures
+
+        if not indicators_cache:
+            return None
+        atrs: list[float] = []
+        rsis: list[float] = []
+        for inds in indicators_cache.values():
+            if not inds or "error" in inds:
+                continue
+            price = inds.get("current_price") or 0
+            atr = inds.get("atr_14") or 0
+            if price > 0 and atr > 0:
+                atrs.append(atr / price)
+            rsi = inds.get("rsi_14")
+            if rsi is not None:
+                rsis.append(rsi)
+        if not atrs and not rsis:
+            return None
+        avg_atr = sum(atrs) / len(atrs) if atrs else 0.0
+        avg_rsi = sum(rsis) / len(rsis) if rsis else 50.0
+        # Conservative defaults for fields we don't track day-of-cycle yet.
+        return RegimeFeatures(
+            volatility=avg_atr,
+            trend=0.0,
+            breadth=0.0,
+            sentiment=0.0,
+            drawdown=0.0,
+            volume_ratio=1.0,
+            correlation=0.0,
+            realized_return_1d=(today_pnl / equity) if equity else 0.0,
+            rsi=avg_rsi,
+            spread_bps=0.0,
+        )
+
+    def _log_treasury_plan(self, *, account) -> None:
+        """Emit a treasury plan log line when the bot is fully flat."""
+        if account.in_order_usdt > 0 or account.available_balance_usdt < 50:
+            return
+        try:
+            from halal_trader.core.treasury import (
+                TreasuryPolicy,
+                plan_idle_cash,
+            )
+
+            plan = plan_idle_cash(
+                cash_balance=account.available_balance_usdt,
+                positions_value=account.total_balance_usdt - account.available_balance_usdt,
+                current_treasury_value=0.0,
+                policy=TreasuryPolicy(),
+            )
+            if not plan.is_noop:
+                logger.info(
+                    "treasury: %s $%.2f into %s — %s",
+                    plan.action,
+                    plan.amount_usd,
+                    plan.instrument,
+                    plan.reason,
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("treasury plan computation failed: %s", exc)
 
     def _should_skip_llm(self, indicators_cache: dict[str, dict]) -> bool:
         """Skip LLM if all pairs are flat with no directional signal."""

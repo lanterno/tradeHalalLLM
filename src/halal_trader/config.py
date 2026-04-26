@@ -105,6 +105,14 @@ class LLMSettings(BaseSettings):
     # cap trips it engages the kill-switch so both bots stop entering
     # new positions until the operator clears it.
     daily_usd_cap: float = Field(default=0.0)
+    # Adversarial co-bot — runs a cheap follow-up LLM call that critiques
+    # each plan and downsizes/skips buys when it surfaces a strong
+    # counter-thesis. Off by default (extra cost; opt-in).
+    adversarial_enabled: bool = Field(default=False)
+    # Ensemble fan-out — number of additional LLM variants that vote
+    # alongside the primary. Median quantity / confidence wins; agreement
+    # score scales sizing in [0.5, 1.0]. 0 disables.
+    ensemble_size: int = Field(default=0, ge=0, le=5)
     ollama: OllamaSettings = Field(default_factory=OllamaSettings)
     openai: OpenAISettings = Field(default_factory=OpenAISettings)
     anthropic: AnthropicSettings = Field(default_factory=AnthropicSettings)
