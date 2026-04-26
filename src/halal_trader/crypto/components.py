@@ -82,6 +82,7 @@ class CryptoComponents:
     ml_signal: Any = None
     news_reactor: NewsEventReactor | None = None
     news_feed: RecentNewsFeed | None = None
+    shadow_runner: Any = None
 
 
 # ── Optional subsystem builders ───────────────────────────────
@@ -270,6 +271,42 @@ async def build_components(
         close_recorders=close_recorders,
     )
 
+    # Optional shadow strategy — frozen-prompt variant that runs
+    # alongside the live strategy and feeds the divergence ledger.
+    shadow_runner = None
+    if getattr(settings.llm, "shadow_enabled", False):
+        try:
+            from halal_trader.core.llm.prompts import register as _register
+            from halal_trader.core.shadow_runner import (
+                FrozenPromptStrategy,
+                ShadowRunner,
+            )
+            from halal_trader.crypto.prompts import (
+                PROMPT_VERSION as _CRYPTO_PV,
+            )
+
+            shadow_strategy = CryptoTradingStrategy(
+                create_llm(settings),
+                repo,
+                llm_provider_name=settings.llm.provider.value,
+                max_position_pct=settings.crypto.max_position_pct,
+                daily_loss_limit=settings.crypto.daily_loss_limit,
+                daily_return_target=settings.crypto.daily_return_target,
+                max_simultaneous_positions=settings.crypto.max_simultaneous_positions,
+            )
+            frozen = FrozenPromptStrategy(
+                inner=shadow_strategy,
+                frozen_prompt_version=_CRYPTO_PV.short,
+            )
+            shadow_runner = ShadowRunner(
+                shadow_strategy=frozen,
+                ledger=insights_hub.shadow,
+                starting_cash=settings.llm.shadow_starting_cash,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("shadow runner init failed: %s — disabling", exc)
+            shadow_runner = None
+
     news_reactor = _build_news_reactor(settings)
 
     # The cycle reads from this bounded buffer; the reactor's job is to
@@ -309,4 +346,5 @@ async def build_components(
         ml_signal=ml_signal,
         news_reactor=news_reactor,
         news_feed=news_feed,
+        shadow_runner=shadow_runner,
     )

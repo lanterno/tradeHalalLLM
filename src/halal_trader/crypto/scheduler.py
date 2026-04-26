@@ -95,6 +95,7 @@ class CryptoTradingBot(BaseTradingBot):
             alerts=comps.alerts,
             engine=self._engine,
             live_mode_checker=comps.live_mode_checker,
+            shadow_runner=comps.shadow_runner,
         )
 
         # Start background tasks the scheduler owns.

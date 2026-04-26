@@ -57,6 +57,7 @@ class CryptoCycleService(BaseCycleService):
         alerts=None,
         engine=None,
         live_mode_checker=None,
+        shadow_runner=None,
     ) -> None:
         super().__init__(alerts=alerts, engine=engine)
         self._live_mode_checker = live_mode_checker
@@ -78,6 +79,7 @@ class CryptoCycleService(BaseCycleService):
         self._notifier = notifier
         self._risk_engine = risk_engine
         self._news_feed = news_feed
+        self._shadow_runner = shadow_runner
         self._consecutive_flat_skips = 0
         self._settings = get_settings()
         # The scheduler reads this after each cycle to drive the
@@ -429,6 +431,43 @@ class CryptoCycleService(BaseCycleService):
                 "cycle.execute_plan", decision_count=len(plan.decisions)
             ):
                 results = await self._executor.execute_plan(plan, account=account)
+
+        # Shadow strategy: drive a frozen-prompt parallel plan + simulator.
+        # The runner writes its own row to the shadow ledger; we don't
+        # write a placeholder above when the runner is active.
+        if self._shadow_runner is not None:
+            try:
+                latest_prices = {
+                    pair: (klines[-1].close if klines else 0.0)
+                    for pair, klines in klines_by_symbol.items()
+                }
+                await self._shadow_runner.observe_cycle(
+                    cycle_id=cycle_id_var.get() or "cycle-unknown",
+                    live_equity=account.total_balance_usdt or 0.0,
+                    latest_prices=latest_prices,
+                    analyze_kwargs=dict(
+                        account=account,
+                        positions_text=positions_text,
+                        halal_pairs=halal_pairs,
+                        klines_by_symbol=klines_by_symbol,
+                        orderbooks=orderbooks,
+                        today_pnl=today_pnl,
+                        performance_text=performance_text,
+                        sentiment_text=sentiment_text,
+                        timeframe_text=timeframe_text,
+                        ml_signals_text=ml_signals_text,
+                        regime_text=regime_text,
+                        active_adjustments=active_adjustments,
+                        exchange_rules_text=exchange_rules_text,
+                        indicators_cache=indicators_cache,
+                        open_position_count=open_position_count,
+                        risk_text=risk_text,
+                        microstructure_text=microstructure_text,
+                        news_text=news_text,
+                    ),
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("shadow runner observe_cycle failed: %s", exc)
             for r in results:
                 logger.info("Crypto execution: %s", r)
                 if r.get("status") in ("submitted", "filled") and r.get("action") == "buy":
@@ -481,14 +520,18 @@ class CryptoCycleService(BaseCycleService):
         cycle_id = cycle_id_var.get() or "cycle-unknown"
         equity = account.total_balance_usdt or 0.0
 
-        try:
-            insights_hub.shadow.record(
-                cycle_id=cycle_id,
-                live_equity=equity,
-                shadow_equity=equity,  # placeholder until shadow strategy lands
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.debug("shadow ledger record failed: %s", exc)
+        # Without a shadow runner, record a placeholder row so the
+        # ledger has a per-cycle entry; with one, defer the record
+        # to the runner's observe_cycle (driven from after-execute).
+        if self._shadow_runner is None:
+            try:
+                insights_hub.shadow.record(
+                    cycle_id=cycle_id,
+                    live_equity=equity,
+                    shadow_equity=equity,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("shadow ledger record failed: %s", exc)
 
         replay_root = getattr(self, "_replay_store", None)
         if replay_root is not None:
