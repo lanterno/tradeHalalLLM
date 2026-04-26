@@ -18,6 +18,12 @@ class RetrainingScheduler:
     """Labels closed trades with their indicator snapshots, then retrains ML models.
 
     Designed to run periodically (e.g. nightly or after N closed trades).
+
+    The ``namespace`` argument lets us run separate schedulers for crypto
+    vs stocks — each persists its models under a distinct subdirectory
+    (``models/<namespace>/``) so a crypto retrain never clobbers a stock
+    model trained on different feature distributions, even though both
+    share the same ``IndicatorSnapshot`` table for label storage.
     """
 
     def __init__(
@@ -27,12 +33,20 @@ class RetrainingScheduler:
         models_dir: Path = Path("models"),
         min_samples: int = 50,
         retrain_every_n_trades: int = 20,
+        namespace: str = "crypto",
     ) -> None:
         self._repo = repo
-        self._models_dir = models_dir
+        # Models live under models/<namespace>/ so two retrainers don't fight
+        # over the same on-disk file.
+        self._models_dir = models_dir / namespace
+        self._namespace = namespace
         self._min_samples = min_samples
         self._retrain_threshold = retrain_every_n_trades
         self._trades_since_retrain = 0
+
+    @property
+    def namespace(self) -> str:
+        return self._namespace
 
     async def on_trade_closed(self, trade_id: int, return_pct: float) -> None:
         """Called when a trade is closed — labels its snapshot and checks retrain trigger."""

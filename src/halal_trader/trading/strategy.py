@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from halal_trader.core.llm.prompts import register as _register_prompt
 from halal_trader.core.strategy import BaseStrategy
 from halal_trader.db.repository import Repository
 from halal_trader.domain.models import Account, Position, TradingPlan
@@ -79,9 +80,18 @@ Today's P&L: ${today_pnl:+,.2f} ({today_pnl_pct:+.2%})
 === PORTFOLIO RISK ===
 {risk_text}
 
+=== RECENT CATALYSTS (news / earnings / insider) ===
+{catalysts_text}
+
 Based on this data, what trades should I make right now? \
 Remember: optimize for 1%+ daily return with proper risk management.
 """
+
+
+# Register the static templates so every LlmDecision row records exactly
+# which template version produced it. Editing either bumps the hash.
+PROMPT_VERSION = _register_prompt("trading.strategy.system", SYSTEM_PROMPT)
+USER_PROMPT_VERSION = _register_prompt("trading.strategy.user", USER_PROMPT_TEMPLATE)
 
 
 def _format_positions(positions: list[Position]) -> str:
@@ -173,6 +183,7 @@ class TradingStrategy(BaseStrategy):
         today_pnl: float = 0.0,
         sentiment_text: str = "Sentiment data: not available",
         risk_text: str = "",
+        catalysts_text: str = "",
     ) -> TradingPlan:
         portfolio_value = account.portfolio_value or account.equity or 100000
         today_pnl_pct = today_pnl / portfolio_value if portfolio_value else 0
@@ -196,6 +207,7 @@ class TradingStrategy(BaseStrategy):
             bars_text=_format_bars(bars),
             sentiment_text=sentiment_text,
             risk_text=risk_text or "No portfolio risk data available.",
+            catalysts_text=catalysts_text or "No recent catalysts.",
         )
 
         return await self._run_llm_analysis(
@@ -216,4 +228,5 @@ class TradingStrategy(BaseStrategy):
                 "sells": len(p.sells),
                 "holds": len(p.holds),
             },
+            prompt_version=PROMPT_VERSION.short,
         )

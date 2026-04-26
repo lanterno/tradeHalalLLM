@@ -20,6 +20,11 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setenv("DB_PATH", str(db_path))
     monkeypatch.setenv("BACKUP_DIR", str(tmp_path / "backups"))
     monkeypatch.setenv("LOG_DIR", str(tmp_path / "logs"))
+    # Phase W0 introduced the auth gate; the legacy halt endpoint is now
+    # also a mutation under the gate. Provide a token here so the rest
+    # of this file's POST/DELETE tests can pass it via the test client's
+    # default headers.
+    monkeypatch.setenv("WEB_API_TOKEN", "legacy-test-token")
 
     # Bust the Settings singleton so the new env vars are picked up.
     import halal_trader.config as _config
@@ -35,6 +40,10 @@ def client(tmp_path, monkeypatch):
     app = web_app.create_app()
 
     with TestClient(app) as c:
+        # Default the auth header on the client so legacy tests don't have
+        # to forge it on every call. Tests that explicitly want to test
+        # auth rejection can pop the header per-request.
+        c.headers["X-Trader-Token"] = "legacy-test-token"
         yield c
 
     # Reset the Settings singleton for the next test.

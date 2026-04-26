@@ -13,6 +13,7 @@ import hashlib
 from dataclasses import dataclass, field
 from typing import Any
 
+from halal_trader.core.llm.prompts import register as _register_prompt
 from halal_trader.crypto.indicators import format_indicators_for_prompt
 from halal_trader.domain.models import CryptoAccount, Kline
 
@@ -124,6 +125,12 @@ Open Positions: {open_position_count}/{max_positions}
 === PORTFOLIO RISK ===
 {risk_text}
 
+=== MICROSTRUCTURE (read-only signal — execute SPOT only) ===
+{microstructure_text}
+
+=== RECENT BREAKING NEWS ===
+{news_text}
+
 === YOUR RECENT PERFORMANCE (last 7 days) ===
 {performance_text}
 
@@ -173,6 +180,8 @@ class PromptContext:
     indicators_cache: dict[str, dict[str, Any]] | None = None
     open_position_count: int = 0
     risk_text: str = ""
+    microstructure_text: str = ""
+    news_text: str = ""
 
 
 # ── Builders ───────────────────────────────────────────────────
@@ -297,6 +306,8 @@ def build_prompts(ctx: PromptContext, params: StrategyParams) -> tuple[str, str]
         ml_signals_text=ctx.ml_signals_text or "No ML model data available.",
         regime_text=ctx.regime_text or "No regime data available.",
         risk_text=ctx.risk_text or "No portfolio risk data available.",
+        microstructure_text=ctx.microstructure_text or "No microstructure data available.",
+        news_text=ctx.news_text or "No recent breaking news.",
         performance_text=ctx.performance_text or "No completed trades yet.",
         daily_return_target=params.daily_return_target,
     )
@@ -311,6 +322,12 @@ def build_prompts(ctx: PromptContext, params: StrategyParams) -> tuple[str, str]
         ("=== ML MODEL SIGNALS ===", ctx.ml_signals_text, "No ML model data available."),
         ("=== MARKET REGIME ===", ctx.regime_text, "No regime data available."),
         ("=== PORTFOLIO RISK ===", ctx.risk_text, "No portfolio risk data available."),
+        (
+            "=== MICROSTRUCTURE (read-only signal — execute SPOT only) ===",
+            ctx.microstructure_text,
+            "No microstructure data available.",
+        ),
+        ("=== RECENT BREAKING NEWS ===", ctx.news_text, "No recent breaking news."),
     ]
     for header, value, placeholder in optional_sections:
         if not value:
@@ -331,3 +348,9 @@ def prompt_cache_key(system: str, user: str) -> str:
     h.update(b"\x1f")
     h.update(user.encode("utf-8"))
     return h.hexdigest()[:16]
+
+
+# Register the static template (not the per-cycle data) so every LlmDecision
+# row can record exactly which template version produced it. Editing
+# SYSTEM_PROMPT bumps this hash automatically.
+PROMPT_VERSION = _register_prompt("crypto.strategy.system", SYSTEM_PROMPT)

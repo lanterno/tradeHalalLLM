@@ -3,11 +3,34 @@
 import logging
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlmodel import Field, SQLModel
 
 logger = logging.getLogger(__name__)
+
+# WAL gives us concurrent reader+writer access — eliminates the
+# cycle-vs-monitor write contention we hit on busy crypto pairs.
+# busy_timeout pushes any residual lock waits onto sqlite itself
+# instead of bubbling up as OperationalError.
+_SQLITE_PRAGMAS = (
+    "PRAGMA journal_mode=WAL",
+    "PRAGMA synchronous=NORMAL",
+    "PRAGMA busy_timeout=30000",
+    "PRAGMA foreign_keys=ON",
+)
+
+
+def _apply_sqlite_pragmas(dbapi_conn: Any, _connection_record: Any) -> None:
+    cursor = dbapi_conn.cursor()
+    try:
+        for pragma in _SQLITE_PRAGMAS:
+            cursor.execute(pragma)
+    finally:
+        cursor.close()
+
 
 # ── Stock Tables ────────────────────────────────────────────────
 
@@ -32,6 +55,24 @@ class Trade(SQLModel, table=True):
     filled_at: datetime | None = None
     filled_price: float | None = None
     filled_quantity: float | None = None
+
+    # Halal audit FK — links to the screening decision that gated this trade.
+    # Nullable for back-compat; new code is expected to populate it.
+    halal_screening_id: int | None = Field(default=None, foreign_key="halal_screenings.id")
+
+    # SL/TP + close lifecycle — mirrors CryptoTrade so the shared
+    # monitor/analytics surface can treat both asset classes uniformly.
+    stop_loss: float | None = None
+    target_price: float | None = None
+    exit_price: float | None = None
+    exit_reason: str | None = None
+    closed_at: datetime | None = None
+
+    # Paper-vs-live divergence — both sides record realized slippage
+    # (signed, in fraction of price) so the operator can sanity-check
+    # the backtester's assumptions against live fills.
+    paper_slippage_pct: float | None = None
+    live_slippage_pct: float | None = None
 
 
 class DailyPnl(SQLModel, table=True):
@@ -75,6 +116,15 @@ class LlmDecision(SQLModel, table=True):
     execution_ms: int | None = None
     thinking: str | None = None  # reasoning chain from thinking-mode LLMs
 
+    # Cost / cache attribution. Lets us cap daily spend, measure cache
+    # hit rate, and replay any decision against its exact prompt version.
+    prompt_version: str | None = None  # registry "name@hash", e.g. "crypto.strategy.system@abc123"
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    cache_read_tokens: int | None = None
+    cache_write_tokens: int | None = None
+    cost_usd: float | None = None  # rounded float — Decimal aggregation done in code
+
 
 # ── Crypto Tables ──────────────────────────────────────────────
 
@@ -107,6 +157,13 @@ class CryptoTrade(SQLModel, table=True):
     filled_at: datetime | None = None
     filled_price: float | None = None
     filled_quantity: float | None = None
+
+    # Halal audit FK — links to the screening decision that gated this trade.
+    halal_screening_id: int | None = Field(default=None, foreign_key="halal_screenings.id")
+
+    # Paper-vs-live divergence — same fields as Trade.
+    paper_slippage_pct: float | None = None
+    live_slippage_pct: float | None = None
 
 
 class CryptoDailyPnl(SQLModel, table=True):
@@ -187,6 +244,121 @@ class ReconciliationLog(SQLModel, table=True):
     notes: str | None = None
 
 
+class ResearchJob(SQLModel, table=True):
+    """One backtest / walk-forward / Monte Carlo job, queued or completed."""
+
+    __tablename__ = "research_jobs"
+
+    id: int | None = Field(default=None, primary_key=True)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    kind: str  # 'backtest' | 'walk_forward' | 'monte_carlo'
+    name: str | None = None  # operator-supplied label
+    params: str  # JSON of inputs
+    status: str = Field(default="queued")  # 'queued' | 'running' | 'ok' | 'error'
+    result: str | None = None  # JSON-encoded outcome
+    error: str | None = None
+    finished_at: datetime | None = None
+    pinned: bool = Field(default=False)
+
+
+class RuntimeConfig(SQLModel, table=True):
+    """Runtime overlay for ``Settings`` knobs.
+
+    The bot reads these on each cycle as an overlay over the .env-derived
+    values, so an operator can tune ``CRYPTO_MAX_POSITION_PCT`` from the
+    dashboard and see the effect on the next tick — no restart required.
+    Removing a row reverts to the .env value.
+    """
+
+    __tablename__ = "runtime_config"
+
+    key: str = Field(primary_key=True)  # uppercase env-var name
+    value: str  # JSON-encoded so we can round-trip int/float/list
+    set_by: str | None = None
+    set_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class PairPause(SQLModel, table=True):
+    """Per-pair operator pause toggle.
+
+    The cycle's tradeable-pair filter excludes any symbol present here.
+    One row per paused pair; deleting the row resumes it. Audit fields
+    (set_by, set_at, reason) are kept for the activity feed.
+    """
+
+    __tablename__ = "pair_pauses"
+
+    pair: str = Field(primary_key=True)
+    set_by: str | None = None
+    set_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    reason: str | None = None
+
+
+class WebAction(SQLModel, table=True):
+    """Audit log row for one dashboard mutation request.
+
+    Written by ``web/audit.py`` *before* the underlying handler runs so
+    even a mutation that crashes mid-execution leaves a trace. The
+    ``outcome`` column gets updated to "ok"/"error" once the handler
+    returns; rows that stay "pending" point at handlers that crashed
+    without cleanup.
+    """
+
+    __tablename__ = "web_actions"
+
+    id: int | None = Field(default=None, primary_key=True)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    actor: str  # the request_id ContextVar value, or "anon" if missing
+    method: str  # POST | DELETE | PATCH | PUT
+    path: str  # e.g. "/api/admin/halt"
+    payload: str | None = None  # JSON-serialised request body (truncated)
+    outcome: str = Field(default="pending")  # 'pending' | 'ok' | 'error'
+    status_code: int | None = None
+    error: str | None = None
+
+
+class PurificationEntry(SQLModel, table=True):
+    """Persistent record of a dividend's haram-portion purification obligation.
+
+    One row per received dividend. ``paid_at`` stays NULL until the
+    operator records the donation; ``outstanding_total`` queries filter
+    on ``paid_at IS NULL``.
+    """
+
+    __tablename__ = "purification_entries"
+
+    id: int | None = Field(default=None, primary_key=True)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    symbol: str = Field(index=True)
+    dividend_usd: float
+    haram_pct: float
+    purification_usd: float
+    notes: str | None = None
+    paid_at: datetime | None = None
+
+
+class HalalScreening(SQLModel, table=True):
+    """Per-decision audit row for a Shariah-compliance screening.
+
+    Every trade should reference one of these via ``halal_screening_id`` so
+    we can prove, after the fact, *why* a position was deemed compliant —
+    which source said so, with what criteria, at what time. Cache hits
+    record a row too (with ``cache_hit=True``) so the audit trail never
+    has gaps even when the underlying provider isn't queried.
+    """
+
+    __tablename__ = "halal_screenings"
+
+    id: int | None = Field(default=None, primary_key=True)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    symbol: str = Field(index=True)
+    asset_class: str  # 'stock' | 'crypto'
+    source: str  # 'zoya' | 'coingecko_rules' | 'override' | 'cache' | …
+    decision: str  # 'halal' | 'not_halal' | 'doubtful'
+    criteria: str | None = None  # JSON string capturing the decision inputs
+    cache_hit: bool = Field(default=False)
+
+
 class KillSwitch(SQLModel, table=True):
     """Single-row operator kill-switch.
 
@@ -232,6 +404,7 @@ async def init_db(db_path: str | Path) -> AsyncEngine:
     import sqlalchemy as sa
 
     engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}")
+    event.listen(engine.sync_engine, "connect", _apply_sqlite_pragmas)
 
     expected_head = _alembic_head_revision()
     expected_tables = set(SQLModel.metadata.tables.keys())

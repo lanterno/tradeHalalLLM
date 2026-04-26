@@ -36,7 +36,8 @@ from halal_trader.crypto.websocket import BinanceWSManager
 from halal_trader.db.repository import Repository
 from halal_trader.ml.retrainer import RetrainingScheduler
 from halal_trader.notifications.telegram import AlertSink, TelegramNotifier
-from halal_trader.sentiment.events import NewsEventReactor
+from halal_trader.sentiment.events import NewsEvent, NewsEventReactor
+from halal_trader.sentiment.feed import RecentNewsFeed
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +81,7 @@ class CryptoComponents:
     ml_anomaly: Any = None
     ml_signal: Any = None
     news_reactor: NewsEventReactor | None = None
+    news_feed: RecentNewsFeed | None = None
 
 
 # ── Optional subsystem builders ───────────────────────────────
@@ -228,6 +230,17 @@ async def build_components(
 
     news_reactor = _build_news_reactor(settings)
 
+    # The cycle reads from this bounded buffer; the reactor's job is to
+    # push every fired event in. We keep both as separate components so
+    # the reactor can also trigger emergency mini-cycles independently
+    # of the LLM-prompt feed.
+    news_feed = RecentNewsFeed(capacity=10, max_age_seconds=1800)
+
+    async def _push_news_to_feed(event: NewsEvent) -> None:
+        news_feed.push(event)
+
+    news_reactor.on_event(_push_news_to_feed)
+
     _ = engine  # kept in the signature so future components can read it.
 
     return CryptoComponents(
@@ -253,4 +266,5 @@ async def build_components(
         ml_anomaly=ml_anomaly,
         ml_signal=ml_signal,
         news_reactor=news_reactor,
+        news_feed=news_feed,
     )

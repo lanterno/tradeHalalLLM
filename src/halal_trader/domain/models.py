@@ -94,6 +94,13 @@ class TradeDecision(BaseModel):
     reasoning: str = Field(description="Brief explanation of the decision")
     target_price: float | None = Field(default=None, description="Expected target price")
     stop_loss: float | None = Field(default=None, description="Suggested stop-loss price")
+    # Optional setup tag — drives the SL/TP profile in core.sl_tp.
+    # Older prompts that don't ask for it leave this None and fall back
+    # to the UNKNOWN/legacy profile.
+    setup_type: str | None = Field(
+        default=None,
+        description="Setup classification: breakout | mean_reversion | momentum | range",
+    )
 
 
 class TradingPlan(BaseModel):
@@ -130,6 +137,12 @@ class CryptoTradeDecision(BaseModel):
     entry_price: float | None = Field(default=None, description="Suggested entry price")
     target_price: float | None = Field(default=None, description="Expected target price")
     stop_loss: float | None = Field(default=None, description="Suggested stop-loss price")
+    # Optional setup tag — drives the SL/TP profile in core.sl_tp. See
+    # TradeDecision for the same field's semantics.
+    setup_type: str | None = Field(
+        default=None,
+        description="Setup classification: breakout | mean_reversion | momentum | range",
+    )
 
 
 class CryptoTradingPlan(BaseModel):

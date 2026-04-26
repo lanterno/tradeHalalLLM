@@ -8,6 +8,7 @@ import signal
 import time
 
 from halal_trader.core.scheduler import BaseTradingBot
+from halal_trader.crypto.cadence import select_interval
 from halal_trader.crypto.cycle import CryptoCycleService
 from halal_trader.crypto.exchange import BinanceClient
 from halal_trader.crypto.monitor import PositionMonitor
@@ -90,6 +91,7 @@ class CryptoTradingBot(BaseTradingBot):
             self_review=comps.self_review,
             notifier=comps.notifier if comps.notifier.enabled else None,
             risk_engine=comps.risk_engine,
+            news_feed=comps.news_feed,
             alerts=comps.alerts,
             engine=self._engine,
             live_mode_checker=comps.live_mode_checker,
@@ -245,7 +247,7 @@ class CryptoTradingBot(BaseTradingBot):
             self._reconcile_task.cancel()
             try:
                 await self._reconcile_task
-            except asyncio.CancelledError, Exception:
+            except Exception:
                 pass
             self._reconcile_task = None
 
@@ -266,6 +268,16 @@ class CryptoTradingBot(BaseTradingBot):
                     await component.close()
             except Exception as e:
                 logger.warning("Failed to stop %s: %s", name, e)
+
+        # Cancel any open orders BEFORE we disconnect — leaving them
+        # sitting on the book during a restart leads to phantom positions
+        # the next process can't reconcile.
+        try:
+            from halal_trader.core.shutdown import cancel_all_open_orders
+
+            await cancel_all_open_orders(self._binance)
+        except Exception as e:
+            logger.warning("Failed to cancel open orders during shutdown: %s", e)
 
         try:
             await self._binance.disconnect()
@@ -340,9 +352,30 @@ class CryptoTradingBot(BaseTradingBot):
 
                 _web_state["last_cycle"] = datetime.now(timezone.utc).isoformat()
 
+                # Adaptive cadence — high-vol regimes shorten the next
+                # cycle; chop lengthens it. Falls back to the configured
+                # interval when no indicators are available yet (cold start
+                # or a cycle that returned early).
+                next_interval = interval
+                if self._cycle_service.last_indicators_cache:
+                    decision = select_interval(
+                        indicators_cache=self._cycle_service.last_indicators_cache,
+                        base_interval=interval,
+                        atr_baseline=self.settings.crypto.atr_baseline,
+                    )
+                    next_interval = decision.interval_seconds
+                    if decision.regime != "normal":
+                        logger.info(
+                            "Adaptive cadence: %s regime (median ATR %.4f, ratio %.2f) → %ds",
+                            decision.regime,
+                            decision.median_atr,
+                            decision.ratio,
+                            next_interval,
+                        )
+
                 # Sleep for remaining interval time
                 elapsed = time.monotonic() - cycle_start
-                sleep_time = max(0, interval - elapsed)
+                sleep_time = max(0, next_interval - elapsed)
                 if sleep_time > 0:
                     logger.debug(
                         "Cycle took %.1fs, sleeping %.1fs until next cycle",
@@ -354,7 +387,7 @@ class CryptoTradingBot(BaseTradingBot):
                     logger.warning(
                         "Cycle took %.1fs (exceeds %ds interval), running next immediately",
                         elapsed,
-                        interval,
+                        next_interval,
                     )
 
         except KeyboardInterrupt, asyncio.CancelledError:

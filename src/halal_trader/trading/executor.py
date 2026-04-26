@@ -27,6 +27,7 @@ class TradeExecutor(BaseExecutor):
         *,
         max_position_pct: float,
         max_simultaneous_positions: int,
+        max_sector_pct: float = 0.40,
     ) -> None:
         super().__init__(
             repo,
@@ -34,17 +35,26 @@ class TradeExecutor(BaseExecutor):
             max_simultaneous_positions=max_simultaneous_positions,
         )
         self._broker = broker
+        # 0 disables the sector check; keep the default at 40% so even
+        # an operator who hasn't tuned this gets a sane diversification
+        # floor on day one.
+        self._max_sector_pct = max_sector_pct
 
     async def execute_plan(
-        self, plan: TradingPlan, *, bars: dict[str, Any] | None = None
+        self,
+        plan: TradingPlan,
+        *,
+        bars: dict[str, Any] | None = None,
+        positions: list[Any] | None = None,
     ) -> list[dict[str, Any]]:
         """Execute all decisions in a TradingPlan, returning execution results.
 
         ``bars`` is the per-symbol bar payload from the cycle. When passed,
         every successful BUY records a stock-side IndicatorSnapshot for the
-        shared retrainer.
+        shared retrainer. ``positions`` (current open positions) feeds the
+        sector-rotation halal cap.
         """
-        return await self._execute_plan_common(plan, bars=bars or {})
+        return await self._execute_plan_common(plan, bars=bars or {}, positions=positions or [])
 
     def _get_sells(self, plan: Any) -> list[Any]:
         return plan.sells
@@ -79,6 +89,23 @@ class TradeExecutor(BaseExecutor):
             msg = f"Position size for {decision.symbol} exceeds {self._max_position_pct:.0%} limit"
             logger.warning(msg)
             return {"symbol": decision.symbol, "action": "buy", "status": "rejected", "reason": msg}
+
+        # Halal sector-rotation cap — refuse buys that would push a single
+        # sector past its share of equity. Pull existing exposure from the
+        # broker positions we already had to fetch above (in kwargs/account).
+        sector_reject = await self._check_sector_limit(
+            symbol=decision.symbol,
+            notional_usd=estimated_cost,
+            equity_usd=account.portfolio_value,
+            positions=kwargs.get("positions") or [],
+        )
+        if sector_reject is not None:
+            return {
+                "symbol": decision.symbol,
+                "action": "buy",
+                "status": "rejected",
+                "reason": sector_reject,
+            }
 
         try:
             submitted_at = datetime.now(UTC)
@@ -249,6 +276,37 @@ class TradeExecutor(BaseExecutor):
         """Close all open positions (end of day)."""
         logger.info("Closing all positions (end of day)")
         return await self._broker.close_all_positions()
+
+    async def _check_sector_limit(
+        self,
+        *,
+        symbol: str,
+        notional_usd: float,
+        equity_usd: float,
+        positions: list[Any],
+    ) -> str | None:
+        """Return a rejection reason if the buy would breach the sector cap."""
+        if equity_usd <= 0 or self._max_sector_pct <= 0:
+            return None
+        from halal_trader.halal.sector_limits import (
+            check_buy_against_limits,
+            compute_allocation,
+        )
+
+        positions_value = {
+            p.symbol: float(p.qty) * float(p.current_price or p.avg_entry_price) for p in positions
+        }
+        allocation = compute_allocation(positions_value, total_equity=equity_usd)
+        ok, reason = check_buy_against_limits(
+            symbol=symbol,
+            notional_usd=notional_usd,
+            allocation=allocation,
+            max_sector_pct=self._max_sector_pct,
+        )
+        if not ok:
+            logger.warning("Sector cap rejection for %s: %s", symbol, reason)
+            return reason
+        return None
 
     def _extract_price(self, snapshot: Any, symbol: str) -> float:
         """Extract a usable price from a snapshot response."""

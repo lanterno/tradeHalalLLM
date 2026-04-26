@@ -67,6 +67,9 @@ class FallbackLLM(BaseLLM):
         self._chain_backoff_until = 0
         self._active_model = provider.model
         self.last_thinking = provider.last_thinking
+        # Surface the chosen provider's usage so persistence sees the
+        # real cost of the call that succeeded, not a stale primary one.
+        self.last_usage = provider.last_usage
 
     def _on_provider_failure(self, provider: BaseLLM, error: Exception) -> None:
         provider_name = type(provider).__name__

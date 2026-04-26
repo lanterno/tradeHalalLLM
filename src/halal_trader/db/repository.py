@@ -4,6 +4,7 @@ import json
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from sqlalchemy import text as sqlalchemy_text
 from sqlalchemy.ext.asyncio import AsyncEngine
 from sqlmodel import SQLModel, select
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -14,10 +15,16 @@ from halal_trader.db.models import (
     CryptoTrade,
     DailyPnl,
     HalalCache,
+    HalalScreening,
     IndicatorSnapshot,
     LlmDecision,
+    PairPause,
+    PurificationEntry,
+    ResearchJob,
+    RuntimeConfig,
     StrategyAdjustment,
     Trade,
+    WebAction,
 )
 from halal_trader.market_hours import today_eastern, trading_day_end_utc, trading_day_start_utc
 
@@ -123,6 +130,9 @@ class Repository:
         filled_at: datetime | None = None,
         filled_price: float | None = None,
         filled_quantity: float | None = None,
+        halal_screening_id: int | None = None,
+        stop_loss: float | None = None,
+        target_price: float | None = None,
     ) -> int:
         trade = Trade(
             symbol=symbol,
@@ -136,6 +146,9 @@ class Repository:
             filled_at=filled_at,
             filled_price=filled_price,
             filled_quantity=filled_quantity,
+            halal_screening_id=halal_screening_id,
+            stop_loss=stop_loss,
+            target_price=target_price,
         )
         async with AsyncSession(self._engine) as session:
             session.add(trade)
@@ -148,6 +161,46 @@ class Repository:
 
     async def get_recent_trades(self, limit: int = 50) -> list[dict[str, Any]]:
         return await self._get_recent_rows(Trade, limit)
+
+    async def get_open_trades(self) -> list[Trade]:
+        """Stock trades with status != 'closed' and an SL/TP set.
+
+        Mirrors :meth:`get_open_crypto_trades` so the stock monitor can
+        consume the same shape. Filters out fully-closed rows so a long
+        history doesn't slow the per-tick scan.
+        """
+        async with AsyncSession(self._engine) as session:
+            statement = select(Trade).where(Trade.closed_at.is_(None)).where(Trade.side == "buy")
+            results = await session.exec(statement)
+            return list(results.all())
+
+    async def close_trade(
+        self,
+        trade_id: int,
+        exit_price: float,
+        exit_reason: str,
+    ) -> None:
+        """Mark a stock trade as closed with exit price + reason."""
+        async with AsyncSession(self._engine) as session:
+            trade = await session.get(Trade, trade_id)
+            if trade is None:
+                return
+            trade.exit_price = exit_price
+            trade.exit_reason = exit_reason
+            trade.closed_at = datetime.now(UTC)
+            trade.status = "closed"
+            session.add(trade)
+            await session.commit()
+
+    async def update_stock_trade_stop_loss(self, trade_id: int, new_stop_loss: float) -> None:
+        """Ratchet up the stop_loss on a stock trade (trailing-stop helper)."""
+        async with AsyncSession(self._engine) as session:
+            trade = await session.get(Trade, trade_id)
+            if trade is None:
+                return
+            trade.stop_loss = new_stop_loss
+            session.add(trade)
+            await session.commit()
 
     # ── Stock Daily P&L ────────────────────────────────────────
 
@@ -187,6 +240,295 @@ class Repository:
     async def is_cache_fresh(self, max_age_hours: int = 24) -> bool:
         return await self._is_cache_fresh(HalalCache, max_age_hours)
 
+    # ── Research jobs (backtest queue) ─────────────────────────
+
+    async def enqueue_research_job(
+        self, *, kind: str, params: dict, name: str | None = None
+    ) -> int:
+        row = ResearchJob(kind=kind, name=name, params=json.dumps(params))
+        async with AsyncSession(self._engine) as session:
+            session.add(row)
+            await session.commit()
+            await session.refresh(row)
+            return row.id
+
+    async def update_research_job(
+        self,
+        job_id: int,
+        *,
+        status: str,
+        result: dict | None = None,
+        error: str | None = None,
+    ) -> None:
+        from datetime import UTC as _UTC
+        from datetime import datetime as _dt
+
+        async with AsyncSession(self._engine) as session:
+            row = await session.get(ResearchJob, job_id)
+            if row is None:
+                return
+            row.status = status
+            if result is not None:
+                row.result = json.dumps(result)
+            if error is not None:
+                row.error = error
+            if status in ("ok", "error"):
+                row.finished_at = _dt.now(_UTC)
+            session.add(row)
+            await session.commit()
+
+    async def get_research_job(self, job_id: int) -> dict[str, Any] | None:
+        async with AsyncSession(self._engine) as session:
+            row = await session.get(ResearchJob, job_id)
+            if row is None:
+                return None
+            data = row.model_dump()
+            for key in ("params", "result"):
+                if data.get(key):
+                    try:
+                        data[key] = json.loads(data[key])
+                    except json.JSONDecodeError:
+                        pass
+            return data
+
+    async def list_research_jobs(self, limit: int = 50) -> list[dict[str, Any]]:
+        async with AsyncSession(self._engine) as session:
+            statement = select(ResearchJob).order_by(ResearchJob.id.desc()).limit(limit)
+            results = await session.exec(statement)
+            return [r.model_dump() for r in results.all()]
+
+    async def pin_research_job(self, job_id: int, pinned: bool) -> bool:
+        async with AsyncSession(self._engine) as session:
+            row = await session.get(ResearchJob, job_id)
+            if row is None:
+                return False
+            row.pinned = pinned
+            session.add(row)
+            await session.commit()
+            return True
+
+    # ── Runtime config overlay ─────────────────────────────────
+
+    async def set_runtime_config(self, key: str, value: Any, *, set_by: str | None = None) -> None:
+        """Insert/update a runtime overlay value (JSON-encoded for type fidelity)."""
+        async with AsyncSession(self._engine) as session:
+            row = await session.get(RuntimeConfig, key.upper())
+            payload = json.dumps(value)
+            if row is None:
+                row = RuntimeConfig(key=key.upper(), value=payload, set_by=set_by)
+            else:
+                from datetime import UTC as _UTC
+                from datetime import datetime as _dt
+
+                row.value = payload
+                row.set_by = set_by
+                row.set_at = _dt.now(_UTC)
+            session.add(row)
+            await session.commit()
+
+    async def delete_runtime_config(self, key: str) -> bool:
+        async with AsyncSession(self._engine) as session:
+            row = await session.get(RuntimeConfig, key.upper())
+            if row is None:
+                return False
+            await session.delete(row)
+            await session.commit()
+            return True
+
+    async def list_runtime_config(self) -> dict[str, Any]:
+        async with AsyncSession(self._engine) as session:
+            results = await session.exec(select(RuntimeConfig))
+            out: dict[str, Any] = {}
+            for r in results.all():
+                try:
+                    out[r.key] = json.loads(r.value)
+                except json.JSONDecodeError:
+                    out[r.key] = r.value
+            return out
+
+    # ── Per-pair operator pauses ───────────────────────────────
+
+    async def pause_pair(
+        self, pair: str, *, set_by: str | None = None, reason: str | None = None
+    ) -> None:
+        """Insert (or update) a pause row for ``pair``."""
+        async with AsyncSession(self._engine) as session:
+            row = await session.get(PairPause, pair.upper())
+            if row is None:
+                row = PairPause(pair=pair.upper(), set_by=set_by, reason=reason)
+            else:
+                row.set_by = set_by
+                row.reason = reason
+                from datetime import UTC as _UTC
+                from datetime import datetime as _dt
+
+                row.set_at = _dt.now(_UTC)
+            session.add(row)
+            await session.commit()
+
+    async def resume_pair(self, pair: str) -> bool:
+        """Delete the pause row. Returns True if a row was actually removed."""
+        async with AsyncSession(self._engine) as session:
+            row = await session.get(PairPause, pair.upper())
+            if row is None:
+                return False
+            await session.delete(row)
+            await session.commit()
+            return True
+
+    async def get_paused_pairs(self) -> set[str]:
+        """The set of currently paused pair symbols (uppercased)."""
+        async with AsyncSession(self._engine) as session:
+            results = await session.exec(select(PairPause))
+            return {r.pair for r in results.all()}
+
+    async def list_pair_pauses(self) -> list[dict[str, Any]]:
+        async with AsyncSession(self._engine) as session:
+            results = await session.exec(select(PairPause))
+            return [r.model_dump() for r in results.all()]
+
+    # ── Web mutation audit ─────────────────────────────────────
+
+    async def begin_web_action(
+        self, *, actor: str, method: str, path: str, payload: str | None = None
+    ) -> int:
+        """Insert a 'pending' web_actions row before the handler runs."""
+        row = WebAction(actor=actor, method=method, path=path, payload=payload)
+        async with AsyncSession(self._engine) as session:
+            session.add(row)
+            await session.commit()
+            await session.refresh(row)
+            return row.id
+
+    async def complete_web_action(
+        self, action_id: int, *, status_code: int, error: str | None = None
+    ) -> None:
+        """Update a pending row with the final outcome."""
+        async with AsyncSession(self._engine) as session:
+            row = await session.get(WebAction, action_id)
+            if row is None:
+                return
+            row.status_code = status_code
+            row.outcome = "ok" if 200 <= status_code < 400 and error is None else "error"
+            row.error = error
+            session.add(row)
+            await session.commit()
+
+    async def get_recent_web_actions(self, limit: int = 50) -> list[dict[str, Any]]:
+        async with AsyncSession(self._engine) as session:
+            statement = select(WebAction).order_by(WebAction.id.desc()).limit(limit)
+            results = await session.exec(statement)
+            return [r.model_dump() for r in results.all()]
+
+    # ── Purification ledger ────────────────────────────────────
+
+    async def record_purification(
+        self,
+        *,
+        symbol: str,
+        dividend_usd: float,
+        haram_pct: float,
+        purification_usd: float,
+        notes: str | None = None,
+    ) -> int:
+        """Append a purification obligation; return its row id."""
+        row = PurificationEntry(
+            symbol=symbol.upper(),
+            dividend_usd=float(dividend_usd),
+            haram_pct=float(haram_pct),
+            purification_usd=float(purification_usd),
+            notes=notes,
+        )
+        async with AsyncSession(self._engine) as session:
+            session.add(row)
+            await session.commit()
+            await session.refresh(row)
+            return row.id
+
+    async def mark_purification_paid(self, entry_id: int, paid_at: datetime | None = None) -> bool:
+        """Stamp ``paid_at`` on an entry. Returns ``False`` if the id is unknown."""
+        async with AsyncSession(self._engine) as session:
+            row = await session.get(PurificationEntry, entry_id)
+            if row is None:
+                return False
+            row.paid_at = paid_at or datetime.now(UTC)
+            session.add(row)
+            await session.commit()
+            return True
+
+    async def get_outstanding_purification(self) -> list[dict[str, Any]]:
+        """Unpaid obligations only — what the operator owes today."""
+        async with AsyncSession(self._engine) as session:
+            statement = (
+                select(PurificationEntry)
+                .where(PurificationEntry.paid_at.is_(None))
+                .order_by(PurificationEntry.timestamp.desc())
+            )
+            results = await session.exec(statement)
+            return [r.model_dump() for r in results.all()]
+
+    async def get_purification_totals(self) -> dict[str, float]:
+        """Aggregate outstanding + paid totals in USD across all rows."""
+        async with AsyncSession(self._engine) as session:
+            outstanding_q = await session.execute(
+                sqlalchemy_text(
+                    "SELECT COALESCE(SUM(purification_usd), 0) "
+                    "FROM purification_entries WHERE paid_at IS NULL"
+                )
+            )
+            paid_q = await session.execute(
+                sqlalchemy_text(
+                    "SELECT COALESCE(SUM(purification_usd), 0) "
+                    "FROM purification_entries WHERE paid_at IS NOT NULL"
+                )
+            )
+            return {
+                "outstanding_usd": float(outstanding_q.scalar_one() or 0.0),
+                "paid_usd": float(paid_q.scalar_one() or 0.0),
+            }
+
+    # ── Halal Screenings (shared audit trail) ──────────────────
+
+    async def record_halal_screening(
+        self,
+        *,
+        symbol: str,
+        asset_class: str,
+        source: str,
+        decision: str,
+        criteria: dict | None = None,
+        cache_hit: bool = False,
+    ) -> int:
+        """Persist a screening decision and return its row id.
+
+        Callers should pass the returned id to ``record_trade`` /
+        ``record_crypto_trade`` via ``halal_screening_id`` so each trade
+        is provably linked to the compliance decision that gated it.
+        """
+        row = HalalScreening(
+            symbol=symbol,
+            asset_class=asset_class,
+            source=source,
+            decision=decision,
+            criteria=json.dumps(criteria) if criteria else None,
+            cache_hit=cache_hit,
+        )
+        async with AsyncSession(self._engine) as session:
+            session.add(row)
+            await session.commit()
+            await session.refresh(row)
+            return row.id
+
+    async def get_halal_screening(self, screening_id: int) -> dict[str, Any] | None:
+        async with AsyncSession(self._engine) as session:
+            row = await session.get(HalalScreening, screening_id)
+            if row is None:
+                return None
+            data = row.model_dump()
+            if data.get("criteria"):
+                data["criteria"] = json.loads(data["criteria"])
+            return data
+
     # ── LLM Decisions (shared) ──────────────────────────────────
 
     async def record_decision(
@@ -199,6 +541,12 @@ class Repository:
         symbols: list[str] | None = None,
         execution_ms: int | None = None,
         thinking: str | None = None,
+        prompt_version: str | None = None,
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
+        cache_read_tokens: int | None = None,
+        cache_write_tokens: int | None = None,
+        cost_usd: float | None = None,
     ) -> int:
         decision = LlmDecision(
             provider=provider,
@@ -209,6 +557,12 @@ class Repository:
             symbols=json.dumps(symbols) if symbols else None,
             execution_ms=execution_ms,
             thinking=thinking,
+            prompt_version=prompt_version,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cache_read_tokens=cache_read_tokens,
+            cache_write_tokens=cache_write_tokens,
+            cost_usd=cost_usd,
         )
         async with AsyncSession(self._engine) as session:
             session.add(decision)
@@ -238,6 +592,7 @@ class Repository:
         filled_at: datetime | None = None,
         filled_price: float | None = None,
         filled_quantity: float | None = None,
+        halal_screening_id: int | None = None,
     ) -> int:
         trade = CryptoTrade(
             pair=pair,
@@ -255,6 +610,7 @@ class Repository:
             filled_at=filled_at,
             filled_price=filled_price,
             filled_quantity=filled_quantity,
+            halal_screening_id=halal_screening_id,
         )
         async with AsyncSession(self._engine) as session:
             session.add(trade)
@@ -351,6 +707,53 @@ class Repository:
 
     async def get_recent_crypto_trades(self, limit: int = 50) -> list[dict[str, Any]]:
         return await self._get_recent_rows(CryptoTrade, limit)
+
+    async def get_completed_stock_round_trips(
+        self, limit: int = 100, lookback_days: int | None = None
+    ) -> list[dict[str, Any]]:
+        """Stock equivalent of :meth:`get_completed_round_trips`.
+
+        Returns the same dict shape (with ``pair`` set to the symbol, so
+        the shared analytics module doesn't need to special-case stocks).
+        """
+        async with AsyncSession(self._engine) as session:
+            statement = (
+                select(Trade)
+                .where(Trade.side == "buy")
+                .where(Trade.closed_at.is_not(None))
+                .order_by(Trade.closed_at.desc())
+            )
+            if lookback_days is not None:
+                cutoff = datetime.now(UTC) - timedelta(days=lookback_days)
+                statement = statement.where(Trade.closed_at >= cutoff)
+            statement = statement.limit(limit)
+
+            results = await session.exec(statement)
+            round_trips = []
+            for trade in results.all():
+                entry = trade.filled_price or trade.price or 0
+                exit_p = trade.exit_price or 0
+                pnl = (exit_p - entry) * trade.quantity
+                pnl_pct = (exit_p - entry) / entry if entry > 0 else 0
+                duration_min = 0.0
+                if trade.closed_at and trade.timestamp:
+                    duration_min = (trade.closed_at - trade.timestamp).total_seconds() / 60
+                round_trips.append(
+                    {
+                        "id": trade.id,
+                        "pair": trade.symbol,  # alias so analytics is symmetric
+                        "buy_price": entry,
+                        "sell_price": exit_p,
+                        "quantity": trade.quantity,
+                        "pnl": pnl,
+                        "pnl_pct": pnl_pct,
+                        "duration_minutes": duration_min,
+                        "exit_reason": trade.exit_reason,
+                        "opened_at": trade.timestamp,
+                        "closed_at": trade.closed_at,
+                    }
+                )
+            return round_trips
 
     async def get_completed_round_trips(
         self, limit: int = 100, lookback_days: int | None = None

@@ -6,8 +6,24 @@ import logging
 import time
 from typing import Any
 
+
+async def _wrap_existing(plan):
+    """Trivial awaitable that returns ``plan`` — feeds the primary into
+    :func:`run_ensemble` as one of the variants without re-calling the LLM.
+    """
+    return plan
+
+from halal_trader.core.llm.adversarial import apply_review_to_buys, critique_plan
+from halal_trader.core.llm.ensemble import EnsembleVariant, run_ensemble
 from halal_trader.core.strategy import BaseStrategy
-from halal_trader.crypto.prompts import PromptContext, StrategyParams, build_prompts
+from halal_trader.crypto.prompts import (
+    PROMPT_VERSION as _CRYPTO_PROMPT_VERSION,
+)
+from halal_trader.crypto.prompts import (
+    PromptContext,
+    StrategyParams,
+    build_prompts,
+)
 from halal_trader.db.repository import Repository
 from halal_trader.domain.models import (
     CryptoAccount,
@@ -36,6 +52,12 @@ class CryptoTradingStrategy(BaseStrategy):
         llm_cooldown_seconds: int = 600,
         stop_loss_pct: float = 0.01,
         take_profit_pct: float = 0.02,
+        attacker_llm: LLMBackend | None = None,
+        adversarial_downsize_at: float = 0.45,
+        adversarial_skip_at: float = 0.75,
+        ensemble_llms: list[LLMBackend] | None = None,
+        ensemble_quorum: int = 2,
+        ensemble_skip_at: float | None = None,
     ) -> None:
         super().__init__(
             llm,
@@ -52,6 +74,23 @@ class CryptoTradingStrategy(BaseStrategy):
         self._llm_cooldown_seconds = llm_cooldown_seconds
         self._stop_loss_pct = stop_loss_pct
         self._take_profit_pct = take_profit_pct
+        # Optional adversarial co-bot — disabled by default. When set,
+        # the strategy runs a cheap critique LLM on every produced plan
+        # and downsizes/skips buys whose counter-thesis is convincing.
+        self._attacker_llm = attacker_llm
+        self._adv_downsize_at = adversarial_downsize_at
+        self._adv_skip_at = adversarial_skip_at
+        self.last_adversarial_review = None  # exposed for the dashboard
+
+        # Optional ensemble fan-out — additional LLMs that vote alongside
+        # the primary. Disabled by default. When set, every analyze()
+        # call runs the primary + ensemble in parallel and consensus
+        # quantities replace the primary's. Adversarial review (if any)
+        # then runs on the consensus plan.
+        self._ensemble_llms = list(ensemble_llms or [])
+        self._ensemble_quorum = ensemble_quorum
+        self._ensemble_skip_at = ensemble_skip_at
+        self.last_ensemble_verdict = None
 
     def _on_llm_success(self) -> None:
         self._consecutive_llm_failures = 0
@@ -90,6 +129,8 @@ class CryptoTradingStrategy(BaseStrategy):
         indicators_cache: dict[str, dict] | None = None,
         open_position_count: int = 0,
         risk_text: str = "",
+        microstructure_text: str = "",
+        news_text: str = "",
     ) -> CryptoTradingPlan:
         now = time.monotonic()
         if now < self._llm_cooldown_until:
@@ -120,6 +161,8 @@ class CryptoTradingStrategy(BaseStrategy):
             indicators_cache=indicators_cache,
             open_position_count=open_position_count,
             risk_text=risk_text,
+            microstructure_text=microstructure_text,
+            news_text=news_text,
         )
         params = StrategyParams(
             max_position_pct=self._max_position_pct,
@@ -131,7 +174,7 @@ class CryptoTradingStrategy(BaseStrategy):
         )
         system, user_prompt = build_prompts(ctx, params)
 
-        return await self._run_llm_analysis(
+        plan = await self._run_llm_analysis(
             system,
             user_prompt,
             prompt_summary=(
@@ -150,4 +193,118 @@ class CryptoTradingStrategy(BaseStrategy):
                 "holds": len(p.holds),
             },
             log_prefix="Crypto",
+            prompt_version=_CRYPTO_PROMPT_VERSION.short,
+        )
+
+        if self._ensemble_llms and plan.decisions:
+            plan = await self._apply_ensemble(plan, ctx, params)
+
+        if self._attacker_llm is not None and plan.decisions:
+            plan = await self._apply_adversarial_review(plan, user_prompt)
+
+        return plan
+
+    async def _apply_ensemble(
+        self,
+        primary_plan: CryptoTradingPlan,
+        ctx: PromptContext,
+        params: StrategyParams,
+    ) -> CryptoTradingPlan:
+        """Fan-out to ensemble LLMs and merge with the primary's plan.
+
+        On any error, returns the primary plan unchanged — the ensemble
+        is advisory and must never block trading.
+        """
+
+        async def _call_for(llm: LLMBackend):
+            system, user_prompt = build_prompts(ctx, params)
+            # Use the BaseLLM directly (no audit / no repair) — those
+            # belong to the primary path. Ensemble votes are consumed
+            # by aggregate_plans, not persisted as separate decisions.
+            try:
+                raw = await llm.generate_json(user_prompt, system=system)
+                return CryptoTradingPlan.model_validate(raw)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("ensemble variant %s failed: %s", getattr(llm, "model", "?"), exc)
+                raise
+
+        variants = [
+            EnsembleVariant(
+                name=f"primary:{getattr(self._llm, 'model', 'primary')}",
+                call=lambda p=primary_plan: _wrap_existing(p),
+            )
+        ]
+        for i, alt in enumerate(self._ensemble_llms):
+
+            async def _alt_call(alt=alt):
+                return await _call_for(alt)
+
+            variants.append(
+                EnsembleVariant(name=f"alt-{i}:{getattr(alt, 'model', 'alt')}", call=_alt_call)
+            )
+
+        try:
+            verdict = await run_ensemble(
+                variants,
+                quorum=self._ensemble_quorum,
+                skip_quorum_at=self._ensemble_skip_at,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("ensemble run failed: %s — keeping primary plan", exc)
+            return primary_plan
+        self.last_ensemble_verdict = verdict
+        consensus = verdict.consensus_plan
+        if not isinstance(consensus, CryptoTradingPlan):
+            return primary_plan
+        # Apply sizing multiplier from agreement to buys only
+        if verdict.sizing_multiplier == 0.0:
+            return consensus.model_copy(update={"decisions": []})
+        if verdict.sizing_multiplier < 1.0 and consensus.decisions:
+            new_decisions = []
+            for d in consensus.decisions:
+                action = d.action.value if hasattr(d.action, "value") else str(d.action)
+                if action.lower() == "buy":
+                    new_decisions.append(
+                        d.model_copy(
+                            update={
+                                "quantity": d.quantity * verdict.sizing_multiplier
+                            }
+                        )
+                    )
+                else:
+                    new_decisions.append(d)
+            consensus = consensus.model_copy(update={"decisions": new_decisions})
+        return consensus
+
+    async def _apply_adversarial_review(
+        self, plan: CryptoTradingPlan, user_prompt: str
+    ) -> CryptoTradingPlan:
+        """Run the co-bot critic and shrink/skip buys when it finds a strong
+        counter-thesis. Errors are advisory — never block trading on them.
+        """
+        try:
+            review = await critique_plan(
+                self._attacker_llm,  # type: ignore[arg-type]
+                decisions=plan.decisions,
+                market_outlook=plan.market_outlook,
+                context_excerpt=user_prompt,
+                downsize_at=self._adv_downsize_at,
+                skip_at=self._adv_skip_at,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("adversarial review wrapper failed: %s — skipping", exc)
+            return plan
+        self.last_adversarial_review = review
+        if review.recommendation == "proceed":
+            return plan
+        new_decisions = apply_review_to_buys(plan.decisions, review)
+        return plan.model_copy(
+            update={
+                "decisions": new_decisions,
+                "risk_notes": (
+                    (plan.risk_notes + " | " if plan.risk_notes else "")
+                    + f"adversarial: {review.recommendation} "
+                    f"(severity {review.severity:.2f}) — {review.counter_thesis}"
+                ),
+            }
         )

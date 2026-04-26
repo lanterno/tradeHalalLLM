@@ -7,12 +7,22 @@ from typing import Any
 from fastapi import FastAPI
 
 from halal_trader.web.routes import (
+    activity,
+    admin,
+    admin_config,
+    admin_halal,
+    admin_trades,
     analytics,
     config,
     decisions,
+    insights,
     metrics,
+    mobile,
     pnl,
     positions,
+    prometheus,
+    research,
+    research_jobs,
     risk,
     sentiment,
     streaming,
@@ -32,6 +42,16 @@ _MODULES = (
     risk,
     metrics,
     streaming,
+    research,
+    research_jobs,
+    prometheus,
+    activity,
+    admin,
+    admin_config,
+    admin_trades,
+    admin_halal,
+    mobile,
+    insights,
 )
 
 

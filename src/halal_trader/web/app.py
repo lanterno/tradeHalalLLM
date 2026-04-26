@@ -67,6 +67,17 @@ def create_app() -> Any:
         response.headers["X-Request-ID"] = rid
         return response
 
+    # Middleware register order is LIFO — register audit FIRST so it
+    # runs INSIDE the auth gate (auth fires on the outer hop, then audit
+    # writes the row only if the request is going to actually reach a
+    # handler). request_id correlation stays outermost so even rejected
+    # auth requests get a header-correlated trace.
+    from halal_trader.web.audit import audit_middleware
+    from halal_trader.web.middleware.auth import auth_middleware
+
+    app.middleware("http")(audit_middleware)
+    app.middleware("http")(auth_middleware)
+
     register_all(app, app_state)
 
     if _DASHBOARD_DIST.exists():

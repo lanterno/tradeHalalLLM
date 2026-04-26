@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from halal_trader.crypto.risk import PortfolioRiskEngine
 from halal_trader.domain.models import Kline
 
@@ -162,3 +164,53 @@ def test_get_adjusted_max_position_pct_falls_back_to_base():
     state = eng.evaluate({}, {}, {}, {}, total_equity=1_000.0)
     # Empty indicators → no entry in adjusted_position_pcts.
     assert eng.get_adjusted_max_position_pct("BTC", state) == 0.25
+
+
+def test_adaptive_corr_threshold_tightens_in_high_vol_regime():
+    """Median ATR ≥ 1.5× baseline → threshold drops by 0.10."""
+    eng = _engine(high_correlation_threshold=0.7, atr_baseline=0.02)
+    indicators = {
+        "BTCUSDT": {"atr_pct": 0.04},  # 2× baseline
+        "ETHUSDT": {"atr_pct": 0.05},
+        "SOLUSDT": {"atr_pct": 0.06},
+    }
+    assert eng._adaptive_corr_threshold(indicators) == pytest.approx(0.6)
+
+
+def test_adaptive_corr_threshold_loosens_in_calm_regime():
+    """Median ATR ≤ 0.7× baseline → threshold rises by 0.10."""
+    eng = _engine(high_correlation_threshold=0.7, atr_baseline=0.02)
+    indicators = {
+        "BTCUSDT": {"atr_pct": 0.012},
+        "ETHUSDT": {"atr_pct": 0.010},
+        "SOLUSDT": {"atr_pct": 0.013},
+    }
+    assert eng._adaptive_corr_threshold(indicators) == pytest.approx(0.8)
+
+
+def test_adaptive_corr_threshold_unchanged_in_normal_regime():
+    eng = _engine(high_correlation_threshold=0.7, atr_baseline=0.02)
+    indicators = {
+        "BTCUSDT": {"atr_pct": 0.020},
+        "ETHUSDT": {"atr_pct": 0.022},
+    }
+    assert eng._adaptive_corr_threshold(indicators) == 0.7
+
+
+def test_adaptive_corr_threshold_clamped_to_safe_range():
+    """Even with extreme inputs the threshold stays in [0.4, 0.9]."""
+    eng = _engine(high_correlation_threshold=0.85, atr_baseline=0.02)
+    # Calm regime would push to 0.95 — clamped down to 0.9.
+    calm = {"BTCUSDT": {"atr_pct": 0.005}}
+    assert eng._adaptive_corr_threshold(calm) == 0.9
+
+    eng2 = _engine(high_correlation_threshold=0.45, atr_baseline=0.02)
+    # Hot regime would push to 0.35 — clamped up to 0.4.
+    hot = {"BTCUSDT": {"atr_pct": 0.08}}
+    assert eng2._adaptive_corr_threshold(hot) == 0.4
+
+
+def test_adaptive_threshold_handles_missing_data_gracefully():
+    eng = _engine(high_correlation_threshold=0.7)
+    assert eng._adaptive_corr_threshold({}) == 0.7
+    assert eng._adaptive_corr_threshold({"BTCUSDT": {"error": "no data"}}) == 0.7

@@ -65,7 +65,7 @@ def _bars_to_klines(bars_for_symbol: Any) -> list[Kline]:
             low = float(bar.get("l", bar.get("low", 0)))
             c = float(bar.get("c", bar.get("close", 0)))
             v = float(bar.get("v", bar.get("volume", 0)))
-        except TypeError, ValueError:
+        except Exception:
             continue
         if c <= 0:
             continue

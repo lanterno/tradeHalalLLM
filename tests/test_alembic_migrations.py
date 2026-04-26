@@ -95,6 +95,15 @@ def test_each_revision_is_applied(db_path):
         "f5a6b7c8d9e0",
         "a6b7c8d9e0f1",
         "b7c8d9e0f1a2",
+        "c8d9e0f1a2b3",
+        "d9e0f1a2b3c4",
+        "e0f1a2b3c4d5",
+        "f1a2b3c4d5e6",
+        "a2b3c4d5e6f7",
+        "b3c4d5e6f7a8",
+        "c4d5e6f7a8b9",
+        "d5e6f7a8b9c0",
+        "e6f7a8b9c0d1",
     ]
     for rev in revisions:
         command.upgrade(cfg, rev)
@@ -116,6 +125,34 @@ def test_p1_8_added_fill_columns(db_path):
         assert col in stock_cols, f"trades missing {col}"
 
 
+def test_halal_screenings_table_and_fk_columns(db_path):
+    """Phase 0.6 added the halal audit table + halal_screening_id FK on trades."""
+    cfg = _alembic_cfg(db_path)
+    command.upgrade(cfg, "head")
+
+    tables = _tables_in(db_path)
+    assert "halal_screenings" in tables
+    for table in ("trades", "crypto_trades"):
+        assert "halal_screening_id" in _columns_in(db_path, table)
+
+
+def test_llm_decisions_has_cost_columns(db_path):
+    """Phase 0.4 added cost / cache attribution columns to llm_decisions."""
+    cfg = _alembic_cfg(db_path)
+    command.upgrade(cfg, "head")
+
+    cols = _columns_in(db_path, "llm_decisions")
+    for col in (
+        "prompt_version",
+        "input_tokens",
+        "output_tokens",
+        "cache_read_tokens",
+        "cache_write_tokens",
+        "cost_usd",
+    ):
+        assert col in cols, f"llm_decisions missing {col}"
+
+
 def test_kill_switch_seeded_with_singleton_row(db_path):
     cfg = _alembic_cfg(db_path)
     command.upgrade(cfg, "head")
@@ -127,7 +164,7 @@ def test_kill_switch_seeded_with_singleton_row(db_path):
 
 def test_admin_head_matches_known_revision():
     """Tripwire so adding a new revision without updating tests fails CI."""
-    assert admin.head() == "b7c8d9e0f1a2"
+    assert admin.head() == "e6f7a8b9c0d1"
 
 
 def test_idempotent_revision_is_safe_to_replay(db_path):

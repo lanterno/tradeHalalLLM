@@ -59,6 +59,21 @@ class CoinGeckoSettings(BaseSettings):
     api_key: str = Field(default="")
 
 
+class HalalSettings(BaseSettings):
+    """Cross-cutting halal-screening cadence + safety knobs."""
+
+    model_config = SettingsConfigDict(**_BASE_CONFIG, env_prefix="HALAL_")
+
+    # Cache TTL — how long a cached screening decision is trusted before
+    # we ask the upstream provider again. Tightened from the legacy 24h
+    # to 6h so a screening provider that flips a symbol from halal to
+    # not_halal mid-day doesn't leave us trading the stale verdict.
+    cache_max_age_hours: int = Field(default=6)
+    # Mid-cycle refresh threshold — if the cache is older than this when
+    # the cycle starts, refresh it inline before screening any symbols.
+    midcycle_refresh_hours: int = Field(default=4)
+
+
 # ── LLM Providers ──────────────────────────────────────────────
 
 
@@ -85,6 +100,11 @@ class LLMSettings(BaseSettings):
     provider: LLMProvider = Field(default=LLMProvider.OLLAMA)
     model: str = Field(default="qwen2.5:32b")
     fallback_providers: list[str] = Field(default_factory=list)
+    # Hard ceiling on per-UTC-day cumulative spend across all providers.
+    # 0 disables the cap (useful in tests / local Ollama runs). When the
+    # cap trips it engages the kill-switch so both bots stop entering
+    # new positions until the operator clears it.
+    daily_usd_cap: float = Field(default=0.0)
     ollama: OllamaSettings = Field(default_factory=OllamaSettings)
     openai: OpenAISettings = Field(default_factory=OpenAISettings)
     anthropic: AnthropicSettings = Field(default_factory=AnthropicSettings)
@@ -214,6 +234,26 @@ class LogSettings(BaseSettings):
     backup_count: int = Field(default=5)
 
 
+# ── Web dashboard ──────────────────────────────────────────────
+
+
+class WebSettings(BaseSettings):
+    """Dashboard control-surface knobs.
+
+    The dashboard binds to localhost by default; ``api_token`` is the
+    shared-secret header gate for any state-changing endpoint. Empty
+    token means *mutations are disabled* — read-only mode for safety
+    on a fresh deployment until the operator explicitly opts in.
+    """
+
+    model_config = SettingsConfigDict(**_BASE_CONFIG, env_prefix="WEB_")
+
+    api_token: str = Field(default="")
+    # Forced confirmation for destructive ops can be turned off in tests
+    # so the runner doesn't have to forge headers — never disable in prod.
+    require_confirmation: bool = Field(default=True)
+
+
 # ── Top-level Settings ─────────────────────────────────────────
 
 
@@ -231,6 +271,8 @@ class Settings(BaseSettings):
     binance: BinanceSettings = Field(default_factory=BinanceSettings)
     zoya: ZoyaSettings = Field(default_factory=ZoyaSettings)
     coingecko: CoinGeckoSettings = Field(default_factory=CoinGeckoSettings)
+    halal: HalalSettings = Field(default_factory=HalalSettings)
+    web: WebSettings = Field(default_factory=WebSettings)
     llm: LLMSettings = Field(default_factory=LLMSettings)
     stocks: StockSettings = Field(default_factory=StockSettings)
     crypto: CryptoSettings = Field(default_factory=CryptoSettings)

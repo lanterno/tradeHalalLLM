@@ -322,6 +322,33 @@ class BinanceClient:
             "asks": [[float(p), float(q)] for p, q in book.get("asks", [])],
         }
 
+    async def get_funding_signal(self, symbol: str) -> dict[str, float] | None:
+        """Read perp funding rate + mark price for ``symbol``.
+
+        Returns ``None`` if Binance has no perp for the symbol or the
+        request failed. **Halal note:** we read this for signal only —
+        spot is the *only* execution venue. We never margin, never
+        short, never open a position on the perp itself.
+        """
+        async with self._semaphore:
+            try:
+                mark = await self.client.futures_mark_price(symbol=symbol)
+            except BinanceAPIException as exc:
+                # -1121 = invalid symbol on the futures venue (e.g. spot-only token).
+                # Anything else is genuinely surprising — log + return None so the
+                # cycle treats microstructure as unavailable for the pair.
+                logger.debug("funding_signal unavailable for %s: %s", symbol, exc)
+                return None
+        if not isinstance(mark, dict):
+            return None
+        try:
+            return {
+                "funding_rate": float(mark.get("lastFundingRate", 0.0) or 0.0),
+                "mark_price": float(mark.get("markPrice", 0.0) or 0.0),
+            }
+        except Exception:
+            return None
+
     async def place_order(
         self,
         symbol: str,

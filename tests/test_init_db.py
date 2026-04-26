@@ -69,4 +69,30 @@ async def test_init_db_succeeds_at_head(tmp_path):
 
 def test_alembic_head_matches_known_revision():
     """If somebody adds a revision without updating tests, this fails loudly."""
-    assert admin.head() == "b7c8d9e0f1a2"
+    assert admin.head() == "e6f7a8b9c0d1"
+
+
+async def test_init_db_applies_wal_and_busy_timeout(tmp_path):
+    """Every connection from the engine must open in WAL mode with busy_timeout set."""
+    db_path = tmp_path / "wal.db"
+    engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}")
+    head = admin.head()
+    async with engine.begin() as conn:
+        await conn.run_sync(SQLModel.metadata.create_all)
+        await conn.execute(
+            sa.text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)")
+        )
+        await conn.execute(sa.text(f"INSERT INTO alembic_version (version_num) VALUES ('{head}')"))
+    await engine.dispose()
+
+    opened = await init_db(str(db_path))
+    try:
+        async with opened.connect() as conn:
+            mode = (await conn.execute(sa.text("PRAGMA journal_mode"))).scalar_one()
+            timeout = (await conn.execute(sa.text("PRAGMA busy_timeout"))).scalar_one()
+            fk = (await conn.execute(sa.text("PRAGMA foreign_keys"))).scalar_one()
+            assert str(mode).lower() == "wal"
+            assert int(timeout) == 30000
+            assert int(fk) == 1
+    finally:
+        await opened.dispose()

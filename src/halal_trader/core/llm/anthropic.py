@@ -8,7 +8,8 @@ import time
 from typing import Any
 
 from halal_trader.core import events
-from halal_trader.core.llm.base import BaseLLM
+from halal_trader.core.llm.base import BaseLLM, CallUsage
+from halal_trader.core.llm.pricing import compute_cost_usd
 
 logger = logging.getLogger(__name__)
 
@@ -18,10 +19,15 @@ class AnthropicLLM(BaseLLM):
 
     _TIMEOUT_SECONDS = 30
 
-    def __init__(self, model: str, api_key: str) -> None:
+    def __init__(self, model: str, api_key: str, *, enable_prompt_cache: bool = True) -> None:
         super().__init__(model)
         self.api_key = api_key
         self._client: Any = None
+        # Caching is on by default — there is no downside on Anthropic's
+        # billing model (cache reads are cheaper than uncached input)
+        # and the only requirement is that the system prompt is reused.
+        # Disable in tests that need deterministic single-call behavior.
+        self._enable_prompt_cache = enable_prompt_cache
 
     def _get_client(self) -> Any:
         if self._client is None:
@@ -29,6 +35,23 @@ class AnthropicLLM(BaseLLM):
 
             self._client = AsyncAnthropic(api_key=self.api_key)
         return self._client
+
+    def _system_payload(self, system: str | None) -> Any:
+        """Build the ``system`` argument, opting into ephemeral cache when enabled.
+
+        Returns a structured list when caching is on (so we can attach
+        cache_control), otherwise the plain string the SDK expects.
+        """
+        text = system or ""
+        if not text or not self._enable_prompt_cache:
+            return text
+        return [
+            {
+                "type": "text",
+                "text": text,
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
 
     async def generate(self, prompt: str, system: str | None = None) -> str:
         client = self._get_client()
@@ -38,35 +61,46 @@ class AnthropicLLM(BaseLLM):
             client.messages.create(
                 model=self.model,
                 max_tokens=4096,
-                system=system or "",
+                system=self._system_payload(system),
                 messages=[{"role": "user", "content": prompt}],
             ),
             timeout=self._TIMEOUT_SECONDS,
         )
         elapsed = time.monotonic() - t0
-        tokens: int | None = None
+
+        usage = CallUsage(provider="anthropic", model=self.model, elapsed_ms=int(elapsed * 1000))
         if hasattr(response, "usage") and response.usage:
-            tokens = response.usage.input_tokens + response.usage.output_tokens
-            logger.debug(
-                "Anthropic response in %.1fs — input: %d, output: %d tokens",
-                elapsed,
-                response.usage.input_tokens,
-                response.usage.output_tokens,
+            u = response.usage
+            usage.input_tokens = getattr(u, "input_tokens", 0) or 0
+            usage.output_tokens = getattr(u, "output_tokens", 0) or 0
+            usage.cache_read_tokens = getattr(u, "cache_read_input_tokens", 0) or 0
+            usage.cache_write_tokens = getattr(u, "cache_creation_input_tokens", 0) or 0
+            usage.cost_usd = compute_cost_usd(
+                self.model,
+                input_tokens=usage.input_tokens,
+                output_tokens=usage.output_tokens,
+                cache_read_tokens=usage.cache_read_tokens,
+                cache_write_tokens=usage.cache_write_tokens,
             )
-            self._track_usage(tokens)
-        else:
-            logger.debug("Anthropic response in %.1fs", elapsed)
+            self._track_usage(usage.total_tokens)
+        self.last_usage = usage
 
         logger.info(
-            "anthropic call complete in %.1fs (tokens=%s)",
+            "anthropic call complete in %.1fs (tokens=%d, cache_read=%d, cost=$%s)",
             elapsed,
-            tokens,
+            usage.total_tokens,
+            usage.cache_read_tokens,
+            f"{usage.cost_usd:.4f}",
             extra={
                 "event": events.LLM_CALL_COMPLETE,
                 "provider": "anthropic",
                 "model": self.model,
-                "elapsed_ms": int(elapsed * 1000),
-                "tokens": tokens,
+                "elapsed_ms": usage.elapsed_ms,
+                "input_tokens": usage.input_tokens,
+                "output_tokens": usage.output_tokens,
+                "cache_read_tokens": usage.cache_read_tokens,
+                "cache_write_tokens": usage.cache_write_tokens,
+                "cost_usd": float(usage.cost_usd),
             },
         )
         text: str = response.content[0].text

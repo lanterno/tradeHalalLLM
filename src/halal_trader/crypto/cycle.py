@@ -10,6 +10,7 @@ from binance import BinanceAPIException
 
 from halal_trader.config import get_settings
 from halal_trader.core.cycle import BaseCycleService
+from halal_trader.core.tracing import tracer
 from halal_trader.crypto.analytics import PerformanceAnalytics
 from halal_trader.crypto.exchange import BinanceClient
 from halal_trader.crypto.executor import CryptoExecutor
@@ -50,6 +51,7 @@ class CryptoCycleService(BaseCycleService):
         self_review=None,
         notifier=None,
         risk_engine: PortfolioRiskEngine | None = None,
+        news_feed=None,
         alerts=None,
         engine=None,
         live_mode_checker=None,
@@ -73,8 +75,13 @@ class CryptoCycleService(BaseCycleService):
         self._self_review = self_review
         self._notifier = notifier
         self._risk_engine = risk_engine
+        self._news_feed = news_feed
         self._consecutive_flat_skips = 0
         self._settings = get_settings()
+        # The scheduler reads this after each cycle to drive the
+        # adaptive cadence selector. None until the first successful
+        # cycle has populated the indicator cache.
+        self.last_indicators_cache: dict[str, dict] | None = None
 
     async def _pre_cycle_checks(self) -> bool:
         return True  # Crypto markets are 24/7
@@ -98,6 +105,8 @@ class CryptoCycleService(BaseCycleService):
         indicators_cache: dict[str, dict] = {}
         for symbol, klines in klines_by_symbol.items():
             indicators_cache[symbol] = compute_all(klines)
+        # Snapshot for the scheduler's adaptive-cadence selector.
+        self.last_indicators_cache = indicators_cache
 
         open_trades = None
         current_prices: dict[str, float] = {}
@@ -317,24 +326,34 @@ class CryptoCycleService(BaseCycleService):
 
         exchange_rules_text = self._broker.format_filters_for_prompt()
 
-        plan = await self._strategy.analyze(
-            account=account,
-            positions_text=positions_text,
-            halal_pairs=halal_pairs,
-            klines_by_symbol=klines_by_symbol,
-            orderbooks=orderbooks,
-            today_pnl=today_pnl,
-            performance_text=performance_text,
-            sentiment_text=sentiment_text,
-            timeframe_text=timeframe_text,
-            ml_signals_text=ml_signals_text,
-            regime_text=regime_text,
-            active_adjustments=active_adjustments,
-            exchange_rules_text=exchange_rules_text,
-            indicators_cache=indicators_cache,
-            open_position_count=open_position_count,
-            risk_text=risk_text,
-        )
+        microstructure_text = self._build_microstructure_text(orderbooks)
+        news_text = self._build_news_text(halal_pairs)
+
+        async with tracer.aspan(
+            "cycle.strategy_analyze",
+            pair_count=len(halal_pairs),
+            open_positions=open_position_count,
+        ):
+            plan = await self._strategy.analyze(
+                account=account,
+                positions_text=positions_text,
+                halal_pairs=halal_pairs,
+                klines_by_symbol=klines_by_symbol,
+                orderbooks=orderbooks,
+                today_pnl=today_pnl,
+                performance_text=performance_text,
+                sentiment_text=sentiment_text,
+                timeframe_text=timeframe_text,
+                ml_signals_text=ml_signals_text,
+                regime_text=regime_text,
+                active_adjustments=active_adjustments,
+                exchange_rules_text=exchange_rules_text,
+                indicators_cache=indicators_cache,
+                open_position_count=open_position_count,
+                risk_text=risk_text,
+                microstructure_text=microstructure_text,
+                news_text=news_text,
+            )
 
         if self._regime and plan.buys:
             downtrend_pairs: set[str] = set()
@@ -416,18 +435,38 @@ class CryptoCycleService(BaseCycleService):
         return True
 
     async def _get_tradeable_pairs(self) -> list[str]:
-        """Get the intersection of configured pairs and halal-screened pairs."""
+        """Get the intersection of configured pairs and halal-screened pairs.
+
+        Operator-paused pairs (via the dashboard's POST /api/admin/pair/.../pause)
+        are filtered out at this layer so a pause takes effect on the
+        very next cycle without needing a bot restart.
+        """
         max_pairs = self._settings.crypto.max_pairs_per_cycle
         halal_symbols = await self._screener.get_halal_pairs()
 
+        # Pull paused pairs once per cycle. Falls back to the empty set
+        # if the repo isn't wired (defensive — pauses are non-critical).
+        paused: set[str] = set()
+        try:
+            from halal_trader.db.repository import Repository
+
+            repo: Repository | None = getattr(self._portfolio, "_repo", None)
+            if repo is not None:
+                paused = await repo.get_paused_pairs()
+        except Exception as e:
+            logger.debug("Could not fetch paused pairs: %s", e)
+
         if not halal_symbols:
             logger.info("No halal cache — using configured pairs: %s", self._configured_pairs)
-            return self._configured_pairs[:max_pairs]
+            return [p for p in self._configured_pairs if p.upper() not in paused][:max_pairs]
 
         halal_set = {s.upper() for s in halal_symbols}
         tradeable = []
         for pair in self._configured_pairs:
             upper_pair = pair.upper()
+            if upper_pair in paused:
+                logger.info("Pair %s is paused by operator — skipping", pair)
+                continue
             for suffix in ("USDT", "BUSD"):
                 if upper_pair.endswith(suffix):
                     base = upper_pair.removesuffix(suffix)
@@ -447,7 +486,7 @@ class CryptoCycleService(BaseCycleService):
 
         if unique:
             return unique[:max_pairs]
-        return self._configured_pairs[:max_pairs]
+        return [p for p in self._configured_pairs if p.upper() not in paused][:max_pairs]
 
     async def _fetch_klines(self, pairs: list[str]) -> dict[str, list[Kline]]:
         """Fetch klines from WebSocket buffer or REST fallback (throttled)."""
@@ -498,3 +537,38 @@ class CryptoCycleService(BaseCycleService):
             pair, book = result
             orderbooks[pair] = book
         return orderbooks
+
+    def _build_microstructure_text(self, orderbooks: dict[str, dict[str, Any]]) -> str:
+        """Format depth-imbalance / spread features per pair for the LLM.
+
+        Funding signal needs an extra REST call (perp endpoint) and we
+        already throttle aggressively per-cycle, so we lean on the
+        already-fetched spot orderbook here. A future task can fan
+        funding fetches alongside orderbook fetches if signal value
+        justifies the cost.
+        """
+        from halal_trader.crypto.microstructure import (
+            format_microstructure_for_prompt,
+            orderbook_features,
+        )
+
+        lines: list[str] = []
+        for pair, book in sorted(orderbooks.items()):
+            feats = orderbook_features(book)
+            line = format_microstructure_for_prompt(pair=pair, book=feats)
+            if line:
+                lines.append(line)
+        return "\n".join(lines)
+
+    def _build_news_text(self, halal_pairs: list[str]) -> str:
+        """Pull a snapshot from the bounded RecentNewsFeed, if one is wired."""
+        if self._news_feed is None:
+            return ""
+        try:
+            from halal_trader.sentiment.feed import format_news_for_prompt
+
+            events = self._news_feed.snapshot()
+            return format_news_for_prompt(events, pair_filter=halal_pairs)
+        except Exception as e:
+            logger.debug("News feed unavailable: %s", e)
+            return ""

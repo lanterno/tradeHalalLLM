@@ -14,6 +14,8 @@ from halal_trader.cli import crypto as crypto_cmd
 from halal_trader.cli import dashboard as dashboard_cmd
 from halal_trader.cli import db as db_cmd
 from halal_trader.cli import halt as halt_cmd
+from halal_trader.cli import insights as insights_cmd
+from halal_trader.cli import llm_decisions as llm_decisions_cmd
 from halal_trader.cli import reconcile as reconcile_cmd
 from halal_trader.cli import stocks as stocks_cmd
 
@@ -51,11 +53,17 @@ cli.add_command(halt_cmd.halt_status)
 cli.add_command(reconcile_cmd.reconcile)
 cli.add_command(backup_cmd.backup)
 
+# ── LLM Decision Audit ─────────────────────────────────────────
+cli.add_command(llm_decisions_cmd.llm_decisions)
+
 # ── Crypto ─────────────────────────────────────────────────────
 cli.add_command(crypto_cmd.crypto)
 
 # ── Dashboard ──────────────────────────────────────────────────
 cli.add_command(dashboard_cmd.dashboard)
+
+# ── Insights (regret / thesis / stress / drift / calibration) ──
+cli.add_command(insights_cmd.insights)
 
 
 __all__ = ["cli"]

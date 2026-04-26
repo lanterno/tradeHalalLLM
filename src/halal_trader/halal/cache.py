@@ -2,6 +2,7 @@
 
 import logging
 
+from halal_trader.config import HalalSettings, get_settings
 from halal_trader.db.repository import Repository
 from halal_trader.halal.zoya import ZoyaClient
 
@@ -36,17 +37,35 @@ DEFAULT_HALAL_SYMBOLS = [
 class HalalScreener:
     """Screens stocks for Shariah compliance using Zoya API + local cache."""
 
-    def __init__(self, repo: Repository, zoya: ZoyaClient | None = None) -> None:
+    def __init__(
+        self,
+        repo: Repository,
+        zoya: ZoyaClient | None = None,
+        *,
+        halal_settings: HalalSettings | None = None,
+    ) -> None:
         self._repo = repo
         self._zoya = zoya
+        # Settings is a singleton; we accept an override only so tests can
+        # tighten the TTL without touching the global cache. Live code
+        # should leave halal_settings=None and let get_settings() decide.
+        self._halal = halal_settings or get_settings().halal
 
-    async def ensure_cache(self, symbols: list[str] | None = None) -> None:
+    async def ensure_cache(self, symbols: list[str] | None = None, *, force: bool = False) -> None:
         """Populate the halal cache, using Zoya API or defaults.
 
-        Called at startup / daily refresh.
+        Called at startup, on the configured TTL, and from
+        :meth:`refresh_if_stale` (the mid-cycle hook). ``force=True``
+        bypasses the freshness check — used by mid-cycle refresh, which
+        has already decided to refresh based on its tighter window.
         """
-        if await self._repo.is_cache_fresh(max_age_hours=24):
-            logger.info("Halal cache is fresh, skipping refresh")
+        if not force and await self._repo.is_cache_fresh(
+            max_age_hours=self._halal.cache_max_age_hours
+        ):
+            logger.info(
+                "Halal cache fresh (TTL %dh), skipping refresh",
+                self._halal.cache_max_age_hours,
+            )
             return
 
         if self._zoya and self._zoya.api_key:
@@ -84,3 +103,21 @@ class HalalScreener:
         """Filter a list of symbols, keeping only halal ones."""
         halal = set(await self.get_halal_symbols())
         return [s for s in symbols if s in halal]
+
+    async def refresh_if_stale(self, symbols: list[str] | None = None) -> bool:
+        """Mid-cycle hook — refresh if the cache is older than the soft threshold.
+
+        Distinct from :meth:`ensure_cache`: that uses the *hard* TTL
+        (``cache_max_age_hours``) and is called once at startup. This
+        one uses ``midcycle_refresh_hours`` (a tighter window) and is
+        meant to be called at the top of each cycle so we don't wait
+        the full TTL between refreshes.
+
+        Returns ``True`` if a refresh actually ran.
+        """
+        soft = self._halal.midcycle_refresh_hours
+        if await self._repo.is_cache_fresh(max_age_hours=soft):
+            return False
+        logger.info("Halal cache older than %dh — mid-cycle refresh", soft)
+        await self.ensure_cache(symbols=symbols, force=True)
+        return True

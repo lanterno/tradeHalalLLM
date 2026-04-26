@@ -35,6 +35,7 @@ class TradingCycleService(BaseCycleService):
         executor: TradeExecutor,
         portfolio: PortfolioTracker,
         sentiment: SentimentAnalyzer | None = None,
+        catalyst_feed: Any = None,
         alerts=None,
         engine=None,
         live_mode_checker=None,
@@ -47,6 +48,9 @@ class TradingCycleService(BaseCycleService):
         self._executor = executor
         self._portfolio = portfolio
         self._sentiment = sentiment
+        # Optional StockCatalystFeed (Phase 3.5) — gives the LLM live news,
+        # earnings, insider activity. Cycle proceeds normally if absent.
+        self._catalyst_feed = catalyst_feed
 
     async def _pre_cycle_checks(self) -> bool:
         now = now_eastern()
@@ -119,6 +123,7 @@ class TradingCycleService(BaseCycleService):
 
         sentiment_text = await self._gather_sentiment(halal_symbols)
         risk_text = self._build_risk_text(bars, positions, account.effective_equity)
+        catalysts_text = await self._gather_catalysts(halal_symbols)
 
         plan = await self._strategy.analyze(
             account=account,
@@ -129,6 +134,7 @@ class TradingCycleService(BaseCycleService):
             today_pnl=today_pnl,
             sentiment_text=sentiment_text,
             risk_text=risk_text,
+            catalysts_text=catalysts_text,
         )
 
         logger.info(
@@ -139,7 +145,9 @@ class TradingCycleService(BaseCycleService):
         )
 
         if plan.decisions:
-            results = await self._executor.execute_plan(plan, bars=bars)
+            # Pass current positions so the executor can apply the
+            # per-sector halal allocation cap on each candidate buy.
+            results = await self._executor.execute_plan(plan, bars=bars, positions=positions)
             for r in results:
                 logger.info("Execution result: %s", r)
         else:
@@ -193,3 +201,21 @@ class TradingCycleService(BaseCycleService):
         except Exception as e:
             logger.debug("Sentiment analysis skipped: %s", e)
             return "Sentiment data: not available"
+
+    async def _gather_catalysts(self, halal_symbols: list[str]) -> str:
+        """Pull live catalysts (news/earnings/insider) for the LLM prompt.
+
+        Returns an empty string when no feed is wired or none of the
+        sources produced anything for our universe — the prompt template
+        already drops empty optional sections.
+        """
+        if self._catalyst_feed is None:
+            return ""
+        try:
+            from halal_trader.trading.catalysts import format_catalysts_for_prompt
+
+            cats = await self._catalyst_feed.fetch_all(halal_symbols)
+            return format_catalysts_for_prompt(cats, symbols=halal_symbols)
+        except Exception as e:
+            logger.debug("Catalyst feed unavailable: %s", e)
+            return ""

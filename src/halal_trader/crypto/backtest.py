@@ -55,7 +55,16 @@ class BacktestResult:
 
 
 class SimulatedExecutor:
-    """Simulates trade execution with slippage and fees."""
+    """Simulates trade execution with slippage and fees.
+
+    The slippage model is vol-aware (see ``crypto.slippage.estimate_fill``):
+    in calm regimes the effective slippage shrinks toward 0.5× the
+    configured baseline, in turbulent regimes it grows up to 4×. Pass
+    ``confidence`` to ``buy`` to scale the position by LLM confidence
+    inside ``[floor, ceiling]`` — the legacy backtester sized every
+    trade at exactly ``max_position_pct``, which over-funded low-edge
+    setups and under-funded high-edge ones.
+    """
 
     def __init__(
         self,
@@ -64,15 +73,39 @@ class SimulatedExecutor:
         slippage_pct: float = 0.0005,
         fee_pct: float = 0.001,
         max_position_pct: float = 0.25,
+        atr_baseline: float = 0.02,
     ) -> None:
         self.balance = initial_balance
         self.initial_balance = initial_balance
         self._slippage_pct = slippage_pct
         self._fee_pct = fee_pct
         self._max_position_pct = max_position_pct
+        self._atr_baseline = atr_baseline
         self.position: SimulatedTrade | None = None
         self.closed_trades: list[SimulatedTrade] = []
         self.equity_curve: list[float] = [initial_balance]
+
+    def _fill_price(
+        self,
+        *,
+        side: str,
+        price: float,
+        notional_usd: float,
+        atr_pct: float,
+    ) -> float:
+        from halal_trader.crypto.slippage import SlippageInputs, estimate_fill
+
+        result = estimate_fill(
+            price=price,
+            inputs=SlippageInputs(
+                side=side,
+                notional_usd=notional_usd,
+                atr_pct=atr_pct,
+                atr_baseline=self._atr_baseline,
+                baseline_slippage_pct=self._slippage_pct,
+            ),
+        )
+        return result.fill_price
 
     def buy(
         self,
@@ -83,13 +116,24 @@ class SimulatedExecutor:
         stop_loss: float | None = None,
         target_price: float | None = None,
         reasoning: str = "",
+        confidence: float | None = None,
+        atr_pct: float = 0.0,
     ) -> bool:
         """Simulate a buy order."""
         if self.position is not None:
             return False
 
-        fill_price = price * (1 + self._slippage_pct)
+        from halal_trader.crypto.slippage import confidence_weighted_quantity
+
         max_spend = self.balance * self._max_position_pct
+        if confidence is not None:
+            max_spend = confidence_weighted_quantity(max_spend, confidence)
+
+        fill_price = self._fill_price(
+            side="buy", price=price, notional_usd=max_spend, atr_pct=atr_pct
+        )
+        if fill_price <= 0:
+            return False
         quantity = max_spend / fill_price
         cost = quantity * fill_price * (1 + self._fee_pct)
 
@@ -109,12 +153,22 @@ class SimulatedExecutor:
         )
         return True
 
-    def sell(self, price: float, timestamp: int, reason: str = "signal") -> SimulatedTrade | None:
+    def sell(
+        self,
+        price: float,
+        timestamp: int,
+        reason: str = "signal",
+        *,
+        atr_pct: float = 0.0,
+    ) -> SimulatedTrade | None:
         """Simulate a sell order, closing the current position."""
         if self.position is None:
             return None
 
-        fill_price = price * (1 - self._slippage_pct)
+        notional = self.position.quantity * price
+        fill_price = self._fill_price(
+            side="sell", price=price, notional_usd=notional, atr_pct=atr_pct
+        )
         proceeds = self.position.quantity * fill_price * (1 - self._fee_pct)
         self.balance += proceeds
 
@@ -473,6 +527,10 @@ class LLMBacktestEngine:
             if action == "buy" and executor.position is None and confidence >= 0.5:
                 sl = current.close * (1 - self._sl_pct)
                 tp = current.close * (1 + self._tp_pct)
+                # ATR per kline isn't pre-computed in this hot loop; pass 0
+                # so slippage falls back to the configured baseline. A
+                # follow-up can compute ATR here when we add per-step
+                # indicator caching to the backtester.
                 executor.buy(
                     pair,
                     current.close,
@@ -480,6 +538,7 @@ class LLMBacktestEngine:
                     stop_loss=sl,
                     target_price=tp,
                     reasoning=reasoning,
+                    confidence=confidence,
                 )
             elif action == "sell" and executor.position is not None:
                 executor.sell(current.close, current.close_time, "llm_sell")

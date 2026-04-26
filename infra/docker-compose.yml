@@ -1,0 +1,93 @@
+# Halal Trader — single-host Docker Compose deployment.
+#
+# Three services:
+#   * trader-crypto — the 24/7 crypto bot (CMD overridden via the
+#     compose service-level command).
+#   * trader-stocks — the market-hours stock bot.
+#   * trader-web    — the FastAPI dashboard + Prometheus /metrics.
+#
+# All three share the SQLite DB volume so they read consistent state
+# (Phase 0 enabled WAL on every connection so concurrent readers are
+# fine; the bots are the only writers).
+#
+# Optional Prometheus + Grafana sidecars are commented out — uncomment
+# when an operator actually wants the dashboards. They scrape the
+# /metrics endpoint exposed by the web service.
+
+services:
+  trader-crypto:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile
+      args:
+        EXTRAS: "ml,sentiment"
+    image: halal-trader:latest
+    container_name: trader-crypto
+    restart: unless-stopped
+    env_file:
+      - ../.env
+    volumes:
+      - trader-data:/app/data
+      - trader-logs:/app/logs
+    command: ["halal-trader", "crypto", "start"]
+
+  trader-stocks:
+    image: halal-trader:latest
+    container_name: trader-stocks
+    restart: unless-stopped
+    env_file:
+      - ../.env
+    volumes:
+      - trader-data:/app/data
+      - trader-logs:/app/logs
+    command: ["halal-trader", "start"]
+    depends_on:
+      - trader-crypto
+
+  trader-web:
+    image: halal-trader:latest
+    container_name: trader-web
+    restart: unless-stopped
+    env_file:
+      - ../.env
+    ports:
+      - "8082:8082"
+    volumes:
+      - trader-data:/app/data
+      - trader-logs:/app/logs
+    command:
+      - "uvicorn"
+      - "halal_trader.web.app:create_app"
+      - "--factory"
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "8082"
+    depends_on:
+      - trader-crypto
+
+  # ── Optional observability stack ──
+  # prometheus:
+  #   image: prom/prometheus:latest
+  #   restart: unless-stopped
+  #   volumes:
+  #     - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+  #   command:
+  #     - "--config.file=/etc/prometheus/prometheus.yml"
+  #   ports:
+  #     - "9090:9090"
+  #
+  # grafana:
+  #   image: grafana/grafana:latest
+  #   restart: unless-stopped
+  #   environment:
+  #     GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+  #   ports:
+  #     - "3000:3000"
+  #   volumes:
+  #     - grafana-data:/var/lib/grafana
+
+volumes:
+  trader-data:
+  trader-logs:
+  # grafana-data:

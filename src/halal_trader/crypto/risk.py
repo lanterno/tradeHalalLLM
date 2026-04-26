@@ -161,6 +161,40 @@ class PortfolioRiskEngine:
                     values.append(corr_matrix[a][b])
         return float(np.mean(values)) if values else 0.0
 
+    def _adaptive_corr_threshold(self, indicators_cache: dict[str, dict]) -> float:
+        """Tighten the correlation cutoff when realised vol runs hot.
+
+        Static thresholds (the legacy 0.7) over-restrict during calm
+        regimes (where 0.6 correlations are nearly meaningless because
+        every pair is doing nothing) and under-restrict during stress
+        regimes (where 0.6 is "everything moves together — please don't
+        stack risk"). We anchor to ``_atr_baseline``: when the universe-
+        median ATR runs ≥ 1.5× baseline, drop the threshold by 0.1; when
+        it's ≤ 0.7× baseline, raise it by 0.1. Bounded to keep the knob
+        sane (never below 0.4 — too noisy — never above 0.9 — too loose).
+        """
+        if not indicators_cache or self._atr_baseline <= 0:
+            return self._high_corr_threshold
+
+        atrs = [
+            ind.get("atr_pct", ind.get("atr_14", 0))
+            for ind in indicators_cache.values()
+            if not ind.get("error")
+        ]
+        atrs = [a for a in atrs if a and a > 0]
+        if not atrs:
+            return self._high_corr_threshold
+
+        median_atr = float(np.median(atrs))
+        ratio = median_atr / self._atr_baseline
+        if ratio >= 1.5:
+            adjusted = self._high_corr_threshold - 0.10
+        elif ratio <= 0.7:
+            adjusted = self._high_corr_threshold + 0.10
+        else:
+            adjusted = self._high_corr_threshold
+        return max(0.4, min(0.9, adjusted))
+
     def _compute_adjusted_sizing(
         self,
         indicators_cache: dict[str, dict],
@@ -169,6 +203,8 @@ class PortfolioRiskEngine:
     ) -> dict[str, float]:
         """Compute risk-adjusted position size for each symbol."""
         result: dict[str, float] = {}
+
+        corr_threshold = self._adaptive_corr_threshold(indicators_cache)
 
         for symbol, indicators in indicators_cache.items():
             if indicators.get("error"):
@@ -189,7 +225,7 @@ class PortfolioRiskEngine:
                         c = abs(corr_matrix[open_sym][symbol])
                         max_corr_with_open = max(max_corr_with_open, c)
 
-                if max_corr_with_open >= self._high_corr_threshold:
+                if max_corr_with_open >= corr_threshold:
                     pct *= self._corr_reduction
 
             result[symbol] = max(0.05, min(pct, self._base_max_position_pct))

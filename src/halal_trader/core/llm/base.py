@@ -6,13 +6,40 @@ import json
 import logging
 import re
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
 _TOKEN_LOG_THRESHOLDS = (10_000, 50_000, 100_000, 250_000, 500_000, 1_000_000)
 _THINK_RE = re.compile(r"<think>(.*?)</think>", re.DOTALL)
+
+
+@dataclass
+class CallUsage:
+    """Token + cost breakdown for a single LLM call.
+
+    Populated by every provider on its instance after each ``generate()``
+    call so callers can persist the numbers alongside the LlmDecision row.
+    The fields mirror what Anthropic and OpenAI surface in their usage
+    objects — providers that don't report a category (e.g. cache tokens
+    on OpenAI today) leave it at zero.
+    """
+
+    provider: str = ""
+    model: str = ""
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
+    cost_usd: Decimal = field(default_factory=lambda: Decimal("0"))
+    elapsed_ms: int = 0
+
+    @property
+    def total_tokens(self) -> int:
+        return self.input_tokens + self.output_tokens
 
 
 def strip_thinking(text: str) -> tuple[str, str]:
@@ -47,6 +74,7 @@ class BaseLLM(ABC):
     def __init__(self, model: str) -> None:
         self.model = model
         self.last_thinking: str = ""
+        self.last_usage: CallUsage = CallUsage(model=model)
         self._daily_tokens: int = 0
         self._daily_reset_date: str = ""
         self._last_threshold_logged: int = 0

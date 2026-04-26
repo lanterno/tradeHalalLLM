@@ -8,7 +8,8 @@ import time
 from typing import Any
 
 from halal_trader.core import events
-from halal_trader.core.llm.base import BaseLLM
+from halal_trader.core.llm.base import BaseLLM, CallUsage
+from halal_trader.core.llm.pricing import compute_cost_usd
 
 logger = logging.getLogger(__name__)
 
@@ -48,29 +49,46 @@ class OpenAILLM(BaseLLM):
             timeout=self._TIMEOUT_SECONDS,
         )
         elapsed = time.monotonic() - t0
-        tokens = response.usage.total_tokens if response.usage else None
+
+        usage = CallUsage(provider="openai", model=self.model, elapsed_ms=int(elapsed * 1000))
         if response.usage:
-            logger.debug(
-                "OpenAI response in %.1fs — %d tokens (prompt: %d, completion: %d)",
-                elapsed,
-                response.usage.total_tokens,
-                response.usage.prompt_tokens,
-                response.usage.completion_tokens,
+            u = response.usage
+            usage.input_tokens = getattr(u, "prompt_tokens", 0) or 0
+            usage.output_tokens = getattr(u, "completion_tokens", 0) or 0
+            # OpenAI surfaces cached prompt tokens via the prompt_tokens_details
+            # nested object on chat completions. The category is bundled inside
+            # input_tokens (not in addition to), so subtract for accurate cost.
+            details = getattr(u, "prompt_tokens_details", None)
+            if details is not None:
+                cached = getattr(details, "cached_tokens", 0) or 0
+                usage.cache_read_tokens = cached
+                usage.input_tokens = max(0, usage.input_tokens - cached)
+            usage.cost_usd = compute_cost_usd(
+                self.model,
+                input_tokens=usage.input_tokens,
+                output_tokens=usage.output_tokens,
+                cache_read_tokens=usage.cache_read_tokens,
+                cache_write_tokens=usage.cache_write_tokens,
             )
-            self._track_usage(response.usage.total_tokens)
-        else:
-            logger.debug("OpenAI response in %.1fs", elapsed)
+            self._track_usage(usage.total_tokens)
+        self.last_usage = usage
 
         logger.info(
-            "openai call complete in %.1fs (tokens=%s)",
+            "openai call complete in %.1fs (tokens=%d, cache_read=%d, cost=$%s)",
             elapsed,
-            tokens,
+            usage.total_tokens,
+            usage.cache_read_tokens,
+            f"{usage.cost_usd:.4f}",
             extra={
                 "event": events.LLM_CALL_COMPLETE,
                 "provider": "openai",
                 "model": self.model,
-                "elapsed_ms": int(elapsed * 1000),
-                "tokens": tokens,
+                "elapsed_ms": usage.elapsed_ms,
+                "input_tokens": usage.input_tokens,
+                "output_tokens": usage.output_tokens,
+                "cache_read_tokens": usage.cache_read_tokens,
+                "cache_write_tokens": usage.cache_write_tokens,
+                "cost_usd": float(usage.cost_usd),
             },
         )
         return response.choices[0].message.content or ""

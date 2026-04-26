@@ -8,7 +8,8 @@ import time
 from typing import Any
 
 from halal_trader.core import events
-from halal_trader.core.llm.base import BaseLLM
+from halal_trader.core.llm.base import BaseLLM, CallUsage
+from halal_trader.core.llm.pricing import compute_cost_usd
 
 logger = logging.getLogger(__name__)
 
@@ -53,20 +54,38 @@ class OllamaLLM(BaseLLM):
             timeout=self._TIMEOUT_SECONDS,
         )
         elapsed = time.monotonic() - t0
-        logger.debug("Ollama response in %.1fs", elapsed)
 
         content: str = response["message"]["content"]
         if not content or not content.strip():
             raise ValueError("Ollama returned empty response")
+
+        usage = CallUsage(provider="ollama", model=self.model, elapsed_ms=int(elapsed * 1000))
+        # Ollama returns prompt_eval_count / eval_count when the engine
+        # surfaces them; older builds don't, so default to zero rather
+        # than crashing the cost roll-up.
+        usage.input_tokens = int(response.get("prompt_eval_count") or 0)
+        usage.output_tokens = int(response.get("eval_count") or 0)
+        usage.cost_usd = compute_cost_usd(
+            self.model,
+            input_tokens=usage.input_tokens,
+            output_tokens=usage.output_tokens,
+        )
+        if usage.total_tokens:
+            self._track_usage(usage.total_tokens)
+        self.last_usage = usage
+
         logger.info(
-            "ollama call complete in %.1fs",
+            "ollama call complete in %.1fs (tokens=%d)",
             elapsed,
+            usage.total_tokens,
             extra={
                 "event": events.LLM_CALL_COMPLETE,
                 "provider": "ollama",
                 "model": self.model,
-                "elapsed_ms": int(elapsed * 1000),
-                "tokens": None,
+                "elapsed_ms": usage.elapsed_ms,
+                "input_tokens": usage.input_tokens,
+                "output_tokens": usage.output_tokens,
+                "cost_usd": float(usage.cost_usd),
             },
         )
         return content

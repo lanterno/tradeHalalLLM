@@ -1,0 +1,14 @@
+# Prometheus scrape config for the halal-trader web service.
+# Mount this at /etc/prometheus/prometheus.yml inside the prometheus
+# container (see docker-compose.yml).
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: halal-trader
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - trader-web:8082

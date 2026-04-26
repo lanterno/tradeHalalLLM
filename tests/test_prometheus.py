@@ -1,0 +1,114 @@
+"""Prometheus exposition + endpoint tests."""
+
+from __future__ import annotations
+
+import pytest
+from fastapi.testclient import TestClient
+
+from halal_trader.web import app as web_app
+from halal_trader.web.prometheus import (
+    MetricSnapshot,
+    collect_default_snapshots,
+    render_metrics,
+)
+
+# ── render_metrics ────────────────────────────────────────────
+
+
+def test_render_emits_help_and_type_headers():
+    snaps = [MetricSnapshot(name="x", help_text="a counter", value=42)]
+    text = render_metrics(snaps)
+    assert "# HELP x a counter" in text
+    assert "# TYPE x gauge" in text
+    assert "x 42" in text
+
+
+def test_render_groups_headers_per_metric_name():
+    """Multiple snapshots of the same metric only emit headers once."""
+    snaps = [
+        MetricSnapshot(name="open", help_text="positions", value=1, labels={"a": "X"}),
+        MetricSnapshot(name="open", help_text="positions", value=2, labels={"a": "Y"}),
+    ]
+    text = render_metrics(snaps)
+    assert text.count("# HELP open") == 1
+    assert text.count("# TYPE open") == 1
+    assert 'open{a="X"} 1' in text
+    assert 'open{a="Y"} 2' in text
+
+
+def test_render_escapes_label_values():
+    snap = MetricSnapshot(name="x", help_text="x", value=1, labels={"k": 'v"\\n'})
+    text = render_metrics([snap])
+    # Quote, backslash, newline all escaped.
+    assert 'k="v\\"\\\\n"' in text
+
+
+def test_render_empty_returns_empty_string():
+    assert render_metrics([]) == ""
+
+
+# ── collect_default_snapshots ─────────────────────────────────
+
+
+def test_collector_skips_missing_keys():
+    """Empty state → empty snapshots; we don't fabricate zeros."""
+    assert collect_default_snapshots({}) == []
+
+
+def test_collector_emits_bot_running():
+    snaps = collect_default_snapshots({"bot_running": True})
+    names = [s.name for s in snaps]
+    assert "halal_trader_bot_running" in names
+    assert next(s for s in snaps if s.name == "halal_trader_bot_running").value == 1.0
+
+
+def test_collector_emits_open_positions_per_asset():
+    state = {"open_positions_by_asset": {"crypto": 3, "stock": 1}}
+    snaps = collect_default_snapshots(state)
+    by_label = {s.labels["asset_class"]: s.value for s in snaps}
+    assert by_label == {"crypto": 3, "stock": 1}
+
+
+def test_collector_skips_none_drawdown():
+    state = {"risk_state": {"drawdown_pct": None, "portfolio_heat_pct": 0.02}}
+    snaps = collect_default_snapshots(state)
+    names = [s.name for s in snaps]
+    assert "halal_trader_drawdown_pct" not in names
+    assert "halal_trader_portfolio_heat_pct" in names
+
+
+# ── /metrics endpoint ─────────────────────────────────────────
+
+
+@pytest.fixture
+def client(tmp_path, monkeypatch):
+    db_path = tmp_path / "metrics.db"
+    monkeypatch.setenv("DB_PATH", str(db_path))
+    monkeypatch.setenv("BACKUP_DIR", str(tmp_path / "backups"))
+    monkeypatch.setenv("LOG_DIR", str(tmp_path / "logs"))
+
+    import halal_trader.config as _config
+
+    _config._settings = None
+
+    from halal_trader.db import admin
+
+    admin.upgrade("head")
+
+    web_app.app_state.clear()
+    web_app.app_state["bot_running"] = True
+    web_app.app_state["llm_cost_today_usd"] = 0.42
+    app = web_app.create_app()
+
+    with TestClient(app) as c:
+        yield c
+
+    _config._settings = None
+
+
+def test_metrics_endpoint_returns_text(client):
+    r = client.get("/metrics")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/plain")
+    assert "halal_trader_bot_running 1" in r.text
+    assert "halal_trader_llm_cost_today_usd 0.42" in r.text
