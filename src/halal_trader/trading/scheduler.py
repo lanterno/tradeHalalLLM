@@ -126,7 +126,9 @@ class TradingBot(BaseTradingBot):
         # Catalyst feed — wires whichever sources are configured. The
         # FRED feed pulls scheduled CPI/FOMC/NFP/GDP release dates so
         # CatalystRiskPolicy can shrink position sizing in the 4h
-        # window before each. Empty FRED key → source skipped cleanly.
+        # window before each. EDGAR streams 8-K material events the
+        # SEC publishes within minutes of the filing. Empty keys
+        # disable each source cleanly.
         catalyst_sources: list[Any] = []
         if self.settings.fred.api_key:
             from halal_trader.trading.fred_catalysts import (
@@ -134,6 +136,12 @@ class TradingBot(BaseTradingBot):
             )
 
             catalyst_sources.append(FREDReleaseCalendarSource(api_key=self.settings.fred.api_key))
+        if self.settings.edgar.user_agent:
+            from halal_trader.trading.edgar_catalysts import (
+                EDGAREightKSource,
+            )
+
+            catalyst_sources.append(EDGAREightKSource(user_agent=self.settings.edgar.user_agent))
         catalyst_feed = StockCatalystFeed(sources=catalyst_sources) if catalyst_sources else None
 
         # Cycle service — owns the intraday trading logic

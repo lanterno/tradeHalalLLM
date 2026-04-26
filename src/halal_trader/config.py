@@ -75,6 +75,19 @@ class FREDSettings(BaseSettings):
     api_key: str = Field(default="")
 
 
+class EDGARSettings(BaseSettings):
+    """SEC EDGAR filings (free, no key — just an identifying user-agent).
+
+    The SEC requires every request to carry a ``User-Agent`` with a
+    real contact (per their ``accessing-edgar-data`` policy); empty
+    disables the feed. Drives the 8-K material-event stream for the
+    stock catalyst feed.
+    """
+
+    model_config = SettingsConfigDict(**_BASE_CONFIG, env_prefix="EDGAR_")
+    user_agent: str = Field(default="")
+
+
 class HalalSettings(BaseSettings):
     """Cross-cutting halal-screening cadence + safety knobs."""
 
@@ -301,6 +314,7 @@ class Settings(BaseSettings):
     zoya: ZoyaSettings = Field(default_factory=ZoyaSettings)
     coingecko: CoinGeckoSettings = Field(default_factory=CoinGeckoSettings)
     fred: FREDSettings = Field(default_factory=FREDSettings)
+    edgar: EDGARSettings = Field(default_factory=EDGARSettings)
     halal: HalalSettings = Field(default_factory=HalalSettings)
     web: WebSettings = Field(default_factory=WebSettings)
     llm: LLMSettings = Field(default_factory=LLMSettings)

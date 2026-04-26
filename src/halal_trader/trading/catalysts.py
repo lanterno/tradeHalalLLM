@@ -286,6 +286,14 @@ class CatalystRiskPolicy:
         "cpi",
         "nfp",
         "gdp",
+        # 8-K item-level kinds — the close-to-trade-decision events.
+        # Earnings results, executive change, material agreements, and
+        # restructuring trigger the same pre-event sizing reduction.
+        "8-k:2.02",
+        "8-k:5.02",
+        "8-k:1.01",
+        "8-k:1.02",
+        "8-k:2.05",
     )
     pre_event_hours: float = 4.0
     pre_event_size_multiplier: float = 0.5
