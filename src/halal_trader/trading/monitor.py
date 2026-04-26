@@ -44,6 +44,7 @@ class StockPositionMonitor:
         trailing_stop_activation_pct: float | None = None,
         trailing_stop_distance_pct: float = 0.005,
         retrainer: Any = None,
+        close_recorders: object | None = None,
     ) -> None:
         self._mcp = mcp
         self._repo = repo
@@ -54,6 +55,9 @@ class StockPositionMonitor:
         # crypto monitor uses, so closed stock trades feed the ML loop
         # without us re-implementing the labeling pipeline.
         self._retrainer = retrainer
+        # Optional post-close fan-out — drift / thesis / regret /
+        # purification dispatch via core.post_close.record_close.
+        self._close_recorders = close_recorders
         self._running = False
         self._task: asyncio.Task[None] | None = None
         # Per-trade-id high water mark for trailing-stop ratchet.
@@ -177,6 +181,47 @@ class StockPositionMonitor:
                 await self._retrainer.on_trade_closed(trade.id, return_pct)
             except Exception as e:  # noqa: BLE001 — retrain failure must not abort exit path
                 logger.debug("retrainer.on_trade_closed failed for %s: %s", trade.symbol, e)
+
+        if self._close_recorders is not None:
+            try:
+                from datetime import UTC, datetime as _dt
+
+                from halal_trader.core.post_close import (
+                    CloseEvent,
+                    record_close,
+                )
+
+                entry = trade.filled_price or trade.price or 0.0
+                return_pct = (price - entry) / entry if entry else 0.0
+                pnl_usd = (price - entry) * (trade.filled_quantity or trade.quantity or 0)
+                hold_seconds = 0
+                if trade.timestamp:
+                    now_ts = _dt.now(UTC)
+                    ts = (
+                        trade.timestamp
+                        if trade.timestamp.tzinfo
+                        else trade.timestamp.replace(tzinfo=UTC)
+                    )
+                    hold_seconds = max(0, int((now_ts - ts).total_seconds()))
+
+                record_close(
+                    CloseEvent(
+                        trade_id=str(trade.id),
+                        symbol=trade.symbol,
+                        side=trade.side,
+                        entry_price=entry,
+                        exit_price=price,
+                        exit_reason=reason,
+                        realized_pnl_usd=pnl_usd,
+                        return_pct=return_pct,
+                        quantity=trade.filled_quantity or trade.quantity or 0,
+                        hold_seconds=hold_seconds,
+                        reasoning=trade.llm_reasoning or "",
+                    ),
+                    self._close_recorders,
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.debug("stocks post-close recorder failed: %s", e)
 
 
 def _extract_last_price(snap: Any, symbol: str) -> float | None:

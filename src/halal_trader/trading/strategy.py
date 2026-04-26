@@ -162,6 +162,9 @@ class TradingStrategy(BaseStrategy):
         daily_loss_limit: float,
         daily_return_target: float,
         max_simultaneous_positions: int,
+        attacker_llm: LLMBackend | None = None,
+        adversarial_downsize_at: float = 0.45,
+        adversarial_skip_at: float = 0.75,
     ) -> None:
         super().__init__(
             llm,
@@ -172,6 +175,11 @@ class TradingStrategy(BaseStrategy):
             daily_return_target=daily_return_target,
             max_simultaneous_positions=max_simultaneous_positions,
         )
+        # Optional adversarial co-bot — mirrors the crypto wiring.
+        self._attacker_llm = attacker_llm
+        self._adv_downsize_at = adversarial_downsize_at
+        self._adv_skip_at = adversarial_skip_at
+        self.last_adversarial_review = None
 
     async def analyze(
         self,
@@ -210,7 +218,7 @@ class TradingStrategy(BaseStrategy):
             catalysts_text=catalysts_text or "No recent catalysts.",
         )
 
-        return await self._run_llm_analysis(
+        plan = await self._run_llm_analysis(
             system,
             user_prompt,
             prompt_summary=(
@@ -229,4 +237,45 @@ class TradingStrategy(BaseStrategy):
                 "holds": len(p.holds),
             },
             prompt_version=PROMPT_VERSION.short,
+        )
+
+        if self._attacker_llm is not None and plan.decisions:
+            plan = await self._apply_adversarial_review(plan, user_prompt)
+
+        return plan
+
+    async def _apply_adversarial_review(
+        self, plan: TradingPlan, user_prompt: str
+    ) -> TradingPlan:
+        """Run the co-bot critic and shrink/skip buys when convincing."""
+        from halal_trader.core.llm.adversarial import (
+            apply_review_to_buys,
+            critique_plan,
+        )
+
+        try:
+            review = await critique_plan(
+                self._attacker_llm,  # type: ignore[arg-type]
+                decisions=plan.decisions,
+                market_outlook=plan.market_outlook,
+                context_excerpt=user_prompt,
+                downsize_at=self._adv_downsize_at,
+                skip_at=self._adv_skip_at,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("stocks adversarial review failed: %s", exc)
+            return plan
+        self.last_adversarial_review = review
+        if review.recommendation == "proceed":
+            return plan
+        new_decisions = apply_review_to_buys(plan.decisions, review)
+        return plan.model_copy(
+            update={
+                "decisions": new_decisions,
+                "risk_notes": (
+                    (plan.risk_notes + " | " if plan.risk_notes else "")
+                    + f"adversarial: {review.recommendation} "
+                    f"(severity {review.severity:.2f}) — {review.counter_thesis}"
+                ),
+            }
         )

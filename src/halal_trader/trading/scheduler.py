@@ -85,6 +85,18 @@ class TradingBot(BaseTradingBot):
             )
         self.screener = HalalScreener(repo, zoya)
 
+        # Optional adversarial co-bot for stocks (mirrors crypto). Off
+        # by default; flipped on via LLM_ADVERSARIAL_ENABLED.
+        attacker_llm = None
+        if getattr(self.settings.llm, "adversarial_enabled", False):
+            try:
+                from halal_trader.core.llm import create_llm
+
+                attacker_llm = create_llm(self.settings)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("stocks adversarial LLM init failed: %s — disabling", exc)
+                attacker_llm = None
+
         # Strategy & executor
         strategy = TradingStrategy(
             llm,
@@ -94,6 +106,7 @@ class TradingBot(BaseTradingBot):
             daily_loss_limit=self.settings.stocks.daily_loss_limit,
             daily_return_target=self.settings.stocks.daily_return_target,
             max_simultaneous_positions=self.settings.stocks.max_simultaneous_positions,
+            attacker_llm=attacker_llm,
         )
         self.executor = TradeExecutor(
             self.broker,
