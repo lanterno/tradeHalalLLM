@@ -164,6 +164,115 @@ def register(app: FastAPI, app_state: dict[str, Any]) -> None:
             }
         )
 
+    @app.get("/api/insights/regime")
+    async def api_regime() -> JSONResponse:
+        insights = app_state.get("insights") or {}
+        mem = insights.get("regime_memory")
+        if mem is None or mem.size == 0:
+            return JSONResponse({"available": False})
+        return JSONResponse(
+            {
+                "available": True,
+                "size": mem.size,
+                "recent": [
+                    {
+                        "date": s.date,
+                        "outcome_pnl_pct": s.outcome_pnl_pct,
+                        "outcome_win_rate": s.outcome_win_rate,
+                        "outcome_n_trades": s.outcome_n_trades,
+                        "note": s.note,
+                    }
+                    for s in mem.snapshots[-10:]
+                ],
+            }
+        )
+
+    @app.get("/api/insights/basis")
+    async def api_basis() -> JSONResponse:
+        insights = app_state.get("insights") or {}
+        tracker = insights.get("basis_tracker")
+        if tracker is None or not tracker.history_by_pair:
+            return JSONResponse({"available": False})
+        out = {}
+        for pair, hist in tracker.history_by_pair.items():
+            if not hist:
+                continue
+            out[pair] = {
+                "n": len(hist),
+                "last_basis_bps": hist[-1] if hist else 0.0,
+                "mean_basis_bps": (sum(hist) / len(hist)) if hist else 0.0,
+            }
+        return JSONResponse({"available": True, "pairs": out})
+
+    @app.get("/api/insights/treasury")
+    async def api_treasury() -> JSONResponse:
+        # Pull current account from app_state if the cycle has cached it,
+        # otherwise emit an "unavailable" response.
+        try:
+            from halal_trader.core.treasury import (
+                TreasuryPolicy,
+                estimate_annual_yield_usd,
+                plan_idle_cash,
+            )
+        except Exception:  # noqa: BLE001
+            return JSONResponse({"available": False})
+        cached = app_state.get("account_snapshot")
+        if not cached:
+            return JSONResponse({"available": False})
+        policy = TreasuryPolicy()
+        plan = plan_idle_cash(
+            cash_balance=float(cached.get("cash", 0)),
+            positions_value=float(cached.get("positions_value", 0)),
+            current_treasury_value=float(cached.get("treasury_value", 0)),
+            policy=policy,
+        )
+        return JSONResponse(
+            {
+                "available": True,
+                "action": plan.action,
+                "amount_usd": plan.amount_usd,
+                "instrument": plan.instrument,
+                "reason": plan.reason,
+                "estimated_yield_usd_year": estimate_annual_yield_usd(
+                    cached.get("treasury_value", 0)
+                ),
+            }
+        )
+
+    @app.get("/api/insights/purification")
+    async def api_purification() -> JSONResponse:
+        from halal_trader.config import get_settings
+        from halal_trader.halal.round_trip_purification import (
+            RoundTripLedger,
+            outstanding_round_trip_due,
+        )
+
+        settings = get_settings()
+        path = settings.resolve_db_path().parent / "analytics" / "round_trip_purification.json"
+        if not path.exists():
+            return JSONResponse({"available": False})
+        ledger = RoundTripLedger(path=path)
+        return JSONResponse({"available": True, **outstanding_round_trip_due(ledger)})
+
+    @app.get("/api/insights/replay")
+    async def api_replay(limit: int = 50) -> JSONResponse:
+        from halal_trader.config import get_settings
+        from halal_trader.core.replay import ReplayStore
+
+        settings = get_settings()
+        root = settings.resolve_db_path().parent / "replay"
+        if not root.exists():
+            return JSONResponse({"available": False})
+        store = ReplayStore(root=root)
+        cycle_ids = store.list_cycle_ids()[-limit:]
+        return JSONResponse(
+            {
+                "available": True,
+                "n": len(cycle_ids),
+                "cycle_ids": cycle_ids,
+            }
+        )
+
     @app.get("/api/insights/calibration")
     async def api_calibration() -> JSONResponse:
         insights = app_state.get("insights") or {}

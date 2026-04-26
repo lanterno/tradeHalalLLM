@@ -104,3 +104,44 @@ def test_calibration_with_curve() -> None:
     assert body["available"] is True
     assert body["method"] == "platt"
     assert body["n_samples"] == 100
+
+
+# ── new surfaces ─────────────────────────────────────────────────
+
+
+def test_regime_unavailable() -> None:
+    client = _client()
+    assert client.get("/api/insights/regime").json() == {"available": False}
+
+
+def test_regime_with_snapshots() -> None:
+    from halal_trader.ml.regime_memory import RegimeFeatures, RegimeMemory
+
+    mem = RegimeMemory()
+    mem.add_today(RegimeFeatures(volatility=0.01), today="2026-04-26", outcome_pnl_pct=0.01)
+    client = _client({"regime_memory": mem})
+    body = client.get("/api/insights/regime").json()
+    assert body["available"] is True
+    assert body["size"] == 1
+    assert body["recent"][0]["date"] == "2026-04-26"
+
+
+def test_basis_unavailable() -> None:
+    client = _client()
+    assert client.get("/api/insights/basis").json() == {"available": False}
+
+
+def test_basis_with_history() -> None:
+    from halal_trader.crypto.basis import BasisTracker
+
+    tracker = BasisTracker()
+    tracker.observe(pair="BTCUSDT", spot_price=100.0, perp_price=100.5, funding_rate_pct=0.0001)
+    client = _client({"basis_tracker": tracker})
+    body = client.get("/api/insights/basis").json()
+    assert body["available"] is True
+    assert "BTCUSDT" in body["pairs"]
+
+
+def test_treasury_unavailable_without_account_snapshot() -> None:
+    client = _client()
+    assert client.get("/api/insights/treasury").json() == {"available": False}

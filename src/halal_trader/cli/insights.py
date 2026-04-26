@@ -227,6 +227,109 @@ def drift_cmd(limit: int) -> None:
 # ── calibration ──────────────────────────────────────────────────
 
 
+@insights.command("shadow")
+def shadow_cmd() -> None:
+    """Show divergence between live and shadow equity curves.
+
+    Reads from the in-process ShadowLedger via ``insights_hub``. Empty
+    if the cycle hasn't recorded any rows yet.
+    """
+
+    def _run() -> None:
+        from halal_trader.core.insights_hub import hub
+        from halal_trader.core.shadow import (
+            divergence_metrics,
+            render_status,
+            shadow_alert_state,
+        )
+        from halal_trader.logging import console
+
+        led = hub.shadow
+        if led.size == 0:
+            console.print("[yellow]Shadow ledger empty — no cycles recorded yet.[/]")
+            return
+        metrics = divergence_metrics(led.entries)
+        level = shadow_alert_state(metrics)
+        console.print(render_status(metrics, level))
+
+    _run()
+
+
+@insights.command("regime")
+def regime_cmd() -> None:
+    """Show recent entries from the regime memory store."""
+
+    def _run() -> None:
+        from halal_trader.core.insights_hub import hub
+        from halal_trader.logging import console
+
+        mem = hub.regime
+        if mem.size == 0:
+            console.print("[yellow]Regime memory empty.[/]")
+            return
+        console.print(f"[bold]Regime memory:[/] {mem.size} snapshot(s)")
+        for s in mem.snapshots[-10:]:
+            console.print(f"  {s.label()}")
+
+    _run()
+
+
+@insights.command("purification")
+def purification_cmd() -> None:
+    """Outstanding round-trip purification due."""
+
+    def _run() -> None:
+        from halal_trader.config import get_settings
+        from halal_trader.halal.round_trip_purification import (
+            RoundTripLedger,
+            outstanding_round_trip_due,
+        )
+        from halal_trader.logging import console
+
+        settings = get_settings()
+        path = settings.resolve_db_path().parent / "analytics" / "round_trip_purification.json"
+        if not path.exists():
+            console.print("[yellow]No purification ledger yet — no closed wins.[/]")
+            return
+        ledger = RoundTripLedger(path=path)
+        summary = outstanding_round_trip_due(ledger)
+        console.print(f"[bold]Outstanding:[/] ${summary['total_usd']:.2f}")
+        console.print(f"Disbursed total: ${summary['disbursed_total_usd']:.2f}")
+        console.print(f"Total entries: {summary['n_entries']}")
+        if summary["by_symbol"]:
+            console.print("[bold]By symbol:[/]")
+            for sym, due in sorted(summary["by_symbol"].items(), key=lambda kv: -kv[1]):
+                console.print(f"  {sym:<10} ${due:.2f}")
+
+    _run()
+
+
+@insights.command("replay")
+@click.option("--limit", default=20, show_default=True)
+def replay_cmd(limit: int) -> None:
+    """List recent cycle snapshots in the replay store."""
+
+    def _run() -> None:
+        from halal_trader.config import get_settings
+        from halal_trader.core.replay import ReplayStore
+        from halal_trader.logging import console
+
+        settings = get_settings()
+        root = settings.resolve_db_path().parent / "replay"
+        if not root.exists():
+            console.print("[yellow]No replay store yet — start the bot to capture snapshots.[/]")
+            return
+        store = ReplayStore(root=root)
+        ids = store.list_cycle_ids()[-limit:]
+        if not ids:
+            console.print("[yellow]Replay store empty.[/]")
+            return
+        for cid in ids:
+            console.print(f"  {cid}")
+
+    _run()
+
+
 @insights.command("calibration")
 @click.option("--limit", default=200, show_default=True)
 def calibration_cmd(limit: int) -> None:
