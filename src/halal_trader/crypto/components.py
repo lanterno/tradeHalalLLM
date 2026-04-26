@@ -158,6 +158,45 @@ async def build_components(
         min_market_cap=settings.crypto.min_market_cap,
     )
 
+    # Optional adversarial co-bot — same provider stack as primary by
+    # default. Constructed only when the operator has flipped the flag,
+    # so the cost is opt-in.
+    attacker_llm: BaseLLM | None = None
+    if getattr(settings.llm, "adversarial_enabled", False):
+        try:
+            attacker_llm = create_llm(settings)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("adversarial LLM init failed: %s — disabling", exc)
+            attacker_llm = None
+
+    # Optional ensemble — N additional providers from the same factory.
+    # Empty list = disabled.
+    ensemble_llms: list[BaseLLM] = []
+    for _ in range(int(getattr(settings.llm, "ensemble_size", 0) or 0)):
+        try:
+            ensemble_llms.append(create_llm(settings))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("ensemble LLM init failed: %s — variant skipped", exc)
+
+    # Build the post-close analytics recorder bundle. The hub is
+    # process-wide; sidecar paths anchor under the data dir.
+    from halal_trader.core.insights_hub import hub as insights_hub
+    from halal_trader.core.post_close import CloseRecorders, RegretSidecar
+    from halal_trader.core.thesis import ThesisTagStore
+    from halal_trader.halal.round_trip_purification import (
+        RoundTripLedger,
+    )
+
+    data_dir = settings.resolve_db_path().parent / "analytics"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    close_recorders = CloseRecorders(
+        hub=insights_hub,
+        thesis_store=ThesisTagStore(path=data_dir / "thesis_tags.json"),
+        regret_sidecar=RegretSidecar(path=data_dir / "regret_records.json"),
+        purification_ledger=RoundTripLedger(path=data_dir / "round_trip_purification.json"),
+        purification_rules={},  # Operator wires per-symbol rules later
+    )
+
     strategy = CryptoTradingStrategy(
         llm,
         repo,
@@ -168,6 +207,8 @@ async def build_components(
         max_simultaneous_positions=settings.crypto.max_simultaneous_positions,
         llm_failure_threshold=settings.crypto.llm_failure_threshold,
         llm_cooldown_seconds=settings.crypto.llm_cooldown_seconds,
+        attacker_llm=attacker_llm,
+        ensemble_llms=ensemble_llms,
     )
 
     executor = CryptoExecutor(
@@ -226,6 +267,7 @@ async def build_components(
         notifier=notifier if notifier.enabled else None,
         retrainer=retrainer,
         exiting_pairs=exiting_pairs,
+        close_recorders=close_recorders,
     )
 
     news_reactor = _build_news_reactor(settings)

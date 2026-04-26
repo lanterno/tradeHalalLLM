@@ -49,6 +49,7 @@ class PositionMonitor:
         notifier: TelegramNotifier | None = None,
         retrainer: RetrainingScheduler | None = None,
         exiting_pairs: set[str] | None = None,
+        close_recorders: object | None = None,
     ) -> None:
         self._broker = broker
         self._repo = repo
@@ -68,6 +69,11 @@ class PositionMonitor:
         self._exit_failures: dict[int, int] = {}
         self._exiting_pairs: set[str] = exiting_pairs if exiting_pairs is not None else set()
         self._exit_lock = asyncio.Lock()
+        # Optional fan-out for post-close analytics (drift, thesis,
+        # regret, purification). When present, the close path calls
+        # ``record_close`` after a successful SL/TP exit. When ``None``,
+        # the monitor behaves exactly as before (back-compat).
+        self._close_recorders = close_recorders
 
     async def start(self) -> None:
         """Start the monitor as a background task."""
@@ -281,6 +287,43 @@ class PositionMonitor:
                     await self._retrainer.on_trade_closed(trade_id, return_pct)
                 except Exception as e:
                     logger.debug("Retrainer callback failed: %s", e)
+
+            if self._close_recorders is not None:
+                try:
+                    from halal_trader.core.post_close import (
+                        CloseEvent,
+                        record_close,
+                    )
+
+                    hold_seconds = 0
+                    if trade.timestamp:
+                        from datetime import UTC, datetime as _dt
+
+                        now_ts = _dt.now(UTC)
+                        if trade.timestamp.tzinfo is None:
+                            trade_ts = trade.timestamp.replace(tzinfo=UTC)
+                        else:
+                            trade_ts = trade.timestamp
+                        hold_seconds = max(0, int((now_ts - trade_ts).total_seconds()))
+
+                    record_close(
+                        CloseEvent(
+                            trade_id=str(trade_id),
+                            symbol=trade.pair,
+                            side=trade.side,
+                            entry_price=entry,
+                            exit_price=fill_price,
+                            exit_reason=reason,
+                            realized_pnl_usd=pnl,
+                            return_pct=return_pct,
+                            quantity=quantity,
+                            hold_seconds=hold_seconds,
+                            reasoning=trade.llm_reasoning or "",
+                        ),
+                        self._close_recorders,
+                    )
+                except Exception as e:  # noqa: BLE001
+                    logger.debug("post-close recorder failed: %s", e)
 
             if self._notifier and self._notifier.enabled:
                 try:
