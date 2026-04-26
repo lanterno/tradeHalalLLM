@@ -113,6 +113,11 @@ class LLMSettings(BaseSettings):
     # alongside the primary. Median quantity / confidence wins; agreement
     # score scales sizing in [0.5, 1.0]. 0 disables.
     ensemble_size: int = Field(default=0, ge=0, le=5)
+    # Shadow strategy — runs an analyze() pass per cycle on the same
+    # inputs and simulates fills against latest prices. Used to detect
+    # decay between live (mutating) and shadow (frozen-prompt) curves.
+    shadow_enabled: bool = Field(default=False)
+    shadow_starting_cash: float = Field(default=1000.0, gt=0)
     ollama: OllamaSettings = Field(default_factory=OllamaSettings)
     openai: OpenAISettings = Field(default_factory=OpenAISettings)
     anthropic: AnthropicSettings = Field(default_factory=AnthropicSettings)
