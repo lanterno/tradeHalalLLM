@@ -58,6 +58,7 @@ class CryptoCycleService(BaseCycleService):
         engine=None,
         live_mode_checker=None,
         shadow_runner=None,
+        whale_flow_source=None,
     ) -> None:
         super().__init__(alerts=alerts, engine=engine)
         self._live_mode_checker = live_mode_checker
@@ -80,6 +81,7 @@ class CryptoCycleService(BaseCycleService):
         self._risk_engine = risk_engine
         self._news_feed = news_feed
         self._shadow_runner = shadow_runner
+        self._whale_flow_source = whale_flow_source
         self._consecutive_flat_skips = 0
         self._settings = get_settings()
         # The scheduler reads this after each cycle to drive the
@@ -335,6 +337,9 @@ class CryptoCycleService(BaseCycleService):
         microstructure_text = self._build_microstructure_text(orderbooks)
         microstructure_text = await self._augment_with_basis(
             microstructure_text, halal_pairs, klines_by_symbol
+        )
+        microstructure_text = await self._augment_with_whale_flows(
+            microstructure_text, klines_by_symbol
         )
         news_text = self._build_news_text(halal_pairs)
 
@@ -642,6 +647,43 @@ class CryptoCycleService(BaseCycleService):
         if sentiment_text:
             parts.append(sentiment_text[:80])
         return " | ".join(parts)[:600]
+
+    async def _augment_with_whale_flows(
+        self,
+        microstructure_text: str,
+        klines_by_symbol: dict,
+    ) -> str:
+        """Pull on-chain whale-flow signals from Etherscan and append them
+        to the microstructure block. Best-effort — silently degrade when
+        the source is unconfigured or fails.
+
+        The watched ERC-20s (USDT, USDC, DAI, WETH) are universe-wide
+        signals: their flows apply to every pair regardless of which
+        symbols the bot is currently trading.
+        """
+        if self._whale_flow_source is None:
+            return microstructure_text
+        try:
+            from halal_trader.crypto.onchain import (
+                TOKENS,
+                format_whale_flows_for_prompt,
+            )
+
+            prices: dict[str, float] = {}
+            eth_klines = klines_by_symbol.get("ETHUSDT") or []
+            if eth_klines:
+                prices["WETH"] = float(eth_klines[-1].close)
+
+            symbols_to_watch = list(TOKENS.keys())
+            signals = await self._whale_flow_source.fetch(symbols_to_watch, prices=prices)
+            insights_hub.whale_flows = signals
+            block = format_whale_flows_for_prompt(signals)
+            if not block:
+                return microstructure_text
+            return microstructure_text + "\n\n" + block if microstructure_text else block
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("whale-flow augmentation failed: %s", exc)
+            return microstructure_text
 
     async def _augment_with_basis(
         self,

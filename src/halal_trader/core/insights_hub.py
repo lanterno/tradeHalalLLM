@@ -47,6 +47,10 @@ class InsightsHub:
     # close fan-out, queried by the cycle to surface analogous
     # past setups.
     rag: object | None = None
+    # Latest on-chain whale-flow signals per ERC-20 symbol; populated
+    # by the cycle from EtherscanWhaleFlow when ETHERSCAN_API_KEY is
+    # set. Empty when the source is disabled.
+    whale_flows: dict[str, Any] = field(default_factory=dict)
 
     def to_app_state(self) -> dict[str, Any]:
         """Snapshot suitable for ``app_state["insights"]`` (web routes)."""
@@ -58,6 +62,7 @@ class InsightsHub:
             "basis_tracker": self.basis,
             "velocity": self.velocity,
             "rag": self.rag,
+            "whale_flows": self.whale_flows,
         }
 
 

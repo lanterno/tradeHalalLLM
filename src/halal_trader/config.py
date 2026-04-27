@@ -88,6 +88,19 @@ class EDGARSettings(BaseSettings):
     user_agent: str = Field(default="")
 
 
+class EtherscanSettings(BaseSettings):
+    """Etherscan (free) — used for on-chain whale-flow signals.
+
+    Drives a crypto-side feature that watches large stablecoin /
+    token transfers to/from major exchanges. Free tier is 5 req/sec,
+    enough to poll the top halal pairs each cycle. Empty key disables
+    the feed cleanly.
+    """
+
+    model_config = SettingsConfigDict(**_BASE_CONFIG, env_prefix="ETHERSCAN_")
+    api_key: str = Field(default="")
+
+
 class HalalSettings(BaseSettings):
     """Cross-cutting halal-screening cadence + safety knobs."""
 
@@ -315,6 +328,7 @@ class Settings(BaseSettings):
     coingecko: CoinGeckoSettings = Field(default_factory=CoinGeckoSettings)
     fred: FREDSettings = Field(default_factory=FREDSettings)
     edgar: EDGARSettings = Field(default_factory=EDGARSettings)
+    etherscan: EtherscanSettings = Field(default_factory=EtherscanSettings)
     halal: HalalSettings = Field(default_factory=HalalSettings)
     web: WebSettings = Field(default_factory=WebSettings)
     llm: LLMSettings = Field(default_factory=LLMSettings)

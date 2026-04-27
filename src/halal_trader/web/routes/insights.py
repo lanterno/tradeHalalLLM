@@ -328,6 +328,29 @@ def register(app: FastAPI, app_state: dict[str, Any]) -> None:
             return JSONResponse({"error": "entry not found"}, status_code=404)
         return JSONResponse({"ok": True, "entry_id": entry_id, "status": status})
 
+    @app.get("/api/insights/whale")
+    async def api_whale() -> JSONResponse:
+        insights = app_state.get("insights") or {}
+        flows = insights.get("whale_flows") or {}
+        if not flows:
+            return JSONResponse({"available": False})
+        return JSONResponse(
+            {
+                "available": True,
+                "flows": [
+                    {
+                        "symbol": sig.symbol,
+                        "inflow_to_exchange_usd": sig.inflow_to_exchange_usd,
+                        "outflow_from_exchange_usd": sig.outflow_from_exchange_usd,
+                        "inflow_pressure": sig.inflow_pressure,
+                        "n_transfers": sig.n_transfers,
+                        "label": sig.label,
+                    }
+                    for sig in flows.values()
+                ],
+            }
+        )
+
     @app.get("/api/insights/rag")
     async def api_rag(query: str = "", k: int = 5) -> JSONResponse:
         from halal_trader.config import get_settings

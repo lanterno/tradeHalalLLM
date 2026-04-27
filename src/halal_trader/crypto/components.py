@@ -83,6 +83,7 @@ class CryptoComponents:
     news_reactor: NewsEventReactor | None = None
     news_feed: RecentNewsFeed | None = None
     shadow_runner: Any = None
+    whale_flow_source: Any = None
 
 
 # ── Optional subsystem builders ───────────────────────────────
@@ -193,6 +194,16 @@ async def build_components(
     data_dir.mkdir(parents=True, exist_ok=True)
     rag_store = RationaleStore(path=data_dir / "rag_rationales.json")
     insights_hub.rag = rag_store
+
+    # Optional Etherscan whale-flow source. The cycle records its
+    # signal into insights_hub.whale_flows and the prompt builder
+    # surfaces them in the microstructure block.
+    whale_flow_source: Any = None
+    if getattr(settings, "etherscan", None) and settings.etherscan.api_key:
+        from halal_trader.crypto.onchain import EtherscanWhaleFlow
+
+        whale_flow_source = EtherscanWhaleFlow(api_key=settings.etherscan.api_key)
+
     close_recorders = CloseRecorders(
         hub=insights_hub,
         thesis_store=ThesisTagStore(path=data_dir / "thesis_tags.json"),
@@ -350,4 +361,5 @@ async def build_components(
         news_reactor=news_reactor,
         news_feed=news_feed,
         shadow_runner=shadow_runner,
+        whale_flow_source=whale_flow_source,
     )
