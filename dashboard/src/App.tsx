@@ -12,6 +12,7 @@ const Decisions = lazy(() => import("./pages/Decisions"));
 const System = lazy(() => import("./pages/System"));
 const Observability = lazy(() => import("./pages/Observability"));
 const RiskAndSystem = lazy(() => import("./pages/RiskAndSystem"));
+const Insights = lazy(() => import("./pages/Insights"));
 
 export default function App() {
   return (
@@ -86,6 +87,14 @@ export default function App() {
           element={
             <Suspense fallback={<PageSkeleton />}>
               <System />
+            </Suspense>
+          }
+        />
+        <Route
+          path="insights"
+          element={
+            <Suspense fallback={<PageSkeleton />}>
+              <Insights />
             </Suspense>
           }
         />

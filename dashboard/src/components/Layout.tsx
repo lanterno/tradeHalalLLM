@@ -10,6 +10,7 @@ import {
   Activity,
   Gauge,
   ShieldAlert,
+  Microscope,
 } from "lucide-react";
 import { cn } from "../lib/utils";
 import { useHealth } from "../hooks/useSystem";
@@ -22,6 +23,7 @@ const NAV_ITEMS = [
   { to: "/sentiment", icon: Radar, label: "Sentiment" },
   { to: "/decisions", icon: Brain, label: "Decisions" },
   { to: "/risk", icon: ShieldAlert, label: "Risk & Halt" },
+  { to: "/insights", icon: Microscope, label: "Insights" },
   { to: "/observability", icon: Gauge, label: "Observability" },
   { to: "/system", icon: Settings, label: "System" },
 ] as const;

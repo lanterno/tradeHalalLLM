@@ -329,6 +329,85 @@ def replay_cmd(limit: int) -> None:
     _run()
 
 
+@insights.command("catalysts")
+@click.argument("symbols", nargs=-1, required=True)
+@click.option(
+    "--lookahead",
+    default=24,
+    show_default=True,
+    help="Hours of history/forward-window for time-bound sources",
+)
+def catalysts_cmd(symbols: tuple[str, ...], lookahead: int) -> None:
+    """Inspect what catalysts the stock cycle will surface for SYMBOLS.
+
+    Constructs the same source bundle the live trading scheduler builds
+    (FRED + EDGAR + Options-IV + Fed-speak), runs each for the given
+    symbols, and prints the assembled catalyst list — exactly what the
+    LLM would see in the next cycle's prompt.
+    """
+
+    async def _run() -> None:
+        from halal_trader.config import get_settings
+        from halal_trader.logging import console
+        from halal_trader.trading.catalysts import (
+            StockCatalystFeed,
+            format_catalysts_for_prompt,
+        )
+
+        settings = get_settings()
+        sources: list = []
+
+        if settings.fred.api_key:
+            from halal_trader.trading.fred_catalysts import (
+                FREDReleaseCalendarSource,
+            )
+
+            sources.append(FREDReleaseCalendarSource(api_key=settings.fred.api_key))
+            console.print("[green]✓[/] FRED enabled")
+        else:
+            console.print("[yellow]✗[/] FRED disabled (no FRED_API_KEY)")
+
+        if settings.edgar.user_agent:
+            from halal_trader.trading.edgar_catalysts import EDGAREightKSource
+
+            sources.append(EDGAREightKSource(user_agent=settings.edgar.user_agent))
+            console.print("[green]✓[/] EDGAR enabled")
+        else:
+            console.print("[yellow]✗[/] EDGAR disabled (no EDGAR_USER_AGENT)")
+
+        from halal_trader.trading.fed_speak_adapter import FedSpeakCatalystSource
+        from halal_trader.trading.options_catalyst_adapter import (
+            OptionsIVCatalystSource,
+        )
+
+        sources.append(OptionsIVCatalystSource())
+        sources.append(FedSpeakCatalystSource())
+        console.print("[green]✓[/] Options-IV + Fed-speak enabled (always-on)")
+        console.print()
+
+        feed = StockCatalystFeed(sources=sources)
+        catalysts = await feed.fetch_all([s.upper() for s in symbols])
+
+        console.print(f"[bold]Catalysts for {', '.join(s.upper() for s in symbols)}:[/]")
+        if not catalysts:
+            console.print("[yellow](no catalysts in window)[/]")
+            return
+        text = format_catalysts_for_prompt(
+            catalysts, symbols=[s.upper() for s in symbols], max_age_hours=lookahead
+        )
+        console.print(text or "[yellow](all catalysts older than lookahead)[/]")
+
+        # Close any sources that hold open clients.
+        for src in sources:
+            if hasattr(src, "aclose"):
+                try:
+                    await src.aclose()
+                except Exception:  # noqa: BLE001
+                    pass
+
+    asyncio.run(_run())
+
+
 @insights.command("whale")
 def whale_cmd() -> None:
     """Show the latest on-chain whale-flow signals (Etherscan).
