@@ -142,6 +142,16 @@ class TradingBot(BaseTradingBot):
             )
 
             catalyst_sources.append(EDGAREightKSource(user_agent=self.settings.edgar.user_agent))
+
+        # Options IV + Fed-speak are always-on (no key required).
+        from halal_trader.trading.fed_speak_adapter import FedSpeakCatalystSource
+        from halal_trader.trading.options_catalyst_adapter import (
+            OptionsIVCatalystSource,
+        )
+
+        catalyst_sources.append(OptionsIVCatalystSource())
+        catalyst_sources.append(FedSpeakCatalystSource())
+
         catalyst_feed = StockCatalystFeed(sources=catalyst_sources) if catalyst_sources else None
 
         # Cycle service — owns the intraday trading logic

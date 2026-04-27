@@ -294,6 +294,11 @@ class CatalystRiskPolicy:
         "8-k:1.01",
         "8-k:1.02",
         "8-k:2.05",
+        # Options-market signals: elevated IV or rich downside skew
+        # both warrant a smaller-than-usual entry. Plain options_iv
+        # without the modifier is just informational; not high-impact.
+        "options_iv_elevated",
+        "options_iv_skew",
     )
     pre_event_hours: float = 4.0
     pre_event_size_multiplier: float = 0.5
