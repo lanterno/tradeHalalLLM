@@ -185,15 +185,31 @@ async def build_components(
     # process-wide; sidecar paths anchor under the data dir.
     from halal_trader.core.insights_hub import hub as insights_hub
     from halal_trader.core.llm.rag import RationaleStore
+    from halal_trader.core.llm.rag_db import DBRationaleStore
     from halal_trader.core.post_close import CloseRecorders, RegretSidecar
+    from halal_trader.core.regret_db import DBRegretRecorder
     from halal_trader.core.thesis import ThesisTagStore
+    from halal_trader.core.thesis_db import DBThesisTagStore
     from halal_trader.halal.round_trip_purification import (
         RoundTripLedger,
     )
 
     data_dir = settings.resolve_data_dir() / "analytics"
     data_dir.mkdir(parents=True, exist_ok=True)
-    rag_store = RationaleStore(path=data_dir / "rag_rationales.json")
+    # Production: DB-backed stores for rationale / thesis / regret so
+    # the dashboard can join on them. Falls back to JSON sidecars if
+    # the engine isn't available (test / offline scenarios).
+    rag_store: Any
+    thesis_store: Any
+    regret_store: Any
+    if engine is not None:
+        rag_store = DBRationaleStore(engine=engine)
+        thesis_store = DBThesisTagStore(engine=engine)
+        regret_store = DBRegretRecorder(engine=engine)
+    else:
+        rag_store = RationaleStore(path=data_dir / "rag_rationales.json")
+        thesis_store = ThesisTagStore(path=data_dir / "thesis_tags.json")
+        regret_store = RegretSidecar(path=data_dir / "regret_records.json")
     insights_hub.rag = rag_store
 
     # Optional Etherscan whale-flow source. The cycle records its
@@ -220,8 +236,8 @@ async def build_components(
 
     close_recorders = CloseRecorders(
         hub=insights_hub,
-        thesis_store=ThesisTagStore(path=data_dir / "thesis_tags.json"),
-        regret_sidecar=RegretSidecar(path=data_dir / "regret_records.json"),
+        thesis_store=thesis_store,
+        regret_sidecar=regret_store,
         purification_ledger=RoundTripLedger(path=data_dir / "round_trip_purification.json"),
         purification_rules={},  # Operator wires per-symbol rules later
         rag_store=rag_store,

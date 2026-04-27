@@ -45,7 +45,7 @@ def _e(symbol: str, *, pnl: float, gain: float, **kw):
     return CloseEvent(**base)
 
 
-def test_full_post_close_flow_to_dashboard_shape(tmp_path: Path) -> None:
+async def test_full_post_close_flow_to_dashboard_shape(tmp_path: Path) -> None:
     """One winning close → drift observed + thesis tagged + regret
     sidecar appended + purification accrual."""
     hub = InsightsHub()
@@ -56,7 +56,7 @@ def test_full_post_close_flow_to_dashboard_shape(tmp_path: Path) -> None:
         purification_ledger=RoundTripLedger(path=tmp_path / "purif.json"),
         purification_rules={"BTCUSDT": RoundTripRule(symbol="BTCUSDT", impure_ratio=0.02)},
     )
-    summary = record_close(_e("BTCUSDT", pnl=0.02, gain=100.0), rec)
+    summary = await record_close(_e("BTCUSDT", pnl=0.02, gain=100.0), rec)
 
     # Dashboard JSON shape — every key the /api/insights/* routes read.
     assert hub.drift.n == 1
@@ -81,7 +81,7 @@ def test_full_post_close_flow_to_dashboard_shape(tmp_path: Path) -> None:
     assert summary["purification_due_usd"] == 2.0
 
 
-def test_loss_close_skips_purification(tmp_path: Path) -> None:
+async def test_loss_close_skips_purification(tmp_path: Path) -> None:
     hub = InsightsHub()
     rec = CloseRecorders(
         hub=hub,
@@ -90,7 +90,7 @@ def test_loss_close_skips_purification(tmp_path: Path) -> None:
         purification_ledger=RoundTripLedger(path=tmp_path / "purif.json"),
         purification_rules={"BTCUSDT": RoundTripRule(symbol="BTCUSDT", impure_ratio=0.02)},
     )
-    record_close(_e("BTCUSDT", pnl=-0.02, gain=-100.0), rec)
+    await record_close(_e("BTCUSDT", pnl=-0.02, gain=-100.0), rec)
     assert rec.purification_ledger.outstanding() == 0.0
     # But drift + thesis + regret still recorded.
     assert hub.drift.n == 1
@@ -98,7 +98,7 @@ def test_loss_close_skips_purification(tmp_path: Path) -> None:
     assert len(rec.regret_sidecar.all()) == 1
 
 
-def test_multiple_closes_aggregate(tmp_path: Path) -> None:
+async def test_multiple_closes_aggregate(tmp_path: Path) -> None:
     hub = InsightsHub()
     rec = CloseRecorders(
         hub=hub,
@@ -109,7 +109,7 @@ def test_multiple_closes_aggregate(tmp_path: Path) -> None:
     )
     for i in range(20):
         sym = "AAPL" if i % 2 == 0 else "MSFT"
-        record_close(
+        await record_close(
             _e(
                 sym,
                 pnl=0.01 if i % 3 == 0 else -0.005,

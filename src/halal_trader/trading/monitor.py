@@ -205,7 +205,7 @@ class StockPositionMonitor:
                     )
                     hold_seconds = max(0, int((now_ts - ts).total_seconds()))
 
-                record_close(
+                await record_close(
                     CloseEvent(
                         trade_id=str(trade.id),
                         symbol=trade.symbol,

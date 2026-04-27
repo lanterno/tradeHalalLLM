@@ -113,7 +113,20 @@ class CloseRecorders:
 # ── Main entry point ─────────────────────────────────────────────
 
 
-def record_close(event: CloseEvent, recorders: CloseRecorders) -> dict[str, Any]:
+async def _maybe_await(result: Any) -> Any:
+    """Await ``result`` if it's a coroutine, else return as-is.
+
+    Lets the dispatcher work with both sync (JSON-sidecar) and async
+    (DB-backed) recorders behind the same call.
+    """
+    import inspect
+
+    if inspect.iscoroutine(result):
+        return await result
+    return result
+
+
+async def record_close(event: CloseEvent, recorders: CloseRecorders) -> dict[str, Any]:
     """Dispatch a close event to every configured recorder.
 
     Returns a dict summarising what fired, suitable for INFO logging.
@@ -156,17 +169,19 @@ def record_close(event: CloseEvent, recorders: CloseRecorders) -> dict[str, Any]
                 reasoning=event.reasoning,
             )
             tag = heuristic_tag(ctx)
-            recorders.thesis_store.set(
-                event.trade_id,
-                tag,
-                method="heuristic",
-                reason="close-time tag",
+            await _maybe_await(
+                recorders.thesis_store.set(
+                    event.trade_id,
+                    tag,
+                    method="heuristic",
+                    reason="close-time tag",
+                )
             )
             summary["thesis_tag"] = tag
         except Exception as exc:  # noqa: BLE001
             logger.debug("thesis tagger failed: %s", exc)
 
-    # Regret sidecar.
+    # Regret sidecar (or DB).
     if recorders.regret_sidecar is not None:
         try:
             from halal_trader.core.regret import (
@@ -183,18 +198,20 @@ def record_close(event: CloseEvent, recorders: CloseRecorders) -> dict[str, Any]
                 setup_type=event.setup_type,
             )
             rec = hindsight_regret(view)
-            recorders.regret_sidecar.append(
-                {
-                    "trade_id": rec.trade_id,
-                    "symbol": rec.symbol,
-                    "regret": rec.regret,
-                    "optimal_size_pct": rec.optimal_size_pct,
-                    "actual_size_pct": rec.actual_size_pct,
-                    "pnl_pct": rec.pnl_pct,
-                    "note": rec.note,
-                    "ts": (event.closed_at or datetime.now(UTC)).isoformat(),
-                }
-            )
+            payload = {
+                "trade_id": rec.trade_id,
+                "symbol": rec.symbol,
+                "regret": rec.regret,
+                "optimal_size_pct": rec.optimal_size_pct,
+                "actual_size_pct": rec.actual_size_pct,
+                "pnl_pct": rec.pnl_pct,
+                "note": rec.note,
+                "setup_type": event.setup_type,
+                "ts": (event.closed_at or datetime.now(UTC)).isoformat(),
+            }
+            # JSON sidecar.append returns None (sync); DB.append returns
+            # a coroutine. _maybe_await handles both.
+            await _maybe_await(recorders.regret_sidecar.append(payload))  # type: ignore[func-returns-value]
             summary["regret"] = rec.regret
         except Exception as exc:  # noqa: BLE001
             logger.debug("regret recorder failed: %s", exc)
@@ -202,13 +219,15 @@ def record_close(event: CloseEvent, recorders: CloseRecorders) -> dict[str, Any]
     # RAG store — embed the rationale + outcome for later retrieval.
     if recorders.rag_store is not None and event.reasoning:
         try:
-            recorders.rag_store.add(
-                trade_id=event.trade_id,
-                symbol=event.symbol,
-                text=event.reasoning,
-                outcome_pnl_pct=event.return_pct,
-                setup_type=event.setup_type,
-                timestamp=(event.closed_at or datetime.now(UTC)).isoformat(),
+            await _maybe_await(
+                recorders.rag_store.add(
+                    trade_id=event.trade_id,
+                    symbol=event.symbol,
+                    text=event.reasoning,
+                    outcome_pnl_pct=event.return_pct,
+                    setup_type=event.setup_type,
+                    timestamp=(event.closed_at or datetime.now(UTC)).isoformat(),
+                )
             )
             summary["rag_added"] = True
         except Exception as exc:  # noqa: BLE001

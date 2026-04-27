@@ -337,6 +337,66 @@ class HalalScreening(SQLModel, table=True):
     cache_hit: bool = Field(default=False)
 
 
+class ThesisTagRow(SQLModel, table=True):
+    """One thesis tag attached to a closed trade.
+
+    Promoted from the JSON sidecar so the dashboard can join on this
+    table directly (faster than parsing the file each time the
+    /api/insights/thesis route is hit) and the tagger doesn't need
+    to fight file-locking with concurrent-write tests.
+    """
+
+    __tablename__ = "thesis_tags"
+
+    trade_id: str = Field(primary_key=True)
+    tag: str  # one of THESIS_TAGS
+    confidence: float = 0.0
+    reason: str | None = None
+    method: str = Field(default="heuristic")  # heuristic | llm
+    set_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class RegretRecordRow(SQLModel, table=True):
+    """Hindsight regret record for one closed trade.
+
+    Promoted from the JSON sidecar so aggregate queries (mean, p99, by
+    symbol/setup_type) run as proper SQL instead of file scans.
+    """
+
+    __tablename__ = "regret_records"
+
+    trade_id: str = Field(primary_key=True)
+    symbol: str = Field(index=True)
+    regret: float
+    optimal_size_pct: float
+    actual_size_pct: float
+    pnl_pct: float
+    note: str = ""
+    setup_type: str | None = None
+    closed_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class RationaleRow(SQLModel, table=True):
+    """RAG store row — one closed-trade rationale + outcome.
+
+    Schema-tracks the JSON sidecar version. Vector column is JSON-
+    serialized for portability across SQLite (tests) and Postgres
+    (prod); Postgres pgvector index is added by an alembic migration
+    that depends on the ``vector`` extension being installed.
+    """
+
+    __tablename__ = "rag_rationales"
+
+    trade_id: str = Field(primary_key=True)
+    symbol: str = Field(index=True)
+    text: str
+    vector: str  # JSON list[float] — Postgres pgvector index lands separately
+    outcome_pnl_pct: float
+    outcome_win: bool
+    setup_type: str | None = None
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
 class KillSwitch(SQLModel, table=True):
     """Single-row operator kill-switch.
 

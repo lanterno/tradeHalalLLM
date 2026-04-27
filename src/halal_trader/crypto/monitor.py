@@ -307,7 +307,7 @@ class PositionMonitor:
                             trade_ts = trade.timestamp
                         hold_seconds = max(0, int((now_ts - trade_ts).total_seconds()))
 
-                    record_close(
+                    await record_close(
                         CloseEvent(
                             trade_id=str(trade_id),
                             symbol=trade.pair,
