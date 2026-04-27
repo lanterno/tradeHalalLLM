@@ -84,6 +84,7 @@ class CryptoComponents:
     news_feed: RecentNewsFeed | None = None
     shadow_runner: Any = None
     whale_flow_source: Any = None
+    reddit_fetcher: Any = None
 
 
 # ── Optional subsystem builders ───────────────────────────────
@@ -203,6 +204,19 @@ async def build_components(
         from halal_trader.crypto.onchain import EtherscanWhaleFlow
 
         whale_flow_source = EtherscanWhaleFlow(api_key=settings.etherscan.api_key)
+
+    # Reddit mention-velocity source — uses public JSON, no OAuth.
+    # Free; the Reddit API ToS just wants a unique User-Agent. We
+    # always wire this since there's no cost or key to manage.
+    from halal_trader.sentiment.reddit_public import (
+        DEFAULT_CRYPTO_SUBS,
+        RedditPublicFetcher,
+    )
+
+    reddit_fetcher = RedditPublicFetcher(
+        user_agent="halal-trader/0.1 (crypto-velocity)",
+        subreddits=DEFAULT_CRYPTO_SUBS,
+    )
 
     close_recorders = CloseRecorders(
         hub=insights_hub,
@@ -362,4 +376,5 @@ async def build_components(
         news_feed=news_feed,
         shadow_runner=shadow_runner,
         whale_flow_source=whale_flow_source,
+        reddit_fetcher=reddit_fetcher,
     )

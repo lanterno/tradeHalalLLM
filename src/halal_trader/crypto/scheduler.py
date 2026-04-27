@@ -97,6 +97,7 @@ class CryptoTradingBot(BaseTradingBot):
             live_mode_checker=comps.live_mode_checker,
             shadow_runner=comps.shadow_runner,
             whale_flow_source=comps.whale_flow_source,
+            reddit_fetcher=comps.reddit_fetcher,
         )
 
         # Start background tasks the scheduler owns.

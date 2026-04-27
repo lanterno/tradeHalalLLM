@@ -59,6 +59,7 @@ class CryptoCycleService(BaseCycleService):
         live_mode_checker=None,
         shadow_runner=None,
         whale_flow_source=None,
+        reddit_fetcher=None,
     ) -> None:
         super().__init__(alerts=alerts, engine=engine)
         self._live_mode_checker = live_mode_checker
@@ -82,6 +83,7 @@ class CryptoCycleService(BaseCycleService):
         self._news_feed = news_feed
         self._shadow_runner = shadow_runner
         self._whale_flow_source = whale_flow_source
+        self._reddit_fetcher = reddit_fetcher
         self._consecutive_flat_skips = 0
         self._settings = get_settings()
         # The scheduler reads this after each cycle to drive the
@@ -224,6 +226,32 @@ class CryptoCycleService(BaseCycleService):
                                     logger.debug("Failed to send buzz alert: %s", exc)
             except Exception as e:
                 logger.debug("Sentiment data unavailable: %s", e)
+
+        # Reddit mention-velocity (no-OAuth public-JSON path).
+        if self._reddit_fetcher is not None:
+            try:
+                from halal_trader.sentiment.velocity import (
+                    compute_velocity,
+                    format_velocity_for_prompt,
+                )
+
+                # Map BTCUSDT → BTC, ETHUSDT → ETH for the search query.
+                bases = sorted(
+                    {p.upper().removesuffix("USDT").removesuffix("BUSD") for p in halal_pairs}
+                )
+                mentions = await self._reddit_fetcher.fetch_for_symbols(bases)
+                if mentions:
+                    velocity = compute_velocity(mentions)
+                    insights_hub.velocity = velocity
+                    velocity_block = format_velocity_for_prompt(velocity)
+                    if velocity_block:
+                        sentiment_text = (
+                            sentiment_text + "\n\n" + velocity_block
+                            if sentiment_text
+                            else velocity_block
+                        )
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("Reddit velocity fetch failed: %s", exc)
 
         timeframe_text = ""
         if self._timeframes:

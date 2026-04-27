@@ -328,6 +328,30 @@ def register(app: FastAPI, app_state: dict[str, Any]) -> None:
             return JSONResponse({"error": "entry not found"}, status_code=404)
         return JSONResponse({"ok": True, "entry_id": entry_id, "status": status})
 
+    @app.get("/api/insights/velocity")
+    async def api_velocity() -> JSONResponse:
+        insights = app_state.get("insights") or {}
+        velocity = insights.get("velocity") or {}
+        if not velocity:
+            return JSONResponse({"available": False})
+        return JSONResponse(
+            {
+                "available": True,
+                "results": [
+                    {
+                        "symbol": r.symbol,
+                        "n_recent": r.n_recent,
+                        "n_older": r.n_older,
+                        "n_total": r.n_total,
+                        "velocity": r.velocity,
+                        "novelty": r.novelty,
+                        "label": r.label,
+                    }
+                    for r in velocity.values()
+                ],
+            }
+        )
+
     @app.get("/api/insights/whale")
     async def api_whale() -> JSONResponse:
         insights = app_state.get("insights") or {}

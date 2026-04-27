@@ -329,6 +329,60 @@ def replay_cmd(limit: int) -> None:
     _run()
 
 
+@insights.command("whale")
+def whale_cmd() -> None:
+    """Show the latest on-chain whale-flow signals (Etherscan).
+
+    Reads from :data:`insights_hub.whale_flows`, populated each cycle
+    when ``ETHERSCAN_API_KEY`` is configured. Empty if the source is
+    not enabled or no recent flows met the min-transfer threshold.
+    """
+
+    def _run() -> None:
+        from halal_trader.core.insights_hub import hub
+        from halal_trader.crypto.onchain import format_whale_flows_for_prompt
+        from halal_trader.logging import console
+
+        flows = hub.whale_flows
+        if not flows:
+            console.print("[yellow]No whale flows recorded yet.[/]")
+            return
+        text = format_whale_flows_for_prompt(flows)
+        if text:
+            console.print(text)
+        else:
+            console.print("[yellow]All recent flows balanced — no actionable signal.[/]")
+
+    _run()
+
+
+@insights.command("velocity")
+def velocity_cmd() -> None:
+    """Show the latest social mention-velocity per symbol.
+
+    Reads from :data:`insights_hub.velocity`, populated each cycle from
+    Reddit's public JSON endpoints (no OAuth). Empty until the cycle
+    has run at least once with the RedditPublicFetcher wired.
+    """
+
+    def _run() -> None:
+        from halal_trader.core.insights_hub import hub
+        from halal_trader.logging import console
+        from halal_trader.sentiment.velocity import format_velocity_for_prompt
+
+        results = hub.velocity
+        if not results:
+            console.print("[yellow]No velocity results recorded yet.[/]")
+            return
+        text = format_velocity_for_prompt(results)
+        if text:
+            console.print(text)
+        else:
+            console.print("[yellow]No surge labels — all symbols below threshold.[/]")
+
+    _run()
+
+
 @insights.command("rag")
 @click.option("--query", "-q", default="", help="Text to retrieve analogues for")
 @click.option("--k", default=5, show_default=True)
