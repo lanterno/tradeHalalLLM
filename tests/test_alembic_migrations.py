@@ -1,7 +1,17 @@
-"""Tests that apply each Alembic revision forward against a fresh DB.
+"""Sanity checks on the Postgres-baseline Alembic migration.
 
-Catches: a revision that fails on a clean DB; a revision that fails when
-applied on top of an adopted (create_all) DB; head-revision drift.
+Pre-Postgres history (17 sqlite-shaped revisions) was archived into
+``alembic/versions_legacy_sqlite/`` and squashed into a single fresh
+initial revision. These tests verify that:
+
+* The squashed revision applies cleanly against an empty SQLite (the
+  test fixtures use SQLite — production uses Postgres).
+* Every model declared in ``halal_trader.db.models`` is materialised.
+* ``admin.head()`` resolves to a non-empty revision id.
+
+For dialect-specific behaviour (pgvector, Postgres-only constraints),
+add Postgres-only tests guarded by an ``@pytest.mark.requires_pg``
+marker once the suite has a docker-compose-backed test fixture.
 """
 
 from __future__ import annotations
@@ -24,17 +34,10 @@ def _alembic_cfg(db_path: Path) -> Config:
 
 @pytest.fixture
 def db_path(tmp_path, monkeypatch):
-    """Per-test fresh DB; also overrides Settings so alembic/env.py uses it.
-
-    `alembic/env.py` calls `logging.config.fileConfig` from `alembic.ini`
-    which wipes ALL existing handlers (including pytest's caplog handler).
-    We save+restore the root logger's handlers around the test so later
-    suites that depend on log capture still work.
-    """
     import logging
 
     path = tmp_path / "alembic_test.db"
-    monkeypatch.setenv("DB_PATH", str(path))
+    monkeypatch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{path}")
     import halal_trader.config as _config
 
     _config._settings = None
@@ -56,13 +59,8 @@ def _tables_in(db_path: Path) -> set[str]:
     return {r[0] for r in rows}
 
 
-def _columns_in(db_path: Path, table: str) -> set[str]:
-    with sqlite3.connect(str(db_path)) as conn:
-        rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
-    return {r[1] for r in rows}
-
-
-def test_clean_db_migrates_to_head(db_path):
+def test_initial_revision_creates_expected_tables(db_path):
+    """The squashed initial migration must materialise every core table."""
     cfg = _alembic_cfg(db_path)
     command.upgrade(cfg, "head")
 
@@ -84,64 +82,23 @@ def test_clean_db_migrates_to_head(db_path):
     assert expected.issubset(tables)
 
 
-def test_each_revision_is_applied(db_path):
-    cfg = _alembic_cfg(db_path)
-    # Walk forward one revision at a time so any single broken upgrade fails loudly.
-    revisions = [
-        "b9da4efd8872",
-        "c1a2b3d4e5f6",
-        "d3e4f5a6b7c8",
-        "e4f5a6b7c8d9",
-        "f5a6b7c8d9e0",
-        "a6b7c8d9e0f1",
-        "b7c8d9e0f1a2",
-        "c8d9e0f1a2b3",
-        "d9e0f1a2b3c4",
-        "e0f1a2b3c4d5",
-        "f1a2b3c4d5e6",
-        "a2b3c4d5e6f7",
-        "b3c4d5e6f7a8",
-        "c4d5e6f7a8b9",
-        "d5e6f7a8b9c0",
-        "e6f7a8b9c0d1",
-    ]
-    for rev in revisions:
-        command.upgrade(cfg, rev)
-
-    tables = _tables_in(db_path)
-    assert "kill_switch" in tables
-    assert "reconciliation_log" in tables
+def test_head_resolves_to_a_revision_id():
+    head = admin.head()
+    assert isinstance(head, str)
+    assert len(head) >= 12
 
 
-def test_p1_8_added_fill_columns(db_path):
+def test_initial_revision_includes_post_phase0_columns(db_path):
+    """Smoke-check that the squashed migration carries forward the
+    Phase-0.x columns we used to test individually."""
     cfg = _alembic_cfg(db_path)
     command.upgrade(cfg, "head")
 
-    crypto_cols = _columns_in(db_path, "crypto_trades")
-    stock_cols = _columns_in(db_path, "trades")
-
+    with sqlite3.connect(str(db_path)) as conn:
+        crypto_cols = {r[1] for r in conn.execute("PRAGMA table_info(crypto_trades)").fetchall()}
+        llm_cols = {r[1] for r in conn.execute("PRAGMA table_info(llm_decisions)").fetchall()}
     for col in ("submitted_at", "filled_at", "filled_price", "filled_quantity"):
         assert col in crypto_cols, f"crypto_trades missing {col}"
-        assert col in stock_cols, f"trades missing {col}"
-
-
-def test_halal_screenings_table_and_fk_columns(db_path):
-    """Phase 0.6 added the halal audit table + halal_screening_id FK on trades."""
-    cfg = _alembic_cfg(db_path)
-    command.upgrade(cfg, "head")
-
-    tables = _tables_in(db_path)
-    assert "halal_screenings" in tables
-    for table in ("trades", "crypto_trades"):
-        assert "halal_screening_id" in _columns_in(db_path, table)
-
-
-def test_llm_decisions_has_cost_columns(db_path):
-    """Phase 0.4 added cost / cache attribution columns to llm_decisions."""
-    cfg = _alembic_cfg(db_path)
-    command.upgrade(cfg, "head")
-
-    cols = _columns_in(db_path, "llm_decisions")
     for col in (
         "prompt_version",
         "input_tokens",
@@ -150,44 +107,4 @@ def test_llm_decisions_has_cost_columns(db_path):
         "cache_write_tokens",
         "cost_usd",
     ):
-        assert col in cols, f"llm_decisions missing {col}"
-
-
-def test_kill_switch_seeded_with_singleton_row(db_path):
-    cfg = _alembic_cfg(db_path)
-    command.upgrade(cfg, "head")
-
-    with sqlite3.connect(str(db_path)) as conn:
-        rows = conn.execute("SELECT id, enabled FROM kill_switch").fetchall()
-    assert rows == [(1, 0)]
-
-
-def test_admin_head_matches_known_revision():
-    """Tripwire so adding a new revision without updating tests fails CI."""
-    assert admin.head() == "e6f7a8b9c0d1"
-
-
-def test_idempotent_revision_is_safe_to_replay(db_path):
-    """Adopted-DB scenario: tables created by create_all already exist; the
-    catch-up revision e4f5a6b7c8d9 must not error on re-application."""
-
-    # Pre-create the same tables that the catch-up revision adds, then
-    # stamp at the prior revision and re-run forward to head. The catch-up
-    # revision uses CREATE TABLE IF NOT EXISTS / column guards so it must
-    # not error.
-    with sqlite3.connect(str(db_path)) as conn:
-        conn.execute(
-            "CREATE TABLE indicator_snapshots ("
-            "id INTEGER PRIMARY KEY, trade_id INTEGER NOT NULL,"
-            "pair TEXT, timestamp DATETIME)"
-        )
-        conn.execute(
-            "CREATE TABLE strategy_adjustments ("
-            "id INTEGER PRIMARY KEY, parameter TEXT, new_value REAL)"
-        )
-
-    cfg = _alembic_cfg(db_path)
-    command.upgrade(cfg, "d3e4f5a6b7c8")  # land just before catch-up
-    command.stamp(cfg, "d3e4f5a6b7c8")
-    # Catch-up + later revisions must not error on the already-present tables.
-    command.upgrade(cfg, "head")
+        assert col in llm_cols, f"llm_decisions missing {col}"

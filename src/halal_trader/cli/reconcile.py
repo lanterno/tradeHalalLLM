@@ -28,7 +28,7 @@ def reconcile(market: str, threshold: float) -> None:
         from halal_trader.db.models import init_db
 
         settings = get_settings()
-        engine = await init_db(str(settings.resolve_db_path()))
+        engine = await init_db(settings.database_url)
         try:
             if market == "crypto":
                 from halal_trader.crypto.exchange import BinanceClient

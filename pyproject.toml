@@ -32,6 +32,9 @@ dependencies = [
     "tzdata",
     "uvicorn>=0.40.0",
     "fastapi>=0.135.1",
+    "asyncpg>=0.31.0",
+    "psycopg[binary]>=3.3.3",
+    "pgvector>=0.4.2",
 ]
 
 [project.optional-dependencies]
@@ -64,6 +67,10 @@ dev = [
     "ruff",
     "mypy",
     "pre-commit",
+    # Test-only: sqlite in-memory engines for unit tests so the suite
+    # doesn't require a running Postgres. Production runs on Postgres
+    # via DATABASE_URL — the two never coexist in the same process.
+    "aiosqlite",
 ]
 
 [project.scripts]

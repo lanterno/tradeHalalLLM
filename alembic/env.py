@@ -1,4 +1,4 @@
-"""Alembic environment — async-aware for SQLite + aiosqlite."""
+"""Alembic environment — async-aware for Postgres (asyncpg)."""
 
 import asyncio
 from logging.config import fileConfig
@@ -35,17 +35,17 @@ target_metadata = SQLModel.metadata
 
 
 def _resolve_url() -> str:
-    """Return the DB URL — Settings.resolve_db_path takes precedence over alembic.ini.
+    """Return the DB URL — Settings.database_url takes precedence over alembic.ini.
 
-    This keeps `alembic upgrade` and `init_db` in sync regardless of CWD or
-    relative-path quirks. Falls back to the alembic.ini value if Settings
-    cannot be loaded (e.g. running offline migrations without an env).
+    This keeps `alembic upgrade` and `init_db` in sync regardless of CWD.
+    Falls back to the alembic.ini value if Settings cannot be loaded (e.g.
+    running offline migrations without an env).
     """
     try:
         from halal_trader.config import get_settings
 
         settings = get_settings()
-        return f"sqlite+aiosqlite:///{settings.resolve_db_path()}"
+        return settings.database_url
     except Exception:
         return config.get_main_option("sqlalchemy.url") or ""
 
@@ -58,7 +58,7 @@ def run_migrations_offline() -> None:
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
-        render_as_batch=True,  # required for SQLite ALTER TABLE support
+        # render_as_batch=False — Postgres supports proper ALTER TABLE.
     )
 
     with context.begin_transaction():
@@ -71,7 +71,7 @@ def do_run_migrations(connection) -> None:  # noqa: ANN001
     context.configure(
         connection=connection,
         target_metadata=target_metadata,
-        render_as_batch=True,  # required for SQLite ALTER TABLE support
+        # render_as_batch=False — Postgres supports proper ALTER TABLE.
     )
 
     with context.begin_transaction():

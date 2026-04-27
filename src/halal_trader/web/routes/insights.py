@@ -248,7 +248,7 @@ def register(app: FastAPI, app_state: dict[str, Any]) -> None:
         )
 
         settings = get_settings()
-        path = settings.resolve_db_path().parent / "analytics" / "round_trip_purification.json"
+        path = settings.resolve_data_dir() / "analytics" / "round_trip_purification.json"
         if not path.exists():
             return JSONResponse({"available": False})
         ledger = RoundTripLedger(path=path)
@@ -260,7 +260,7 @@ def register(app: FastAPI, app_state: dict[str, Any]) -> None:
         from halal_trader.core.replay import ReplayStore
 
         settings = get_settings()
-        root = settings.resolve_db_path().parent / "replay"
+        root = settings.resolve_data_dir() / "replay"
         if not root.exists():
             return JSONResponse({"available": False})
         store = ReplayStore(root=root)
@@ -279,7 +279,7 @@ def register(app: FastAPI, app_state: dict[str, Any]) -> None:
         from halal_trader.halal.exception_queue import ExceptionQueue
 
         settings = get_settings()
-        path = settings.resolve_db_path().parent / "analytics" / "sharia_exceptions.json"
+        path = settings.resolve_data_dir() / "analytics" / "sharia_exceptions.json"
         if not path.exists():
             return JSONResponse({"available": False})
         q = ExceptionQueue(path=path)
@@ -318,7 +318,7 @@ def register(app: FastAPI, app_state: dict[str, Any]) -> None:
         from halal_trader.halal.exception_queue import ExceptionQueue
 
         settings = get_settings()
-        path = settings.resolve_db_path().parent / "analytics" / "sharia_exceptions.json"
+        path = settings.resolve_data_dir() / "analytics" / "sharia_exceptions.json"
         q = ExceptionQueue(path=path)
         try:
             ok = q.decide(entry_id, status=status, decided_by=decided_by, operator_note=note)  # type: ignore[arg-type]
@@ -381,7 +381,7 @@ def register(app: FastAPI, app_state: dict[str, Any]) -> None:
         from halal_trader.core.llm.rag import RationaleStore
 
         settings = get_settings()
-        path = settings.resolve_db_path().parent / "analytics" / "rag_rationales.json"
+        path = settings.resolve_data_dir() / "analytics" / "rag_rationales.json"
         if not path.exists():
             return JSONResponse({"available": False})
         store = RationaleStore(path=path)

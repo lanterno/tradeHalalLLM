@@ -61,7 +61,7 @@ def list_cmd(limit: int, prompt_version: str | None, provider: str | None) -> No
 
     async def _run() -> None:
         settings = get_settings()
-        engine = await init_db(str(settings.resolve_db_path()))
+        engine = await init_db(settings.database_url)
         try:
             from sqlmodel import select
 
@@ -119,7 +119,7 @@ def show_cmd(decision_id: int) -> None:
 
     async def _run() -> None:
         settings = get_settings()
-        engine = await init_db(str(settings.resolve_db_path()))
+        engine = await init_db(settings.database_url)
         try:
             async with AsyncSession(engine) as session:
                 row = await session.get(LlmDecision, decision_id)
@@ -186,7 +186,7 @@ def cost_summary_cmd(days: int) -> None:
 
     async def _run() -> None:
         settings = get_settings()
-        engine = await init_db(str(settings.resolve_db_path()))
+        engine = await init_db(settings.database_url)
         try:
             async with AsyncSession(engine) as session:
                 result = await session.execute(

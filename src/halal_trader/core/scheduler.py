@@ -26,7 +26,7 @@ class BaseTradingBot(abc.ABC):
 
     async def initialize(self) -> None:
         """Set up the database and delegate component creation to the subclass."""
-        engine = await init_db(str(self.settings.resolve_db_path()))
+        engine = await init_db(self.settings.database_url)
         self._engine = engine
         self._repo = Repository(engine)
         await self._create_components()

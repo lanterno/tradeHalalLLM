@@ -338,16 +338,10 @@ class TradingBot(BaseTradingBot):
             summary = await portfolio.record_day_end()
             logger.info("Day summary: %s", summary)
 
-            # Daily backup (gzipped SQLite snapshot + retention prune).
-            from halal_trader.db.backup import run_with_alerts
-
-            await run_with_alerts(
-                db_path=self.settings.resolve_db_path(),
-                backup_dir=self.settings.backup.dir,
-                retention_days=self.settings.backup.retention_days,
-                weekly_count=self.settings.backup.weekly_count,
-                alerts=self._alerts,
-            )
+            # Daily backup — disabled under the Postgres baseline. See
+            # crypto/scheduler.py for the rationale; re-enable when a
+            # pg_dump-based module replaces db/backup.py.
+            logger.debug("Daily SQLite backup hook skipped under Postgres baseline")
 
         except Exception as e:
             logger.error("End of day routine failed: %s", e)

@@ -55,7 +55,7 @@ The roadmap proper lives in `~/.claude/plans/i-want-you-to-swift-pine.md`.
 | 5.1 Sukuk treasury | 🟡 partial | `ae49a0e` policy module + cycle log; broker integration deferred |
 | 5.2 Automated purification | ✅ landed | `5db26c9` + close-hook recorder + sidecar ledger |
 | 5.3 Sharia exception queue | 🔴 blocked | UI work; better with operator in loop |
-| 5.4 Postgres migration | 🔴 blocked | schema migration touching every persistence call site |
+| 5.4 Postgres migration | ✅ landed | greenfield switch: deps + pgvector docker + DATABASE_URL config + 17 sqlite migrations squashed into one Postgres-native baseline + tests use SQLite via fixtures |
 | 5.5 OpenTelemetry tracing | ✅ landed | `081d96f` (module) + spans on LLM/cycle/orderbook/account/execute stages |
 | 5.6 Bit-perfect replay harness | ✅ landed | `09fa3ba` + per-cycle snapshot in cycle |
 

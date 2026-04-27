@@ -97,7 +97,7 @@ def crypto_history(limit: int) -> None:
         from halal_trader.db.repository import Repository
 
         settings = get_settings()
-        engine = await init_db(str(settings.resolve_db_path()))
+        engine = await init_db(settings.database_url)
         repo = Repository(engine)
         try:
             print_crypto_trades(await repo.get_recent_crypto_trades(limit))
@@ -120,7 +120,7 @@ def crypto_stats(days: int) -> None:
         from halal_trader.db.repository import Repository
 
         settings = get_settings()
-        engine = await init_db(str(settings.resolve_db_path()))
+        engine = await init_db(settings.database_url)
         repo = Repository(engine)
         analytics = PerformanceAnalytics(repo)
         stats = await analytics.compute_stats(lookback_days=days)
@@ -307,7 +307,7 @@ def crypto_screen() -> None:
         from halal_trader.db.repository import Repository
 
         settings = get_settings()
-        engine = await init_db(str(settings.resolve_db_path()))
+        engine = await init_db(settings.database_url)
         repo = Repository(engine)
         screener = CryptoHalalScreener(
             repo,

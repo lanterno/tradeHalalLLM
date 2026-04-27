@@ -1,20 +1,38 @@
 # Halal Trader — single-host Docker Compose deployment.
 #
-# Three services:
-#   * trader-crypto — the 24/7 crypto bot (CMD overridden via the
-#     compose service-level command).
+# Four services:
+#   * postgres      — Postgres 16 + pgvector for the canonical DB.
+#   * trader-crypto — the 24/7 crypto bot.
 #   * trader-stocks — the market-hours stock bot.
 #   * trader-web    — the FastAPI dashboard + Prometheus /metrics.
 #
-# All three share the SQLite DB volume so they read consistent state
-# (Phase 0 enabled WAL on every connection so concurrent readers are
-# fine; the bots are the only writers).
+# All three bot services share the same Postgres instance — multi-bot
+# concurrent writes are first-class now (no SQLite WAL limits).
 #
 # Optional Prometheus + Grafana sidecars are commented out — uncomment
 # when an operator actually wants the dashboards. They scrape the
 # /metrics endpoint exposed by the web service.
 
 services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: trader-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: halal_trader
+      POSTGRES_USER: trader
+      # Override in .env for prod; sane default for local dev.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-trader-dev-only}
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U trader -d halal_trader"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   trader-crypto:
     build:
       context: ..
@@ -30,6 +48,9 @@ services:
       - trader-data:/app/data
       - trader-logs:/app/logs
     command: ["halal-trader", "crypto", "start"]
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   trader-stocks:
     image: halal-trader:latest
@@ -42,7 +63,8 @@ services:
       - trader-logs:/app/logs
     command: ["halal-trader", "start"]
     depends_on:
-      - trader-crypto
+      postgres:
+        condition: service_healthy
 
   trader-web:
     image: halal-trader:latest
@@ -64,7 +86,8 @@ services:
       - "--port"
       - "8082"
     depends_on:
-      - trader-crypto
+      postgres:
+        condition: service_healthy
 
   # ── Optional observability stack ──
   # prometheus:
@@ -88,6 +111,7 @@ services:
   #     - grafana-data:/var/lib/grafana
 
 volumes:
+  pg-data:
   trader-data:
   trader-logs:
   # grafana-data:

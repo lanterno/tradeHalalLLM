@@ -75,7 +75,7 @@ def history(limit: int) -> None:
         from halal_trader.db.repository import Repository
 
         settings = get_settings()
-        engine = await init_db(str(settings.resolve_db_path()))
+        engine = await init_db(settings.database_url)
         repo = Repository(engine)
         try:
             print_trades(await repo.get_recent_trades(limit))

@@ -341,14 +341,36 @@ class Settings(BaseSettings):
     backup: BackupSettings = Field(default_factory=BackupSettings)
     log: LogSettings = Field(default_factory=LogSettings)
 
-    db_path: Path = Field(default=Path("halal_trader.db"))
+    # Postgres baseline — see docker-compose for the matching service.
+    # Override via DATABASE_URL in .env. SQLAlchemy / alembic both
+    # read this directly. ``+asyncpg`` and ``+psycopg`` drivers are
+    # interchangeable; we ship asyncpg for the runtime and psycopg
+    # for sync paths (alembic, db/admin.py).
+    database_url: str = Field(
+        default="postgresql+asyncpg://trader:trader-dev-only@localhost:5433/halal_trader",
+        description="SQLAlchemy connection URL for the Postgres database",
+    )
+    # Sidecar / replay / analytics dir on the filesystem.
+    data_dir: Path = Field(default=Path("data"))
 
-    def resolve_db_path(self) -> Path:
-        """Return an absolute db_path, resolving relative paths from the project root."""
-        if self.db_path.is_absolute():
-            return self.db_path
+    def resolve_data_dir(self) -> Path:
+        """Return an absolute data-dir path, resolving relative paths from project root."""
+        if self.data_dir.is_absolute():
+            return self.data_dir
         project_root = Path(__file__).resolve().parent.parent.parent
-        return project_root / self.db_path
+        return project_root / self.data_dir
+
+    def database_url_sync(self) -> str:
+        """Return a synchronous-driver URL for alembic + admin scripts.
+
+        SQLAlchemy URLs encode the driver as ``+asyncpg`` for the runtime
+        and ``+psycopg`` for sync. We map the runtime URL to its sync
+        cousin so alembic reads from the same DB without needing a
+        second env var.
+        """
+        return self.database_url.replace("+asyncpg", "+psycopg").replace(
+            "postgresql://", "postgresql+psycopg://"
+        )
 
 
 _settings: Settings | None = None

@@ -64,7 +64,7 @@ def test_confirm_header_case_insensitive(monkeypatch):
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     db_path = tmp_path / "activity.db"
-    monkeypatch.setenv("DB_PATH", str(db_path))
+    monkeypatch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
     monkeypatch.setenv("BACKUP_DIR", str(tmp_path / "backups"))
     monkeypatch.setenv("LOG_DIR", str(tmp_path / "logs"))
     monkeypatch.setenv("WEB_API_TOKEN", "secret")

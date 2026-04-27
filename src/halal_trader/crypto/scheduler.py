@@ -214,16 +214,11 @@ class CryptoTradingBot(BaseTradingBot):
                 except Exception as e:
                     logger.debug("Failed to send daily summary: %s", e)
 
-            # Daily backup (gzipped SQLite snapshot + retention prune).
-            from halal_trader.db.backup import run_with_alerts
-
-            await run_with_alerts(
-                db_path=self.settings.resolve_db_path(),
-                backup_dir=self.settings.backup.dir,
-                retention_days=self.settings.backup.retention_days,
-                weekly_count=self.settings.backup.weekly_count,
-                alerts=self._alerts,
-            )
+            # Daily backup — disabled under the Postgres baseline. The
+            # legacy SQLite gzipped-snapshot path doesn't apply; use
+            # pg_dump (or managed-DB snapshots) instead. Re-enable here
+            # when a pg-aware backup module is wired.
+            logger.debug("Daily SQLite backup hook skipped under Postgres baseline")
         except Exception as e:
             logger.error("Crypto daily end failed: %s", e)
 

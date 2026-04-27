@@ -39,7 +39,7 @@ def create_app() -> Any:
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         settings = get_settings()
-        engine = await init_db(str(settings.resolve_db_path()))
+        engine = await init_db(settings.database_url)
         app_state["engine"] = engine
         app_state["repo"] = Repository(engine)
         app_state["analytics"] = PerformanceAnalytics(app_state["repo"])

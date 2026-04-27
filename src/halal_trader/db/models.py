@@ -3,33 +3,11 @@
 import logging
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
 
-from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlmodel import Field, SQLModel
 
 logger = logging.getLogger(__name__)
-
-# WAL gives us concurrent reader+writer access — eliminates the
-# cycle-vs-monitor write contention we hit on busy crypto pairs.
-# busy_timeout pushes any residual lock waits onto sqlite itself
-# instead of bubbling up as OperationalError.
-_SQLITE_PRAGMAS = (
-    "PRAGMA journal_mode=WAL",
-    "PRAGMA synchronous=NORMAL",
-    "PRAGMA busy_timeout=30000",
-    "PRAGMA foreign_keys=ON",
-)
-
-
-def _apply_sqlite_pragmas(dbapi_conn: Any, _connection_record: Any) -> None:
-    cursor = dbapi_conn.cursor()
-    try:
-        for pragma in _SQLITE_PRAGMAS:
-            cursor.execute(pragma)
-    finally:
-        cursor.close()
 
 
 # ── Stock Tables ────────────────────────────────────────────────
@@ -388,7 +366,7 @@ class SchemaError(RuntimeError):
     """Raised when the DB schema is not at the expected Alembic revision."""
 
 
-async def init_db(db_path: str | Path) -> AsyncEngine:
+async def init_db(database_url: str) -> AsyncEngine:
     """Open the async engine after verifying Alembic is at head.
 
     Behavior:
@@ -403,21 +381,16 @@ async def init_db(db_path: str | Path) -> AsyncEngine:
     """
     import sqlalchemy as sa
 
-    engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}")
-    event.listen(engine.sync_engine, "connect", _apply_sqlite_pragmas)
+    engine = create_async_engine(database_url)
 
     expected_head = _alembic_head_revision()
     expected_tables = set(SQLModel.metadata.tables.keys())
 
     async with engine.connect() as conn:
-        version_row = await conn.execute(
-            sa.text("SELECT name FROM sqlite_master WHERE type='table' AND name='alembic_version'")
-        )
-        alembic_table_present = version_row.first() is not None
-
-        existing_tables: set[str] = set()
-        result = await conn.execute(sa.text("SELECT name FROM sqlite_master WHERE type='table'"))
-        existing_tables = {row[0] for row in result}
+        # Use SQLAlchemy's inspector — dialect-agnostic. Tests use SQLite
+        # via the test fixtures; production uses Postgres.
+        existing_tables = set(await conn.run_sync(lambda c: sa.inspect(c).get_table_names()))
+        alembic_table_present = "alembic_version" in existing_tables
 
         current_revision: str | None = None
         if alembic_table_present:
@@ -434,18 +407,18 @@ async def init_db(db_path: str | Path) -> AsyncEngine:
     if current_revision is None:
         if adopted:
             raise SchemaError(
-                f"Database at {db_path} has tables {sorted(adopted)} but no "
-                f"recorded Alembic revision. This DB pre-dates Alembic-managed "
-                f"schema. Run `halal-trader db stamp head` once to adopt it."
+                f"Database has tables {sorted(adopted)} but no recorded Alembic "
+                f"revision. This DB pre-dates Alembic-managed schema. "
+                f"Run `halal-trader db stamp head` once to adopt it."
             )
         raise SchemaError(
-            f"Database at {db_path} is empty and not initialized. "
-            f"Run `halal-trader db migrate` to create the schema."
+            "Database is empty and not initialized. "
+            "Run `halal-trader db migrate` to create the schema."
         )
 
     raise SchemaError(
-        f"Database at {db_path} is at revision {current_revision!r}, "
-        f"expected {expected_head!r}. Run `halal-trader db migrate`."
+        f"Database is at revision {current_revision!r}, expected {expected_head!r}. "
+        f"Run `halal-trader db migrate`."
     )
 
 

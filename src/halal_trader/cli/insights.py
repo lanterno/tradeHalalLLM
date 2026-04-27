@@ -31,7 +31,7 @@ async def _load_closed_crypto_trades(limit: int = 200) -> list:
     from halal_trader.db.models import CryptoTrade, init_db
 
     settings = get_settings()
-    engine = await init_db(str(settings.resolve_db_path()))
+    engine = await init_db(settings.database_url)
     sm = async_sessionmaker(engine, expire_on_commit=False)
     try:
         async with sm() as s:
@@ -286,7 +286,7 @@ def purification_cmd() -> None:
         from halal_trader.logging import console
 
         settings = get_settings()
-        path = settings.resolve_db_path().parent / "analytics" / "round_trip_purification.json"
+        path = settings.resolve_data_dir() / "analytics" / "round_trip_purification.json"
         if not path.exists():
             console.print("[yellow]No purification ledger yet — no closed wins.[/]")
             return
@@ -314,7 +314,7 @@ def replay_cmd(limit: int) -> None:
         from halal_trader.logging import console
 
         settings = get_settings()
-        root = settings.resolve_db_path().parent / "replay"
+        root = settings.resolve_data_dir() / "replay"
         if not root.exists():
             console.print("[yellow]No replay store yet — start the bot to capture snapshots.[/]")
             return
@@ -477,7 +477,7 @@ def rag_cmd(query: str, k: int) -> None:
         from halal_trader.logging import console
 
         settings = get_settings()
-        path = settings.resolve_db_path().parent / "analytics" / "rag_rationales.json"
+        path = settings.resolve_data_dir() / "analytics" / "rag_rationales.json"
         if not path.exists():
             console.print("[yellow]RAG store empty — close some trades first.[/]")
             return
@@ -516,7 +516,7 @@ def exceptions_cmd(status: str) -> None:
         from halal_trader.logging import console
 
         settings = get_settings()
-        path = settings.resolve_db_path().parent / "analytics" / "sharia_exceptions.json"
+        path = settings.resolve_data_dir() / "analytics" / "sharia_exceptions.json"
         if not path.exists():
             console.print("[yellow]Exception queue empty.[/]")
             return
@@ -561,7 +561,7 @@ def calibrate_cmd() -> None:
         metrics = calibration_metrics(curve, samples)
 
         settings = get_settings()
-        out = settings.resolve_db_path().parent / "analytics" / "calibration.json"
+        out = settings.resolve_data_dir() / "analytics" / "calibration.json"
         out.parent.mkdir(parents=True, exist_ok=True)
         curve.save(out)
         hub.calibration = curve  # update process-wide state if running

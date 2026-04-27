@@ -87,7 +87,7 @@ def cli_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
     # The CLI calls get_settings() which returns a cached Settings; override
     # only the resolved DB path so other defaults (Ollama, etc.) are intact.
-    monkeypatch.setenv("DB_PATH", str(db_path))
+    monkeypatch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
     # Reset the cached Settings singleton so DB_PATH takes effect.
     from halal_trader import config
 

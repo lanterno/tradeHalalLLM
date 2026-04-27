@@ -17,7 +17,7 @@ def client(tmp_path, monkeypatch):
     via `alembic.command.upgrade` first.
     """
     db_path = tmp_path / "web.db"
-    monkeypatch.setenv("DB_PATH", str(db_path))
+    monkeypatch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
     monkeypatch.setenv("BACKUP_DIR", str(tmp_path / "backups"))
     monkeypatch.setenv("LOG_DIR", str(tmp_path / "logs"))
     # Phase W0 introduced the auth gate; the legacy halt endpoint is now

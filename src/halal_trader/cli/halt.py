@@ -34,7 +34,7 @@ def halt(reason: str, close_all: str | None) -> None:
         from halal_trader.db.models import init_db
 
         settings = get_settings()
-        engine = await init_db(str(settings.resolve_db_path()))
+        engine = await init_db(settings.database_url)
         try:
             if close_all in ("crypto", "both"):
                 from halal_trader.crypto.exchange import BinanceClient
@@ -82,7 +82,7 @@ def resume() -> None:
         from halal_trader.db.models import init_db
 
         settings = get_settings()
-        engine = await init_db(str(settings.resolve_db_path()))
+        engine = await init_db(settings.database_url)
         try:
             status = await halt_module.clear_halt(engine)
             console.print(
@@ -106,7 +106,7 @@ def halt_status() -> None:
         from halal_trader.db.models import init_db
 
         settings = get_settings()
-        engine = await init_db(str(settings.resolve_db_path()))
+        engine = await init_db(settings.database_url)
         try:
             s = await get_status(engine)
             if s.enabled:

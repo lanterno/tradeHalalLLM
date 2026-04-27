@@ -191,7 +191,7 @@ async def build_components(
         RoundTripLedger,
     )
 
-    data_dir = settings.resolve_db_path().parent / "analytics"
+    data_dir = settings.resolve_data_dir() / "analytics"
     data_dir.mkdir(parents=True, exist_ok=True)
     rag_store = RationaleStore(path=data_dir / "rag_rationales.json")
     insights_hub.rag = rag_store
