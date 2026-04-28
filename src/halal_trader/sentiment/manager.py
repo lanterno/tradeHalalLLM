@@ -22,7 +22,6 @@ class SentimentManager:
         reddit_client_id: str = "",
         reddit_client_secret: str = "",
         cryptopanic_api_key: str = "",
-        use_finbert: bool = False,
         update_interval_seconds: int = 300,
     ) -> None:
         self._trading_pairs = trading_pairs
@@ -45,7 +44,7 @@ class SentimentManager:
                 cache_ttl_seconds=update_interval_seconds,
             )
 
-        self._scorer = SentimentScorer(use_finbert=use_finbert)
+        self._scorer = SentimentScorer()
         self._latest_signals: dict[str, SentimentSignal] = {}
         self._running = False
         self._task: asyncio.Task[None] | None = None

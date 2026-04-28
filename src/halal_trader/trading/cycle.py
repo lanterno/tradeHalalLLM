@@ -8,16 +8,12 @@ from halal_trader.domain.ports import Broker, ComplianceScreener
 from halal_trader.market_hours import is_market_open_local, now_eastern
 from halal_trader.trading.executor import TradeExecutor
 from halal_trader.trading.portfolio import PortfolioTracker
-from halal_trader.trading.sentiment import SentimentAnalyzer
 from halal_trader.trading.strategy import TradingStrategy
 
 logger = logging.getLogger(__name__)
 
 # Maximum number of symbols to fetch market data for per cycle.
 _MAX_SYMBOLS_PER_CYCLE = 20
-
-# Maximum number of symbols to run sentiment analysis on.
-_MAX_SENTIMENT_SYMBOLS = 10
 
 
 class TradingCycleService(BaseCycleService):
@@ -34,7 +30,6 @@ class TradingCycleService(BaseCycleService):
         strategy: TradingStrategy,
         executor: TradeExecutor,
         portfolio: PortfolioTracker,
-        sentiment: SentimentAnalyzer | None = None,
         catalyst_feed: Any = None,
         alerts=None,
         engine=None,
@@ -47,7 +42,6 @@ class TradingCycleService(BaseCycleService):
         self._strategy = strategy
         self._executor = executor
         self._portfolio = portfolio
-        self._sentiment = sentiment
         # Optional StockCatalystFeed (Phase 3.5) — gives the LLM live news,
         # earnings, insider activity. Cycle proceeds normally if absent.
         self._catalyst_feed = catalyst_feed
@@ -121,7 +115,6 @@ class TradingCycleService(BaseCycleService):
         snapshots, bars = await self._fetch_market_data(halal_symbols)
         today_pnl = await self._portfolio.get_current_pnl()
 
-        sentiment_text = await self._gather_sentiment(halal_symbols)
         risk_text = self._build_risk_text(bars, positions, account.effective_equity)
         catalysts_text = await self._gather_catalysts(halal_symbols)
 
@@ -132,7 +125,6 @@ class TradingCycleService(BaseCycleService):
             snapshots=snapshots,
             bars=bars,
             today_pnl=today_pnl,
-            sentiment_text=sentiment_text,
             risk_text=risk_text,
             catalysts_text=catalysts_text,
         )
@@ -190,17 +182,6 @@ class TradingCycleService(BaseCycleService):
             logger.debug("Stock risk engine evaluation failed: %s", exc)
             return ""
         return output.risk_text
-
-    async def _gather_sentiment(self, halal_symbols: list[str]) -> str:
-        """Run sentiment analysis if available, returning formatted text."""
-        if not self._sentiment:
-            return "Sentiment data: not available"
-        try:
-            scores = await self._sentiment.analyze_batch(halal_symbols[:_MAX_SENTIMENT_SYMBOLS])
-            return self._sentiment.format_for_prompt(scores)
-        except Exception as e:
-            logger.debug("Sentiment analysis skipped: %s", e)
-            return "Sentiment data: not available"
 
     async def _gather_catalysts(self, halal_symbols: list[str]) -> str:
         """Pull live catalysts (news/earnings/insider) for the LLM prompt.

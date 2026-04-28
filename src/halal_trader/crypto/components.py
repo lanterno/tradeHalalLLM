@@ -98,7 +98,6 @@ def _build_sentiment(settings: Settings) -> Any:
         reddit_client_id=settings.sentiment.reddit.client_id,
         reddit_client_secret=settings.sentiment.reddit.client_secret,
         cryptopanic_api_key=settings.sentiment.cryptopanic.api_key,
-        use_finbert=settings.sentiment.use_finbert,
         update_interval_seconds=settings.sentiment.update_interval_seconds,
     )
 

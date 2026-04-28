@@ -55,11 +55,6 @@ dashboard = [
 all = [
     "halal-trader[ml,sentiment,dashboard]",
 ]
-fingpt = [
-    "transformers",
-    "peft",
-    "torch",
-]
 dev = [
     "pytest",
     "pytest-asyncio",

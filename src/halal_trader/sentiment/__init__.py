@@ -1,1 +1,1 @@
-"""Social sentiment analysis — Reddit, CryptoPanic, and FinBERT scoring."""
+"""Social sentiment analysis — Reddit + CryptoPanic composite scoring."""

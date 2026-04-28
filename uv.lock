@@ -651,11 +651,6 @@ dev = [
     { name = "pytest-cov" },
     { name = "ruff" },
 ]
-fingpt = [
-    { name = "peft" },
-    { name = "torch" },
-    { name = "transformers" },
-]
 ml = [
     { name = "chronos-forecasting" },
     { name = "scikit-learn" },
@@ -686,7 +681,6 @@ requires-dist = [
     { name = "numpy" },
     { name = "ollama" },
     { name = "openai" },
-    { name = "peft", marker = "extra == 'fingpt'" },
     { name = "pgvector", specifier = ">=0.4.2" },
     { name = "praw", marker = "extra == 'sentiment'" },
     { name = "pre-commit", marker = "extra == 'dev'" },
@@ -701,16 +695,14 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'dev'" },
     { name = "scikit-learn", marker = "extra == 'ml'" },
     { name = "sqlmodel" },
-    { name = "torch", marker = "extra == 'fingpt'" },
     { name = "torch", marker = "extra == 'ml'" },
-    { name = "transformers", marker = "extra == 'fingpt'" },
     { name = "transformers", marker = "extra == 'ml'" },
     { name = "tzdata" },
     { name = "uvicorn", specifier = ">=0.40.0" },
     { name = "uvicorn", marker = "extra == 'dashboard'" },
     { name = "xgboost", marker = "extra == 'ml'" },
 ]
-provides-extras = ["ml", "sentiment", "dashboard", "all", "fingpt", "dev"]
+provides-extras = ["ml", "sentiment", "dashboard", "all", "dev"]
 
 [[package]]
 name = "hf-xet"
@@ -1342,27 +1334,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/2e/17/9c3094b822982b9f1ea666d8580ce59000f61f87c1663556fb72031ad9ec/pathspec-1.1.0.tar.gz", hash = "sha256:f5d7c555da02fd8dde3e4a2354b6aba817a89112fa8f333f7917a2a4834dd080", size = 133918, upload-time = "2026-04-23T01:46:22.298Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/fa/c9/8eed0486f074e9f1ca7f8ce5ad663e65f12fdab344028d658fa1b03d35e0/pathspec-1.1.0-py3-none-any.whl", hash = "sha256:574b128f7456bd899045ccd142dd446af7e6cfd0072d63ad73fbc55fbb4aaa42", size = 56264, upload-time = "2026-04-23T01:46:20.606Z" },
-]
-
-[[package]]
-name = "peft"
-version = "0.18.1"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "accelerate" },
-    { name = "huggingface-hub" },
-    { name = "numpy" },
-    { name = "packaging" },
-    { name = "psutil" },
-    { name = "pyyaml" },
-    { name = "safetensors" },
-    { name = "torch" },
-    { name = "tqdm" },
-    { name = "transformers" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/d8/48/147b3ea999560b40a34fd78724c7777aa9d18409c2250bdcaf9c4f2db7fc/peft-0.18.1.tar.gz", hash = "sha256:2dd0d6bfce936d1850e48aaddbd250941c5c02fc8ef3237cd8fd5aac35e0bae2", size = 635030, upload-time = "2026-01-09T13:08:01.136Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/b3/14/b4e3f574acf349ae6f61f9c000a77f97a3b315b4bb6ad03791e79ae4a568/peft-0.18.1-py3-none-any.whl", hash = "sha256:0bf06847a3551e3019fc58c440cffc9a6b73e6e2962c95b52e224f77bbdb50f1", size = 556960, upload-time = "2026-01-09T13:07:55.865Z" },
 ]
 
 [[package]]

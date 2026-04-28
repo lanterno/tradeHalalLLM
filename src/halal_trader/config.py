@@ -236,7 +236,6 @@ class CryptoPanicSettings(BaseSettings):
 class SentimentSettings(BaseSettings):
     model_config = SettingsConfigDict(**_BASE_CONFIG, env_prefix="SENTIMENT_")
     update_interval_seconds: int = Field(default=300)
-    use_finbert: bool = Field(default=False)
     reddit: RedditSettings = Field(default_factory=RedditSettings)
     cryptopanic: CryptoPanicSettings = Field(default_factory=CryptoPanicSettings)
 

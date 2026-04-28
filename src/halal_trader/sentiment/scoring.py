@@ -1,4 +1,4 @@
-"""Sentiment scoring — combines Reddit and CryptoPanic signals with optional FinBERT."""
+"""Sentiment scoring — combines Reddit and CryptoPanic signals."""
 
 from __future__ import annotations
 
@@ -24,57 +24,8 @@ class SentimentSignal:
 class SentimentScorer:
     """Combines sentiment signals from multiple sources into a composite score."""
 
-    def __init__(self, *, use_finbert: bool = False) -> None:
-        self._use_finbert = use_finbert
-        self._finbert_pipeline = None
+    def __init__(self) -> None:
         self._buzz_history: dict[str, list[int]] = {}
-
-    def _load_finbert(self):
-        """Lazily load FinBERT from HuggingFace."""
-        if self._finbert_pipeline is not None:
-            return
-        try:
-            from transformers import pipeline
-
-            self._finbert_pipeline = pipeline(
-                "sentiment-analysis",
-                model="ProsusAI/finbert",
-                device=-1,  # CPU
-            )
-            logger.info("FinBERT model loaded for sentiment scoring")
-        except Exception as e:
-            logger.warning("Failed to load FinBERT: %s", e)
-            self._use_finbert = False
-
-    def score_texts(self, texts: list[str]) -> list[tuple[str, float]]:
-        """Score a batch of texts using FinBERT.
-
-        Returns list of (label, score) where label is positive/negative/neutral.
-        """
-        if not self._use_finbert or not texts:
-            return []
-
-        self._load_finbert()
-        if self._finbert_pipeline is None:
-            return []
-
-        try:
-            truncated = [t[:512] for t in texts]
-            results = self._finbert_pipeline(truncated, batch_size=16, truncation=True)
-            scored = []
-            for r in results:
-                label = r["label"].lower()
-                conf = r["score"]
-                if label == "positive":
-                    scored.append(("positive", conf))
-                elif label == "negative":
-                    scored.append(("negative", -conf))
-                else:
-                    scored.append(("neutral", 0.0))
-            return scored
-        except Exception as e:
-            logger.warning("FinBERT scoring failed: %s", e)
-            return []
 
     def compute_composite(
         self,
@@ -97,14 +48,7 @@ class SentimentScorer:
             signal.buzz = buzz
             signal.data_sources.append("reddit")
 
-            reddit_score = 0.0
-            if self._use_finbert and reddit_top_posts:
-                finbert_scores = self.score_texts(reddit_top_posts)
-                if finbert_scores:
-                    reddit_score = sum(s for _, s in finbert_scores) / len(finbert_scores)
-            else:
-                reddit_score = min(1.0, max(-1.0, (reddit_avg_score - 10) / 50))
-
+            reddit_score = min(1.0, max(-1.0, (reddit_avg_score - 10) / 50))
             scores.append(reddit_score)
             weight = min(2.0, buzz) if buzz > 1.5 else 1.0
             weights.append(weight)
@@ -120,14 +64,6 @@ class SentimentScorer:
 
             if news_headlines:
                 signal.news_headlines = news_headlines[:3]
-
-                if self._use_finbert:
-                    finbert_scores = self.score_texts(news_headlines[:5])
-                    if finbert_scores:
-                        finbert_avg = sum(s for _, s in finbert_scores) / len(finbert_scores)
-                        scores.append(finbert_avg)
-                        weights.append(1.5)
-                        signal.data_sources.append("finbert")
 
         # Weighted average
         if scores and weights:

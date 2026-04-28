@@ -27,7 +27,6 @@ from halal_trader.trading.catalysts import StockCatalystFeed
 from halal_trader.trading.cycle import TradingCycleService
 from halal_trader.trading.executor import TradeExecutor
 from halal_trader.trading.portfolio import PortfolioTracker
-from halal_trader.trading.sentiment import SentimentAnalyzer
 from halal_trader.trading.strategy import TradingStrategy
 
 logger = logging.getLogger(__name__)
@@ -120,9 +119,6 @@ class TradingBot(BaseTradingBot):
             daily_loss_limit=self.settings.stocks.daily_loss_limit,
         )
 
-        # Sentiment analyzer (supplementary — gracefully degrades if deps missing)
-        sentiment = SentimentAnalyzer()
-
         # Catalyst feed — wires whichever sources are configured. The
         # FRED feed pulls scheduled CPI/FOMC/NFP/GDP release dates so
         # CatalystRiskPolicy can shrink position sizing in the 4h
@@ -161,7 +157,6 @@ class TradingBot(BaseTradingBot):
             strategy=strategy,
             executor=self.executor,
             portfolio=self.portfolio,
-            sentiment=sentiment,
             alerts=self._alerts,
             engine=self._engine,
             live_mode_checker=self._live_mode_checker,
