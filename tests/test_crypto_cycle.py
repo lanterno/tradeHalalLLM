@@ -65,6 +65,9 @@ def _make_cycle_service(
     broker.get_klines.return_value = _make_klines()
     broker.get_cached_price.return_value = 50000.0
     broker.format_filters_for_prompt.return_value = ""
+    # Microstructure helpers — return None so the cycle skips the
+    # basis/funding extension cleanly without leaving unawaited coroutines.
+    broker.get_funding_signal.return_value = None
 
     screener = AsyncMock()
     screener.get_halal_pairs.return_value = halal_pairs or ["BTC", "ETH"]

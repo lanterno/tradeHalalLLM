@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import AsyncIterator, Iterator
+from pathlib import Path
 
 import psycopg
 import pytest
@@ -94,15 +95,25 @@ def _truncate_all_tables(sync_url: str) -> None:
 
 
 @pytest.fixture
-def database_url(monkeypatch: pytest.MonkeyPatch, _pg_test_db_ready: str) -> Iterator[str]:
+def database_url(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    _pg_test_db_ready: str,
+) -> Iterator[str]:
     """Set ``DATABASE_URL`` to a freshly-truncated test DB.
 
-    Code that calls ``get_settings()`` will pick up this URL because
+    Also points ``DATA_DIR`` at ``tmp_path`` so any test that touches
+    ``settings.resolve_data_dir()`` (round-trip purification, replay,
+    regime memory, exception queue, …) writes into the per-test tmp
+    tree instead of leaking into the dev workspace's ``./data/``.
+
+    Code that calls ``get_settings()`` will pick up both URLs because
     we also bust the singleton cache.
     """
     url = _pg_test_db_ready
     _truncate_all_tables(PG_TEST_URL_SYNC)
     monkeypatch.setenv("DATABASE_URL", url)
+    monkeypatch.setenv("DATA_DIR", str(tmp_path / "data"))
     import halal_trader.config as _config
 
     monkeypatch.setattr(_config, "_settings", None, raising=False)

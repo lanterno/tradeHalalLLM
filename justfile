@@ -61,6 +61,10 @@ config:
 dashboard:
     uv run halal-trader dashboard
 
+# Install dashboard frontend deps (one-time, before -build / -dev / -lint)
+dashboard-install:
+    cd dashboard && npm install
+
 # Build the React SPA (production)
 dashboard-build:
     cd dashboard && npm run build

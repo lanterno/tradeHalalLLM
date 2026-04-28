@@ -92,6 +92,13 @@ select = ["E", "F", "I", "W"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+filterwarnings = [
+    # AsyncMock auto-creates child AsyncMock attributes the first time they're
+    # touched (in `if`-guards, attribute lookups, etc.); the resulting
+    # coroutines never get awaited because the access never escalated to a
+    # call. These are mock-plumbing artifacts in tests, not production bugs.
+    "ignore:coroutine 'AsyncMockMixin\\._execute_mock_call' was never awaited:RuntimeWarning",
+]
 
 [tool.coverage.run]
 # Coverage gates the safety / lifecycle surface. The pure HTTP wrappers

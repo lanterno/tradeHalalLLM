@@ -241,18 +241,18 @@ def register(app: FastAPI, app_state: dict[str, Any]) -> None:
 
     @app.get("/api/insights/purification")
     async def api_purification() -> JSONResponse:
-        from halal_trader.config import get_settings
         from halal_trader.halal.round_trip_purification import (
             RoundTripLedger,
             outstanding_round_trip_due,
         )
 
-        settings = get_settings()
-        path = settings.resolve_data_dir() / "analytics" / "round_trip_purification.json"
-        if not path.exists():
+        engine = app_state.get("engine")
+        if engine is None:
             return JSONResponse({"available": False})
-        ledger = RoundTripLedger(path=path)
-        return JSONResponse({"available": True, **outstanding_round_trip_due(ledger)})
+        ledger = RoundTripLedger(engine=engine)
+        if await ledger.count() == 0:
+            return JSONResponse({"available": False})
+        return JSONResponse({"available": True, **(await outstanding_round_trip_due(ledger))})
 
     @app.get("/api/insights/replay")
     async def api_replay(limit: int = 50) -> JSONResponse:

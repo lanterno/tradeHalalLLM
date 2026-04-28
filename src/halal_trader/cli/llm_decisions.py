@@ -8,8 +8,9 @@ These commands let an operator audit the LLM trail without writing SQL:
 
 Today we store ``prompt_summary`` and ``raw_response`` (not the full
 assembled prompt), so a true "re-run against the same LLM" workflow
-needs Phase 2's prompt-cache restructure first. These commands are the
-audit half of the replay story; the rerun half lands later.
+also needs the snapshot store at ``core/replay.py``. These commands are
+the audit half of the replay story; ``halal-trader insights replay``
+covers the rerun half.
 """
 
 from __future__ import annotations
