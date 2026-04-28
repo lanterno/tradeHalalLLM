@@ -210,160 +210,21 @@ class CryptoCycleService(BaseCycleService):
                 usdt_free,
             )
 
-        performance_text = ""
-        if self._analytics:
-            try:
-                stats = await self._analytics.compute_stats(lookback_days=7)
-                performance_text = self._analytics.format_for_prompt(stats)
-            except Exception as e:
-                logger.debug("Performance stats unavailable: %s", e)
+        performance_text = await self._build_performance_text()
+        sentiment_text = await self._build_sentiment_text(halal_pairs)
+        timeframe_text = await self._build_timeframe_text(halal_pairs)
+        regime_text = self._build_regime_text(klines_by_symbol, indicators_cache)
+        ml_signals_text = self._build_ml_signals_text(klines_by_symbol, indicators_cache)
 
-        sentiment_text = ""
-        if self._sentiment and self._sentiment.enabled:
-            try:
-                from halal_trader.sentiment.scoring import format_sentiment_for_prompt
-
-                signals = self._sentiment.latest_signals
-                if signals:
-                    sentiment_text = format_sentiment_for_prompt(signals)
-                    if self._notifier:
-                        for pair, sig in signals.items():
-                            if sig.buzz >= 3.0:
-                                try:
-                                    await self._notifier.notify_buzz(pair, sig.buzz, sig.score)
-                                except Exception as exc:
-                                    logger.debug("Failed to send buzz alert: %s", exc)
-            except Exception as e:
-                logger.debug("Sentiment data unavailable: %s", e)
-
-        # Reddit mention-velocity (no-OAuth public-JSON path).
-        if self._reddit_fetcher is not None:
-            try:
-                from halal_trader.sentiment.velocity import (
-                    compute_velocity,
-                    format_velocity_for_prompt,
-                )
-
-                # Map BTCUSDT → BTC, ETHUSDT → ETH for the search query.
-                bases = sorted(
-                    {p.upper().removesuffix("USDT").removesuffix("BUSD") for p in halal_pairs}
-                )
-                mentions = await self._reddit_fetcher.fetch_for_symbols(bases)
-                if mentions:
-                    velocity = compute_velocity(mentions)
-                    insights_hub.velocity = velocity
-                    velocity_block = format_velocity_for_prompt(velocity)
-                    if velocity_block:
-                        sentiment_text = (
-                            sentiment_text + "\n\n" + velocity_block
-                            if sentiment_text
-                            else velocity_block
-                        )
-            except Exception as exc:  # noqa: BLE001
-                logger.debug("Reddit velocity fetch failed: %s", exc)
-
-        timeframe_text = ""
-        if self._timeframes:
-            try:
-                from halal_trader.crypto.timeframes import format_timeframes_for_prompt
-
-                tf_results = await self._timeframes.analyze(halal_pairs)
-                if tf_results:
-                    timeframe_text = format_timeframes_for_prompt(tf_results)
-            except Exception as e:
-                logger.debug("Multi-timeframe analysis unavailable: %s", e)
-
-        regime_text = ""
-        if self._regime:
-            try:
-                from halal_trader.crypto.regime import format_regime_for_prompt
-
-                regimes = {}
-                for pair in klines_by_symbol:
-                    indicators = indicators_cache.get(pair, {})
-                    if not indicators or "error" in indicators:
-                        continue
-                    regimes[pair] = self._regime.detect(indicators)
-                if regimes:
-                    regime_text = format_regime_for_prompt(regimes)
-            except Exception as e:
-                logger.debug("Regime detection unavailable: %s", e)
-
-        ml_signals_text = ""
-        if self._ml_forecaster or self._ml_anomaly or self._ml_signal:
-            try:
-                from halal_trader.ml.anomaly import format_ml_signals_for_prompt
-                from halal_trader.ml.forecaster import format_forecasts_for_prompt
-
-                forecasts = {}
-                anomalies = {}
-                ml_confidence = {}
-
-                for pair, klines in klines_by_symbol.items():
-                    if self._ml_forecaster and len(klines) >= 20:
-                        closes = [k.close for k in klines]
-                        fc = self._ml_forecaster.forecast(pair, closes)
-                        if fc:
-                            forecasts[pair] = fc
-
-                    indicators = indicators_cache.get(pair, {})
-                    if not indicators or "error" in indicators:
-                        continue
-                    if self._ml_anomaly:
-                        self._ml_anomaly.add_sample(indicators)
-                        anomalies[pair] = self._ml_anomaly.detect(indicators)
-                    if self._ml_signal:
-                        conf = self._ml_signal.predict_confidence(indicators)
-                        if conf is not None:
-                            ml_confidence[pair] = conf
-
-                forecasts_text = format_forecasts_for_prompt(forecasts)
-                ml_signals_text = format_ml_signals_for_prompt(
-                    forecasts_text, anomalies or None, ml_confidence or None
-                )
-            except Exception as e:
-                logger.debug("ML signals unavailable: %s", e)
-
-        risk_text = ""
-        if self._risk_engine:
-            try:
-                open_pos_value: dict[str, float] = {}
-                unrealized_pnl: dict[str, float] = {}
-                for t in open_trades or []:
-                    price = current_prices.get(t.pair) or self._broker.get_cached_price(t.pair)
-                    if price and t.entry_price:
-                        open_pos_value[t.pair] = t.quantity * price
-                        unrealized_pnl[t.pair] = (price - t.entry_price) * t.quantity
-
-                risk_state = self._risk_engine.evaluate(
-                    klines_by_symbol=klines_by_symbol,
-                    indicators_cache=indicators_cache,
-                    open_positions_value=open_pos_value,
-                    unrealized_pnl=unrealized_pnl,
-                    total_equity=account.total_balance_usdt,
-                )
-                risk_text = self._risk_engine.format_for_prompt(risk_state)
-
-                # Cache the latest risk state for the dashboard.
-                try:
-                    from halal_trader.web.app import app_state as _web_state
-
-                    _web_state["risk_state"] = {
-                        "is_halted": risk_state.is_halted,
-                        "halt_reason": risk_state.halt_reason,
-                        "portfolio_heat_pct": getattr(risk_state, "portfolio_heat_pct", None),
-                        "drawdown_pct": getattr(risk_state, "drawdown_pct", None),
-                        "avg_correlation": getattr(risk_state, "avg_correlation", None),
-                        "summary": risk_text,
-                    }
-                except Exception:
-                    pass
-
-                if risk_state.is_halted:
-                    logger.warning("Risk engine halt: %s", risk_state.halt_reason)
-                    return
-            except Exception as e:
-                logger.debug("Risk engine evaluation failed: %s", e)
+        risk_text, halt = self._evaluate_portfolio_risk(
+            account=account,
+            klines_by_symbol=klines_by_symbol,
+            indicators_cache=indicators_cache,
+            open_trades=open_trades,
+            current_prices=current_prices,
+        )
+        if halt:
+            return
 
         active_adjustments = ""
         if self._self_review:
@@ -380,45 +241,15 @@ class CryptoCycleService(BaseCycleService):
         )
         news_text = self._build_news_text(halal_pairs)
 
-        # RAG over our own past rationales — query with a compact summary
-        # of the current setup and append analogues to the regime block.
-        try:
-            rag_store = getattr(insights_hub, "rag", None)
-            if rag_store is not None:
-                from halal_trader.core.llm.rag import format_rag_for_prompt
-
-                size = await rag_store.size()
-                if size > 0:
-                    rag_query = self._build_rag_query(
-                        indicators_cache=indicators_cache,
-                        sentiment_text=sentiment_text,
-                        regime_text=regime_text,
-                    )
-                    hits = await rag_store.query(rag_query, k=5, min_similarity=0.0)
-                    rag_text = format_rag_for_prompt(hits)
-                    if rag_text:
-                        regime_text = regime_text + "\n\n" + rag_text if regime_text else rag_text
-        except Exception as exc:  # noqa: BLE001
-            logger.debug("RAG query failed: %s", exc)
-
-        # Inject the most analogous past regimes into the regime block.
-        # Best-effort — silently degrade if memory is empty / fails.
-        try:
-            from halal_trader.ml.regime_memory import format_for_prompt
-
-            features = self._build_regime_features(
-                indicators_cache=indicators_cache,
-                today_pnl=today_pnl,
-                equity=account.total_balance_usdt or 0.0,
-            )
-            regime_mem = insights_hub.regime
-            if features is not None and regime_mem is not None and await regime_mem.size() > 0:
-                hits = await regime_mem.query(features, k=3)
-                analog_text = format_for_prompt(features, hits)
-                if analog_text and "No analogous" not in analog_text:
-                    regime_text = regime_text + "\n\n" + analog_text if regime_text else analog_text
-        except Exception as exc:  # noqa: BLE001
-            logger.debug("regime memory query failed: %s", exc)
+        regime_text = await self._augment_regime_with_rag(
+            regime_text, indicators_cache, sentiment_text
+        )
+        regime_text = await self._augment_regime_with_memory(
+            regime_text,
+            indicators_cache=indicators_cache,
+            today_pnl=today_pnl,
+            equity=account.total_balance_usdt or 0.0,
+        )
 
         async with tracer.aspan(
             "cycle.strategy_analyze",
@@ -446,26 +277,7 @@ class CryptoCycleService(BaseCycleService):
                 news_text=news_text,
             )
 
-        if self._regime and plan.buys:
-            downtrend_pairs: set[str] = set()
-            for pair in klines_by_symbol:
-                indicators = indicators_cache.get(pair, {})
-                if not indicators or "error" in indicators:
-                    continue
-                regime, confidence, _ = self._regime.detect(indicators)
-                if regime == MarketRegime.TRENDING_DOWN and confidence >= 0.6:
-                    downtrend_pairs.add(pair)
-
-            if downtrend_pairs:
-                blocked = [d for d in plan.buys if d.symbol in downtrend_pairs]
-                if blocked:
-                    for d in blocked:
-                        plan.decisions.remove(d)
-                    logger.warning(
-                        "Regime gate blocked %d BUY(s) in downtrend: %s",
-                        len(blocked),
-                        ", ".join(d.symbol for d in blocked),
-                    )
+        self._apply_regime_gate(plan, klines_by_symbol, indicators_cache)
 
         logger.info(
             "Crypto plan: %s | %d buys, %d sells",
@@ -488,72 +300,361 @@ class CryptoCycleService(BaseCycleService):
             microstructure_text=microstructure_text,
         )
 
+        await self._execute_and_notify(
+            plan,
+            account=account,
+            indicators_cache=indicators_cache,
+            klines_by_symbol=klines_by_symbol,
+            shadow_kwargs=dict(
+                account=account,
+                positions_text=positions_text,
+                halal_pairs=halal_pairs,
+                klines_by_symbol=klines_by_symbol,
+                orderbooks=orderbooks,
+                today_pnl=today_pnl,
+                performance_text=performance_text,
+                sentiment_text=sentiment_text,
+                timeframe_text=timeframe_text,
+                ml_signals_text=ml_signals_text,
+                regime_text=regime_text,
+                active_adjustments=active_adjustments,
+                exchange_rules_text=exchange_rules_text,
+                indicators_cache=indicators_cache,
+                open_position_count=open_position_count,
+                risk_text=risk_text,
+                microstructure_text=microstructure_text,
+                news_text=news_text,
+            ),
+        )
+
+    # ── Plan post-processing + execution ───────────────────────
+
+    def _apply_regime_gate(
+        self,
+        plan,
+        klines_by_symbol: dict,
+        indicators_cache: dict[str, dict],
+    ) -> None:
+        """Strip BUYs in confirmed downtrend pairs from the plan in place."""
+        if not (self._regime and plan.buys):
+            return
+        downtrend_pairs: set[str] = set()
+        for pair in klines_by_symbol:
+            indicators = indicators_cache.get(pair, {})
+            if not indicators or "error" in indicators:
+                continue
+            regime, confidence, _ = self._regime.detect(indicators)
+            if regime == MarketRegime.TRENDING_DOWN and confidence >= 0.6:
+                downtrend_pairs.add(pair)
+        if not downtrend_pairs:
+            return
+        blocked = [d for d in plan.buys if d.symbol in downtrend_pairs]
+        if not blocked:
+            return
+        for d in blocked:
+            plan.decisions.remove(d)
+        logger.warning(
+            "Regime gate blocked %d BUY(s) in downtrend: %s",
+            len(blocked),
+            ", ".join(d.symbol for d in blocked),
+        )
+
+    async def _execute_and_notify(
+        self,
+        plan,
+        *,
+        account,
+        indicators_cache: dict[str, dict],
+        klines_by_symbol: dict,
+        shadow_kwargs: dict,
+    ) -> None:
+        """Execute the plan, drive the shadow runner, and notify on fills."""
+        results: list = []
         if plan.decisions:
             async with tracer.aspan("cycle.execute_plan", decision_count=len(plan.decisions)):
                 results = await self._executor.execute_plan(plan, account=account)
 
-        # Shadow strategy: drive a frozen-prompt parallel plan + simulator.
-        # The runner writes its own row to the shadow ledger; we don't
-        # write a placeholder above when the runner is active.
-        if self._shadow_runner is not None:
-            try:
-                latest_prices = {
-                    pair: (klines[-1].close if klines else 0.0)
-                    for pair, klines in klines_by_symbol.items()
-                }
-                await self._shadow_runner.observe_cycle(
-                    cycle_id=cycle_id_var.get() or "cycle-unknown",
-                    live_equity=account.total_balance_usdt or 0.0,
-                    latest_prices=latest_prices,
-                    analyze_kwargs=dict(
-                        account=account,
-                        positions_text=positions_text,
-                        halal_pairs=halal_pairs,
-                        klines_by_symbol=klines_by_symbol,
-                        orderbooks=orderbooks,
-                        today_pnl=today_pnl,
-                        performance_text=performance_text,
-                        sentiment_text=sentiment_text,
-                        timeframe_text=timeframe_text,
-                        ml_signals_text=ml_signals_text,
-                        regime_text=regime_text,
-                        active_adjustments=active_adjustments,
-                        exchange_rules_text=exchange_rules_text,
-                        indicators_cache=indicators_cache,
-                        open_position_count=open_position_count,
-                        risk_text=risk_text,
-                        microstructure_text=microstructure_text,
-                        news_text=news_text,
-                    ),
-                )
-            except Exception as exc:  # noqa: BLE001
-                logger.debug("shadow runner observe_cycle failed: %s", exc)
-            for r in results:
-                logger.info("Crypto execution: %s", r)
-                if r.get("status") in ("submitted", "filled") and r.get("action") == "buy":
-                    trade_id = r.get("trade_id")
-                    symbol = r.get("symbol", "")
-                    if trade_id and symbol in indicators_cache:
-                        try:
-                            await self._portfolio._repo.record_indicator_snapshot(
-                                trade_id=trade_id,
-                                pair=symbol,
-                                indicators=indicators_cache[symbol],
-                            )
-                        except Exception as exc:
-                            logger.debug("Failed to record indicator snapshot: %s", exc)
-                if self._notifier and r.get("status") in ("submitted", "filled"):
+        if self._shadow_runner is None:
+            if not plan.decisions:
+                logger.info("No crypto trades to execute this cycle")
+            return
+
+        try:
+            latest_prices = {
+                pair: (klines[-1].close if klines else 0.0)
+                for pair, klines in klines_by_symbol.items()
+            }
+            await self._shadow_runner.observe_cycle(
+                cycle_id=cycle_id_var.get() or "cycle-unknown",
+                live_equity=account.total_balance_usdt or 0.0,
+                latest_prices=latest_prices,
+                analyze_kwargs=shadow_kwargs,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("shadow runner observe_cycle failed: %s", exc)
+
+        for r in results:
+            logger.info("Crypto execution: %s", r)
+            if r.get("status") in ("submitted", "filled") and r.get("action") == "buy":
+                trade_id = r.get("trade_id")
+                symbol = r.get("symbol", "")
+                if trade_id and symbol in indicators_cache:
                     try:
-                        await self._notifier.notify_trade(
-                            pair=r.get("symbol", ""),
-                            side=r.get("action", ""),
-                            quantity=r.get("quantity", 0),
-                            price=r.get("price", 0),
+                        await self._portfolio._repo.record_indicator_snapshot(
+                            trade_id=trade_id,
+                            pair=symbol,
+                            indicators=indicators_cache[symbol],
                         )
-                    except Exception as exc:
-                        logger.debug("Failed to send trade notification: %s", exc)
-        else:
-            logger.info("No crypto trades to execute this cycle")
+                    except Exception as exc:  # noqa: BLE001
+                        logger.debug("Failed to record indicator snapshot: %s", exc)
+            if self._notifier and r.get("status") in ("submitted", "filled"):
+                try:
+                    await self._notifier.notify_trade(
+                        pair=r.get("symbol", ""),
+                        side=r.get("action", ""),
+                        quantity=r.get("quantity", 0),
+                        price=r.get("price", 0),
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("Failed to send trade notification: %s", exc)
+
+    # ── Prompt-fragment builders (each best-effort) ────────────
+
+    async def _build_performance_text(self) -> str:
+        if not self._analytics:
+            return ""
+        try:
+            stats = await self._analytics.compute_stats(lookback_days=7)
+            return self._analytics.format_for_prompt(stats)
+        except Exception as e:  # noqa: BLE001
+            logger.debug("Performance stats unavailable: %s", e)
+            return ""
+
+    async def _build_sentiment_text(self, halal_pairs: list[str]) -> str:
+        """CryptoPanic + Reddit composite sentiment + mention-velocity."""
+        sentiment_text = ""
+        if self._sentiment and self._sentiment.enabled:
+            try:
+                from halal_trader.sentiment.scoring import format_sentiment_for_prompt
+
+                signals = self._sentiment.latest_signals
+                if signals:
+                    sentiment_text = format_sentiment_for_prompt(signals)
+                    if self._notifier:
+                        for pair, sig in signals.items():
+                            if sig.buzz >= 3.0:
+                                try:
+                                    await self._notifier.notify_buzz(pair, sig.buzz, sig.score)
+                                except Exception as exc:  # noqa: BLE001
+                                    logger.debug("Failed to send buzz alert: %s", exc)
+            except Exception as e:  # noqa: BLE001
+                logger.debug("Sentiment data unavailable: %s", e)
+
+        if self._reddit_fetcher is not None:
+            try:
+                from halal_trader.sentiment.velocity import (
+                    compute_velocity,
+                    format_velocity_for_prompt,
+                )
+
+                bases = sorted(
+                    {p.upper().removesuffix("USDT").removesuffix("BUSD") for p in halal_pairs}
+                )
+                mentions = await self._reddit_fetcher.fetch_for_symbols(bases)
+                if mentions:
+                    velocity = compute_velocity(mentions)
+                    insights_hub.velocity = velocity
+                    velocity_block = format_velocity_for_prompt(velocity)
+                    if velocity_block:
+                        sentiment_text = (
+                            sentiment_text + "\n\n" + velocity_block
+                            if sentiment_text
+                            else velocity_block
+                        )
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("Reddit velocity fetch failed: %s", exc)
+        return sentiment_text
+
+    async def _build_timeframe_text(self, halal_pairs: list[str]) -> str:
+        if not self._timeframes:
+            return ""
+        try:
+            from halal_trader.crypto.timeframes import format_timeframes_for_prompt
+
+            tf_results = await self._timeframes.analyze(halal_pairs)
+            if tf_results:
+                return format_timeframes_for_prompt(tf_results)
+        except Exception as e:  # noqa: BLE001
+            logger.debug("Multi-timeframe analysis unavailable: %s", e)
+        return ""
+
+    def _build_regime_text(self, klines_by_symbol: dict, indicators_cache: dict[str, dict]) -> str:
+        if not self._regime:
+            return ""
+        try:
+            from halal_trader.crypto.regime import format_regime_for_prompt
+
+            regimes = {}
+            for pair in klines_by_symbol:
+                indicators = indicators_cache.get(pair, {})
+                if not indicators or "error" in indicators:
+                    continue
+                regimes[pair] = self._regime.detect(indicators)
+            if regimes:
+                return format_regime_for_prompt(regimes)
+        except Exception as e:  # noqa: BLE001
+            logger.debug("Regime detection unavailable: %s", e)
+        return ""
+
+    def _build_ml_signals_text(
+        self, klines_by_symbol: dict, indicators_cache: dict[str, dict]
+    ) -> str:
+        if not (self._ml_forecaster or self._ml_anomaly or self._ml_signal):
+            return ""
+        try:
+            from halal_trader.ml.anomaly import format_ml_signals_for_prompt
+            from halal_trader.ml.forecaster import format_forecasts_for_prompt
+
+            forecasts: dict = {}
+            anomalies: dict = {}
+            ml_confidence: dict = {}
+
+            for pair, klines in klines_by_symbol.items():
+                if self._ml_forecaster and len(klines) >= 20:
+                    closes = [k.close for k in klines]
+                    fc = self._ml_forecaster.forecast(pair, closes)
+                    if fc:
+                        forecasts[pair] = fc
+
+                indicators = indicators_cache.get(pair, {})
+                if not indicators or "error" in indicators:
+                    continue
+                if self._ml_anomaly:
+                    self._ml_anomaly.add_sample(indicators)
+                    anomalies[pair] = self._ml_anomaly.detect(indicators)
+                if self._ml_signal:
+                    conf = self._ml_signal.predict_confidence(indicators)
+                    if conf is not None:
+                        ml_confidence[pair] = conf
+
+            forecasts_text = format_forecasts_for_prompt(forecasts)
+            return format_ml_signals_for_prompt(
+                forecasts_text, anomalies or None, ml_confidence or None
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.debug("ML signals unavailable: %s", e)
+        return ""
+
+    def _evaluate_portfolio_risk(
+        self,
+        *,
+        account,
+        klines_by_symbol: dict,
+        indicators_cache: dict[str, dict],
+        open_trades,
+        current_prices: dict[str, float],
+    ) -> tuple[str, bool]:
+        """Run the portfolio-risk engine. Returns (risk_text, should_halt)."""
+        if not self._risk_engine:
+            return "", False
+        try:
+            open_pos_value: dict[str, float] = {}
+            unrealized_pnl: dict[str, float] = {}
+            for t in open_trades or []:
+                price = current_prices.get(t.pair) or self._broker.get_cached_price(t.pair)
+                if price and t.entry_price:
+                    open_pos_value[t.pair] = t.quantity * price
+                    unrealized_pnl[t.pair] = (price - t.entry_price) * t.quantity
+
+            risk_state = self._risk_engine.evaluate(
+                klines_by_symbol=klines_by_symbol,
+                indicators_cache=indicators_cache,
+                open_positions_value=open_pos_value,
+                unrealized_pnl=unrealized_pnl,
+                total_equity=account.total_balance_usdt,
+            )
+            risk_text = self._risk_engine.format_for_prompt(risk_state)
+
+            try:
+                from halal_trader.web.app import app_state as _web_state
+
+                _web_state["risk_state"] = {
+                    "is_halted": risk_state.is_halted,
+                    "halt_reason": risk_state.halt_reason,
+                    "portfolio_heat_pct": getattr(risk_state, "portfolio_heat_pct", None),
+                    "drawdown_pct": getattr(risk_state, "drawdown_pct", None),
+                    "avg_correlation": getattr(risk_state, "avg_correlation", None),
+                    "summary": risk_text,
+                }
+            except Exception:  # noqa: BLE001
+                pass
+
+            if risk_state.is_halted:
+                logger.warning("Risk engine halt: %s", risk_state.halt_reason)
+                return risk_text, True
+            return risk_text, False
+        except Exception as e:  # noqa: BLE001
+            logger.debug("Risk engine evaluation failed: %s", e)
+            return "", False
+
+    async def _augment_regime_with_rag(
+        self,
+        regime_text: str,
+        indicators_cache: dict[str, dict],
+        sentiment_text: str,
+    ) -> str:
+        """Append RAG hits over the closed-trade rationale store."""
+        try:
+            rag_store = getattr(insights_hub, "rag", None)
+            if rag_store is None:
+                return regime_text
+            from halal_trader.core.llm.rag import format_rag_for_prompt
+
+            size = await rag_store.size()
+            if size <= 0:
+                return regime_text
+            rag_query = self._build_rag_query(
+                indicators_cache=indicators_cache,
+                sentiment_text=sentiment_text,
+                regime_text=regime_text,
+            )
+            hits = await rag_store.query(rag_query, k=5, min_similarity=0.0)
+            rag_text = format_rag_for_prompt(hits)
+            if rag_text:
+                return regime_text + "\n\n" + rag_text if regime_text else rag_text
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("RAG query failed: %s", exc)
+        return regime_text
+
+    async def _augment_regime_with_memory(
+        self,
+        regime_text: str,
+        *,
+        indicators_cache: dict[str, dict],
+        today_pnl: float,
+        equity: float,
+    ) -> str:
+        """Append the top-K analogous past regimes to the regime block."""
+        try:
+            from halal_trader.ml.regime_memory import format_for_prompt
+
+            features = self._build_regime_features(
+                indicators_cache=indicators_cache,
+                today_pnl=today_pnl,
+                equity=equity,
+            )
+            regime_mem = insights_hub.regime
+            if features is None or regime_mem is None:
+                return regime_text
+            if await regime_mem.size() <= 0:
+                return regime_text
+            hits = await regime_mem.query(features, k=3)
+            analog_text = format_for_prompt(features, hits)
+            if analog_text and "No analogous" not in analog_text:
+                return regime_text + "\n\n" + analog_text if regime_text else analog_text
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("regime memory query failed: %s", exc)
+        return regime_text
 
     # ── Private helpers ────────────────────────────────────────
 
