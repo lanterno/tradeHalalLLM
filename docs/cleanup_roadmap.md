@@ -1,334 +1,532 @@
-# Cleanup Roadmap — Round 2
+# Roadmap — Round 3
 
-After the Postgres-only sweep (commits `08358f1..14a4849`) the
-codebase is in good shape. The items below are the ones I'd reach for
-next, ordered by risk × payoff. Each is independently shippable as a
-single PR / commit. Stop after any one and the codebase is strictly
-cleaner than before.
+The two earlier rounds were focused on **mechanical cleanup**:
+schema hygiene, dead code, type safety, test parallelism. The
+codebase is now in a state where mechanical work has diminishing
+returns. The next set of changes is more ambitious: structural
+refactors that pay off across many files, plus net-new features
+that exploit modern primitives we haven't reached for yet.
 
----
+The waves split into three buckets:
 
-## Wave A — Reconcile alembic on timezone-aware datetimes
+* **Architecture** (A–D) — primitives that, once landed, change
+  how every subsequent feature is built.
+* **Decision quality** (E–H) — features that make the LLM's
+  trading decisions sharper and more honest.
+* **Operability + UX** (I–L) — what you reach for *after* a bad
+  trade or *during* a deployment.
 
-**Why**: every `db revision --autogenerate` run prints ~25 spurious
-`Detected type change from TIMESTAMP() to DateTime(timezone=True)`
-notices. The initial migration created the columns as bare
-`TIMESTAMP` (Postgres `timestamp without time zone`); the SQLModel
-declarations all use `sa.DateTime(timezone=True)`. Autogenerate
-drifts them every time, and contributors learn to ignore the warning
-and hand-edit the diff. That instinct will eventually delete a real
-schema change.
-
-**Scope**: one migration that does the `ALTER COLUMN ... TYPE
-TIMESTAMPTZ USING (...)` for every drifted column in one shot. After
-that, autogenerate stays quiet on a clean head and any future drift
-is signal again.
-
-**Cross-cutting concerns**:
-- The ALTERs need a `USING (column AT TIME ZONE 'UTC')` clause so
-  Postgres knows how to interpret the existing naïve timestamps.
-  Every row we've written is already UTC by convention (`datetime.now(UTC)`),
-  so the cast is lossless.
-- Touches ~25 columns across ~15 tables. Run `EXPLAIN` on a populated
-  dev DB first to make sure none of them rewrites a huge table.
-  Worst case the migration takes a few seconds on the volumes this
-  bot produces.
-
-**Acceptance**:
-- `halal-trader db revision -m "noop" --autogenerate` produces an
-  empty migration body (or, equivalently, prints zero
-  `Detected type change` lines).
-- `pytest -q` green; the test DB recreate path applies the migration
-  cleanly.
-
-**Estimated effort**: 1 hour.
+The waves are not strictly ordered, but A unblocks much of B/D/J
+and is recommended first. Each wave is independently shippable;
+each ends with a one-line acceptance test you can run at the CLI.
 
 ---
 
-## Wave B — JSON → JSONB for the remaining text-encoded JSON columns
+## Architecture
 
-**Why**: only `replay_snapshots.payload` is `JSONB` today. Every
-other "JSON in a string column" we have (`research_jobs.params`,
-`research_jobs.result`, `runtime_config.value`,
-`web_actions.payload`, `halal_screenings.criteria`,
-`crypto_halal_cache.screening_criteria`,
-`llm_decisions.parsed_action`, `rag_rationales.vector`,
-`regime_snapshots.features_json`, `regime_snapshots.vector_json`)
-sits in `AutoString` (TEXT). Postgres can't index into them, the
-dashboard can't query JSON paths, and the bot pays a parse-on-read
-tax for nothing.
+### Wave A — Replace `app_state: dict` + `getattr` chains with a typed `BotContext`
 
-**Scope**: one migration that ALTERs each column from `TEXT` to
-`JSONB USING column::jsonb`. SQLModel field types switch from `str`
-to `dict | list[float]` as appropriate; call sites that
-`json.dumps` / `json.loads` collapse to direct dict access.
+**Why**: today the dashboard, cycle, monitor, and CLI all reach into a
+`dict[str, Any]` (`app_state`) or pull soft-optional dependencies via
+`getattr(self, "_x", None)`. Round 2's Wave E showed how often that
+masks dead wiring; round 1's `_replay_store` was a real bug. Mypy
+strict is now clean only on `db/repository.py` because `app_state`
+makes the rest of the surface untypable.
 
-**Cross-cutting concerns**:
-- Some callers cast the JSON to typed dataclasses on read; those
-  stay (the cast is the contract). Most just want a dict — they
-  simplify.
-- `rag_rationales.vector` and `regime_snapshots.vector_json` are
-  `list[float]`. Storing them as JSONB unblocks the pgvector
-  promotion in Wave C without changing storage twice.
-
-**Acceptance**:
-- `\\d` in psql shows `jsonb` for every column above.
-- `core/llm/rag_db.py`, `core/regret_db.py`, `core/thesis_db.py`,
-  `ml/regime_memory.py`, `db/repository.py:begin_web_action` all
-  drop their `json.dumps` / `json.loads` boilerplate.
-- Suite green.
-
-**Estimated effort**: 2 hours.
-
----
-
-## Wave C — pgvector for rag + regime similarity
-
-**Why**: `core/llm/rag_db.py:DBRationaleStore.query` and
-`ml/regime_memory.py:RegimeMemory.query` both load every row into
-Python and compute cosine in a list comprehension. RAG is bounded
-to ~10k rows by the schema's retention; regime is bounded to 730.
-That's not a performance problem *yet*, but it makes the whole "use
-embeddings" story smaller than it should be — there's no path to
-HNSW, no path to filter+rerank, no SQL composability.
-
-The `pgvector` extension is already installed in
-`infra/docker-compose.yml`. The vectors are stable shapes
-(`hashing_embedder.dim` for RAG, 10 for regime).
+The fix is a small, frozen, typed `BotContext` dataclass that holds
+every long-lived dependency the bot needs (engine, repo, hub, broker,
+LLM, settings). Build it once at composition time and pass it
+explicitly. The dashboard takes a `DashboardContext` (a strict subset
+— no broker, no LLM). Both are strict-typed.
 
 **Scope**:
-- Add a `Vector(N)` column next to the existing `vector_json` /
-  `vector` columns. Migration backfills from JSON.
-- Switch `query()` to `ORDER BY vector <=> :query LIMIT k`.
-- Drop the JSON column once the new path is verified.
-- Add an HNSW index on the RAG table — `~1ms` queries even at 100k
-  rows.
-
-**Cross-cutting concerns**:
-- The pgvector dialect plugs into SQLAlchemy via the `pgvector`
-  Python package (already in `pyproject.toml`).
-- Embedding dimension is set at table-create time; if RAG's
-  `hashing_embedder.dim` changes, that's a schema migration. Pin
-  the dim in a constant.
+- `core/context.py` — `@dataclass(frozen=True, slots=True)` with each
+  long-lived dependency typed. Builders return it; consumers read it.
+- Replace `app_state["engine"]`, `app_state["repo"]`, `app_state["hub"]`
+  reads in the 22 web routes with `ctx: DashboardContext` injected
+  via FastAPI `Depends`.
+- Promote mypy strict to `web/`, `crypto/cycle.py`, `crypto/scheduler.py`,
+  `crypto/components.py`.
+- Delete `app_state` entirely.
 
 **Acceptance**:
-- `RegimeMemory.query` and `DBRationaleStore.query` execute a single
-  `SELECT ... ORDER BY embedding <=> $1 LIMIT k` (`EXPLAIN` shows
-  the index when present).
-- Behavior is unchanged: the existing tests still pass, plus a new
-  test that asserts the SQL plan uses the index for ≥1k rows.
+- `grep -r 'app_state\["' src/` returns zero hits.
+- `uv run mypy --strict src/halal_trader/web` clean.
+- The dashboard has a real type signature for "what state am I
+  reading."
 
-**Estimated effort**: 3 hours.
+**Estimated effort**: 1 day (broad but mechanical once the dataclass
+shape is right).
 
 ---
 
-## Wave D — Decompose `crypto/cycle.py:_run_cycle_impl`
+### Wave B — Per-stage cycle pipeline with explicit stage objects
 
-**Why**: the function is ~340 lines today and growing every time we
-add a prompt-context source. Adding sentiment/whale-flow/regret
-data each grew it; adding a new source means scrolling past nine
-unrelated blocks to find the right insertion point. Each block is
-also independently testable but can't be tested in isolation.
+**Why**: Round 2 Wave D peeled `_run_cycle_impl` into helpers, but it's
+still a single function reading from a procedural soup of locals
+(`halal_pairs`, `klines_by_symbol`, `indicators_cache`, `account`,
+`positions_text`, `today_pnl`, `sentiment_text`, …). Adding a new
+prompt-context source means scrolling past nine unrelated blocks to
+find the right insertion point and threading a new local through five
+function signatures.
 
-**Scope**: peel each `try/except` "augmentation" block out into its
-own private async method (`_augment_with_rag`,
-`_augment_with_regime_memory`, `_augment_with_news`,
-`_augment_with_whale_flows`, `_augment_with_basis` etc.) that
-returns its prompt fragment. The main cycle becomes a sequence of
-~20 awaited helpers. No behavior change.
+The primitive is a `CycleStage` protocol: each stage takes a
+`CycleState` dataclass, mutates one field, returns it. The
+`CryptoCycleService` becomes a list of stages run in order. New data
+sources land as a single new stage in a list; nothing else changes.
 
-**Cross-cutting concerns**:
-- Several blocks share inputs (`indicators_cache`, `account`,
-  `today_pnl`). Pass them positionally; don't introduce a context
-  bag.
-- Don't touch `_record_cycle_analytics` — it's already factored.
+This unblocks: per-stage timing histograms (Wave J), per-stage
+backtesting (Wave G), per-stage A/B harness (Wave F), and most
+importantly **prompt-context provenance** — each row in the LLM
+decision table can record which stages ran and how long each took.
+
+**Scope**:
+- `crypto/cycle/state.py` — `CycleState` dataclass with one field per
+  prompt-context source (`klines`, `indicators`, `regime_text`, …).
+- `crypto/cycle/stages/*.py` — one file per stage:
+  `FetchKlinesStage`, `ComputeIndicatorsStage`, `BuildSentimentStage`,
+  `BuildRegimeStage`, `EvaluateRiskStage`, `AnalyzeStage` (the LLM
+  call), `ApplyRegimeGateStage`, `ExecuteStage`. Each is a tiny
+  class with one async `run(state) -> state` method.
+- `crypto/cycle.py` becomes ~50 lines: build the stage list, run it.
+- A `StageInstrumentation` middleware wraps each stage with a
+  `tracer.aspan` and records elapsed/exception/skipped to the cycle
+  span.
 
 **Acceptance**:
-- `_run_cycle_impl` is under ~120 lines.
-- Each new helper has at least one focused test (most are
-  swallowed-exception-safe today; verify that explicitly).
-- `pytest -q` green.
+- `crypto/cycle.py` is under 100 lines.
+- New prompt source = one new file, one new line in the stage list.
+- The replay snapshot (Wave C of round 1) records per-stage timing so
+  the dashboard can plot p95 cycle latency by stage.
 
-**Estimated effort**: 2–3 hours.
+**Estimated effort**: 2 days. This is *the* refactor that makes the
+crypto cycle modern and extensible; the bot has been begging for it
+since the third or fourth prompt-context block landed.
 
 ---
 
-## Wave E — Audit `getattr(self, "_x", None)` dead paths
+### Wave C — Adopt `anyio` task groups for structured concurrency
 
-**Why**: I found one during Wave C — `_replay_store` was read by
-`_record_cycle_analytics` via `getattr(self, "_replay_store", None)`
-but never assigned anywhere. The whole "snapshot every cycle" flow
-was dead code. There may be others.
+**Why**: today the bot creates background tasks via
+`asyncio.create_task(...)` in seven places (monitor, ws_manager,
+news_reactor, sentiment_manager, reconcile_loop, position_monitor,
+research_jobs). Each has its own ad-hoc shutdown sequence. When one
+silently dies (a coroutine raises before the supervisor logs it),
+*nothing* notices until the operator sees a stale dashboard.
 
-**Scope**: grep for `getattr(self, "_` across `src/`, audit each
-hit. Three outcomes:
-- It's a soft-optional dependency (legitimate, leave alone).
-- It's set somewhere but the assignment was deleted later (wire it
-  back or delete the read).
-- It's never set (delete the read, possibly the whole code path).
+`anyio.create_task_group()` is the modern primitive: cancel-on-error
+propagation, automatic awaiting on context exit, no fire-and-forget
+loss. Switching the scheduler to manage all background work under a
+root task group means a crash in one supervisor cancels the whole
+bot — which is what we want for a single-user paper-trading bot.
+
+**Scope**:
+- Add `anyio` to `[project.dependencies]` (already in via httpx).
+- `core/scheduler.py:run` enters `async with anyio.create_task_group()
+  as tg:` once, and every long-lived task (monitor, ws, news_reactor,
+  reconcile loop) is spawned with `tg.start_soon(...)`.
+- Each subsystem's `start()` becomes "register this coroutine with
+  the supervisor"; `stop()` becomes "cancel my scope."
+- One `RestartPolicy` knob per task: `crash_bot` (the default for
+  monitor/ws), `restart` (for sentiment/news_reactor with backoff),
+  or `ignore` (for the optional reddit fetcher).
 
 **Acceptance**:
-- Each remaining `getattr(self, "_x", None)` corresponds to an
-  actual `self._x = …` assignment somewhere.
-- A short PR description listing what was found.
+- `grep -r 'asyncio\.create_task' src/` is a single-digit count
+  (only inside `RestartPolicy`-aware adapters).
+- A test that raises inside the monitor cancels the bot's run loop
+  with the original traceback, not a silent hang.
 
-**Estimated effort**: 45 min.
+**Estimated effort**: 1 day. Adds a small amount of code; pays for
+itself the first time a background task crashes.
 
 ---
 
-## Wave F — Promote mypy strict to `db/repository.py`
+### Wave D — Repository as a `Protocol` + per-table mini-repos
 
-**Why**: `just typecheck` only checks `domain/` + `core/` strictly.
-Running `mypy src/halal_trader/db/repository.py` directly today
-prints ~62 errors, mostly the SQLModel column-attribute typing
-issue (`Trade.timestamp.desc()` is typed as
-`datetime | None`-with-no-`desc()`). The same pattern is throughout
-the codebase, but `repository.py` is the file most likely to grow
-new SQL — having it strict-clean would pay off every time we add a
-helper.
+**Why**: `db/repository.py` is 956 lines of one class with 50+
+methods spanning trades, halal cache, web actions, runtime config,
+purification, screenings, decisions, research jobs, indicator
+snapshots, pair pauses. Adding a new table means scrolling past nine
+unrelated sections and hoping you don't put the helper in the wrong
+spot. Tests that need only `record_trade` end up coupled to every
+other method via the giant constructor.
 
-**Scope**: typed `col(Model.field).desc()` instead of bare
-`Model.field.desc()`, add `# type: ignore[attr-defined]` only where
-SQLModel's typing genuinely lies (the `is_(None)` / `is_not(None)`
-cases). Add `repository.py` to the `[[tool.mypy.overrides]]` strict
-list.
+Split into per-table mini-repos behind a `Protocol`:
+`TradeRepo`, `CryptoTradeRepo`, `HalalCacheRepo`, `WebAuditRepo`,
+`PnlRepo`, `RuntimeConfigRepo`, `PurificationRepo`,
+`ScreeningRepo`, `LlmDecisionRepo`, `ResearchJobRepo`,
+`IndicatorSnapshotRepo`. Each is ~60 lines, under one mypy strict
+file, with its own focused tests. Composition root constructs the
+bundle.
 
-**Cross-cutting concerns**:
-- Same pattern crops up in `cli/insights.py` and a few other DB
-  helpers. Don't fix those in this wave — keep the diff small.
-- The existing `from sqlmodel import col` import I added in Wave C
-  is the right primitive.
+**Scope**:
+- `db/repos/__init__.py` exposes `RepoBundle` (a frozen dataclass
+  holding all of them).
+- Each repo file is ≤80 lines, mypy strict.
+- `Repository` class deleted; `from halal_trader.db.repository
+  import Repository` becomes `from halal_trader.db.repos import
+  RepoBundle`.
 
 **Acceptance**:
-- `uv run mypy src/halal_trader/db/repository.py --strict` clean.
-- The `just typecheck` recipe passes including this file.
+- No file under `db/repos/` over 100 lines.
+- `mypy --strict` passes on the entire `db/` package, not just
+  `repository.py`.
+- Adding a table = adding one file, not editing a 956-line module.
 
-**Estimated effort**: 1.5 hours.
+**Estimated effort**: 1.5 days.
 
 ---
 
-## Wave G — Enable pytest parallelism with pytest-xdist
+## Decision quality
 
-**Why**: the full suite is 2:11 today and growing every wave.
-After Wave B (advisory lock) the test DB is no longer the
-bottleneck for parallel runs — only the single-DB
-TRUNCATE-per-test fixture is. Switching each test to a per-worker
-schema or a per-test transaction-rollback pattern unlocks 4–8x
-speedup on the dev workstation and CI.
+### Wave E — Tool-use LLM calls instead of JSON-blob parsing
 
-**Scope**: add `pytest-xdist` to `[dev]`, change `conftest.py` so
-each xdist worker gets its own DB (e.g. `halal_trader_test_gw0`,
-`halal_trader_test_gw1`, …). The advisory lock from Wave B
-generalises to a per-DB lock keyed by the worker id.
+**Why**: today every LLM strategy call asks for a JSON blob, parses
+it, and runs schema-repair on retry. Anthropic and OpenAI both ship
+**typed tool use** — the model emits a structured call against a
+JSON Schema you declared, the SDK validates it, and you get a Python
+dict back. Schema-repair retries vanish. Token cost drops because the
+model doesn't waste output tokens emitting JSON syntax. And we get to
+expose the same tool to a future agentic mode (Wave H).
 
-**Alternative**: run all tests in a SAVEPOINT, rollback on
-teardown. Faster but the test code that opens its own session
-breaks the rollback isolation — would need every helper to share
-the test's session, which is invasive.
+Trading-plan-shaped tools:
+- `submit_plan(buys: list[BuyDecision], sells: list[SellDecision],
+  market_outlook: str)` — returns a structured plan.
+- `analyze_pair(symbol: str)` — optional second-call deep-dive
+  triggered when the model wants more info on one pair (ties into
+  the agentic mode in Wave H).
+- `request_indicator(symbol: str, indicator: str)` — same idea, but
+  for one indicator on one pair, in case the model wants to ask
+  "what's the 4h MACD on ETHUSDT?" before deciding.
 
-**Decision**: per-worker DB. Simpler, no per-test code changes.
+**Scope**:
+- `core/llm/tools.py` — typed JSONSchema definitions for each tool,
+  derived from the existing Pydantic decision dataclasses.
+- `AnthropicLLM.generate_tool_call(prompt, system, tools)` returns a
+  typed `(tool_name, args)`.
+- `CryptoTradingStrategy.analyze` switches from
+  `await self._llm.generate_json(...)` to
+  `await self._llm.generate_tool_call(submit_plan_tool, ...)`.
+- Schema-repair path becomes a no-op (still kept as a code path for
+  Ollama, which doesn't support native tool use).
 
 **Acceptance**:
-- `pytest -n auto -q` runs the full suite green in ≤45s on the dev
-  workstation (8 cores).
-- The advisory lock still prevents two sessions from clobbering
-  the same worker DB.
+- LLM decision rows for Anthropic / OpenAI runs have
+  `parsed_action != None` 100% of the time (today it's lower because
+  the JSON-repair fallback occasionally fails).
+- Output token counts on the same prompt drop ≥10% (less JSON
+  syntax to emit).
 
-**Estimated effort**: 1.5 hours.
+**Estimated effort**: 2 days.
 
 ---
 
-## Wave H — Drop the websockets deprecation warnings
+### Wave F — Continuous A/B harness over the prompt-evolution GA
 
-**Why**: every test run prints two deprecation warnings from
-`python-binance` (`websockets.WebSocketClientProtocol` and
-`websockets.legacy`). They're not our bug, but they erode the
-signal value of the warning summary the same way the SQLModel
-deprecations did pre-Wave-A.
+**Why**: `core/llm/prompt_evo.py` is sitting unused. It has a clean
+GA over prompt slot×allele genomes but nothing wires it to a fitness
+function. The honest fitness signal is **paper P&L on replayed
+cycles** (Wave C of round 1 promoted the snapshot store, so we have
+the raw material).
 
-**Scope**: bump `python-binance` to the latest, or fork the WS
-client locally if upstream still uses the deprecated API. Verify
-the WS reconnect / heartbeat tests still pass.
+Hook the GA up to a fitness loop that:
+1. Takes the last 200 replay snapshots (DB query, ~ms).
+2. Runs each genome's prompt against each snapshot via the strategy's
+   replay harness (parallel, bounded concurrency).
+3. Scores by Sharpe over the resulting trades.
+4. Mutates / crosses over the top-K, repeats for N generations.
+5. Records the best genome to a `prompt_genomes` table (new) with
+   its fitness, lineage, and cycle count.
 
-**Cross-cutting concerns**:
-- python-binance had a v2 rewrite that fixed this; check
-  release notes for breaking changes around the spot/futures
-  client signatures we use.
+Run it nightly via `apscheduler` already in the bot. The dashboard
+gets a "candidate prompts" page where the operator sees which slot
+swaps improved fitness and can promote a genome to live with one
+click — which writes to `RuntimeConfig` and the next cycle picks it
+up.
+
+**Scope**:
+- `crypto/prompts.py` is already structured around named slots; add
+  `AllelePool` content for each slot (3-5 phrasings each).
+- `core/llm/prompt_evo_runner.py` — wires GA to ReplayStore + a
+  fitness function that backtests against snapshots.
+- New SQLModel table `PromptGenome` with `id`, `genome_json`,
+  `fitness`, `n_cycles`, `parent_ids`, `promoted_at`.
+- New web route `/api/prompts/candidates` + dashboard page.
+- New CLI: `halal-trader prompts evolve --generations 8` for ad-hoc
+  runs.
 
 **Acceptance**:
-- pytest run emits zero `websockets` deprecation warnings.
-- `crypto/exchange.py` and `crypto/ws_manager.py` work against
-  testnet in a manual smoke run.
+- Running the nightly job produces a `prompt_genomes` row count > 0
+  the next morning.
+- One-click "promote" path works end-to-end.
 
-**Estimated effort**: 1–2 hours (depends on python-binance
-breaking changes).
+**Estimated effort**: 2 days.
 
 ---
 
-## Wave I — Replace `insights_hub` singleton with explicit DI
+### Wave G — Replay-fitted slippage + execution model
 
-**Why**: now that `regime`, `rag`, `shadow`, `drift` etc. are all
-either DB-backed or single-process state, the module-level
-`insights_hub.hub` is doing very little work. Cycles read from it,
-the dashboard reads `to_app_state()` from it, and tests
-`reset_hub()` constantly. It's the kind of singleton that looks
-free until you try to test the cycle in isolation and find half a
-dozen module-state writes you have to rollback.
+**Why**: today the executor records `paper_slippage_pct` and
+`live_slippage_pct` but nothing closes the loop. Backtests assume a
+fixed slippage. Live runs occasionally hit unexpected fills the
+strategy didn't budget for. We have months of paired
+(intended-price, filled-price, kline-context) data sitting in
+`crypto_trades` — a regression model can learn the slippage function
+and feed it back into the *backtester*, which currently lies about
+what live execution will do.
 
-**Scope**: pass the hub (or its members directly) through the
-constructors that need them. The wiring chain is short:
-`CryptoComponents` builds it, the bot holds it, the cycle / monitor
-/ web app receive it. `reset_hub()` becomes a no-op (or just
-deleted).
+Train a tiny gradient-boost model:
+- features: order size relative to 1m volume, spread bps, ATR,
+  RSI, kline volatility, hour of day.
+- target: `(filled_price - intent_price) / intent_price`.
 
-**Cross-cutting concerns**:
-- This is the largest item on the list and could break tests in
-  surprising places. Recommend doing it after Wave G so test
-  parallelism is in place to keep iteration fast.
-- `web/app.py` reads `insights_hub.to_app_state()` once at startup
-  — that already takes a hub-like object via
-  `app_state["insights"]`. The work is mostly in the cycle.
+Save it to `models/slippage_v1.json` (XGBoost JSON format — small,
+versioned, deployable). Backtester reads it; the executor optionally
+*displays* the predicted slippage in the prompt so the LLM knows the
+expected execution cost.
+
+**Scope**:
+- `ml/slippage.py` — train + predict.
+- `crypto/backtest.py` — replace the constant `_SLIPPAGE_BPS` with
+  the model's prediction.
+- `crypto/executor.py` — add `predicted_slippage_pct` to the
+  `crypto_trades` row when filling.
+- A nightly retrain job (uses `RetrainingScheduler` already in the
+  bot).
 
 **Acceptance**:
-- `from halal_trader.core.insights_hub import hub` deleted from all
-  source files; `reset_hub()` deleted.
-- `test_insights_hub.py` either deleted or rewritten against the
-  injected types.
-- Suite green.
+- Backtest Sharpe and live Sharpe converge within ±0.3 over a
+  one-month sample (today they often diverge by 0.6-1.0).
+- Predicted slippage shows up in the prompt context block.
 
-**Estimated effort**: 4–5 hours.
+**Estimated effort**: 1 day for the model, 1 for the wiring.
+
+---
+
+### Wave H — Agentic mode: multi-turn tool calling with bounded budget
+
+**Why**: today every cycle is one prompt → one decision. Modern best
+practice is to give the LLM a **toolbelt** and let it decide whether
+it needs more info before committing. For a 60s crypto cycle with
+$0.02-0.04 per call, an agentic flow that does a typical 1.3 calls
+per cycle (instead of 1.0) costs ~$30/month extra and unlocks much
+better decisions in ambiguous setups.
+
+Tools the agent can use:
+- `analyze_pair(symbol)` — pulls 4h klines + multi-timeframe
+  indicators on demand.
+- `query_rag(text)` — retrieves analogous past trades from the RAG
+  store (Round 2's pgvector now backs this in ~1ms).
+- `query_regime_memory(features)` — the same for regime memory.
+- `compute_var_95(symbols, weights)` — the existing VaR module
+  exposed as a tool.
+- `submit_plan(...)` — the terminal call; ends the loop.
+
+The agent gets a per-cycle tool-call budget (default 5) and a
+per-cycle wall-clock budget (default 30s). Over budget → forced
+`submit_plan` with whatever it has. The whole transcript lands in
+the LlmDecision row as a JSONB `tool_transcript` column so the
+dashboard can render the agent's chain of thought per cycle.
+
+**Scope**:
+- `core/llm/agent.py` — the tool-calling loop (provider-agnostic
+  via `BaseLLM.generate_tool_call`).
+- New SQLModel column `LlmDecision.tool_transcript: list | None`.
+- `CryptoTradingStrategy` opts into agentic mode via
+  `crypto.agentic_enabled` setting.
+- Dashboard page that renders the transcript as a tree.
+
+**Acceptance**:
+- Setting `CRYPTO_AGENTIC_ENABLED=true` flips the strategy into the
+  loop without code changes.
+- A test that mocks two tool calls + one `submit_plan` runs the loop
+  to completion and persists the transcript.
+- Daily LLM cost stays within ±50% of single-call mode.
+
+**Estimated effort**: 2 days. Highest functional payoff on this
+roadmap; the first thing the project should ship as a "modern AI
+trading bot" headline.
+
+---
+
+## Operability + UX
+
+### Wave I — Live-cycle WebSocket: what the dashboard *should* show
+
+**Why**: the dashboard polls `/api/positions`, `/api/trades`,
+`/api/insights/*` every few seconds. That misses anything that
+happens *between* polls and burns server CPU on every refresh.
+What the operator actually wants is **a live feed of what the bot
+is doing right now**: this cycle started, fetched klines, called
+the LLM, decided to BUY BTCUSDT 0.005 at $42100 with stop $41600.
+
+A single `/ws/cycle` WebSocket that streams structured events:
+`cycle.start`, `cycle.stage.complete`, `llm.call.start`,
+`llm.call.complete`, `executor.fill`, `monitor.exit`. The bot
+publishes events to an in-process `EventBus`; the WS streams them
+to connected clients.
+
+This pairs perfectly with Wave B (per-stage cycle pipeline) — the
+stages already emit events; the bus just multiplexes them.
+
+**Scope**:
+- `core/event_bus.py` — async pub/sub with topic globs and
+  back-pressure-safe slow-consumer drop.
+- `web/routes/streaming.py:/ws/cycle` — new route, JSON line
+  protocol.
+- Dashboard "Live" page — a single scrolling timeline of events
+  with collapsible nested LLM tool calls.
+
+**Acceptance**:
+- Open the dashboard, watch one full cycle render in real time,
+  end-to-end.
+- The events match what the JSON log file contains.
+
+**Estimated effort**: 1.5 days.
+
+---
+
+### Wave J — Per-stage Prometheus histograms + Grafana dashboard
+
+**Why**: `web/prometheus.py` exposes ~10 gauges (no histograms, no
+labels). With Wave B's cycle pipeline, each stage has a cleanly
+defined start/stop, so a histogram of stage latency is one decorator
+away. The same trick applies to broker calls, LLM calls, and DB
+writes.
+
+The dashboard already has a `/metrics` endpoint; just add the
+histograms and ship a Grafana dashboard JSON in `infra/grafana/`.
+
+**Scope**:
+- `core/metrics.py` — wrap `prometheus_client` with consistent
+  naming.
+- `crypto/cycle/stages/*.py` already wrapped via the
+  `StageInstrumentation` from Wave B; add a histogram emit.
+- `infra/grafana/halal-trader.json` — 8 panels: cycle p50/p95
+  latency by stage, LLM call cost rate, broker error rate, kill-
+  switch state, daily P&L, drift state, regime distribution, halal
+  cache hit rate.
+
+**Acceptance**:
+- `curl localhost:8082/metrics | grep _bucket` shows histograms.
+- Importing `infra/grafana/halal-trader.json` in a fresh Grafana
+  produces a working dashboard against the bot's `/metrics`.
+
+**Estimated effort**: 1 day.
+
+---
+
+### Wave K — Move ML model artefacts from pickled files to the DB
+
+**Why**: today `models/anomaly_detector.pkl`,
+`models/anomaly_state.pkl`, `models/signal_classifier.pkl`, and
+`models/regime_classifier.pkl` are file-based. That's the **last**
+file-based persistence in the production write path. After Round 1's
+JSON sidecar purge, every other piece of state is in Postgres. The
+bot is "Postgres-only" *almost*.
+
+Beyond the property, file-based pickles are operationally annoying:
+they don't replicate across hosts, don't roll back with the DB, and
+there's no audit trail when one is regenerated.
+
+Add a `ml_artefacts` table: `(name PRIMARY KEY, version INT, payload
+BYTEA, created_at, sklearn_version, feature_hash)`. Save/load goes
+through the table. The retrainer writes a new row; the loader reads
+the latest one. The dashboard gets a "model versions" page that
+shows what's currently live.
+
+**Scope**:
+- New SQLModel table + migration.
+- `ml/anomaly.py`, `ml/signal_classifier.py`, `crypto/regime.py`
+  — switch save/load to the repo.
+- `models/` directory becomes only a temporary write target for
+  HuggingFace caches (Chronos), which are large and shouldn't live
+  in Postgres.
+
+**Acceptance**:
+- `find data models -name "*.pkl"` returns no results in
+  production.
+- `halal-trader ml versions` lists model history with timestamps
+  and feature hashes.
+
+**Estimated effort**: 1 day.
+
+---
+
+### Wave L — Sharia-compliance "explainer" mode
+
+**Why**: every trade is gated by a halal screener and the receipt is
+recorded in `halal_screenings`. But the *reasoning* is a JSONB blob
+that nobody looks at. For an operator who cares about Sharia
+compliance (the only kind this bot has), an "explainer" route that
+walks through the gate's reasoning for a given trade — "BTC was
+allowed because: layer-1 utility token, no interest-bearing
+features, market cap > $1B" — would build trust in the bot's
+decisions.
+
+This is also a hedge for the eventual jurisprudence question: if a
+scholar challenges a position, the operator pulls up the explainer,
+sees the chain of reasoning, and can either explain it or override.
+
+**Scope**:
+- `halal/explainer.py` — pure function, takes a screening criteria
+  dict and renders a markdown explanation.
+- `web/routes/admin_halal.py` — new `/api/halal/explain/{trade_id}`.
+- Dashboard "Trade detail" page gets an "explain" button that
+  fetches and renders.
+- A small `halal/jurisprudence.md` doc that the explainer references
+  by section number (so updates to the reasoning text don't drift
+  silently).
+
+**Acceptance**:
+- Click "explain" on any trade → markdown explanation rendered with
+  citations.
+- The explainer renders the same reasoning offline (CLI:
+  `halal-trader halal explain TRADE_ID`).
+
+**Estimated effort**: 1 day.
 
 ---
 
 ## Cross-cutting principles
 
-Same rules as the last roadmap:
-- One migration per Wave. Don't bundle.
-- Suite green at every commit.
-- No new abstractions unless the Wave is explicitly about
-  introducing one (Wave I is the only one that qualifies).
-- Greenfield-aggressive: if a code path is dead, delete it; don't
-  preserve it for "compatibility" the user has never asked for.
+* **Each wave is independently shippable.** Stop after any one and
+  the codebase is strictly cleaner / more capable than before.
+* **One migration per wave.** If two waves touch the same table,
+  split.
+* **No half-finished features.** A wave that lands without its
+  dashboard surface or its CLI command isn't complete; it's a
+  half-implemented liability.
+* **Suite green at every commit.** Including parallel
+  (`pytest -n auto`).
+* **Greenfield-aggressive.** Drop dead code; don't preserve API
+  shapes for users who don't exist.
 
 ---
 
 ## Suggested order
 
-1. **A (timezone reconcile)** — pure noise reduction, prevents a
-   future deletion-by-confusion. Do first.
-2. **B (JSONB)** — unblocks Wave C and removes parse-on-read tax.
-3. **C (pgvector)** — biggest functional payoff once the JSONB shape
-   is in.
-4. **D (cycle decomposition)** — quality-of-life, no dependencies.
-5. **E (dead-getattr audit)** — quick win, removes confusion.
-6. **F (mypy strict on repository)** — catches future bugs at
-   compile time.
-7. **G (pytest-xdist)** — pays for itself across every subsequent
-   commit.
-8. **H (websockets)** — depends on upstream; may stall.
-9. **I (drop insights_hub)** — bigger refactor; do last when the
-   smaller items have settled.
+The waves cluster into three independent tracks that can ship in
+parallel; within a track they have light dependencies. If you only
+ship six items, ship the bold ones — they're the highest-leverage:
 
-Total estimated effort: **~17–20 hours of focused work**, broken
-into 9 commits. Like the last roadmap, every Wave is independently
-shippable — stop after any one and the bar's been raised.
+1. **A (typed BotContext)** — every other wave benefits.
+2. **B (cycle pipeline)** — unblocks D, F, G, J.
+3. **C (anyio task groups)** — kills a class of silent-crash bugs.
+4. D (repo split)
+5. **E (tool-use)** — modernises the LLM surface.
+6. **H (agentic mode)** — biggest functional payoff; the headline
+   feature.
+7. F (prompt-evolution A/B)
+8. G (replay-fitted slippage)
+9. **I (live-cycle WebSocket)** — best UX win.
+10. J (Prometheus histograms + Grafana)
+11. K (ML artefacts to DB)
+12. L (halal explainer)
+
+**Total estimated effort: ~16 days of focused work,** broken into
+12 commits. The roadmap is intentionally larger than rounds 1-2:
+the cleanup waves are mostly behind us, and the next inflection in
+this codebase comes from **structural choices** (Waves A/B/C/D) and
+**agentic LLM features** (Waves E/H). Everything else is consequent.
