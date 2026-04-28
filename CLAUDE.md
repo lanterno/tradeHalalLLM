@@ -34,7 +34,9 @@ just crypto-screen      # refresh CoinGecko-based halal list
 
 just dashboard          # FastAPI + React SPA on :8082 (serves dashboard/dist)
 just logs / logs-tail   # pretty-print JSON log files (cycle_id + event tags)
-just db-reset           # ⚠ wipes halal_trader.db
+just pg-up / pg-down    # bring the Postgres+pgvector container up/down (port 5433)
+just db-reset           # ⚠ DROP+CREATE halal_trader and re-run migrations
+just test-db-reset      # drop the test database (safe; recreated by next pytest run)
 
 # Operator
 halal-trader halt --reason "..."     # engage kill-switch (bots refuse new entries)
@@ -44,6 +46,8 @@ halal-trader db migrate              # apply pending Alembic revisions
 halal-trader db current              # show current vs head revision
 halal-trader db stamp head           # one-time adopt a pre-Alembic DB
 ```
+
+**Database**: Postgres 16 + pgvector. Bring up the container with `just pg-up` (uses `infra/docker-compose.yml`); the bot connects to `localhost:5433` per `DATABASE_URL` in `.env.example`. The test suite uses a separate `halal_trader_test` database that `tests/conftest.py` recreates per session and TRUNCATEs per test — running tests requires the same Postgres container reachable on `localhost:5433`.
 
 Run a single test file/case: `uv run pytest tests/test_crypto_executor.py -k test_name`.
 
@@ -76,7 +80,7 @@ Authoritative diagrams + tables live in `docs/ARCHITECTURE.md`. Key points that 
 ## Conventions / gotchas
 
 - **Settings are a singleton.** `config.py:get_settings()` caches a `Settings()` instance. Don't construct `Settings` directly elsewhere — pass `settings` via DI.
-- **`db_path` resolution.** `Settings.resolve_db_path()` makes relative paths absolute from the project root. Use it instead of `settings.db_path` directly so behavior is consistent regardless of CWD.
+- **DB connection.** `Settings.database_url` is the canonical async URL (asyncpg); `Settings.database_url_sync()` derives the matching `+psycopg` URL for Alembic / sync admin scripts. Never hardcode a URL — always go through `get_settings()`.
 - **Async repository.** `db/repository.py` is fully async; `Repository(engine)` is constructed once in `BaseTradingBot.initialize()` and shared. Don't open new engines per cycle.
 - **Three logger sinks.** `logging.py` configures Rich console + JSON `logs/halal_trader.log` (rotated) + `logs/error.log`. The `just logs*` recipes parse the JSON format via `scripts/format_logs.py` — don't switch to plain-text logging without updating those.
 - **Structured event logging.** Use `extra={"event": events.X, ...}` with constants from `core/events.py`. `cycle_id`/`monitor_id`/`request_id` ContextVars in `core/observability.py` are auto-attached to every JSON record by `ObservabilityFilter`. `BaseCycleService.run_cycle()` already wraps each cycle in `cycle_context()` — don't manage these manually unless you're starting a sub-scope (e.g. per-trade `monitor_context()` in `crypto/monitor.py`).

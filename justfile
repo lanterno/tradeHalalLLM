@@ -131,7 +131,23 @@ clean:
     find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
     rm -rf .pytest_cache .ruff_cache
 
-# Delete the SQLite database (⚠ destroys all trade history)
+# Drop + recreate the Postgres database (⚠ destroys all trade history)
 db-reset:
-    @echo "This will DELETE halal_trader.db. Press Ctrl+C to cancel."
-    @read -p "Are you sure? [y/N] " confirm && [ "$confirm" = "y" ] && rm -f halal_trader.db && echo "Database deleted." || echo "Cancelled."
+    @echo "This will DROP DATABASE halal_trader. Press Ctrl+C to cancel."
+    @read -p "Are you sure? [y/N] " confirm && [ "$confirm" = "y" ] && \
+        docker exec halal-trader-pg psql -U trader -d postgres -c 'DROP DATABASE IF EXISTS halal_trader' && \
+        docker exec halal-trader-pg psql -U trader -d postgres -c 'CREATE DATABASE halal_trader' && \
+        uv run halal-trader db migrate && \
+        echo "Database reset and migrated." || echo "Cancelled."
+
+# Bring up the Postgres + pgvector container (localhost:5433)
+pg-up:
+    cd infra && docker compose up -d postgres
+
+# Stop the Postgres container (data persists in the named volume)
+pg-down:
+    cd infra && docker compose stop postgres
+
+# Drop + recreate the test database (run before pytest if it gets corrupted)
+test-db-reset:
+    docker exec halal-trader-pg psql -U trader -d postgres -c 'DROP DATABASE IF EXISTS halal_trader_test'

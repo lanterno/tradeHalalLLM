@@ -12,7 +12,7 @@ This module is the seam:
   serializable, versioned by ``schema_version``.
 * :class:`ReplayStore` — write/read cycle snapshots from a directory of
   JSON files keyed by ``cycle_id``. Wraps the on-disk format so callers
-  can swap to sqlite / blob storage later.
+  can swap to Postgres / blob storage later.
 * :func:`replay_cycle` — given a cycle_id and a "decision callable", load
   the snapshot, call the callable on the inputs, and return its plan.
 

@@ -41,8 +41,6 @@ class Receipt:
 
 def _serialize_trade(trade: Trade | CryptoTrade) -> dict[str, Any]:
     data = trade.model_dump()
-    # Stringify datetimes consistently — trade rows mix tz-naive (sqlite)
-    # and tz-aware (UTC) timestamps depending on which path wrote them.
     for k, v in list(data.items()):
         if isinstance(v, datetime):
             data[k] = v.isoformat()

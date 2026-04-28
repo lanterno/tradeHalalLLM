@@ -182,7 +182,8 @@ async def build_components(
             logger.warning("ensemble LLM init failed: %s — variant skipped", exc)
 
     # Build the post-close analytics recorder bundle. The hub is
-    # process-wide; sidecar paths anchor under the data dir.
+    # process-wide; the round-trip purification ledger anchors under
+    # the data dir.
     from halal_trader.core.insights_hub import hub as insights_hub
     from halal_trader.core.llm.rag_db import DBRationaleStore
     from halal_trader.core.post_close import CloseRecorders

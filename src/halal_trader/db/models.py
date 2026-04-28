@@ -38,7 +38,6 @@ class Trade(SQLModel, table=True):
     filled_quantity: float | None = None
 
     # Halal audit FK — links to the screening decision that gated this trade.
-    # Nullable for back-compat; new code is expected to populate it.
     halal_screening_id: int | None = Field(default=None, foreign_key="halal_screenings.id")
 
     # SL/TP + close lifecycle — mirrors CryptoTrade so the shared
@@ -367,13 +366,7 @@ class HalalScreening(SQLModel, table=True):
 
 
 class ThesisTagRow(SQLModel, table=True):
-    """One thesis tag attached to a closed trade.
-
-    Promoted from the JSON sidecar so the dashboard can join on this
-    table directly (faster than parsing the file each time the
-    /api/insights/thesis route is hit) and the tagger doesn't need
-    to fight file-locking with concurrent-write tests.
-    """
+    """One thesis tag attached to a closed trade."""
 
     __tablename__ = "thesis_tags"
 
@@ -390,8 +383,8 @@ class ThesisTagRow(SQLModel, table=True):
 class RegretRecordRow(SQLModel, table=True):
     """Hindsight regret record for one closed trade.
 
-    Promoted from the JSON sidecar so aggregate queries (mean, p99, by
-    symbol/setup_type) run as proper SQL instead of file scans.
+    Aggregate queries (mean, p99, by symbol/setup_type) run as proper
+    SQL against this table.
     """
 
     __tablename__ = "regret_records"
@@ -412,10 +405,9 @@ class RegretRecordRow(SQLModel, table=True):
 class RationaleRow(SQLModel, table=True):
     """RAG store row — one closed-trade rationale + outcome.
 
-    Schema-tracks the JSON sidecar version. Vector column is JSON-
-    serialized for portability across SQLite (tests) and Postgres
-    (prod); Postgres pgvector index is added by an alembic migration
-    that depends on the ``vector`` extension being installed.
+    Vector column is JSON-serialised today; a pgvector(512) column
+    with an HNSW index is one alembic migration away — the public
+    storage API doesn't change.
     """
 
     __tablename__ = "rag_rationales"

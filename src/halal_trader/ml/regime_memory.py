@@ -110,8 +110,8 @@ class RegimeMemory:
 
     Writes are O(1); queries are O(N) — N is small (months of days),
     so this is fine. Persistence is JSON for ops simplicity; if the
-    store grows past ~10k rows you'd swap to sqlite or an actual vector
-    DB without changing the interface.
+    store grows past ~10k rows you'd swap to a pgvector table without
+    changing the interface.
     """
 
     capacity: int = 730  # ~2 trading years

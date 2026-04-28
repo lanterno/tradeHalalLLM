@@ -16,7 +16,7 @@
 services:
   postgres:
     image: pgvector/pgvector:pg16
-    container_name: trader-postgres
+    container_name: halal-trader-pg
     restart: unless-stopped
     environment:
       POSTGRES_DB: halal_trader
