@@ -36,7 +36,10 @@ class InsightsHub:
     """Container for in-process analytics state."""
 
     drift: DriftMonitor = field(default_factory=DriftMonitor)
-    regime: RegimeMemory = field(default_factory=RegimeMemory)
+    # DB-backed once the bot is composed (CryptoComponents wires it
+    # from the engine). Stays None for pure-CLI / dashboard contexts
+    # that don't run the cycle.
+    regime: RegimeMemory | None = None
     shadow: ShadowLedger = field(default_factory=ShadowLedger)
     calibration: CalibrationCurve = field(default_factory=CalibrationCurve.identity)
     basis: BasisTracker = field(default_factory=BasisTracker)

@@ -6,7 +6,6 @@ from halal_trader.core.insights_hub import hub, reset_hub
 from halal_trader.core.shadow import ShadowLedger
 from halal_trader.ml.calibration import CalibrationCurve
 from halal_trader.ml.drift import DriftMonitor
-from halal_trader.ml.regime_memory import RegimeMemory
 
 
 def test_hub_default_attributes_present() -> None:
@@ -14,7 +13,8 @@ def test_hub_default_attributes_present() -> None:
     from halal_trader.core.insights_hub import hub as h
 
     assert isinstance(h.drift, DriftMonitor)
-    assert isinstance(h.regime, RegimeMemory)
+    # regime is None until the bot composes a DB engine and wires it.
+    assert h.regime is None
     assert isinstance(h.shadow, ShadowLedger)
     assert isinstance(h.calibration, CalibrationCurve)
 

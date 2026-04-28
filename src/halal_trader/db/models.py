@@ -473,6 +473,29 @@ class ReplaySnapshotRow(SQLModel, table=True):
     payload: dict = Field(sa_column=sa.Column("payload", JSONB, nullable=False))
 
 
+class RegimeSnapshotRow(SQLModel, table=True):
+    """One day's regime snapshot (features + outcome).
+
+    Features are JSON-serialised; the embedding vector lives next to
+    them so cosine similarity queries don't have to recompute it.
+    The pgvector(N) promotion is one alembic migration away — the
+    stored JSON list[float] format ports cleanly to a vector column.
+    """
+
+    __tablename__ = "regime_snapshots"
+
+    date: str = Field(primary_key=True)
+    features_json: str  # JSON dict of RegimeFeatures fields
+    vector_json: str  # JSON list[float]
+    outcome_pnl_pct: float = 0.0
+    outcome_win_rate: float = 0.0
+    outcome_n_trades: int = 0
+    note: str = ""
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(UTC), sa_type=sa.DateTime(timezone=True)
+    )
+
+
 class KillSwitch(SQLModel, table=True):
     """Single-row operator kill-switch.
 

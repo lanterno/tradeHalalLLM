@@ -202,6 +202,10 @@ async def build_components(
     thesis_store: Any = DBThesisTagStore(engine=engine)
     regret_store: Any = DBRegretRecorder(engine=engine)
     insights_hub.rag = rag_store
+    if insights_hub.regime is None:
+        from halal_trader.ml.regime_memory import RegimeMemory
+
+        insights_hub.regime = RegimeMemory(engine=engine)
 
     # Optional Etherscan whale-flow source. The cycle records its
     # signal into insights_hub.whale_flows and the prompt builder

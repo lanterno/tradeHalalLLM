@@ -411,8 +411,9 @@ class CryptoCycleService(BaseCycleService):
                 today_pnl=today_pnl,
                 equity=account.total_balance_usdt or 0.0,
             )
-            if features is not None and insights_hub.regime.size > 0:
-                hits = insights_hub.regime.query(features, k=3)
+            regime_mem = insights_hub.regime
+            if features is not None and regime_mem is not None and await regime_mem.size() > 0:
+                hits = await regime_mem.query(features, k=3)
                 analog_text = format_for_prompt(features, hits)
                 if analog_text and "No analogous" not in analog_text:
                     regime_text = regime_text + "\n\n" + analog_text if regime_text else analog_text
@@ -633,8 +634,9 @@ class CryptoCycleService(BaseCycleService):
                     today_pnl=today_pnl,
                     equity=equity,
                 )
-                if feats is not None:
-                    insights_hub.regime.add_today(feats, today=today)
+                regime_mem = insights_hub.regime
+                if feats is not None and regime_mem is not None:
+                    await regime_mem.add_today(feats, today=today)
                     self._last_regime_snapshot_date = today
         except Exception as exc:  # noqa: BLE001
             logger.debug("regime memory snapshot failed: %s", exc)

@@ -114,16 +114,37 @@ def test_regime_unavailable() -> None:
     assert client.get("/api/insights/regime").json() == {"available": False}
 
 
-def test_regime_with_snapshots() -> None:
-    from halal_trader.ml.regime_memory import RegimeFeatures, RegimeMemory
+async def test_regime_with_snapshots(database_url) -> None:
+    """End-to-end: route reads a DB-backed RegimeMemory.
 
-    mem = RegimeMemory()
-    mem.add_today(RegimeFeatures(volatility=0.01), today="2026-04-26", outcome_pnl_pct=0.01)
-    client = _client({"regime_memory": mem})
-    body = client.get("/api/insights/regime").json()
-    assert body["available"] is True
-    assert body["size"] == 1
-    assert body["recent"][0]["date"] == "2026-04-26"
+    Uses ``httpx.AsyncClient`` with an ASGI transport so the route
+    runs in the same event loop as the test (TestClient spawns its
+    own loop, which trips asyncpg's per-connection loop affinity).
+    """
+    import httpx
+    from fastapi import FastAPI
+
+    from halal_trader.db.models import init_db
+    from halal_trader.ml.regime_memory import RegimeFeatures, RegimeMemory
+    from halal_trader.web.routes.insights import register
+
+    engine = await init_db(database_url)
+    try:
+        mem = RegimeMemory(engine=engine)
+        await mem.add_today(
+            RegimeFeatures(volatility=0.01), today="2026-04-26", outcome_pnl_pct=0.01
+        )
+        app = FastAPI()
+        register(app, {"insights": {"regime_memory": mem}})
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
+            response = await ac.get("/api/insights/regime")
+        body = response.json()
+        assert body["available"] is True
+        assert body["size"] == 1
+        assert body["recent"][0]["date"] == "2026-04-26"
+    finally:
+        await engine.dispose()
 
 
 def test_basis_unavailable() -> None:

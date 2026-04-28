@@ -11,8 +11,9 @@ This module keeps the abstraction tiny:
 * :class:`RegimeFeatures` — the day's snapshot vector (volatility, trend,
   breadth, sentiment, drawdown, etc.). Hand-engineered, not learned —
   the goal is interpretability and stability, not raw accuracy.
-* :class:`RegimeMemory` — a fixed-capacity in-process store; ``add()``
-  appends a snapshot + outcome, ``query()`` returns top-K cosine matches.
+* :class:`RegimeMemory` — DB-backed store over ``regime_snapshots``;
+  ``add()`` appends a snapshot + outcome, ``query()`` returns top-K
+  cosine matches.
 * :func:`format_for_prompt` — render a query result into the plain
   text block the LLM reads.
 
@@ -24,11 +25,20 @@ already what the bot computes per cycle anyway.
 from __future__ import annotations
 
 import json
+import logging
 import math
 from collections.abc import Iterable, Sequence
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from datetime import date
-from pathlib import Path
+from typing import Any
+
+from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
+from sqlmodel import col, select
+
+from halal_trader.db.models import RegimeSnapshotRow
+
+logger = logging.getLogger(__name__)
+
 
 # ── Feature vector ────────────────────────────────────────────────
 
@@ -90,9 +100,6 @@ class RegimeSnapshot:
         )
 
 
-# ── Memory store ──────────────────────────────────────────────────
-
-
 def _cosine(a: Sequence[float], b: Sequence[float]) -> float:
     if len(a) != len(b):
         return 0.0
@@ -104,35 +111,75 @@ def _cosine(a: Sequence[float], b: Sequence[float]) -> float:
     return num / (da * db)
 
 
+def _row_to_snapshot(row: RegimeSnapshotRow) -> RegimeSnapshot:
+    features = RegimeFeatures(**json.loads(row.features_json))
+    return RegimeSnapshot(
+        date=row.date,
+        features=features,
+        outcome_pnl_pct=row.outcome_pnl_pct,
+        outcome_win_rate=row.outcome_win_rate,
+        outcome_n_trades=row.outcome_n_trades,
+        note=row.note,
+    )
+
+
+# ── DB-backed memory store ────────────────────────────────────────
+
+
 @dataclass
 class RegimeMemory:
-    """Fixed-capacity store of daily regime snapshots.
+    """Postgres-backed daily regime store.
 
-    Writes are O(1); queries are O(N) — N is small (months of days),
-    so this is fine. Persistence is JSON for ops simplicity; if the
-    store grows past ~10k rows you'd swap to a pgvector table without
-    changing the interface.
+    Queries are O(N) over the in-memory rowset; N stays small (months
+    of trading days, capped at ``capacity``), so explicit cosine in
+    Python is cheaper than round-tripping a vector op to the DB.
+    pgvector adoption is a one-line migration when N grows past ~10k.
     """
 
+    engine: AsyncEngine
     capacity: int = 730  # ~2 trading years
-    snapshots: list[RegimeSnapshot] = field(default_factory=list)
 
     @property
-    def size(self) -> int:
-        return len(self.snapshots)
+    def _sm(self) -> "async_sessionmaker[Any]":
+        return async_sessionmaker(self.engine, expire_on_commit=False)
 
-    def add(self, snapshot: RegimeSnapshot) -> None:
-        # de-dupe by date; replace prior entry if same date
-        for i, s in enumerate(self.snapshots):
-            if s.date == snapshot.date:
-                self.snapshots[i] = snapshot
-                return
-        self.snapshots.append(snapshot)
-        # FIFO trim
-        if len(self.snapshots) > self.capacity:
-            self.snapshots = self.snapshots[-self.capacity :]
+    async def size(self) -> int:
+        async with self._sm() as s:
+            from sqlalchemy import func
 
-    def add_today(
+            result = await s.execute(select(func.count()).select_from(RegimeSnapshotRow))
+            return int(result.scalar_one())
+
+    async def add(self, snapshot: RegimeSnapshot) -> None:
+        """Upsert by date — same date overwrites."""
+        features_json = json.dumps(asdict(snapshot.features))
+        vector_json = json.dumps(snapshot.features.to_vector())
+        async with self._sm() as s:
+            existing = await s.get(RegimeSnapshotRow, snapshot.date)
+            if existing is None:
+                s.add(
+                    RegimeSnapshotRow(
+                        date=snapshot.date,
+                        features_json=features_json,
+                        vector_json=vector_json,
+                        outcome_pnl_pct=snapshot.outcome_pnl_pct,
+                        outcome_win_rate=snapshot.outcome_win_rate,
+                        outcome_n_trades=snapshot.outcome_n_trades,
+                        note=snapshot.note,
+                    )
+                )
+            else:
+                existing.features_json = features_json
+                existing.vector_json = vector_json
+                existing.outcome_pnl_pct = snapshot.outcome_pnl_pct
+                existing.outcome_win_rate = snapshot.outcome_win_rate
+                existing.outcome_n_trades = snapshot.outcome_n_trades
+                existing.note = snapshot.note
+                s.add(existing)
+            await s.commit()
+        await self._enforce_capacity()
+
+    async def add_today(
         self,
         features: RegimeFeatures,
         *,
@@ -153,22 +200,76 @@ class RegimeMemory:
             outcome_n_trades=outcome_n_trades,
             note=note,
         )
-        self.add(snap)
+        await self.add(snap)
         return snap
 
-    def query(
-        self, features: RegimeFeatures, *, k: int = 5, min_similarity: float = 0.0
+    async def query(
+        self,
+        features: RegimeFeatures,
+        *,
+        k: int = 5,
+        min_similarity: float = 0.0,
     ) -> list[tuple[RegimeSnapshot, float]]:
         """Top-K similar snapshots by cosine of feature vectors."""
-        if not self.snapshots:
-            return []
         q = features.to_vector()
-        scored = [(s, _cosine(q, s.features.to_vector())) for s in self.snapshots]
+        async with self._sm() as s:
+            result = await s.execute(select(RegimeSnapshotRow))
+            rows = result.scalars().all()
+        if not rows:
+            return []
+        scored: list[tuple[RegimeSnapshot, float]] = []
+        for row in rows:
+            try:
+                vec = json.loads(row.vector_json)
+            except Exception:  # noqa: BLE001
+                continue
+            scored.append((_row_to_snapshot(row), _cosine(q, vec)))
         scored.sort(key=lambda p: p[1], reverse=True)
         out = [p for p in scored if p[1] >= min_similarity]
         return out[:k]
 
-    def aggregate_outcome(self, hits: Iterable[tuple[RegimeSnapshot, float]]) -> dict[str, float]:
+    async def recent(self, limit: int = 10) -> list[RegimeSnapshot]:
+        """Most recently inserted snapshots (for the dashboard)."""
+        async with self._sm() as s:
+            stmt = (
+                select(RegimeSnapshotRow)
+                .order_by(col(RegimeSnapshotRow.created_at).desc())
+                .limit(limit)
+            )
+            result = await s.execute(stmt)
+            rows = result.scalars().all()
+        return [_row_to_snapshot(r) for r in rows]
+
+    async def _enforce_capacity(self) -> None:
+        """Trim the oldest rows if we're past capacity."""
+        if self.capacity <= 0:
+            return
+        async with self._sm() as s:
+            from sqlalchemy import func
+
+            count_r = await s.execute(select(func.count()).select_from(RegimeSnapshotRow))
+            total = int(count_r.scalar_one())
+            if total <= self.capacity:
+                return
+            excess = total - self.capacity
+            stmt = (
+                select(RegimeSnapshotRow.date)
+                .order_by(col(RegimeSnapshotRow.created_at).asc())
+                .limit(excess)
+            )
+            result = await s.execute(stmt)
+            stale_dates = [row[0] for row in result.all()]
+            if not stale_dates:
+                return
+            from sqlalchemy import delete
+
+            await s.execute(
+                delete(RegimeSnapshotRow).where(col(RegimeSnapshotRow.date).in_(stale_dates))
+            )
+            await s.commit()
+
+    @staticmethod
+    def aggregate_outcome(hits: Iterable[tuple[RegimeSnapshot, float]]) -> dict[str, float]:
         """Similarity-weighted outcome aggregate from a query result."""
         hits = list(hits)
         if not hits:
@@ -188,24 +289,6 @@ class RegimeMemory:
             "weighted_win_rate": weighted_win / total_w,
             "n": len(hits),
         }
-
-    # ── persistence ──────────────────────────────────────────────
-
-    def save(self, path: Path | str) -> None:
-        data = {
-            "capacity": self.capacity,
-            "snapshots": [{**asdict(s), "features": asdict(s.features)} for s in self.snapshots],
-        }
-        Path(path).write_text(json.dumps(data, indent=2))
-
-    @classmethod
-    def load(cls, path: Path | str) -> "RegimeMemory":
-        raw = json.loads(Path(path).read_text())
-        snaps: list[RegimeSnapshot] = []
-        for s in raw.get("snapshots", []):
-            f = s.pop("features", {})
-            snaps.append(RegimeSnapshot(features=RegimeFeatures(**f), **s))
-        return cls(capacity=int(raw.get("capacity", 730)), snapshots=snaps)
 
 
 # ── Prompt rendering ──────────────────────────────────────────────

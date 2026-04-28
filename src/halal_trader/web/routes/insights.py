@@ -168,12 +168,16 @@ def register(app: FastAPI, app_state: dict[str, Any]) -> None:
     async def api_regime() -> JSONResponse:
         insights = app_state.get("insights") or {}
         mem = insights.get("regime_memory")
-        if mem is None or mem.size == 0:
+        if mem is None:
             return JSONResponse({"available": False})
+        size = await mem.size()
+        if size == 0:
+            return JSONResponse({"available": False})
+        recent = await mem.recent(limit=10)
         return JSONResponse(
             {
                 "available": True,
-                "size": mem.size,
+                "size": size,
                 "recent": [
                     {
                         "date": s.date,
@@ -182,7 +186,7 @@ def register(app: FastAPI, app_state: dict[str, Any]) -> None:
                         "outcome_n_trades": s.outcome_n_trades,
                         "note": s.note,
                     }
-                    for s in mem.snapshots[-10:]
+                    for s in recent
                 ],
             }
         )

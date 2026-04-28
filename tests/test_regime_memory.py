@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+from sqlalchemy.ext.asyncio import AsyncEngine
 
 from halal_trader.ml.regime_memory import (
     RegimeFeatures,
@@ -68,102 +68,100 @@ def test_features_to_vector_stable_length() -> None:
 # ── Storage ───────────────────────────────────────────────────────
 
 
-def test_add_and_size() -> None:
-    mem = RegimeMemory()
+async def test_add_and_size(engine: AsyncEngine) -> None:
+    mem = RegimeMemory(engine=engine)
     snap = RegimeSnapshot(date="2026-01-01", features=_calm())
-    mem.add(snap)
-    assert mem.size == 1
+    await mem.add(snap)
+    assert await mem.size() == 1
 
 
-def test_add_today_dedupes_by_date() -> None:
-    mem = RegimeMemory()
-    mem.add_today(_calm(), today="2026-04-01", outcome_pnl_pct=0.01)
-    mem.add_today(_crashing(), today="2026-04-01", outcome_pnl_pct=-0.05)
-    assert mem.size == 1
-    assert mem.snapshots[0].outcome_pnl_pct == -0.05
+async def test_add_today_dedupes_by_date(engine: AsyncEngine) -> None:
+    mem = RegimeMemory(engine=engine)
+    await mem.add_today(_calm(), today="2026-04-01", outcome_pnl_pct=0.01)
+    await mem.add_today(_crashing(), today="2026-04-01", outcome_pnl_pct=-0.05)
+    assert await mem.size() == 1
+    recent = await mem.recent()
+    assert recent[0].outcome_pnl_pct == -0.05
 
 
-def test_capacity_fifo_trim() -> None:
-    mem = RegimeMemory(capacity=3)
+async def test_capacity_fifo_trim(engine: AsyncEngine) -> None:
+    import asyncio
+
+    mem = RegimeMemory(engine=engine, capacity=3)
     for i in range(5):
-        mem.add_today(_calm(), today=f"2026-04-0{i + 1}")
-    assert mem.size == 3
-    assert [s.date for s in mem.snapshots] == [
-        "2026-04-03",
-        "2026-04-04",
-        "2026-04-05",
-    ]
+        await mem.add_today(_calm(), today=f"2026-04-0{i + 1}")
+        # Tiny sleep so the created_at column distinguishes insert order
+        # — capacity trim deletes by oldest created_at.
+        await asyncio.sleep(0.01)
+    assert await mem.size() == 3
+    recent = await mem.recent(limit=10)
+    dates = sorted(s.date for s in recent)
+    assert dates == ["2026-04-03", "2026-04-04", "2026-04-05"]
 
 
 # ── Query ─────────────────────────────────────────────────────────
 
 
-def test_query_finds_most_similar_first() -> None:
-    mem = RegimeMemory()
-    mem.add_today(_calm(), today="2026-01-01", outcome_pnl_pct=0.01)
-    mem.add_today(_crashing(), today="2026-01-02", outcome_pnl_pct=-0.05)
-    mem.add_today(_euphoric(), today="2026-01-03", outcome_pnl_pct=0.03)
+async def test_query_finds_most_similar_first(engine: AsyncEngine) -> None:
+    mem = RegimeMemory(engine=engine)
+    await mem.add_today(_calm(), today="2026-01-01", outcome_pnl_pct=0.01)
+    await mem.add_today(_crashing(), today="2026-01-02", outcome_pnl_pct=-0.05)
+    await mem.add_today(_euphoric(), today="2026-01-03", outcome_pnl_pct=0.03)
 
-    hits = mem.query(_crashing(), k=2)
+    hits = await mem.query(_crashing(), k=2)
     assert hits
     assert hits[0][0].date == "2026-01-02"
     assert hits[0][1] >= hits[1][1]
 
 
-def test_query_respects_min_similarity() -> None:
-    mem = RegimeMemory()
-    mem.add_today(_calm(), today="2026-01-01")
-    mem.add_today(_crashing(), today="2026-01-02")
+async def test_query_respects_min_similarity(engine: AsyncEngine) -> None:
+    mem = RegimeMemory(engine=engine)
+    await mem.add_today(_calm(), today="2026-01-01")
+    await mem.add_today(_crashing(), today="2026-01-02")
 
-    hits = mem.query(_euphoric(), k=5, min_similarity=0.95)
+    hits = await mem.query(_euphoric(), k=5, min_similarity=0.95)
     assert hits == []
 
 
-def test_query_empty_memory() -> None:
-    mem = RegimeMemory()
-    assert mem.query(_calm()) == []
+async def test_query_empty_memory(engine: AsyncEngine) -> None:
+    mem = RegimeMemory(engine=engine)
+    assert await mem.query(_calm()) == []
 
 
-def test_aggregate_outcome_weighted() -> None:
-    mem = RegimeMemory()
-    mem.add_today(_crashing(), today="2026-01-02", outcome_pnl_pct=-0.05, outcome_win_rate=0.2)
-    mem.add_today(_calm(), today="2026-01-01", outcome_pnl_pct=0.01, outcome_win_rate=0.6)
-    hits = mem.query(_crashing(), k=2)
-    agg = mem.aggregate_outcome(hits)
+async def test_aggregate_outcome_weighted(engine: AsyncEngine) -> None:
+    mem = RegimeMemory(engine=engine)
+    await mem.add_today(
+        _crashing(), today="2026-01-02", outcome_pnl_pct=-0.05, outcome_win_rate=0.2
+    )
+    await mem.add_today(_calm(), today="2026-01-01", outcome_pnl_pct=0.01, outcome_win_rate=0.6)
+    hits = await mem.query(_crashing(), k=2)
+    agg = RegimeMemory.aggregate_outcome(hits)
     # Crashing match dominates by similarity, so aggregate should be negative.
     assert agg["n"] == 2
     assert agg["weighted_pnl_pct"] < 0
 
 
 def test_aggregate_outcome_empty() -> None:
-    mem = RegimeMemory()
-    agg = mem.aggregate_outcome([])
+    agg = RegimeMemory.aggregate_outcome([])
     assert agg == {"weighted_pnl_pct": 0.0, "weighted_win_rate": 0.0, "n": 0}
 
 
-# ── Persistence ───────────────────────────────────────────────────
-
-
-def test_save_load_round_trip(tmp_path: Path) -> None:
-    p = tmp_path / "regime_memory.json"
-    mem = RegimeMemory(capacity=10)
-    mem.add_today(_calm(), today="2026-04-01", outcome_pnl_pct=0.01, note="quiet day")
-    mem.add_today(_crashing(), today="2026-04-02", outcome_pnl_pct=-0.07, note="cpi shock")
-    mem.save(p)
-    back = RegimeMemory.load(p)
-    assert back.size == 2
-    assert back.capacity == 10
-    assert back.snapshots[1].features.volatility == _crashing().volatility
-    assert back.snapshots[1].note == "cpi shock"
+async def test_round_trip_preserves_features(engine: AsyncEngine) -> None:
+    mem = RegimeMemory(engine=engine)
+    await mem.add_today(_crashing(), today="2026-04-02", outcome_pnl_pct=-0.07, note="cpi shock")
+    recent = await mem.recent()
+    assert len(recent) == 1
+    assert recent[0].features.volatility == _crashing().volatility
+    assert recent[0].note == "cpi shock"
 
 
 # ── Prompt formatting ─────────────────────────────────────────────
 
 
-def test_format_for_prompt_includes_outcome_label() -> None:
-    mem = RegimeMemory()
-    mem.add_today(_crashing(), today="2026-01-02", outcome_pnl_pct=-0.05, outcome_n_trades=4)
-    hits = mem.query(_crashing(), k=1)
+async def test_format_for_prompt_includes_outcome_label(engine: AsyncEngine) -> None:
+    mem = RegimeMemory(engine=engine)
+    await mem.add_today(_crashing(), today="2026-01-02", outcome_pnl_pct=-0.05, outcome_n_trades=4)
+    hits = await mem.query(_crashing(), k=1)
     text = format_for_prompt(_crashing(), hits)
     assert "2026-01-02" in text
     assert "-5" in text or "-5.0" in text or "-5.00" in text
