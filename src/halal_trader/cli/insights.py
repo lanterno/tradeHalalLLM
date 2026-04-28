@@ -524,8 +524,9 @@ def rag_cmd(query: str, k: int) -> None:
 def exceptions_cmd(status: str) -> None:
     """List Sharia exception queue entries (pending by default)."""
 
-    def _run() -> None:
+    async def _run() -> None:
         from halal_trader.config import get_settings
+        from halal_trader.db.models import init_db
         from halal_trader.halal.exception_queue import (
             ExceptionQueue,
             render_summary,
@@ -533,15 +534,15 @@ def exceptions_cmd(status: str) -> None:
         from halal_trader.logging import console
 
         settings = get_settings()
-        path = settings.resolve_data_dir() / "analytics" / "sharia_exceptions.json"
-        if not path.exists():
-            console.print("[yellow]Exception queue empty.[/]")
-            return
-        q = ExceptionQueue(path=path)
-        rows = q.all() if status == "all" else q.by_status(status)
-        console.print(render_summary(rows))
+        engine = await init_db(settings.database_url)
+        try:
+            q = ExceptionQueue(engine=engine)
+            rows = await q.all() if status == "all" else await q.by_status(status)  # type: ignore[arg-type]
+            console.print(render_summary(rows))
+        finally:
+            await engine.dispose()
 
-    _run()
+    asyncio.run(_run())
 
 
 @insights.command("calibrate")

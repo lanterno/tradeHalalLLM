@@ -277,17 +277,15 @@ def register(app: FastAPI, app_state: dict[str, Any]) -> None:
 
     @app.get("/api/insights/exceptions")
     async def api_exceptions(status: str = "pending") -> JSONResponse:
-        from halal_trader.config import get_settings
         from halal_trader.halal.exception_queue import ExceptionQueue
 
-        settings = get_settings()
-        path = settings.resolve_data_dir() / "analytics" / "sharia_exceptions.json"
-        if not path.exists():
+        engine = app_state.get("engine")
+        if engine is None:
             return JSONResponse({"available": False})
-        q = ExceptionQueue(path=path)
         if status not in ("pending", "approved", "rejected", "deferred", "all"):
             return JSONResponse({"error": f"unknown status {status!r}"}, status_code=400)
-        rows = q.all() if status == "all" else q.by_status(status)  # type: ignore[arg-type]
+        q = ExceptionQueue(engine=engine)
+        rows = await q.all() if status == "all" else await q.by_status(status)  # type: ignore[arg-type]
         return JSONResponse(
             {
                 "available": True,
@@ -316,14 +314,19 @@ def register(app: FastAPI, app_state: dict[str, Any]) -> None:
         decided_by: str = "",
         note: str = "",
     ) -> JSONResponse:
-        from halal_trader.config import get_settings
         from halal_trader.halal.exception_queue import ExceptionQueue
 
-        settings = get_settings()
-        path = settings.resolve_data_dir() / "analytics" / "sharia_exceptions.json"
-        q = ExceptionQueue(path=path)
+        engine = app_state.get("engine")
+        if engine is None:
+            return JSONResponse({"error": "no engine"}, status_code=503)
+        q = ExceptionQueue(engine=engine)
         try:
-            ok = q.decide(entry_id, status=status, decided_by=decided_by, operator_note=note)  # type: ignore[arg-type]
+            ok = await q.decide(
+                entry_id,
+                status=status,
+                decided_by=decided_by,
+                operator_note=note,  # type: ignore[arg-type]
+            )
         except ValueError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
         if not ok:

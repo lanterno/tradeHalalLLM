@@ -8,8 +8,9 @@ the dashboard, and decisions are logged for future learning.
 
 Design choices:
 
-* JSON sidecar persistence for now — low write rate, operator-driven.
-  Promote to a Postgres table when concurrent multi-bot review lands.
+* DB-backed (``sharia_exceptions`` table) — operator-driven low rate,
+  but ops surfaces (CLI / dashboard / bot screener) all consume the
+  same source of truth without file-locking races.
 * Status FSM: ``pending`` → ``approved`` | ``rejected`` | ``deferred``.
   Decided entries are kept (not deleted) so the screener can learn from
   past rulings.
@@ -19,13 +20,16 @@ Design choices:
 
 from __future__ import annotations
 
-import json
 import logging
 from collections.abc import Iterable
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, datetime
-from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
+
+from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
+from sqlmodel import select
+
+from halal_trader.db.models import ShariaExceptionRow
 
 logger = logging.getLogger(__name__)
 
@@ -39,73 +43,82 @@ class ExceptionEntry:
 
     entry_id: str  # stable: "<instrument>:<kind>"
     instrument: str
-    kind: str  # "new_token" | "ambiguous_derivative" | "doubtful_screen" | ...
-    reasoning: str  # LLM's preliminary case
+    kind: str
+    reasoning: str
     status: ExceptionStatus = "pending"
-    created_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
+    created_at: str = ""  # ISO timestamp
     decided_at: str | None = None
     decided_by: str = ""
     operator_note: str = ""
 
 
+def _row_to_entry(row: ShariaExceptionRow) -> ExceptionEntry:
+    return ExceptionEntry(
+        entry_id=row.entry_id,
+        instrument=row.instrument,
+        kind=row.kind,
+        reasoning=row.reasoning,
+        status=row.status,  # type: ignore[arg-type]
+        created_at=row.created_at.isoformat() if row.created_at else "",
+        decided_at=row.decided_at.isoformat() if row.decided_at else None,
+        decided_by=row.decided_by,
+        operator_note=row.operator_note,
+    )
+
+
 @dataclass
 class ExceptionQueue:
-    """Append-only sidecar of Sharia exception entries."""
+    """Postgres-backed queue of Sharia exception entries."""
 
-    path: Path
-    entries: dict[str, ExceptionEntry] = field(default_factory=dict)
+    engine: AsyncEngine
 
-    def __post_init__(self) -> None:
-        self.path = Path(self.path)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        if self.path.exists():
-            self._load()
-
-    def _load(self) -> None:
-        try:
-            raw = json.loads(self.path.read_text())
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("exception queue unreadable: %s — starting fresh", exc)
-            return
-        for k, v in raw.get("entries", {}).items():
-            try:
-                self.entries[k] = ExceptionEntry(**v)
-            except Exception:  # noqa: BLE001
-                continue
-
-    def _save(self) -> None:
-        self.path.write_text(
-            json.dumps(
-                {"entries": {k: asdict(v) for k, v in self.entries.items()}},
-                indent=2,
-                sort_keys=True,
-            )
-        )
+    @property
+    def _sm(self) -> "async_sessionmaker[Any]":
+        return async_sessionmaker(self.engine, expire_on_commit=False)
 
     @staticmethod
     def _key(instrument: str, kind: str) -> str:
         return f"{instrument.upper()}:{kind}"
 
-    def add(self, *, instrument: str, kind: str, reasoning: str) -> ExceptionEntry:
-        """Add a new pending entry (idempotent on instrument+kind)."""
-        key = self._key(instrument, kind)
-        existing = self.entries.get(key)
-        if existing is not None and existing.status == "pending":
-            # Refresh reasoning text but keep created_at and status
-            existing.reasoning = reasoning
-            self._save()
-            return existing
-        entry = ExceptionEntry(
-            entry_id=key,
-            instrument=instrument.upper(),
-            kind=kind,
-            reasoning=reasoning,
-        )
-        self.entries[key] = entry
-        self._save()
-        return entry
+    async def add(self, *, instrument: str, kind: str, reasoning: str) -> ExceptionEntry:
+        """Add a new pending entry (idempotent on instrument+kind).
 
-    def decide(
+        - Pending row of the same key: update reasoning, keep created_at.
+        - Already-decided row of the same key: replace with a fresh
+          pending row (operator can re-approve / re-reject after a
+          re-screening).
+        """
+        key = self._key(instrument, kind)
+        async with self._sm() as s:
+            existing = await s.get(ShariaExceptionRow, key)
+            if existing is not None and existing.status == "pending":
+                existing.reasoning = reasoning
+                s.add(existing)
+                await s.commit()
+                return _row_to_entry(existing)
+            if existing is not None:
+                # decided previously — overwrite with a fresh pending entry
+                existing.reasoning = reasoning
+                existing.status = "pending"
+                existing.created_at = datetime.now(UTC)
+                existing.decided_at = None
+                existing.decided_by = ""
+                existing.operator_note = ""
+                s.add(existing)
+                await s.commit()
+                return _row_to_entry(existing)
+            row = ShariaExceptionRow(
+                entry_id=key,
+                instrument=instrument.upper(),
+                kind=kind,
+                reasoning=reasoning,
+            )
+            s.add(row)
+            await s.commit()
+            await s.refresh(row)
+            return _row_to_entry(row)
+
+    async def decide(
         self,
         entry_id: str,
         *,
@@ -114,31 +127,42 @@ class ExceptionQueue:
         operator_note: str = "",
     ) -> bool:
         """Apply an operator decision; returns False if entry was unknown."""
-        entry = self.entries.get(entry_id)
-        if entry is None:
-            return False
         if status not in ("approved", "rejected", "deferred"):
             raise ValueError(f"invalid decision status: {status!r}")
-        entry.status = status
-        entry.decided_at = datetime.now(UTC).isoformat()
-        entry.decided_by = decided_by
-        entry.operator_note = operator_note
-        self._save()
-        return True
+        async with self._sm() as s:
+            row = await s.get(ShariaExceptionRow, entry_id)
+            if row is None:
+                return False
+            row.status = status
+            row.decided_at = datetime.now(UTC)
+            row.decided_by = decided_by
+            row.operator_note = operator_note
+            s.add(row)
+            await s.commit()
+            return True
 
-    def pending(self) -> list[ExceptionEntry]:
-        return [e for e in self.entries.values() if e.status == "pending"]
+    async def all(self) -> list[ExceptionEntry]:
+        async with self._sm() as s:
+            result = await s.execute(select(ShariaExceptionRow))
+            rows = result.scalars().all()
+        return [_row_to_entry(r) for r in rows]
 
-    def by_status(self, status: ExceptionStatus) -> list[ExceptionEntry]:
-        return [e for e in self.entries.values() if e.status == status]
+    async def by_status(self, status: ExceptionStatus) -> list[ExceptionEntry]:
+        async with self._sm() as s:
+            result = await s.execute(
+                select(ShariaExceptionRow).where(ShariaExceptionRow.status == status)
+            )
+            rows = result.scalars().all()
+        return [_row_to_entry(r) for r in rows]
 
-    def all(self) -> list[ExceptionEntry]:
-        return list(self.entries.values())
+    async def pending(self) -> list[ExceptionEntry]:
+        return await self.by_status("pending")
 
-    def is_approved(self, instrument: str, kind: str) -> bool:
+    async def is_approved(self, instrument: str, kind: str) -> bool:
         """Quick gate: returns True only if an approval exists for this pair."""
-        e = self.entries.get(self._key(instrument, kind))
-        return e is not None and e.status == "approved"
+        async with self._sm() as s:
+            row = await s.get(ShariaExceptionRow, self._key(instrument, kind))
+            return row is not None and row.status == "approved"
 
 
 def render_summary(entries: Iterable[ExceptionEntry]) -> str:

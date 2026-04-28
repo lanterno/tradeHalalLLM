@@ -473,6 +473,30 @@ class ReplaySnapshotRow(SQLModel, table=True):
     payload: dict = Field(sa_column=sa.Column("payload", JSONB, nullable=False))
 
 
+class ShariaExceptionRow(SQLModel, table=True):
+    """One pending Sharia ruling for an ambiguous instrument.
+
+    The screener writes a row when an instrument is doubtful or
+    unknown; the operator decides via the dashboard. Keyed by
+    ``(instrument, kind)`` (composed into ``entry_id``) so re-screening
+    the same pair updates the same row instead of spamming the queue.
+    """
+
+    __tablename__ = "sharia_exceptions"
+
+    entry_id: str = Field(primary_key=True)
+    instrument: str
+    kind: str
+    reasoning: str
+    status: str = Field(default="pending")  # pending | approved | rejected | deferred
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(UTC), sa_type=sa.DateTime(timezone=True)
+    )
+    decided_at: datetime | None = Field(default=None, sa_type=sa.DateTime(timezone=True))
+    decided_by: str = ""
+    operator_note: str = ""
+
+
 class RegimeSnapshotRow(SQLModel, table=True):
     """One day's regime snapshot (features + outcome).
 
