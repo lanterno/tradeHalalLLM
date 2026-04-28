@@ -67,6 +67,26 @@ async def test_rag_store_aggregate(engine) -> None:
     assert agg["n"] == 2
 
 
+async def test_rag_store_uses_hnsw_index(engine) -> None:
+    """The query plan should hit the HNSW index, not a seq scan."""
+    import sqlalchemy as sa
+
+    store = DBRationaleStore(engine=engine)
+    await store.add(trade_id="t1", symbol="X", text="aaa bbb", outcome_pnl_pct=0.01)
+
+    q = list(store.embedder.embed("aaa bbb"))
+    qstr = "[" + ",".join(str(x) for x in q) + "]"
+    async with engine.connect() as conn:
+        rows = await conn.execute(
+            sa.text(
+                "EXPLAIN SELECT trade_id FROM rag_rationales "
+                f"ORDER BY embedding <=> '{qstr}'::vector LIMIT 5"
+            )
+        )
+        plan = "\n".join(r[0] for r in rows.all())
+    assert "ix_rag_rationales_embedding_hnsw" in plan, plan
+
+
 # ── DBThesisTagStore ─────────────────────────────────────────────
 
 

@@ -25,7 +25,6 @@ already what the bot computes per cycle anyway.
 from __future__ import annotations
 
 import logging
-import math
 from collections.abc import Iterable, Sequence
 from dataclasses import asdict, dataclass
 from datetime import date
@@ -99,17 +98,6 @@ class RegimeSnapshot:
         )
 
 
-def _cosine(a: Sequence[float], b: Sequence[float]) -> float:
-    if len(a) != len(b):
-        return 0.0
-    num = sum(x * y for x, y in zip(a, b))
-    da = math.sqrt(sum(x * x for x in a))
-    db = math.sqrt(sum(y * y for y in b))
-    if da == 0 or db == 0:
-        return 0.0
-    return num / (da * db)
-
-
 def _row_to_snapshot(row: RegimeSnapshotRow) -> RegimeSnapshot:
     features = RegimeFeatures(**row.features_json)
     return RegimeSnapshot(
@@ -152,7 +140,7 @@ class RegimeMemory:
     async def add(self, snapshot: RegimeSnapshot) -> None:
         """Upsert by date — same date overwrites."""
         features_json = asdict(snapshot.features)
-        vector_json = snapshot.features.to_vector()
+        embedding = snapshot.features.to_vector()
         async with self._sm() as s:
             existing = await s.get(RegimeSnapshotRow, snapshot.date)
             if existing is None:
@@ -160,7 +148,7 @@ class RegimeMemory:
                     RegimeSnapshotRow(
                         date=snapshot.date,
                         features_json=features_json,
-                        vector_json=vector_json,
+                        embedding=embedding,
                         outcome_pnl_pct=snapshot.outcome_pnl_pct,
                         outcome_win_rate=snapshot.outcome_win_rate,
                         outcome_n_trades=snapshot.outcome_n_trades,
@@ -169,7 +157,7 @@ class RegimeMemory:
                 )
             else:
                 existing.features_json = features_json
-                existing.vector_json = vector_json
+                existing.embedding = embedding
                 existing.outcome_pnl_pct = snapshot.outcome_pnl_pct
                 existing.outcome_win_rate = snapshot.outcome_win_rate
                 existing.outcome_n_trades = snapshot.outcome_n_trades
@@ -209,20 +197,25 @@ class RegimeMemory:
         k: int = 5,
         min_similarity: float = 0.0,
     ) -> list[tuple[RegimeSnapshot, float]]:
-        """Top-K similar snapshots by cosine of feature vectors."""
+        """Top-K similar snapshots via pgvector cosine distance."""
         q = features.to_vector()
+        distance = RegimeSnapshotRow.embedding.cosine_distance(q)  # type: ignore[attr-defined]
         async with self._sm() as s:
-            result = await s.execute(select(RegimeSnapshotRow))
-            rows = result.scalars().all()
-        if not rows:
-            return []
+            stmt = (
+                select(RegimeSnapshotRow, distance.label("distance"))
+                .order_by(distance)
+                .limit(max(k * 2, k))
+            )
+            result = await s.execute(stmt)
+            rows = result.all()
         scored: list[tuple[RegimeSnapshot, float]] = []
-        for row in rows:
-            vec = row.vector_json or []
-            scored.append((_row_to_snapshot(row), _cosine(q, vec)))
-        scored.sort(key=lambda p: p[1], reverse=True)
-        out = [p for p in scored if p[1] >= min_similarity]
-        return out[:k]
+        for row, dist in rows:
+            sim = 1.0 - float(dist)
+            if sim >= min_similarity:
+                scored.append((_row_to_snapshot(row), sim))
+            if len(scored) >= k:
+                break
+        return scored
 
     async def recent(self, limit: int = 10) -> list[RegimeSnapshot]:
         """Most recently inserted snapshots (for the dashboard)."""

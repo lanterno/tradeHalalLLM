@@ -6,9 +6,16 @@ from pathlib import Path
 from typing import Any
 
 import sqlalchemy as sa
+from pgvector.sqlalchemy import Vector
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlmodel import Field, SQLModel
+
+# Embedding dimensions are pinned constants; if they change the
+# corresponding pgvector column needs an alembic migration that
+# REINDEXes the HNSW index.
+RAG_EMBEDDING_DIM = 512
+REGIME_EMBEDDING_DIM = 10
 
 logger = logging.getLogger(__name__)
 
@@ -450,7 +457,9 @@ class RationaleRow(SQLModel, table=True):
     trade_id: str = Field(primary_key=True)
     symbol: str = Field(index=True)
     text: str
-    vector: list[float] = Field(sa_column=sa.Column("vector", JSONB, nullable=False))
+    embedding: list[float] = Field(
+        sa_column=sa.Column("embedding", Vector(RAG_EMBEDDING_DIM), nullable=False)
+    )
     outcome_pnl_pct: float
     outcome_win: bool
     setup_type: str | None = None
@@ -519,7 +528,9 @@ class RegimeSnapshotRow(SQLModel, table=True):
 
     date: str = Field(primary_key=True)
     features_json: dict = Field(sa_column=sa.Column("features_json", JSONB, nullable=False))
-    vector_json: list[float] = Field(sa_column=sa.Column("vector_json", JSONB, nullable=False))
+    embedding: list[float] = Field(
+        sa_column=sa.Column("embedding", Vector(REGIME_EMBEDDING_DIM), nullable=False)
+    )
     outcome_pnl_pct: float = 0.0
     outcome_win_rate: float = 0.0
     outcome_n_trades: int = 0

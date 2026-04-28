@@ -25,11 +25,20 @@ from tests.conftest import (
 
 
 def _scratch_db_url() -> tuple[str, str]:
-    """Create a one-off Postgres database for a single test; return its URL + name."""
+    """Create a one-off Postgres database for a single test; return its URL + name.
+
+    The bot's models include pgvector columns, so the ``vector``
+    extension has to exist in the scratch DB before
+    ``SQLModel.metadata.create_all`` runs.
+    """
     name = f"halal_trader_init_{uuid.uuid4().hex[:10]}"
     with psycopg.connect(_ADMIN_DSN_SYNC, autocommit=True) as conn:
         with conn.cursor() as cur:
             cur.execute(f'CREATE DATABASE "{name}"')
+    new_db_dsn = f"postgresql://{PG_USER}:{PG_PASS}@{PG_HOST}:{PG_PORT}/{name}"
+    with psycopg.connect(new_db_dsn, autocommit=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute("CREATE EXTENSION IF NOT EXISTS vector")
     return (
         f"postgresql+asyncpg://{PG_USER}:{PG_PASS}@{PG_HOST}:{PG_PORT}/{name}",
         name,
