@@ -58,22 +58,57 @@ def _terminate_and_drop(dbname: str) -> None:
             cur.execute(f'DROP DATABASE IF EXISTS "{dbname}"')
 
 
+# Stable advisory-lock key — any 64-bit int. Picked once and never
+# changed; if two pytest sessions disagree on the key they'll both
+# proceed and corrupt the test DB, which is exactly what we're guarding
+# against.
+_PG_TEST_LOCK_KEY = 8675309
+
+
 @pytest.fixture(scope="session")
-def _pg_test_db_ready() -> str:
-    """Recreate the test DB once per session and run Alembic to head."""
-    _terminate_and_drop(PG_DBNAME)
-    with psycopg.connect(_ADMIN_DSN_SYNC, autocommit=True) as conn:
-        with conn.cursor() as cur:
-            cur.execute(f'CREATE DATABASE "{PG_DBNAME}"')
+def _pg_test_db_ready() -> Iterator[str]:
+    """Recreate the test DB once per session and run Alembic to head.
 
-    os.environ["DATABASE_URL"] = PG_TEST_URL_ASYNC
-    import halal_trader.config as _config
+    Holds a Postgres advisory lock for the lifetime of the session so
+    two concurrent pytest invocations can't race on
+    ``DROP DATABASE`` / ``CREATE DATABASE``. Second runner blocks on
+    ``pg_advisory_lock`` until the first releases (or fails fast under
+    a short statement_timeout if held longer than 60s — pytest sessions
+    rarely exceed that, but a hung suite shouldn't wedge a second one
+    indefinitely).
+    """
+    lock_conn = psycopg.connect(_ADMIN_DSN_SYNC, autocommit=True)
+    try:
+        with lock_conn.cursor() as cur:
+            cur.execute("SET statement_timeout = '60s'")
+            try:
+                cur.execute("SELECT pg_advisory_lock(%s)", (_PG_TEST_LOCK_KEY,))
+            except psycopg.errors.QueryCanceled:
+                pytest.exit(
+                    "Another pytest session is holding the halal_trader_test "
+                    "advisory lock. Wait for it to finish or kill it.",
+                    returncode=1,
+                )
 
-    _config._settings = None
-    from halal_trader.db.admin import upgrade
+        _terminate_and_drop(PG_DBNAME)
+        with psycopg.connect(_ADMIN_DSN_SYNC, autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(f'CREATE DATABASE "{PG_DBNAME}"')
 
-    upgrade()
-    return PG_TEST_URL_ASYNC
+        os.environ["DATABASE_URL"] = PG_TEST_URL_ASYNC
+        import halal_trader.config as _config
+
+        _config._settings = None
+        from halal_trader.db.admin import upgrade
+
+        upgrade()
+        try:
+            yield PG_TEST_URL_ASYNC
+        finally:
+            with lock_conn.cursor() as cur:
+                cur.execute("SELECT pg_advisory_unlock(%s)", (_PG_TEST_LOCK_KEY,))
+    finally:
+        lock_conn.close()
 
 
 def _truncate_all_tables(sync_url: str) -> None:
