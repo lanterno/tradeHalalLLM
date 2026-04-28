@@ -312,25 +312,26 @@ def purification_cmd() -> None:
 def replay_cmd(limit: int) -> None:
     """List recent cycle snapshots in the replay store."""
 
-    def _run() -> None:
+    async def _run() -> None:
         from halal_trader.config import get_settings
         from halal_trader.core.replay import ReplayStore
+        from halal_trader.db.models import init_db
         from halal_trader.logging import console
 
         settings = get_settings()
-        root = settings.resolve_data_dir() / "replay"
-        if not root.exists():
-            console.print("[yellow]No replay store yet — start the bot to capture snapshots.[/]")
-            return
-        store = ReplayStore(root=root)
-        ids = store.list_cycle_ids()[-limit:]
-        if not ids:
-            console.print("[yellow]Replay store empty.[/]")
-            return
-        for cid in ids:
-            console.print(f"  {cid}")
+        engine = await init_db(settings.database_url)
+        try:
+            store = ReplayStore(engine=engine)
+            ids = await store.list_cycle_ids(limit=limit)
+            if not ids:
+                console.print("[yellow]Replay store empty.[/]")
+                return
+            for cid in ids:
+                console.print(f"  {cid}")
+        finally:
+            await engine.dispose()
 
-    _run()
+    asyncio.run(_run())
 
 
 @insights.command("catalysts")

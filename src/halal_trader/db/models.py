@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import sqlalchemy as sa
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlmodel import Field, SQLModel
 
@@ -447,6 +448,29 @@ class RationaleRow(SQLModel, table=True):
     timestamp: datetime = Field(
         default_factory=lambda: datetime.now(UTC), sa_type=sa.DateTime(timezone=True)
     )
+
+
+class ReplaySnapshotRow(SQLModel, table=True):
+    """One cycle's frozen input bundle.
+
+    The full ``CycleSnapshot`` lives in the ``payload`` JSONB column —
+    treating it as opaque keeps schema churn out of the cycle path
+    (snapshot fields can come and go via the dataclass). The top-level
+    columns are extracted from the snapshot for cheap listing /
+    filtering by the dashboard.
+    """
+
+    __tablename__ = "replay_snapshots"
+
+    cycle_id: str = Field(primary_key=True)
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(UTC),
+        sa_type=sa.DateTime(timezone=True),
+        index=True,
+    )
+    market: str
+    schema_version: int
+    payload: dict = Field(sa_column=sa.Column("payload", JSONB, nullable=False))
 
 
 class KillSwitch(SQLModel, table=True):

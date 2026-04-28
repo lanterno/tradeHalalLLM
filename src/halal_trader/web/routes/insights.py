@@ -256,15 +256,13 @@ def register(app: FastAPI, app_state: dict[str, Any]) -> None:
 
     @app.get("/api/insights/replay")
     async def api_replay(limit: int = 50) -> JSONResponse:
-        from halal_trader.config import get_settings
         from halal_trader.core.replay import ReplayStore
 
-        settings = get_settings()
-        root = settings.resolve_data_dir() / "replay"
-        if not root.exists():
+        engine = app_state.get("engine")
+        if engine is None:
             return JSONResponse({"available": False})
-        store = ReplayStore(root=root)
-        cycle_ids = store.list_cycle_ids()[-limit:]
+        store = ReplayStore(engine=engine)
+        cycle_ids = await store.list_cycle_ids(limit=limit)
         return JSONResponse(
             {
                 "available": True,

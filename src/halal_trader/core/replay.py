@@ -10,29 +10,31 @@ This module is the seam:
 * :class:`CycleSnapshot` — the input bundle (klines, account, sentiment,
   positions, indicators, regime, etc.) for one cycle. Pure data, JSON
   serializable, versioned by ``schema_version``.
-* :class:`ReplayStore` — write/read cycle snapshots from a directory of
-  JSON files keyed by ``cycle_id``. Wraps the on-disk format so callers
-  can swap to Postgres / blob storage later.
+* :class:`ReplayStore` — write/read cycle snapshots from a Postgres
+  ``replay_snapshots`` table. The full snapshot lives in a JSONB
+  ``payload`` column; the dataclass below is the schema authority.
 * :func:`replay_cycle` — given a cycle_id and a "decision callable", load
   the snapshot, call the callable on the inputs, and return its plan.
 
 The cycle code captures snapshots once via :func:`record_snapshot` (no
-behavior change to the cycle besides one IO write per cycle). The
-replay harness reconstructs ``CycleSnapshot`` objects exactly — the LLM
-output won't be bit-identical because LLMs aren't deterministic, but
+behavior change to the cycle besides one INSERT per cycle). The replay
+harness reconstructs ``CycleSnapshot`` objects exactly — the LLM output
+won't be bit-identical because LLMs aren't deterministic, but
 *everything the LLM saw* is.
 """
 
 from __future__ import annotations
 
-import json
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
 
+from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
+from sqlmodel import col, select
+
+from halal_trader.db.models import ReplaySnapshotRow
 from halal_trader.domain.models import Kline
 
 logger = logging.getLogger(__name__)
@@ -115,75 +117,73 @@ def _kline_to_dict(k: Kline | dict[str, Any]) -> dict[str, Any]:
     return asdict(k)
 
 
-# ── On-disk store ─────────────────────────────────────────────────
+# ── DB-backed store ───────────────────────────────────────────────
 
 
 @dataclass
 class ReplayStore:
-    """JSON-per-cycle directory store. Simple, ops-friendly, swappable."""
+    """Postgres-backed snapshot store keyed by ``cycle_id``."""
 
-    root: Path
-    max_keep: int = 5_000
+    engine: AsyncEngine
 
-    def __post_init__(self) -> None:
-        self.root = Path(self.root)
-        self.root.mkdir(parents=True, exist_ok=True)
+    @property
+    def _sm(self) -> "async_sessionmaker[Any]":
+        return async_sessionmaker(self.engine, expire_on_commit=False)
 
-    def _path(self, cycle_id: str) -> Path:
-        # cycle_id is "cycle-XXXXXXXX" — sanitise just in case
-        safe = "".join(c for c in cycle_id if c.isalnum() or c in "-_")
-        return self.root / f"{safe}.json"
+    async def write(self, snapshot: CycleSnapshot) -> None:
+        """Upsert by cycle_id — replays of the same cycle overwrite."""
+        payload = asdict(snapshot)
+        async with self._sm() as s:
+            existing = await s.get(ReplaySnapshotRow, snapshot.cycle_id)
+            if existing is None:
+                s.add(
+                    ReplaySnapshotRow(
+                        cycle_id=snapshot.cycle_id,
+                        market=snapshot.market,
+                        schema_version=snapshot.schema_version,
+                        payload=payload,
+                    )
+                )
+            else:
+                existing.market = snapshot.market
+                existing.schema_version = snapshot.schema_version
+                existing.payload = payload
+                s.add(existing)
+            await s.commit()
 
-    def write(self, snapshot: CycleSnapshot) -> Path:
-        path = self._path(snapshot.cycle_id)
-        path.write_text(json.dumps(asdict(snapshot), default=_json_default, indent=2))
-        self._gc()
-        return path
+    async def read(self, cycle_id: str) -> CycleSnapshot:
+        async with self._sm() as s:
+            row = await s.get(ReplaySnapshotRow, cycle_id)
+            if row is None:
+                raise KeyError(f"no replay snapshot for cycle_id {cycle_id!r}")
+            version = int(row.schema_version)
+            if version > SCHEMA_VERSION:
+                raise ValueError(
+                    f"snapshot {cycle_id} schema_version {version} > supported {SCHEMA_VERSION}"
+                )
+            return CycleSnapshot(**row.payload)
 
-    def read(self, cycle_id: str) -> CycleSnapshot:
-        path = self._path(cycle_id)
-        raw = json.loads(path.read_text())
-        version = int(raw.get("schema_version", 0))
-        if version > SCHEMA_VERSION:
-            raise ValueError(
-                f"snapshot {cycle_id} schema_version {version} > supported {SCHEMA_VERSION}"
+    async def list_cycle_ids(self, limit: int = 50) -> list[str]:
+        """Most-recent ``limit`` cycles by ``created_at`` desc."""
+        async with self._sm() as s:
+            stmt = (
+                select(ReplaySnapshotRow.cycle_id)
+                .order_by(col(ReplaySnapshotRow.created_at).desc())
+                .limit(limit)
             )
-        return CycleSnapshot(**raw)
-
-    def list_cycle_ids(self) -> list[str]:
-        return sorted(p.stem for p in self.root.glob("*.json"))
-
-    def _gc(self) -> None:
-        if self.max_keep <= 0:
-            return
-        files = sorted(self.root.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
-        for stale in files[self.max_keep :]:
-            try:
-                stale.unlink()
-            except OSError:
-                pass
-
-
-def _json_default(obj: Any) -> Any:
-    if hasattr(obj, "model_dump"):
-        return obj.model_dump()
-    if hasattr(obj, "isoformat"):
-        return obj.isoformat()
-    if hasattr(obj, "__dict__"):
-        return obj.__dict__
-    return str(obj)
+            result = await s.execute(stmt)
+            return [row[0] for row in result.all()]
 
 
 # ── Recording / replay ────────────────────────────────────────────
 
 
-def record_snapshot(store: ReplayStore, snapshot: CycleSnapshot) -> Path:
+async def record_snapshot(store: ReplayStore, snapshot: CycleSnapshot) -> None:
     """Persist a snapshot — failure logged, never raised to the cycle."""
     try:
-        return store.write(snapshot)
+        await store.write(snapshot)
     except Exception as exc:  # noqa: BLE001
         logger.warning("replay snapshot write failed (%s): %s", snapshot.cycle_id, exc)
-        return Path()
 
 
 async def replay_cycle(
@@ -200,7 +200,7 @@ async def replay_cycle(
       * the adversarial-co-bot critic alone,
       * the prompt-evolution GA fitness function.
     """
-    snap = store.read(cycle_id)
+    snap = await store.read(cycle_id)
     return await decide(snap)
 
 

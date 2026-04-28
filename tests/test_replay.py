@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
+from sqlalchemy.ext.asyncio import AsyncEngine
 
 from halal_trader.core.replay import (
     CycleSnapshot,
@@ -43,12 +42,12 @@ def _make_snapshot(cycle_id: str = "cycle-aaa", market: str = "crypto") -> Cycle
     )
 
 
-def test_snapshot_round_trip(tmp_path: Path) -> None:
-    store = ReplayStore(root=tmp_path)
+async def test_snapshot_round_trip(engine: AsyncEngine) -> None:
+    store = ReplayStore(engine=engine)
     snap = _make_snapshot()
-    store.write(snap)
+    await store.write(snap)
 
-    back = store.read(snap.cycle_id)
+    back = await store.read(snap.cycle_id)
     assert back.cycle_id == snap.cycle_id
     assert back.halal_pairs == snap.halal_pairs
     assert back.indicators_cache == snap.indicators_cache
@@ -57,54 +56,49 @@ def test_snapshot_round_trip(tmp_path: Path) -> None:
     assert klines["BTCUSDT"][0].close == 100.0
 
 
-def test_snapshot_klines_native_preserves_objects(tmp_path: Path) -> None:
-    store = ReplayStore(root=tmp_path)
+async def test_snapshot_klines_native_preserves_objects(engine: AsyncEngine) -> None:
+    store = ReplayStore(engine=engine)
     snap = _make_snapshot()
-    store.write(snap)
-    back = store.read(snap.cycle_id)
+    await store.write(snap)
+    back = await store.read(snap.cycle_id)
     klines = back.klines_native()
     for k in klines["BTCUSDT"]:
         assert isinstance(k, Kline)
 
 
-def test_record_snapshot_does_not_raise_on_io_error(tmp_path: Path) -> None:
-    # ReplayStore points at a *file* path — writing children fails.
-    bad_root = tmp_path / "not_a_dir.txt"
-    bad_root.write_text("hello")  # exists as a file
-    # Constructor calls mkdir(parents=True, exist_ok=True) — that fails on a
-    # path that exists as a file. Catch it the same way `record_snapshot`
-    # would by going through it.
-    try:
-        store = ReplayStore(root=bad_root)
-    except (FileExistsError, NotADirectoryError) as _exc:  # noqa: F841
-        pytest.skip("OS prevents constructing the store on a file path")
-    record_snapshot(store, _make_snapshot())  # must not raise
+async def test_record_snapshot_does_not_raise_on_failure(engine: AsyncEngine) -> None:
+    """``record_snapshot`` swallows DB failures so the cycle keeps running."""
+    await engine.dispose()  # subsequent writes will fail
+    store = ReplayStore(engine=engine)
+    await record_snapshot(store, _make_snapshot())  # must not raise
 
 
-def test_list_cycle_ids(tmp_path: Path) -> None:
-    store = ReplayStore(root=tmp_path)
+async def test_list_cycle_ids(engine: AsyncEngine) -> None:
+    store = ReplayStore(engine=engine)
     for i in range(3):
-        store.write(_make_snapshot(cycle_id=f"cycle-{i:08x}"))
-    ids = store.list_cycle_ids()
-    assert ids == ["cycle-00000000", "cycle-00000001", "cycle-00000002"]
+        await store.write(_make_snapshot(cycle_id=f"cycle-{i:08x}"))
+    ids = await store.list_cycle_ids()
+    assert set(ids) == {"cycle-00000000", "cycle-00000001", "cycle-00000002"}
 
 
-def test_max_keep_gc(tmp_path: Path) -> None:
-    store = ReplayStore(root=tmp_path, max_keep=2)
-    import time
+async def test_list_cycle_ids_orders_recent_first(engine: AsyncEngine) -> None:
+    store = ReplayStore(engine=engine)
+    import asyncio
 
-    for i in range(5):
-        store.write(_make_snapshot(cycle_id=f"cycle-{i:08x}"))
-        time.sleep(0.01)  # ensure mtime ordering
-    ids = store.list_cycle_ids()
-    assert len(ids) == 2
+    for i in range(3):
+        await store.write(_make_snapshot(cycle_id=f"cycle-{i:08x}"))
+        # ensure created_at ordering — sub-millisecond differences are
+        # enough but a tiny sleep keeps the assertion deterministic.
+        await asyncio.sleep(0.01)
+    ids = await store.list_cycle_ids(limit=2)
+    assert ids[0] == "cycle-00000002"
+    assert ids[1] == "cycle-00000001"
 
 
-@pytest.mark.asyncio
-async def test_replay_cycle_invokes_decider(tmp_path: Path) -> None:
-    store = ReplayStore(root=tmp_path)
+async def test_replay_cycle_invokes_decider(engine: AsyncEngine) -> None:
+    store = ReplayStore(engine=engine)
     snap = _make_snapshot()
-    store.write(snap)
+    await store.write(snap)
 
     async def decider(s: CycleSnapshot) -> str:
         assert s.cycle_id == snap.cycle_id
@@ -113,6 +107,34 @@ async def test_replay_cycle_invokes_decider(tmp_path: Path) -> None:
 
     result = await replay_cycle(store, snap.cycle_id, decider)
     assert result == "decided"
+
+
+async def test_replay_unknown_cycle_raises(engine: AsyncEngine) -> None:
+    store = ReplayStore(engine=engine)
+    with pytest.raises(KeyError):
+        await store.read("nonexistent-cycle")
+
+
+async def test_unknown_schema_version_rejected(engine: AsyncEngine) -> None:
+    store = ReplayStore(engine=engine)
+    snap = _make_snapshot()
+    await store.write(snap)
+
+    # Tamper directly with the row's schema_version to simulate a forward-rev.
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from halal_trader.db.models import ReplaySnapshotRow
+
+    sm = async_sessionmaker(engine, expire_on_commit=False)
+    async with sm() as s:
+        row = await s.get(ReplaySnapshotRow, snap.cycle_id)
+        assert row is not None
+        row.schema_version = 99
+        s.add(row)
+        await s.commit()
+
+    with pytest.raises(ValueError):
+        await store.read(snap.cycle_id)
 
 
 def test_diff_snapshots_detects_changes() -> None:
@@ -132,15 +154,3 @@ def test_diff_snapshots_no_diff_for_identical() -> None:
     # cycle_started_at differs each call — sync them
     b.cycle_started_at = a.cycle_started_at
     assert diff_snapshots(a, b) == {}
-
-
-def test_unknown_schema_version_rejected(tmp_path: Path) -> None:
-    store = ReplayStore(root=tmp_path)
-    snap = _make_snapshot()
-    store.write(snap)
-    # Tamper with the schema_version on disk
-    p = next(tmp_path.glob("*.json"))
-    raw = p.read_text().replace('"schema_version": 1', '"schema_version": 99')
-    p.write_text(raw)
-    with pytest.raises(ValueError):
-        store.read(snap.cycle_id)

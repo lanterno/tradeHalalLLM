@@ -86,6 +86,15 @@ class CryptoCycleService(BaseCycleService):
         self._reddit_fetcher = reddit_fetcher
         self._consecutive_flat_skips = 0
         self._settings = get_settings()
+        # Replay snapshot store — DB-backed when an engine is available.
+        # Captures the full LLM-prompt context for each cycle so prompt
+        # changes can be honestly scored against historical inputs.
+        if engine is not None:
+            from halal_trader.core.replay import ReplayStore
+
+            self._replay_store: "ReplayStore | None" = ReplayStore(engine=engine)
+        else:
+            self._replay_store = None
         # The scheduler reads this after each cycle to drive the
         # adaptive cadence selector. None until the first successful
         # cycle has populated the indicator cache.
@@ -466,7 +475,7 @@ class CryptoCycleService(BaseCycleService):
 
         # Analytics: record this cycle's equity to the shadow ledger
         # and snapshot inputs for replay. Best-effort — never blocks.
-        self._record_cycle_analytics(
+        await self._record_cycle_analytics(
             account=account,
             klines_by_symbol=klines_by_symbol,
             indicators_cache=indicators_cache,
@@ -547,7 +556,7 @@ class CryptoCycleService(BaseCycleService):
 
     # ── Private helpers ────────────────────────────────────────
 
-    def _record_cycle_analytics(
+    async def _record_cycle_analytics(
         self,
         *,
         account,
@@ -583,8 +592,8 @@ class CryptoCycleService(BaseCycleService):
             except Exception as exc:  # noqa: BLE001
                 logger.debug("shadow ledger record failed: %s", exc)
 
-        replay_root = getattr(self, "_replay_store", None)
-        if replay_root is not None:
+        replay_store = getattr(self, "_replay_store", None)
+        if replay_store is not None:
             try:
                 from halal_trader.core.replay import (
                     CycleSnapshot,
@@ -608,7 +617,7 @@ class CryptoCycleService(BaseCycleService):
                         "in_order_usdt": account.in_order_usdt,
                     },
                 )
-                record_snapshot(replay_root, snap)
+                await record_snapshot(replay_store, snap)
             except Exception as exc:  # noqa: BLE001
                 logger.debug("replay snapshot failed: %s", exc)
 
