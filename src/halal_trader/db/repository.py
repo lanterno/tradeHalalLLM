@@ -4,9 +4,8 @@ import json
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import text as sqlalchemy_text
 from sqlalchemy.ext.asyncio import AsyncEngine
-from sqlmodel import SQLModel, select
+from sqlmodel import SQLModel, func, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from halal_trader.db.models import (
@@ -470,21 +469,19 @@ class Repository:
     async def get_purification_totals(self) -> dict[str, float]:
         """Aggregate outstanding + paid totals in USD across all rows."""
         async with AsyncSession(self._engine) as session:
-            outstanding_q = await session.execute(
-                sqlalchemy_text(
-                    "SELECT COALESCE(SUM(purification_usd), 0) "
-                    "FROM purification_entries WHERE paid_at IS NULL"
+            outstanding = await session.exec(
+                select(func.coalesce(func.sum(PurificationEntry.purification_usd), 0.0)).where(
+                    PurificationEntry.paid_at.is_(None)
                 )
             )
-            paid_q = await session.execute(
-                sqlalchemy_text(
-                    "SELECT COALESCE(SUM(purification_usd), 0) "
-                    "FROM purification_entries WHERE paid_at IS NOT NULL"
+            paid = await session.exec(
+                select(func.coalesce(func.sum(PurificationEntry.purification_usd), 0.0)).where(
+                    PurificationEntry.paid_at.is_not(None)
                 )
             )
             return {
-                "outstanding_usd": float(outstanding_q.scalar_one() or 0.0),
-                "paid_usd": float(paid_q.scalar_one() or 0.0),
+                "outstanding_usd": float(outstanding.one() or 0.0),
+                "paid_usd": float(paid.one() or 0.0),
             }
 
     # ── Halal Screenings (shared audit trail) ──────────────────

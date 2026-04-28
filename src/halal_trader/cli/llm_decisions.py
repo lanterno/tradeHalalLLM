@@ -189,8 +189,8 @@ def cost_summary_cmd(days: int) -> None:
         settings = get_settings()
         engine = await init_db(settings.database_url)
         try:
-            async with AsyncSession(engine) as session:
-                result = await session.execute(
+            async with engine.connect() as conn:
+                result = await conn.execute(
                     sa.text(
                         """
                         SELECT date(timestamp) AS day,
