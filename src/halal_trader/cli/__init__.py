@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import click
 
-from halal_trader.cli import backup as backup_cmd
 from halal_trader.cli import crypto as crypto_cmd
 from halal_trader.cli import dashboard as dashboard_cmd
 from halal_trader.cli import db as db_cmd
@@ -49,9 +48,8 @@ cli.add_command(halt_cmd.halt)
 cli.add_command(halt_cmd.resume)
 cli.add_command(halt_cmd.halt_status)
 
-# ── Reconciliation + Backup ────────────────────────────────────
+# ── Reconciliation ─────────────────────────────────────────────
 cli.add_command(reconcile_cmd.reconcile)
-cli.add_command(backup_cmd.backup)
 
 # ── LLM Decision Audit ─────────────────────────────────────────
 cli.add_command(llm_decisions_cmd.llm_decisions)

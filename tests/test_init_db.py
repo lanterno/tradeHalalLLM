@@ -1,44 +1,69 @@
-"""Tests for init_db's Alembic schema-authority behavior.
+"""Tests for init_db's Alembic schema-authority behavior."""
 
-All tests use SQLite via the test fixtures — production runs Postgres,
-but the schema-authority logic is dialect-agnostic and tests don't
-require a running Postgres.
-"""
+from __future__ import annotations
 
+import uuid
+from collections.abc import AsyncIterator
+
+import psycopg
 import pytest
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlmodel import SQLModel
 
+import halal_trader.db.models  # noqa: F401  — populate metadata
 from halal_trader.db import admin
 from halal_trader.db.models import SchemaError, init_db
+from tests.conftest import (
+    _ADMIN_DSN_SYNC,
+    PG_HOST,
+    PG_PASS,
+    PG_PORT,
+    PG_USER,
+    _terminate_and_drop,
+)
 
 
-def _url(tmp_path, name="x.db") -> str:
-    return f"sqlite+aiosqlite:///{tmp_path / name}"
+def _scratch_db_url() -> tuple[str, str]:
+    """Create a one-off Postgres database for a single test; return its URL + name."""
+    name = f"halal_trader_init_{uuid.uuid4().hex[:10]}"
+    with psycopg.connect(_ADMIN_DSN_SYNC, autocommit=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute(f'CREATE DATABASE "{name}"')
+    return (
+        f"postgresql+asyncpg://{PG_USER}:{PG_PASS}@{PG_HOST}:{PG_PORT}/{name}",
+        name,
+    )
 
 
-async def test_init_db_rejects_empty_uninitialized(tmp_path):
+@pytest.fixture
+async def scratch_db() -> AsyncIterator[str]:
+    url, name = _scratch_db_url()
+    try:
+        yield url
+    finally:
+        _terminate_and_drop(name)
+
+
+async def test_init_db_rejects_empty_uninitialized(scratch_db):
     with pytest.raises(SchemaError, match="empty"):
-        await init_db(_url(tmp_path, "empty.db"))
+        await init_db(scratch_db)
 
 
-async def test_init_db_rejects_create_all_db_with_adoption_hint(tmp_path):
+async def test_init_db_rejects_create_all_db_with_adoption_hint(scratch_db):
     """A DB populated by SQLModel.create_all (no alembic_version) must be rejected."""
-    url = _url(tmp_path, "legacy.db")
-    engine = create_async_engine(url)
+    engine = create_async_engine(scratch_db)
     async with engine.begin() as conn:
         await conn.run_sync(SQLModel.metadata.create_all)
     await engine.dispose()
 
     with pytest.raises(SchemaError, match="db stamp head"):
-        await init_db(url)
+        await init_db(scratch_db)
 
 
-async def test_init_db_rejects_wrong_revision(tmp_path):
+async def test_init_db_rejects_wrong_revision(scratch_db):
     """A DB at a non-head revision must be rejected with migrate hint."""
-    url = _url(tmp_path, "old.db")
-    engine = create_async_engine(url)
+    engine = create_async_engine(scratch_db)
     async with engine.begin() as conn:
         await conn.run_sync(SQLModel.metadata.create_all)
         await conn.execute(
@@ -50,13 +75,12 @@ async def test_init_db_rejects_wrong_revision(tmp_path):
     await engine.dispose()
 
     with pytest.raises(SchemaError, match="db migrate"):
-        await init_db(url)
+        await init_db(scratch_db)
 
 
-async def test_init_db_succeeds_at_head(tmp_path):
+async def test_init_db_succeeds_at_head(scratch_db):
     """A DB at head must open cleanly."""
-    url = _url(tmp_path, "head.db")
-    engine = create_async_engine(url)
+    engine = create_async_engine(scratch_db)
     head = admin.head()
     async with engine.begin() as conn:
         await conn.run_sync(SQLModel.metadata.create_all)
@@ -66,7 +90,7 @@ async def test_init_db_succeeds_at_head(tmp_path):
         await conn.execute(sa.text(f"INSERT INTO alembic_version (version_num) VALUES ('{head}')"))
     await engine.dispose()
 
-    opened = await init_db(url)
+    opened = await init_db(scratch_db)
     try:
         async with opened.connect() as conn:
             row = await conn.execute(sa.text("SELECT version_num FROM alembic_version"))
@@ -76,7 +100,6 @@ async def test_init_db_succeeds_at_head(tmp_path):
 
 
 def test_alembic_head_resolves_to_a_revision_id():
-    """Sanity check — head() returns *some* revision id (squashed migration)."""
     head = admin.head()
     assert isinstance(head, str)
     assert len(head) >= 12

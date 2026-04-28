@@ -32,7 +32,7 @@ def upgrade() -> None:
         sa.Column("outcome_pnl_pct", sa.Float(), nullable=False),
         sa.Column("outcome_win", sa.Boolean(), nullable=False),
         sa.Column("setup_type", sqlmodel.sql.sqltypes.AutoString(), nullable=True),
-        sa.Column("timestamp", sa.DateTime(), nullable=False),
+        sa.Column("timestamp", sa.DateTime(timezone=True), nullable=False),
         sa.PrimaryKeyConstraint("trade_id"),
     )
     op.create_index(op.f("ix_rag_rationales_symbol"), "rag_rationales", ["symbol"], unique=False)
@@ -46,7 +46,7 @@ def upgrade() -> None:
         sa.Column("pnl_pct", sa.Float(), nullable=False),
         sa.Column("note", sqlmodel.sql.sqltypes.AutoString(), nullable=False),
         sa.Column("setup_type", sqlmodel.sql.sqltypes.AutoString(), nullable=True),
-        sa.Column("closed_at", sa.DateTime(), nullable=False),
+        sa.Column("closed_at", sa.DateTime(timezone=True), nullable=False),
         sa.PrimaryKeyConstraint("trade_id"),
     )
     op.create_index(op.f("ix_regret_records_symbol"), "regret_records", ["symbol"], unique=False)
@@ -57,7 +57,7 @@ def upgrade() -> None:
         sa.Column("confidence", sa.Float(), nullable=False),
         sa.Column("reason", sqlmodel.sql.sqltypes.AutoString(), nullable=True),
         sa.Column("method", sqlmodel.sql.sqltypes.AutoString(), nullable=False),
-        sa.Column("set_at", sa.DateTime(), nullable=False),
+        sa.Column("set_at", sa.DateTime(timezone=True), nullable=False),
         sa.PrimaryKeyConstraint("trade_id"),
     )
     # ### end Alembic commands ###

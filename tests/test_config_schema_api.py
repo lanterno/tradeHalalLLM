@@ -10,26 +10,12 @@ from halal_trader.web import app as web_app
 
 @pytest.fixture
 def client(tmp_path, monkeypatch):
-    db_path = tmp_path / "schema.db"
-    monkeypatch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
-    monkeypatch.setenv("BACKUP_DIR", str(tmp_path / "backups"))
     monkeypatch.setenv("LOG_DIR", str(tmp_path / "logs"))
-
-    import halal_trader.config as _config
-
-    _config._settings = None
-
-    from halal_trader.db import admin
-
-    admin.upgrade("head")
-
     web_app.app_state.clear()
     app = web_app.create_app()
 
     with TestClient(app) as c:
         yield c
-
-    _config._settings = None
 
 
 def test_schema_returns_list_of_fields(client):

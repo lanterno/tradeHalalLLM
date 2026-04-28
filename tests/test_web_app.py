@@ -9,16 +9,13 @@ from halal_trader.web import app as web_app
 
 
 @pytest.fixture
-def client(tmp_path, monkeypatch):
+def client(database_url, tmp_path, monkeypatch):
     """TestClient pointed at a fresh tmp DB.
 
     `init_db` (called by the app's lifespan) refuses any DB that isn't at
     the head Alembic revision, so we apply migrations against the tmp DB
     via `alembic.command.upgrade` first.
     """
-    db_path = tmp_path / "web.db"
-    monkeypatch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
-    monkeypatch.setenv("BACKUP_DIR", str(tmp_path / "backups"))
     monkeypatch.setenv("LOG_DIR", str(tmp_path / "logs"))
     # Phase W0 introduced the auth gate; the legacy halt endpoint is now
     # also a mutation under the gate. Provide a token here so the rest
@@ -27,15 +24,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setenv("WEB_API_TOKEN", "legacy-test-token")
 
     # Bust the Settings singleton so the new env vars are picked up.
-    import halal_trader.config as _config
-
-    _config._settings = None
-
     # Apply migrations to the fresh tmp DB.
-    from halal_trader.db import admin
-
-    admin.upgrade("head")
-
     web_app.app_state.clear()
     app = web_app.create_app()
 
@@ -47,7 +36,6 @@ def client(tmp_path, monkeypatch):
         yield c
 
     # Reset the Settings singleton for the next test.
-    _config._settings = None
 
 
 # ── Health & basic GETs ────────────────────────────────────────
@@ -168,13 +156,16 @@ def test_reconcile_recent_paginates(client):
     # Seed a row directly via the engine.
     from datetime import UTC, datetime
 
-    from sqlmodel.ext.asyncio.session import AsyncSession
+    from sqlalchemy import create_engine
+    from sqlmodel import Session
 
+    from halal_trader.config import get_settings
     from halal_trader.db.models import ReconciliationLog
 
-    async def _seed():
-        eng = web_app.app_state["engine"]
-        async with AsyncSession(eng) as session:
+    sync_url = get_settings().database_url_sync()
+    eng = create_engine(sync_url)
+    try:
+        with Session(eng) as session:
             for i in range(5):
                 session.add(
                     ReconciliationLog(
@@ -186,11 +177,9 @@ def test_reconcile_recent_paginates(client):
                         drift_pct=0.5,
                     )
                 )
-            await session.commit()
-
-    import asyncio
-
-    asyncio.run(_seed())
+            session.commit()
+    finally:
+        eng.dispose()
 
     r = client.get("/api/system/reconcile/recent?limit=3")
     assert r.status_code == 200
@@ -203,10 +192,8 @@ def test_reconcile_recent_caps_limit(client):
     assert r.status_code == 200
 
 
-def test_backups_endpoint_empty(client, tmp_path, monkeypatch):
-    from halal_trader.config import get_settings
-
-    monkeypatch.setattr(get_settings().backup, "dir", tmp_path / "noexist")
+def test_backups_endpoint_empty(client):
+    """Postgres baseline — backups endpoint returns empty list."""
     r = client.get("/api/system/backups")
     assert r.status_code == 200
     assert r.json() == []

@@ -16,21 +16,17 @@ The taxonomy is intentionally tiny:
 
 Few enough buckets that 50 trades is enough to spot which one is decaying.
 
-Persistence: a JSON sidecar (``thesis_tags.json`` in the data dir). No
-schema migration required, so this lands behind a feature flag without
-touching any other module's wire format. When the column lands, the
-sidecar is the source of truth for backfill.
+Persistence: DB-backed (`core/thesis_db.py:DBThesisTagStore`). The
+tagger / attribution helpers in this module are pure functions over
+the in-memory dataclasses; the store wires them into the DB.
 """
 
 from __future__ import annotations
 
-import json
 import logging
 import time
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any
 
 from halal_trader.domain.ports import LLMBackend
 
@@ -185,67 +181,6 @@ async def llm_tag(llm: LLMBackend, ctx: TaggedTradeContext) -> TagVerdict:
     except (TypeError, ValueError) as _exc:  # noqa: F841 — keep parens, ruff format strips them otherwise
         cost = 0.0
     return TagVerdict(tag=tag, confidence=conf, reason=reason, elapsed_ms=elapsed, cost_usd=cost)
-
-
-# ── Sidecar persistence ───────────────────────────────────────────
-
-
-@dataclass
-class ThesisTagStore:
-    """JSON-on-disk store of trade_id → tag.
-
-    Schema-free, ops-simple, swappable for a real column when one lands.
-    """
-
-    path: Path
-
-    def __post_init__(self) -> None:
-        self.path = Path(self.path)
-        if not self.path.parent.exists():
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-
-    def _load(self) -> dict[str, dict[str, Any]]:
-        if not self.path.exists():
-            return {}
-        try:
-            data = json.loads(self.path.read_text())
-            if not isinstance(data, dict):
-                return {}
-            return {str(k): dict(v) for k, v in data.items() if isinstance(v, dict)}
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("thesis tag sidecar unreadable, starting fresh: %s", exc)
-            return {}
-
-    def _save(self, data: dict[str, dict[str, Any]]) -> None:
-        self.path.write_text(json.dumps(data, indent=2, sort_keys=True))
-
-    def get(self, trade_id: str) -> str | None:
-        data = self._load()
-        rec = data.get(str(trade_id))
-        return rec.get("tag") if rec else None
-
-    def set(
-        self,
-        trade_id: str,
-        tag: str,
-        *,
-        confidence: float = 1.0,
-        reason: str = "",
-        method: str = "heuristic",
-    ) -> None:
-        if tag not in THESIS_TAGS:
-            tag = "unknown"
-        data = self._load()
-        data[str(trade_id)] = {
-            "tag": tag,
-            "confidence": confidence,
-            "reason": reason,
-            "method": method,
-        }
-        self._save(data)
-
-    def all(self) -> dict[str, str]:
-        return {tid: rec.get("tag", "unknown") for tid, rec in self._load().items()}
 
 
 # ── Attribution analytics ─────────────────────────────────────────

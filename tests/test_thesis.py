@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -14,7 +13,6 @@ from halal_trader.core.thesis import (
     AttributionRow,
     TaggedTradeContext,
     TagVerdict,
-    ThesisTagStore,
     attribute_pnl_by_thesis,
     deprecated_thesis_kill_list,
     heuristic_tag,
@@ -130,47 +128,6 @@ async def test_llm_tag_failure_falls_back_to_heuristic() -> None:
     v = await llm_tag(llm, ctx)
     assert v.tag == "breakout"  # heuristic match
     assert v.confidence < 0.5
-
-
-# ── Store ─────────────────────────────────────────────────────────
-
-
-def test_store_round_trip(tmp_path: Path) -> None:
-    p = tmp_path / "tags.json"
-    s = ThesisTagStore(path=p)
-    s.set("trade-1", "breakout", confidence=0.8, reason="x", method="llm")
-    assert s.get("trade-1") == "breakout"
-
-
-def test_store_unknown_tag_coerced_to_unknown(tmp_path: Path) -> None:
-    p = tmp_path / "tags.json"
-    s = ThesisTagStore(path=p)
-    s.set("t", "magic_tag")
-    assert s.get("t") == "unknown"
-
-
-def test_store_all_returns_lookup(tmp_path: Path) -> None:
-    p = tmp_path / "tags.json"
-    s = ThesisTagStore(path=p)
-    s.set("a", "breakout")
-    s.set("b", "trend_follow")
-    assert s.all() == {"a": "breakout", "b": "trend_follow"}
-
-
-def test_store_resilient_to_corrupt_file(tmp_path: Path) -> None:
-    p = tmp_path / "tags.json"
-    p.write_text("{not json")
-    s = ThesisTagStore(path=p)
-    assert s.get("any") is None
-    s.set("trade-1", "scalp")
-    assert s.get("trade-1") == "scalp"
-
-
-def test_store_creates_parent_dir(tmp_path: Path) -> None:
-    p = tmp_path / "deep" / "nested" / "tags.json"
-    s = ThesisTagStore(path=p)
-    s.set("t", "scalp")
-    assert p.exists()
 
 
 # ── Attribution ───────────────────────────────────────────────────

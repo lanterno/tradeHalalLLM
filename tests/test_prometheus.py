@@ -82,19 +82,7 @@ def test_collector_skips_none_drawdown():
 
 @pytest.fixture
 def client(tmp_path, monkeypatch):
-    db_path = tmp_path / "metrics.db"
-    monkeypatch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
-    monkeypatch.setenv("BACKUP_DIR", str(tmp_path / "backups"))
     monkeypatch.setenv("LOG_DIR", str(tmp_path / "logs"))
-
-    import halal_trader.config as _config
-
-    _config._settings = None
-
-    from halal_trader.db import admin
-
-    admin.upgrade("head")
-
     web_app.app_state.clear()
     web_app.app_state["bot_running"] = True
     web_app.app_state["llm_cost_today_usd"] = 0.42
@@ -102,8 +90,6 @@ def client(tmp_path, monkeypatch):
 
     with TestClient(app) as c:
         yield c
-
-    _config._settings = None
 
 
 def test_metrics_endpoint_returns_text(client):

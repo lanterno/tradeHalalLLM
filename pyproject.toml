@@ -67,10 +67,6 @@ dev = [
     "ruff",
     "mypy",
     "pre-commit",
-    # Test-only: sqlite in-memory engines for unit tests so the suite
-    # doesn't require a running Postgres. Production runs on Postgres
-    # via DATABASE_URL — the two never coexist in the same process.
-    "aiosqlite",
 ]
 
 [project.scripts]

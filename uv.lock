@@ -644,7 +644,6 @@ dashboard = [
     { name = "uvicorn" },
 ]
 dev = [
-    { name = "aiosqlite" },
     { name = "mypy" },
     { name = "pre-commit" },
     { name = "pytest" },
@@ -671,7 +670,6 @@ sentiment = [
 [package.metadata]
 requires-dist = [
     { name = "aiosqlite" },
-    { name = "aiosqlite", marker = "extra == 'dev'" },
     { name = "alembic" },
     { name = "anthropic" },
     { name = "apscheduler", specifier = ">=3.10" },

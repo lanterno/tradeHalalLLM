@@ -1,4 +1,4 @@
-"""DB-backed regret recorder — async equivalent of ``RegretSidecar``."""
+"""DB-backed regret recorder — append-only over ``regret_records``."""
 
 from __future__ import annotations
 
@@ -19,9 +19,8 @@ logger = logging.getLogger(__name__)
 class DBRegretRecorder:
     """Persistent regret record store.
 
-    Same role as the JSON-sidecar :class:`RegretSidecar` but rows live
-    in ``regret_records`` so aggregate queries (mean, p99, by symbol /
-    setup_type) run as proper SQL.
+    Rows live in ``regret_records`` so aggregate queries (mean, p99,
+    by symbol / setup_type) run as proper SQL.
     """
 
     engine: AsyncEngine

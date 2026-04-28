@@ -1,20 +1,13 @@
 """Tests for the halal cache and screener."""
 
 import pytest
-from sqlalchemy.ext.asyncio import create_async_engine
-from sqlmodel import SQLModel
 
 from halal_trader.db.repository import Repository
 from halal_trader.halal.cache import DEFAULT_HALAL_SYMBOLS, HalalScreener
 
 
 @pytest.fixture
-async def repo(tmp_path):
-    """Create an in-memory SQLite repository."""
-    db_path = str(tmp_path / "test.db")
-    engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}")
-    async with engine.begin() as conn:
-        await conn.run_sync(SQLModel.metadata.create_all)
+async def repo(engine):
     return Repository(engine)
 
 

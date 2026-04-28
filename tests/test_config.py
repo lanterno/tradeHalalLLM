@@ -5,7 +5,6 @@ from typing import Any
 from halal_trader.config import (
     AlpacaSettings,
     AnthropicSettings,
-    BackupSettings,
     BinanceSettings,
     CoinGeckoSettings,
     CryptoPanicSettings,
@@ -54,7 +53,6 @@ def _isolated_settings(**overrides: Any) -> Settings:
         "ml": MLSettings(_env_file=None),
         "telegram": TelegramSettings(_env_file=None),
         "live_mode": LiveModeSettings(_env_file=None),
-        "backup": BackupSettings(_env_file=None),
         "log": LogSettings(_env_file=None),
     }
     defaults.update(overrides)

@@ -1,20 +1,14 @@
-"""Database-backed RAG store — same interface as ``RationaleStore``.
-
-Lives next to the JSON-backed :class:`RationaleStore` so the cycle can
-opt into either one. Production wires the DB variant via
-``CryptoComponents.build_components``; tests use the JSON variant
-because they bypass the engine entirely.
+"""Database-backed RAG store over `rag_rationales`.
 
 Storage shape
 =============
 Each rationale lands as one ``rag_rationales`` row with the embedding
-serialised as a JSON list[float] (portable across SQLite-test and
-Postgres-prod). Switching to a ``vector(512)`` column with an HNSW
-index is one alembic migration away — the public methods here don't
-change.
+serialised as a JSON list[float]. Switching to a ``vector(512)``
+column with an HNSW index is one alembic migration away — the public
+methods here don't change.
 
-API mirrors :class:`RationaleStore` but is fully async, since every
-call site already runs inside an async context.
+API is fully async since every call site already runs inside an
+async context.
 """
 
 from __future__ import annotations
@@ -46,8 +40,7 @@ logger = logging.getLogger(__name__)
 class DBRationaleStore:
     """Async DB-backed rationale store.
 
-    Same retrieval semantics as :class:`RationaleStore`: linear-scan
-    cosine over JSON-encoded vectors. Linear scan is fine up to a few
+    Linear-scan cosine over JSON-encoded vectors. Fine up to a few
     thousand rows; past that, swap the body of :meth:`query` for a
     pgvector index without touching the public API.
     """
@@ -150,7 +143,7 @@ class DBRationaleStore:
         return scored[:k]
 
     async def aggregate(self, hits: Iterable[tuple[RationaleRowDC, float]]) -> dict[str, Any]:
-        """Mirror of ``RationaleStore.aggregate``."""
+        """Similarity-weighted stats over a query result."""
         hits = list(hits)
         if not hits:
             return {"n": 0, "weighted_pnl_pct": 0.0, "weighted_win_rate": 0.0}

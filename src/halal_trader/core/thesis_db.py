@@ -1,4 +1,4 @@
-"""DB-backed thesis tag store — async equivalent of ``ThesisTagStore``."""
+"""DB-backed thesis tag store over ``thesis_tags``."""
 
 from __future__ import annotations
 

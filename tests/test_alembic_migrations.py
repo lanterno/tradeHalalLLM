@@ -1,70 +1,72 @@
-"""Sanity checks on the Postgres-baseline Alembic migration.
-
-Pre-Postgres history (17 sqlite-shaped revisions) was archived into
-``alembic/versions_legacy_sqlite/`` and squashed into a single fresh
-initial revision. These tests verify that:
-
-* The squashed revision applies cleanly against an empty SQLite (the
-  test fixtures use SQLite — production uses Postgres).
-* Every model declared in ``halal_trader.db.models`` is materialised.
-* ``admin.head()`` resolves to a non-empty revision id.
-
-For dialect-specific behaviour (pgvector, Postgres-only constraints),
-add Postgres-only tests guarded by an ``@pytest.mark.requires_pg``
-marker once the suite has a docker-compose-backed test fixture.
-"""
+"""Sanity checks on the Postgres-baseline Alembic migration."""
 
 from __future__ import annotations
 
-import sqlite3
-from pathlib import Path
-
+import psycopg
 import pytest
 from alembic.config import Config
 
 from alembic import command
 from halal_trader.db import admin
-
-
-def _alembic_cfg(db_path: Path) -> Config:
-    cfg = admin._alembic_config()
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
-    return cfg
+from tests.conftest import (
+    _ADMIN_DSN_SYNC,
+    PG_HOST,
+    PG_PASS,
+    PG_PORT,
+    PG_USER,
+    _terminate_and_drop,
+)
 
 
 @pytest.fixture
-def db_path(tmp_path, monkeypatch):
-    import logging
+def scratch_db(monkeypatch):
+    import uuid
 
-    path = tmp_path / "alembic_test.db"
-    monkeypatch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{path}")
+    name = f"halal_trader_alembic_{uuid.uuid4().hex[:10]}"
+    with psycopg.connect(_ADMIN_DSN_SYNC, autocommit=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute(f'CREATE DATABASE "{name}"')
+    sync_url = f"postgresql+psycopg://{PG_USER}:{PG_PASS}@{PG_HOST}:{PG_PORT}/{name}"
+    raw_url = f"postgresql://{PG_USER}:{PG_PASS}@{PG_HOST}:{PG_PORT}/{name}"
+    async_url = f"postgresql+asyncpg://{PG_USER}:{PG_PASS}@{PG_HOST}:{PG_PORT}/{name}"
+    monkeypatch.setenv("DATABASE_URL", async_url)
     import halal_trader.config as _config
 
-    _config._settings = None
-
-    saved_handlers = list(logging.getLogger().handlers)
-    saved_level = logging.getLogger().level
+    monkeypatch.setattr(_config, "_settings", None, raising=False)
     try:
-        yield path
+        yield raw_url, sync_url
     finally:
-        _config._settings = None
-        root = logging.getLogger()
-        root.handlers[:] = saved_handlers
-        root.setLevel(saved_level)
+        _terminate_and_drop(name)
 
 
-def _tables_in(db_path: Path) -> set[str]:
-    with sqlite3.connect(str(db_path)) as conn:
-        rows = conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+def _alembic_cfg(sync_url: str) -> Config:
+    cfg = admin._alembic_config()
+    cfg.set_main_option("sqlalchemy.url", sync_url)
+    return cfg
+
+
+def _tables_in(raw_url: str) -> set[str]:
+    with psycopg.connect(raw_url) as conn:
+        rows = conn.execute(
+            "SELECT tablename FROM pg_tables WHERE schemaname = 'public'"
+        ).fetchall()
     return {r[0] for r in rows}
 
 
-def test_initial_revision_creates_expected_tables(db_path):
-    """The squashed initial migration must materialise every core table."""
-    cfg = _alembic_cfg(db_path)
-    command.upgrade(cfg, "head")
+def _columns_in(raw_url: str, table: str) -> set[str]:
+    with psycopg.connect(raw_url) as conn:
+        rows = conn.execute(
+            "SELECT column_name FROM information_schema.columns WHERE table_name = %s",
+            (table,),
+        ).fetchall()
+    return {r[0] for r in rows}
 
-    tables = _tables_in(db_path)
+
+def test_initial_revision_creates_expected_tables(scratch_db):
+    raw_url, sync_url = scratch_db
+    command.upgrade(_alembic_cfg(sync_url), "head")
+
+    tables = _tables_in(raw_url)
     expected = {
         "alembic_version",
         "trades",
@@ -88,17 +90,16 @@ def test_head_resolves_to_a_revision_id():
     assert len(head) >= 12
 
 
-def test_initial_revision_includes_post_phase0_columns(db_path):
+def test_initial_revision_includes_post_phase0_columns(scratch_db):
     """Smoke-check that the squashed migration carries forward the
     Phase-0.x columns we used to test individually."""
-    cfg = _alembic_cfg(db_path)
-    command.upgrade(cfg, "head")
+    raw_url, sync_url = scratch_db
+    command.upgrade(_alembic_cfg(sync_url), "head")
 
-    with sqlite3.connect(str(db_path)) as conn:
-        crypto_cols = {r[1] for r in conn.execute("PRAGMA table_info(crypto_trades)").fetchall()}
-        llm_cols = {r[1] for r in conn.execute("PRAGMA table_info(llm_decisions)").fetchall()}
+    crypto_cols = _columns_in(raw_url, "crypto_trades")
     for col in ("submitted_at", "filled_at", "filled_price", "filled_quantity"):
         assert col in crypto_cols, f"crypto_trades missing {col}"
+    llm_cols = _columns_in(raw_url, "llm_decisions")
     for col in (
         "prompt_version",
         "input_tokens",

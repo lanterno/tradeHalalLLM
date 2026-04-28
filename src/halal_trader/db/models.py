@@ -4,6 +4,7 @@ import logging
 from datetime import UTC, datetime
 from pathlib import Path
 
+import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlmodel import Field, SQLModel
 
@@ -19,7 +20,9 @@ class Trade(SQLModel, table=True):
     __tablename__ = "trades"
 
     id: int | None = Field(default=None, primary_key=True)
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    timestamp: datetime = Field(
+        default_factory=lambda: datetime.now(UTC), sa_type=sa.DateTime(timezone=True)
+    )
     symbol: str
     side: str  # 'buy' or 'sell'
     quantity: float
@@ -29,8 +32,8 @@ class Trade(SQLModel, table=True):
     llm_reasoning: str | None = None
 
     # Fill confirmation (populated by FillConfirmer after place_order).
-    submitted_at: datetime | None = None
-    filled_at: datetime | None = None
+    submitted_at: datetime | None = Field(default=None, sa_type=sa.DateTime(timezone=True))
+    filled_at: datetime | None = Field(default=None, sa_type=sa.DateTime(timezone=True))
     filled_price: float | None = None
     filled_quantity: float | None = None
 
@@ -44,7 +47,7 @@ class Trade(SQLModel, table=True):
     target_price: float | None = None
     exit_price: float | None = None
     exit_reason: str | None = None
-    closed_at: datetime | None = None
+    closed_at: datetime | None = Field(default=None, sa_type=sa.DateTime(timezone=True))
 
     # Paper-vs-live divergence — both sides record realized slippage
     # (signed, in fraction of price) so the operator can sanity-check
@@ -75,7 +78,9 @@ class HalalCache(SQLModel, table=True):
     symbol: str = Field(primary_key=True)
     compliance: str  # 'halal', 'not_halal', 'doubtful'
     detail: str | None = None
-    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = Field(
+        default_factory=lambda: datetime.now(UTC), sa_type=sa.DateTime(timezone=True)
+    )
 
 
 class LlmDecision(SQLModel, table=True):
@@ -84,7 +89,9 @@ class LlmDecision(SQLModel, table=True):
     __tablename__ = "llm_decisions"
 
     id: int | None = Field(default=None, primary_key=True)
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    timestamp: datetime = Field(
+        default_factory=lambda: datetime.now(UTC), sa_type=sa.DateTime(timezone=True)
+    )
     provider: str
     model: str
     prompt_summary: str | None = None
@@ -113,7 +120,9 @@ class CryptoTrade(SQLModel, table=True):
     __tablename__ = "crypto_trades"
 
     id: int | None = Field(default=None, primary_key=True)
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    timestamp: datetime = Field(
+        default_factory=lambda: datetime.now(UTC), sa_type=sa.DateTime(timezone=True)
+    )
     pair: str  # e.g. 'BTCUSDT'
     side: str  # 'buy' or 'sell'
     quantity: float
@@ -128,11 +137,11 @@ class CryptoTrade(SQLModel, table=True):
     target_price: float | None = None
     exit_price: float | None = None
     exit_reason: str | None = None
-    closed_at: datetime | None = None
+    closed_at: datetime | None = Field(default=None, sa_type=sa.DateTime(timezone=True))
 
     # Fill confirmation (populated by FillConfirmer after place_order).
-    submitted_at: datetime | None = None
-    filled_at: datetime | None = None
+    submitted_at: datetime | None = Field(default=None, sa_type=sa.DateTime(timezone=True))
+    filled_at: datetime | None = Field(default=None, sa_type=sa.DateTime(timezone=True))
     filled_price: float | None = None
     filled_quantity: float | None = None
 
@@ -168,7 +177,9 @@ class CryptoHalalCache(SQLModel, table=True):
     category: str | None = None  # e.g. 'layer-1', 'defi', 'meme'
     market_cap: float | None = None
     screening_criteria: str | None = None  # JSON string of criteria met/failed
-    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = Field(
+        default_factory=lambda: datetime.now(UTC), sa_type=sa.DateTime(timezone=True)
+    )
 
 
 class IndicatorSnapshot(SQLModel, table=True):
@@ -179,7 +190,9 @@ class IndicatorSnapshot(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     trade_id: int = Field(index=True)
     pair: str
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    timestamp: datetime = Field(
+        default_factory=lambda: datetime.now(UTC), sa_type=sa.DateTime(timezone=True)
+    )
     rsi_14: float | None = None
     macd_histogram: float | None = None
     volume_ratio: float | None = None
@@ -199,7 +212,9 @@ class StrategyAdjustment(SQLModel, table=True):
     __tablename__ = "strategy_adjustments"
 
     id: int | None = Field(default=None, primary_key=True)
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    timestamp: datetime = Field(
+        default_factory=lambda: datetime.now(UTC), sa_type=sa.DateTime(timezone=True)
+    )
     parameter: str
     old_value: float | None = None
     new_value: float
@@ -212,7 +227,9 @@ class ReconciliationLog(SQLModel, table=True):
     __tablename__ = "reconciliation_log"
 
     id: int | None = Field(default=None, primary_key=True)
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    timestamp: datetime = Field(
+        default_factory=lambda: datetime.now(UTC), sa_type=sa.DateTime(timezone=True)
+    )
     market: str  # 'stocks' | 'crypto'
     symbol: str  # asset/ticker affected
     db_quantity: float
@@ -228,14 +245,16 @@ class ResearchJob(SQLModel, table=True):
     __tablename__ = "research_jobs"
 
     id: int | None = Field(default=None, primary_key=True)
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    timestamp: datetime = Field(
+        default_factory=lambda: datetime.now(UTC), sa_type=sa.DateTime(timezone=True)
+    )
     kind: str  # 'backtest' | 'walk_forward' | 'monte_carlo'
     name: str | None = None  # operator-supplied label
     params: str  # JSON of inputs
     status: str = Field(default="queued")  # 'queued' | 'running' | 'ok' | 'error'
     result: str | None = None  # JSON-encoded outcome
     error: str | None = None
-    finished_at: datetime | None = None
+    finished_at: datetime | None = Field(default=None, sa_type=sa.DateTime(timezone=True))
     pinned: bool = Field(default=False)
 
 
@@ -253,7 +272,9 @@ class RuntimeConfig(SQLModel, table=True):
     key: str = Field(primary_key=True)  # uppercase env-var name
     value: str  # JSON-encoded so we can round-trip int/float/list
     set_by: str | None = None
-    set_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    set_at: datetime = Field(
+        default_factory=lambda: datetime.now(UTC), sa_type=sa.DateTime(timezone=True)
+    )
 
 
 class PairPause(SQLModel, table=True):
@@ -268,7 +289,9 @@ class PairPause(SQLModel, table=True):
 
     pair: str = Field(primary_key=True)
     set_by: str | None = None
-    set_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    set_at: datetime = Field(
+        default_factory=lambda: datetime.now(UTC), sa_type=sa.DateTime(timezone=True)
+    )
     reason: str | None = None
 
 
@@ -285,7 +308,9 @@ class WebAction(SQLModel, table=True):
     __tablename__ = "web_actions"
 
     id: int | None = Field(default=None, primary_key=True)
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    timestamp: datetime = Field(
+        default_factory=lambda: datetime.now(UTC), sa_type=sa.DateTime(timezone=True)
+    )
     actor: str  # the request_id ContextVar value, or "anon" if missing
     method: str  # POST | DELETE | PATCH | PUT
     path: str  # e.g. "/api/admin/halt"
@@ -306,13 +331,15 @@ class PurificationEntry(SQLModel, table=True):
     __tablename__ = "purification_entries"
 
     id: int | None = Field(default=None, primary_key=True)
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    timestamp: datetime = Field(
+        default_factory=lambda: datetime.now(UTC), sa_type=sa.DateTime(timezone=True)
+    )
     symbol: str = Field(index=True)
     dividend_usd: float
     haram_pct: float
     purification_usd: float
     notes: str | None = None
-    paid_at: datetime | None = None
+    paid_at: datetime | None = Field(default=None, sa_type=sa.DateTime(timezone=True))
 
 
 class HalalScreening(SQLModel, table=True):
@@ -328,7 +355,9 @@ class HalalScreening(SQLModel, table=True):
     __tablename__ = "halal_screenings"
 
     id: int | None = Field(default=None, primary_key=True)
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    timestamp: datetime = Field(
+        default_factory=lambda: datetime.now(UTC), sa_type=sa.DateTime(timezone=True)
+    )
     symbol: str = Field(index=True)
     asset_class: str  # 'stock' | 'crypto'
     source: str  # 'zoya' | 'coingecko_rules' | 'override' | 'cache' | …
@@ -353,7 +382,9 @@ class ThesisTagRow(SQLModel, table=True):
     confidence: float = 0.0
     reason: str | None = None
     method: str = Field(default="heuristic")  # heuristic | llm
-    set_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    set_at: datetime = Field(
+        default_factory=lambda: datetime.now(UTC), sa_type=sa.DateTime(timezone=True)
+    )
 
 
 class RegretRecordRow(SQLModel, table=True):
@@ -373,7 +404,9 @@ class RegretRecordRow(SQLModel, table=True):
     pnl_pct: float
     note: str = ""
     setup_type: str | None = None
-    closed_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    closed_at: datetime = Field(
+        default_factory=lambda: datetime.now(UTC), sa_type=sa.DateTime(timezone=True)
+    )
 
 
 class RationaleRow(SQLModel, table=True):
@@ -394,7 +427,9 @@ class RationaleRow(SQLModel, table=True):
     outcome_pnl_pct: float
     outcome_win: bool
     setup_type: str | None = None
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    timestamp: datetime = Field(
+        default_factory=lambda: datetime.now(UTC), sa_type=sa.DateTime(timezone=True)
+    )
 
 
 class KillSwitch(SQLModel, table=True):
@@ -412,7 +447,7 @@ class KillSwitch(SQLModel, table=True):
     enabled: bool = Field(default=False)
     reason: str | None = None
     set_by: str | None = None
-    set_at: datetime | None = None
+    set_at: datetime | None = Field(default=None, sa_type=sa.DateTime(timezone=True))
 
 
 # ── Schema authority ────────────────────────────────────────────
@@ -447,8 +482,6 @@ async def init_db(database_url: str) -> AsyncEngine:
     expected_tables = set(SQLModel.metadata.tables.keys())
 
     async with engine.connect() as conn:
-        # Use SQLAlchemy's inspector — dialect-agnostic. Tests use SQLite
-        # via the test fixtures; production uses Postgres.
         existing_tables = set(await conn.run_sync(lambda c: sa.inspect(c).get_table_names()))
         alembic_table_present = "alembic_version" in existing_tables
 

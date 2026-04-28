@@ -7,8 +7,6 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from sqlalchemy.ext.asyncio import create_async_engine
-from sqlmodel import SQLModel
 
 from halal_trader.config import (
     AlpacaSettings,
@@ -67,15 +65,6 @@ def _settings(
         ),
         **rest,
     )
-
-
-@pytest.fixture
-async def engine(tmp_path):
-    eng = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/safe.db")
-    async with eng.begin() as conn:
-        await conn.run_sync(SQLModel.metadata.create_all)
-    yield eng
-    await eng.dispose()
 
 
 def _alert_sink() -> tuple[AlertSink, MagicMock]:

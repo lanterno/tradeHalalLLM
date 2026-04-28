@@ -213,12 +213,6 @@ class CryptoTradingBot(BaseTradingBot):
                     await self._notifier.notify_daily_summary(summary or {})
                 except Exception as e:
                     logger.debug("Failed to send daily summary: %s", e)
-
-            # Daily backup — disabled under the Postgres baseline. The
-            # legacy SQLite gzipped-snapshot path doesn't apply; use
-            # pg_dump (or managed-DB snapshots) instead. Re-enable here
-            # when a pg-aware backup module is wired.
-            logger.debug("Daily SQLite backup hook skipped under Postgres baseline")
         except Exception as e:
             logger.error("Crypto daily end failed: %s", e)
 

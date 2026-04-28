@@ -377,23 +377,22 @@ def register(app: FastAPI, app_state: dict[str, Any]) -> None:
 
     @app.get("/api/insights/rag")
     async def api_rag(query: str = "", k: int = 5) -> JSONResponse:
-        from halal_trader.config import get_settings
-        from halal_trader.core.llm.rag import RationaleStore
+        from halal_trader.core.llm.rag_db import DBRationaleStore
 
-        settings = get_settings()
-        path = settings.resolve_data_dir() / "analytics" / "rag_rationales.json"
-        if not path.exists():
+        engine = app_state.get("engine")
+        if engine is None:
             return JSONResponse({"available": False})
-        store = RationaleStore(path=path)
-        if store.size == 0:
+        store = DBRationaleStore(engine=engine)
+        size = await store.size()
+        if size == 0:
             return JSONResponse({"available": False})
         if not query:
-            return JSONResponse({"available": True, "size": store.size, "hits": []})
-        hits = store.query(query, k=k, min_similarity=0.0)
+            return JSONResponse({"available": True, "size": size, "hits": []})
+        hits = await store.query(query, k=k, min_similarity=0.0)
         return JSONResponse(
             {
                 "available": True,
-                "size": store.size,
+                "size": size,
                 "hits": [
                     {
                         "trade_id": r.trade_id,
@@ -405,7 +404,7 @@ def register(app: FastAPI, app_state: dict[str, Any]) -> None:
                     }
                     for r, sim in hits
                 ],
-                "aggregate": store.aggregate(hits),
+                "aggregate": await store.aggregate(hits),
             }
         )
 

@@ -1,34 +1,10 @@
-"""Tests for the DB-backed RAG / thesis / regret stores.
-
-All three stores share the same shape: async DB-backed implementations
-of the JSON-sidecar interfaces. Tests use SQLite via the existing
-fixture pattern — production runs against Postgres, but the storage
-logic is dialect-agnostic.
-"""
+"""Tests for the DB-backed RAG / thesis / regret stores."""
 
 from __future__ import annotations
-
-import pytest
-from sqlalchemy.ext.asyncio import create_async_engine
-from sqlmodel import SQLModel
 
 from halal_trader.core.llm.rag_db import DBRationaleStore
 from halal_trader.core.regret_db import DBRegretRecorder
 from halal_trader.core.thesis_db import DBThesisTagStore
-
-
-@pytest.fixture
-async def engine(tmp_path):
-    """Per-test SQLite engine with the full schema applied via create_all."""
-    eng = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'db_stores.db'}")
-    # Touch every model so SQLModel.metadata is fully populated.
-    import halal_trader.db.models  # noqa: F401
-
-    async with eng.begin() as conn:
-        await conn.run_sync(SQLModel.metadata.create_all)
-    yield eng
-    await eng.dispose()
-
 
 # ── DBRationaleStore ─────────────────────────────────────────────
 

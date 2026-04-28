@@ -374,28 +374,18 @@ class CryptoCycleService(BaseCycleService):
         # RAG over our own past rationales — query with a compact summary
         # of the current setup and append analogues to the regime block.
         try:
-            import inspect
-
             rag_store = getattr(insights_hub, "rag", None)
             if rag_store is not None:
                 from halal_trader.core.llm.rag import format_rag_for_prompt
 
-                # ``size`` is sync on the JSON store, async on the DB store.
-                size = rag_store.size
-                if inspect.iscoroutine(size):
-                    size = await size
-                elif callable(size):
-                    res = size()
-                    size = await res if inspect.iscoroutine(res) else res
+                size = await rag_store.size()
                 if size > 0:
                     rag_query = self._build_rag_query(
                         indicators_cache=indicators_cache,
                         sentiment_text=sentiment_text,
                         regime_text=regime_text,
                     )
-                    hits = rag_store.query(rag_query, k=5, min_similarity=0.0)
-                    if inspect.iscoroutine(hits):
-                        hits = await hits
+                    hits = await rag_store.query(rag_query, k=5, min_similarity=0.0)
                     rag_text = format_rag_for_prompt(hits)
                     if rag_text:
                         regime_text = regime_text + "\n\n" + rag_text if regime_text else rag_text

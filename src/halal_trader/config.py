@@ -241,7 +241,7 @@ class SentimentSettings(BaseSettings):
     cryptopanic: CryptoPanicSettings = Field(default_factory=CryptoPanicSettings)
 
 
-# ── ML / Notifications / Live-mode / Backup / Logging ─────────
+# ── ML / Notifications / Live-mode / Logging ──────────────────
 
 
 class MLSettings(BaseSettings):
@@ -258,26 +258,13 @@ class TelegramSettings(BaseSettings):
 
 
 class LiveModeSettings(BaseSettings):
-    """Live-mode safeguards. ``confirmation`` and ``max_daily_loss_pct`` use
-    the ``LIVE_MODE_`` prefix; the two ``MAX_*_USD`` ceilings predate that
-    prefix and are read via explicit aliases for backward compatibility."""
+    """Live-mode safeguards — all knobs use the ``LIVE_MODE_`` prefix."""
 
     model_config = SettingsConfigDict(**_BASE_CONFIG, env_prefix="LIVE_MODE_")
     confirmation: str = Field(default="")
     max_daily_loss_pct: float = Field(default=0.02, ge=0, le=0.5)
-    max_account_balance_usd: float = Field(
-        default=500.0, gt=0, validation_alias="MAX_ACCOUNT_BALANCE_USD"
-    )
-    max_single_order_usd: float = Field(
-        default=100.0, gt=0, validation_alias="MAX_SINGLE_ORDER_USD"
-    )
-
-
-class BackupSettings(BaseSettings):
-    model_config = SettingsConfigDict(**_BASE_CONFIG, env_prefix="BACKUP_")
-    dir: Path = Field(default=Path("backups"))
-    retention_days: int = Field(default=30, ge=1)
-    weekly_count: int = Field(default=12, ge=0)
+    max_account_balance_usd: float = Field(default=500.0, gt=0)
+    max_single_order_usd: float = Field(default=100.0, gt=0)
 
 
 class LogSettings(BaseSettings):
@@ -338,7 +325,6 @@ class Settings(BaseSettings):
     ml: MLSettings = Field(default_factory=MLSettings)
     telegram: TelegramSettings = Field(default_factory=TelegramSettings)
     live_mode: LiveModeSettings = Field(default_factory=LiveModeSettings)
-    backup: BackupSettings = Field(default_factory=BackupSettings)
     log: LogSettings = Field(default_factory=LogSettings)
 
     # Postgres baseline — see docker-compose for the matching service.

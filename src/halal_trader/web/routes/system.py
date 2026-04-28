@@ -115,17 +115,8 @@ def register(app: FastAPI, app_state: dict[str, Any]) -> None:
 
     @app.get("/api/system/backups")
     async def api_backups() -> JSONResponse:
-        from halal_trader.db.backup import list_backups
-
-        settings = get_settings()
-        rows = list_backups(settings.backup.dir)
-        return JSONResponse(
-            [
-                {
-                    "path": str(r.path),
-                    "size_bytes": r.size_bytes,
-                    "backed_up_at": r.backed_up_at.isoformat(),
-                }
-                for r in rows
-            ]
-        )
+        # Postgres baseline — backups happen via pg_dump or managed-DB
+        # snapshot tooling, not via this endpoint. Returns an empty list
+        # for dashboard back-compat; remove the route entirely once the
+        # operator UI stops calling it.
+        return JSONResponse([])

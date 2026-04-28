@@ -2,22 +2,8 @@
 
 from __future__ import annotations
 
-import pytest
-from sqlalchemy.ext.asyncio import create_async_engine
-from sqlmodel import SQLModel
-
 from halal_trader.core import halt
 from halal_trader.core.cycle import BaseCycleService
-
-
-@pytest.fixture
-async def engine(tmp_path):
-    db_path = tmp_path / "halt.db"
-    eng = create_async_engine(f"sqlite+aiosqlite:///{db_path}")
-    async with eng.begin() as conn:
-        await conn.run_sync(SQLModel.metadata.create_all)
-    yield eng
-    await eng.dispose()
 
 
 async def test_status_when_uninitialized(engine):

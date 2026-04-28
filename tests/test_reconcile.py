@@ -6,22 +6,10 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from sqlalchemy.ext.asyncio import create_async_engine
-from sqlmodel import SQLModel
 
 from halal_trader.core import reconcile
 from halal_trader.db.repository import Repository
 from halal_trader.notifications.telegram import AlertSink, TelegramNotifier
-
-
-@pytest.fixture
-async def engine(tmp_path):
-    db_path = tmp_path / "recon.db"
-    eng = create_async_engine(f"sqlite+aiosqlite:///{db_path}")
-    async with eng.begin() as conn:
-        await conn.run_sync(SQLModel.metadata.create_all)
-    yield eng
-    await eng.dispose()
 
 
 def _alert_sink() -> tuple[AlertSink, MagicMock]:

@@ -10,22 +10,10 @@ from halal_trader.web import app as web_app
 
 
 @pytest.fixture
-def client(tmp_path, monkeypatch):
-    db_path = tmp_path / "trades.db"
-    monkeypatch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
-    monkeypatch.setenv("BACKUP_DIR", str(tmp_path / "backups"))
+def client(database_url, tmp_path, monkeypatch):
     monkeypatch.setenv("LOG_DIR", str(tmp_path / "logs"))
     monkeypatch.setenv("WEB_API_TOKEN", "secret")
     monkeypatch.setenv("WEB_REQUIRE_CONFIRMATION", "false")
-
-    import halal_trader.config as _config
-
-    _config._settings = None
-
-    from halal_trader.db import admin
-
-    admin.upgrade("head")
-
     web_app.app_state.clear()
     app = web_app.create_app()
 
@@ -33,17 +21,20 @@ def client(tmp_path, monkeypatch):
         c.headers["X-Trader-Token"] = "secret"
         yield c
 
-    _config._settings = None
-
 
 def _seed_crypto_trade(client, *, side="buy", entry=70_000.0, sl=None, tp=None):
-    """Insert one crypto trade row directly via the engine."""
-    eng = web_app.app_state["engine"]
-    import asyncio
+    """Insert one crypto trade row directly via a sync psycopg connection."""
+    from datetime import UTC, datetime
 
-    async def _seed():
-        async with eng.begin() as conn:
-            await conn.execute(
+    from sqlalchemy import create_engine
+
+    from halal_trader.config import get_settings
+
+    sync_url = get_settings().database_url_sync()
+    eng = create_engine(sync_url)
+    try:
+        with eng.begin() as conn:
+            conn.execute(
                 sa.text(
                     "INSERT INTO crypto_trades "
                     "(timestamp, pair, side, quantity, price, filled_price, "
@@ -51,12 +42,18 @@ def _seed_crypto_trade(client, *, side="buy", entry=70_000.0, sl=None, tp=None):
                     "VALUES (:ts, 'BTCUSDT', :side, 0.01, :p, :p, :p, "
                     "        'open', 'binance', :sl, :tp)"
                 ),
-                {"ts": "2026-04-26T12:00:00", "side": side, "p": entry, "sl": sl, "tp": tp},
+                {
+                    "ts": datetime(2026, 4, 26, 12, 0, 0, tzinfo=UTC),
+                    "side": side,
+                    "p": entry,
+                    "sl": sl,
+                    "tp": tp,
+                },
             )
-            row = await conn.execute(sa.text("SELECT max(id) FROM crypto_trades"))
+            row = conn.execute(sa.text("SELECT max(id) FROM crypto_trades"))
             return row.scalar_one()
-
-    return asyncio.run(_seed())
+    finally:
+        eng.dispose()
 
 
 # ── Edit SL/TP ───────────────────────────────────────────────
@@ -128,18 +125,21 @@ def test_manual_close_marks_trade_closed(client):
         json={"asset_class": "crypto", "exit_price": 71_000.0, "reason": "news_event"},
     )
     assert r.status_code == 200
-    eng = web_app.app_state["engine"]
-    import asyncio
+    from sqlalchemy import create_engine
 
-    async def _read():
-        async with eng.begin() as conn:
-            row = await conn.execute(
+    from halal_trader.config import get_settings
+
+    sync_url = get_settings().database_url_sync()
+    eng = create_engine(sync_url)
+    try:
+        with eng.begin() as conn:
+            row = conn.execute(
                 sa.text("SELECT status, exit_price, exit_reason FROM crypto_trades WHERE id = :i"),
                 {"i": tid},
             )
-            return row.first()
-
-    status, exit_price, reason = asyncio.run(_read())
+            status, exit_price, reason = row.first()
+    finally:
+        eng.dispose()
     assert status == "closed"
     assert exit_price == 71_000.0
     assert reason == "news_event"

@@ -468,38 +468,50 @@ def velocity_cmd() -> None:
 def rag_cmd(query: str, k: int) -> None:
     """Top-K most-similar past trade rationales by cosine of hashed BoW."""
 
-    def _run() -> None:
+    async def _run() -> None:
         from halal_trader.config import get_settings
-        from halal_trader.core.llm.rag import (
-            RationaleStore,
-            format_rag_for_prompt,
-        )
+        from halal_trader.core.llm.rag import format_rag_for_prompt
+        from halal_trader.core.llm.rag_db import DBRationaleStore
+        from halal_trader.db.models import init_db
         from halal_trader.logging import console
 
         settings = get_settings()
-        path = settings.resolve_data_dir() / "analytics" / "rag_rationales.json"
-        if not path.exists():
-            console.print("[yellow]RAG store empty — close some trades first.[/]")
-            return
-        store = RationaleStore(path=path)
-        if store.size == 0:
-            console.print("[yellow]RAG store empty — close some trades first.[/]")
-            return
-        if not query:
-            console.print(f"[bold]RAG store:[/] {store.size} rationale(s)")
-            for r in store.rows[-10:]:
-                outcome = "WIN" if r.outcome_win else "LOSS"
-                console.print(f"  {outcome} {r.outcome_pnl_pct:+.2%} {r.symbol}: {r.text[:80]}")
-            return
-        hits = store.query(query, k=k, min_similarity=0.0)
-        console.print(format_rag_for_prompt(hits, max_rows=k))
-        agg = store.aggregate(hits)
-        console.print(
-            f"\n[bold]Weighted outcome:[/] pnl={agg['weighted_pnl_pct']:+.2%} "
-            f"win-rate={agg['weighted_win_rate']:.0%} (n={agg['n']})"
-        )
+        engine = await init_db(settings.database_url)
+        try:
+            store = DBRationaleStore(engine=engine)
+            size = await store.size()
+            if size == 0:
+                console.print("[yellow]RAG store empty — close some trades first.[/]")
+                return
+            if not query:
+                console.print(f"[bold]RAG store:[/] {size} rationale(s)")
+                from sqlalchemy.ext.asyncio import async_sessionmaker
+                from sqlmodel import select
 
-    _run()
+                from halal_trader.db.models import RationaleRow as _Row
+
+                sm = async_sessionmaker(engine, expire_on_commit=False)
+                async with sm() as s:
+                    rows = (
+                        (await s.execute(select(_Row).order_by(_Row.timestamp.desc()).limit(10)))
+                        .scalars()
+                        .all()
+                    )
+                for r in rows:
+                    outcome = "WIN" if r.outcome_win else "LOSS"
+                    console.print(f"  {outcome} {r.outcome_pnl_pct:+.2%} {r.symbol}: {r.text[:80]}")
+                return
+            hits = await store.query(query, k=k, min_similarity=0.0)
+            console.print(format_rag_for_prompt(hits, max_rows=k))
+            agg = await store.aggregate(hits)
+            console.print(
+                f"\n[bold]Weighted outcome:[/] pnl={agg['weighted_pnl_pct']:+.2%} "
+                f"win-rate={agg['weighted_win_rate']:.0%} (n={agg['n']})"
+            )
+        finally:
+            await engine.dispose()
+
+    asyncio.run(_run())
 
 
 @insights.command("exceptions")

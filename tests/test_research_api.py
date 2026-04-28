@@ -10,71 +10,56 @@ from halal_trader.web import app as web_app
 
 
 @pytest.fixture
-def client(tmp_path, monkeypatch):
-    db_path = tmp_path / "research.db"
-    monkeypatch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
-    monkeypatch.setenv("BACKUP_DIR", str(tmp_path / "backups"))
+def client(database_url, tmp_path, monkeypatch):
     monkeypatch.setenv("LOG_DIR", str(tmp_path / "logs"))
-
-    import halal_trader.config as _config
-
-    _config._settings = None
-
-    from halal_trader.db import admin
-
-    admin.upgrade("head")
-
     web_app.app_state.clear()
     app = web_app.create_app()
 
     with TestClient(app) as c:
         yield c
 
-    _config._settings = None
+
+def _sync_engine():
+    from sqlalchemy import create_engine
+
+    from halal_trader.config import get_settings
+
+    return create_engine(get_settings().database_url_sync())
 
 
 def _seed_decisions(client: TestClient) -> None:
     """Insert a couple of decisions covering two prompt versions."""
-    eng = web_app.app_state["engine"]
-    import asyncio
+    from datetime import UTC, datetime
 
-    async def _seed() -> None:
-        async with eng.begin() as conn:
-            await conn.execute(
-                sa.text(
-                    "INSERT INTO llm_decisions "
-                    "(timestamp, provider, model, prompt_summary, raw_response, "
-                    " prompt_version, input_tokens, output_tokens, "
-                    " cache_read_tokens, cost_usd) "
-                    "VALUES (:ts, 'anthropic', 'claude-opus-4-7', 'cycle 1', '{}', "
-                    " 'crypto.strategy.system@v1', 1000, 100, 800, 0.01)"
-                ),
-                {"ts": "2026-04-26T12:00:00"},
-            )
-            await conn.execute(
-                sa.text(
-                    "INSERT INTO llm_decisions "
-                    "(timestamp, provider, model, prompt_summary, raw_response, "
-                    " prompt_version, input_tokens, output_tokens, "
-                    " cache_read_tokens, cost_usd) "
-                    "VALUES (:ts, 'anthropic', 'claude-opus-4-7', 'cycle 2', '{}', "
-                    " 'crypto.strategy.system@v1', 1100, 110, 900, 0.011)"
-                ),
-                {"ts": "2026-04-26T12:01:00"},
-            )
-            await conn.execute(
-                sa.text(
-                    "INSERT INTO llm_decisions "
-                    "(timestamp, provider, model, prompt_summary, raw_response, "
-                    " prompt_version, input_tokens, output_tokens, "
-                    " cache_read_tokens, cost_usd) "
-                    "VALUES (:ts, 'anthropic', 'claude-opus-4-7', 'cycle 3', '{}', "
-                    " 'crypto.strategy.system@v2', 950, 90, 700, 0.009)"
-                ),
-                {"ts": "2026-04-26T12:02:00"},
-            )
-
-    asyncio.get_event_loop().run_until_complete(_seed()) if False else asyncio.run(_seed())
+    eng = _sync_engine()
+    try:
+        with eng.begin() as conn:
+            for minute, version, in_tok, out_tok, cache, cost in [
+                (0, "v1", 1000, 100, 800, 0.01),
+                (1, "v1", 1100, 110, 900, 0.011),
+                (2, "v2", 950, 90, 700, 0.009),
+            ]:
+                conn.execute(
+                    sa.text(
+                        "INSERT INTO llm_decisions "
+                        "(timestamp, provider, model, prompt_summary, raw_response, "
+                        " prompt_version, input_tokens, output_tokens, "
+                        " cache_read_tokens, cost_usd) "
+                        "VALUES (:ts, 'anthropic', 'claude-opus-4-7', :sum, '{}', "
+                        " :ver, :it, :ot, :crt, :cost)"
+                    ),
+                    {
+                        "ts": datetime(2026, 4, 26, 12, minute, 0, tzinfo=UTC),
+                        "sum": f"cycle {minute}",
+                        "ver": f"crypto.strategy.system@{version}",
+                        "it": in_tok,
+                        "ot": out_tok,
+                        "crt": cache,
+                        "cost": cost,
+                    },
+                )
+    finally:
+        eng.dispose()
 
 
 def test_replay_unknown_decision_returns_404(client):
@@ -126,30 +111,34 @@ def test_halal_audit_for_symbol_returns_empty_list(client):
 
 def test_halal_audit_for_symbol_returns_receipts(client):
     """After seeding a trade with a screening FK, the audit returns receipts."""
-    eng = web_app.app_state["engine"]
-    import asyncio
+    from datetime import UTC, datetime
 
-    async def _seed() -> None:
-        async with eng.begin() as conn:
-            await conn.execute(
+    eng = _sync_engine()
+    ts = datetime(2026, 4, 26, 12, 0, 0, tzinfo=UTC)
+    try:
+        with eng.begin() as conn:
+            conn.execute(
                 sa.text(
                     "INSERT INTO halal_screenings "
                     "(timestamp, symbol, asset_class, source, decision, cache_hit) "
-                    "VALUES ('2026-04-26T12:00:00', 'BTC', 'crypto', "
-                    " 'coingecko_rules', 'halal', 0)"
-                )
+                    "VALUES (:ts, 'BTC', 'crypto', 'coingecko_rules', 'halal', false) "
+                    "RETURNING id"
+                ),
+                {"ts": ts},
             )
-            await conn.execute(
+            sid = conn.execute(sa.text("SELECT max(id) FROM halal_screenings")).scalar_one()
+            conn.execute(
                 sa.text(
                     "INSERT INTO crypto_trades "
                     "(timestamp, pair, side, quantity, price, halal_screening_id, "
                     " status, exchange) "
-                    "VALUES ('2026-04-26T12:00:00', 'BTCUSDT', 'buy', 0.01, "
-                    " 70000.0, 1, 'open', 'binance')"
-                )
+                    "VALUES (:ts, 'BTCUSDT', 'buy', 0.01, 70000.0, :sid, 'open', "
+                    " 'binance')"
+                ),
+                {"ts": ts, "sid": sid},
             )
-
-    asyncio.run(_seed())
+    finally:
+        eng.dispose()
 
     r = client.get("/api/research/halal-audit/crypto/symbol/BTCUSDT")
     assert r.status_code == 200

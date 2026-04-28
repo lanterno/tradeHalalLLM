@@ -2,35 +2,21 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+from datetime import UTC, datetime
 
 import pytest
 import sqlalchemy as sa
 from click.testing import CliRunner
+from sqlalchemy import create_engine
 from sqlalchemy.ext.asyncio import create_async_engine
-from sqlmodel import SQLModel
 
 from halal_trader.cli import cli
-from halal_trader.db import admin
 
 
-def _seed_db_sync(db_path: Path) -> None:
-    """Build a fresh DB at ``db_path`` and insert a few decision rows."""
-    import asyncio
-
-    async def _build() -> None:
-        engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}")
-        head = admin.head()
+async def _seed(database_url: str) -> None:
+    engine = create_async_engine(database_url)
+    try:
         async with engine.begin() as conn:
-            await conn.run_sync(SQLModel.metadata.create_all)
-            await conn.execute(
-                sa.text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)")
-            )
-            await conn.execute(
-                sa.text(f"INSERT INTO alembic_version (version_num) VALUES ('{head}')")
-            )
-            # Two decisions: one with full cost data, one minimal. Use bound
-            # params so JSON colons aren't mistaken for SQLAlchemy bind names.
             await conn.execute(
                 sa.text(
                     "INSERT INTO llm_decisions "
@@ -42,7 +28,7 @@ def _seed_db_sync(db_path: Path) -> None:
                     " :ms, :pv, :it, :ot, :crt, :cwt, :cost)"
                 ),
                 {
-                    "ts": "2026-04-26T12:00:00",
+                    "ts": datetime(2026, 4, 26, 12, 0, 0, tzinfo=UTC),
                     "prov": "anthropic",
                     "model": "claude-opus-4-7",
                     "summ": "crypto cycle: analyzed 10 pairs",
@@ -66,7 +52,7 @@ def _seed_db_sync(db_path: Path) -> None:
                     "VALUES (:ts, :prov, :model, :summ, :raw, :ms)"
                 ),
                 {
-                    "ts": "2026-04-26T13:00:00",
+                    "ts": datetime(2026, 4, 26, 13, 0, 0, tzinfo=UTC),
                     "prov": "openai",
                     "model": "gpt-4o",
                     "summ": "stock cycle: analyzed 5 symbols",
@@ -74,28 +60,19 @@ def _seed_db_sync(db_path: Path) -> None:
                     "ms": 800,
                 },
             )
+    finally:
         await engine.dispose()
-
-    asyncio.run(_build())
 
 
 @pytest.fixture
-def cli_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Build a seeded DB and point Settings at it for the duration of one test."""
-    db_path = tmp_path / "cli.db"
-    _seed_db_sync(db_path)
+def cli_db(database_url: str, monkeypatch: pytest.MonkeyPatch):
+    import asyncio
 
-    # The CLI calls get_settings() which returns a cached Settings; override
-    # only the resolved DB path so other defaults (Ollama, etc.) are intact.
-    monkeypatch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
-    # Reset the cached Settings singleton so DB_PATH takes effect.
-    from halal_trader import config
-
-    monkeypatch.setattr(config, "_settings", None)
-    # Rich respects COLUMNS for the terminal width; set wide so tabular
-    # output isn't truncated below the cells we're asserting on.
+    asyncio.get_event_loop_policy().new_event_loop().run_until_complete(
+        _seed(database_url)
+    ) if False else asyncio.run(_seed(database_url))
     monkeypatch.setenv("COLUMNS", "240")
-    yield db_path
+    return database_url
 
 
 def test_list_default_renders_table(cli_db):
@@ -104,9 +81,8 @@ def test_list_default_renders_table(cli_db):
     assert result.exit_code == 0, result.output
     assert "claude-opus-4-7" in result.output
     assert "gpt-4o" in result.output
-    # Cost should render as $0.0234 — we treat absent cost as "—".
     assert "$0.0234" in result.output
-    assert "—" in result.output  # row 2 has no cost
+    assert "—" in result.output
 
 
 def test_list_filter_by_provider(cli_db):
@@ -119,7 +95,16 @@ def test_list_filter_by_provider(cli_db):
 
 def test_show_prints_full_record(cli_db):
     runner = CliRunner()
-    result = runner.invoke(cli, ["llm-decisions", "show", "1"])
+    # Look up the first row id (sequential per fresh DB but assert by content).
+    sync_url = cli_db.replace("+asyncpg", "+psycopg")
+    eng = create_engine(sync_url)
+    with eng.connect() as conn:
+        rows = conn.execute(
+            sa.text("SELECT id FROM llm_decisions WHERE provider='anthropic' LIMIT 1")
+        ).fetchone()
+    eng.dispose()
+    rid = rows[0]
+    result = runner.invoke(cli, ["llm-decisions", "show", str(rid)])
     assert result.exit_code == 0, result.output
     assert "anthropic" in result.output
     assert "crypto.strategy.system@abc123" in result.output

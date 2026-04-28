@@ -38,7 +38,6 @@ _NOISY_LOGGERS = frozenset(
         "apscheduler",
         "httpcore",
         "httpx",
-        "aiosqlite",
         "asyncio",
         "mcp",
     }
@@ -128,5 +127,5 @@ def setup_logging(settings: Settings, *, cli_log_level: str | None = None) -> No
     # Silence extremely noisy third-party loggers at source level.
     # These produce thousands of DEBUG messages per minute (WebSocket frames)
     # that drown out useful application logs even in the JSON file.
-    for name in ("binance", "websockets", "aiosqlite"):
+    for name in ("binance", "websockets"):
         logging.getLogger(name).setLevel(logging.WARNING)

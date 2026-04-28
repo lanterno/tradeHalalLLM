@@ -10,21 +10,9 @@ from halal_trader.web import app as web_app
 
 
 @pytest.fixture
-def client(tmp_path, monkeypatch):
-    db_path = tmp_path / "audit.db"
-    monkeypatch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
-    monkeypatch.setenv("BACKUP_DIR", str(tmp_path / "backups"))
+def client(database_url, tmp_path, monkeypatch):
     monkeypatch.setenv("LOG_DIR", str(tmp_path / "logs"))
     monkeypatch.setenv("WEB_API_TOKEN", "secret")
-
-    import halal_trader.config as _config
-
-    _config._settings = None
-
-    from halal_trader.db import admin
-
-    admin.upgrade("head")
-
     web_app.app_state.clear()
     app = web_app.create_app()
 
@@ -40,21 +28,25 @@ def client(tmp_path, monkeypatch):
     with TestClient(app) as c:
         yield c
 
-    _config._settings = None
+
+def _sync_engine():
+    from sqlalchemy import create_engine
+
+    from halal_trader.config import get_settings
+
+    return create_engine(get_settings().database_url_sync())
 
 
 def _audited_rows(client):
-    eng = web_app.app_state["engine"]
-    import asyncio
-
-    async def _read():
-        async with eng.begin() as conn:
-            rows = await conn.execute(
+    eng = _sync_engine()
+    try:
+        with eng.begin() as conn:
+            rows = conn.execute(
                 sa.text("SELECT method, path, outcome, status_code, error FROM web_actions")
             )
             return list(rows)
-
-    return asyncio.run(_read())
+    finally:
+        eng.dispose()
 
 
 def test_successful_mutation_writes_ok_row(client):
@@ -104,14 +96,11 @@ def test_payload_truncated_for_huge_bodies(client):
     big = {"x": "y" * 10_000}
     r = client.post("/api/admin/echo", json=big, headers={"X-Trader-Token": "secret"})
     assert r.status_code == 200
-    eng = web_app.app_state["engine"]
-    import asyncio
-
-    async def _read():
-        async with eng.begin() as conn:
-            row = await conn.execute(sa.text("SELECT payload FROM web_actions"))
-            return row.scalar_one()
-
-    payload = asyncio.run(_read())
+    eng = _sync_engine()
+    try:
+        with eng.begin() as conn:
+            payload = conn.execute(sa.text("SELECT payload FROM web_actions")).scalar_one()
+    finally:
+        eng.dispose()
     assert payload.endswith("…[truncated]")
-    assert len(payload) < 6_000  # 4k cap + truncation marker
+    assert len(payload) < 6_000
