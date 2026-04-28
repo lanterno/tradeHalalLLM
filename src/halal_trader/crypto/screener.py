@@ -11,7 +11,6 @@ metadata and applies multi-criteria filtering:
 5. Manual overrides — config-based allow/deny lists for edge cases.
 """
 
-import json
 import logging
 from typing import Any
 
@@ -121,7 +120,7 @@ class CryptoHalalScreener:
                 compliance=compliance,
                 category=category,
                 market_cap=float(market_cap),
-                screening_criteria=json.dumps(criteria),
+                screening_criteria=criteria,
             )
             screened += 1
 

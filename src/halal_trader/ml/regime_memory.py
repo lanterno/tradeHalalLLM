@@ -24,7 +24,6 @@ already what the bot computes per cycle anyway.
 
 from __future__ import annotations
 
-import json
 import logging
 import math
 from collections.abc import Iterable, Sequence
@@ -112,7 +111,7 @@ def _cosine(a: Sequence[float], b: Sequence[float]) -> float:
 
 
 def _row_to_snapshot(row: RegimeSnapshotRow) -> RegimeSnapshot:
-    features = RegimeFeatures(**json.loads(row.features_json))
+    features = RegimeFeatures(**row.features_json)
     return RegimeSnapshot(
         date=row.date,
         features=features,
@@ -152,8 +151,8 @@ class RegimeMemory:
 
     async def add(self, snapshot: RegimeSnapshot) -> None:
         """Upsert by date — same date overwrites."""
-        features_json = json.dumps(asdict(snapshot.features))
-        vector_json = json.dumps(snapshot.features.to_vector())
+        features_json = asdict(snapshot.features)
+        vector_json = snapshot.features.to_vector()
         async with self._sm() as s:
             existing = await s.get(RegimeSnapshotRow, snapshot.date)
             if existing is None:
@@ -219,10 +218,7 @@ class RegimeMemory:
             return []
         scored: list[tuple[RegimeSnapshot, float]] = []
         for row in rows:
-            try:
-                vec = json.loads(row.vector_json)
-            except Exception:  # noqa: BLE001
-                continue
+            vec = row.vector_json or []
             scored.append((_row_to_snapshot(row), _cosine(q, vec)))
         scored.sort(key=lambda p: p[1], reverse=True)
         out = [p for p in scored if p[1] >= min_similarity]

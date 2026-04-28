@@ -3,6 +3,7 @@
 import logging
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONB
@@ -96,8 +97,10 @@ class LlmDecision(SQLModel, table=True):
     model: str
     prompt_summary: str | None = None
     raw_response: str | None = None
-    parsed_action: str | None = None  # stored as JSON string
-    symbols: str | None = None  # stored as JSON string
+    parsed_action: dict | None = Field(
+        default=None, sa_column=sa.Column("parsed_action", JSONB, nullable=True)
+    )
+    symbols: list | None = Field(default=None, sa_column=sa.Column("symbols", JSONB, nullable=True))
     execution_ms: int | None = None
     thinking: str | None = None  # reasoning chain from thinking-mode LLMs
 
@@ -176,7 +179,9 @@ class CryptoHalalCache(SQLModel, table=True):
     compliance: str  # 'halal', 'not_halal', 'doubtful'
     category: str | None = None  # e.g. 'layer-1', 'defi', 'meme'
     market_cap: float | None = None
-    screening_criteria: str | None = None  # JSON string of criteria met/failed
+    screening_criteria: dict | None = Field(
+        default=None, sa_column=sa.Column("screening_criteria", JSONB, nullable=True)
+    )
     updated_at: datetime = Field(
         default_factory=lambda: datetime.now(UTC), sa_type=sa.DateTime(timezone=True)
     )
@@ -250,9 +255,9 @@ class ResearchJob(SQLModel, table=True):
     )
     kind: str  # 'backtest' | 'walk_forward' | 'monte_carlo'
     name: str | None = None  # operator-supplied label
-    params: str  # JSON of inputs
+    params: dict = Field(sa_column=sa.Column("params", JSONB, nullable=False))
     status: str = Field(default="queued")  # 'queued' | 'running' | 'ok' | 'error'
-    result: str | None = None  # JSON-encoded outcome
+    result: dict | None = Field(default=None, sa_column=sa.Column("result", JSONB, nullable=True))
     error: str | None = None
     finished_at: datetime | None = Field(default=None, sa_type=sa.DateTime(timezone=True))
     pinned: bool = Field(default=False)
@@ -270,7 +275,9 @@ class RuntimeConfig(SQLModel, table=True):
     __tablename__ = "runtime_config"
 
     key: str = Field(primary_key=True)  # uppercase env-var name
-    value: str  # JSON-encoded so we can round-trip int/float/list
+    # Raw scalar / list / dict — JSONB so we can round-trip any
+    # ``Settings`` value without a parse-on-read step.
+    value: Any = Field(sa_column=sa.Column("value", JSONB, nullable=False))
     set_by: str | None = None
     set_at: datetime = Field(
         default_factory=lambda: datetime.now(UTC), sa_type=sa.DateTime(timezone=True)
@@ -362,7 +369,9 @@ class HalalScreening(SQLModel, table=True):
     asset_class: str  # 'stock' | 'crypto'
     source: str  # 'zoya' | 'coingecko_rules' | 'override' | 'cache' | …
     decision: str  # 'halal' | 'not_halal' | 'doubtful'
-    criteria: str | None = None  # JSON string capturing the decision inputs
+    criteria: dict | None = Field(
+        default=None, sa_column=sa.Column("criteria", JSONB, nullable=True)
+    )
     cache_hit: bool = Field(default=False)
 
 
@@ -441,7 +450,7 @@ class RationaleRow(SQLModel, table=True):
     trade_id: str = Field(primary_key=True)
     symbol: str = Field(index=True)
     text: str
-    vector: str  # JSON list[float] — Postgres pgvector index lands separately
+    vector: list[float] = Field(sa_column=sa.Column("vector", JSONB, nullable=False))
     outcome_pnl_pct: float
     outcome_win: bool
     setup_type: str | None = None
@@ -509,8 +518,8 @@ class RegimeSnapshotRow(SQLModel, table=True):
     __tablename__ = "regime_snapshots"
 
     date: str = Field(primary_key=True)
-    features_json: str  # JSON dict of RegimeFeatures fields
-    vector_json: str  # JSON list[float]
+    features_json: dict = Field(sa_column=sa.Column("features_json", JSONB, nullable=False))
+    vector_json: list[float] = Field(sa_column=sa.Column("vector_json", JSONB, nullable=False))
     outcome_pnl_pct: float = 0.0
     outcome_win_rate: float = 0.0
     outcome_n_trades: int = 0

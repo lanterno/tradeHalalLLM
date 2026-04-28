@@ -1,6 +1,5 @@
 """Data access layer using SQLModel."""
 
-import json
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -244,7 +243,7 @@ class Repository:
     async def enqueue_research_job(
         self, *, kind: str, params: dict, name: str | None = None
     ) -> int:
-        row = ResearchJob(kind=kind, name=name, params=json.dumps(params))
+        row = ResearchJob(kind=kind, name=name, params=params)
         async with AsyncSession(self._engine) as session:
             session.add(row)
             await session.commit()
@@ -268,7 +267,7 @@ class Repository:
                 return
             row.status = status
             if result is not None:
-                row.result = json.dumps(result)
+                row.result = result
             if error is not None:
                 row.error = error
             if status in ("ok", "error"):
@@ -281,14 +280,7 @@ class Repository:
             row = await session.get(ResearchJob, job_id)
             if row is None:
                 return None
-            data = row.model_dump()
-            for key in ("params", "result"):
-                if data.get(key):
-                    try:
-                        data[key] = json.loads(data[key])
-                    except json.JSONDecodeError:
-                        pass
-            return data
+            return row.model_dump()
 
     async def list_research_jobs(self, limit: int = 50) -> list[dict[str, Any]]:
         async with AsyncSession(self._engine) as session:
@@ -309,17 +301,16 @@ class Repository:
     # ── Runtime config overlay ─────────────────────────────────
 
     async def set_runtime_config(self, key: str, value: Any, *, set_by: str | None = None) -> None:
-        """Insert/update a runtime overlay value (JSON-encoded for type fidelity)."""
+        """Insert/update a runtime overlay value (JSONB — any JSON shape)."""
         async with AsyncSession(self._engine) as session:
             row = await session.get(RuntimeConfig, key.upper())
-            payload = json.dumps(value)
             if row is None:
-                row = RuntimeConfig(key=key.upper(), value=payload, set_by=set_by)
+                row = RuntimeConfig(key=key.upper(), value=value, set_by=set_by)
             else:
                 from datetime import UTC as _UTC
                 from datetime import datetime as _dt
 
-                row.value = payload
+                row.value = value
                 row.set_by = set_by
                 row.set_at = _dt.now(_UTC)
             session.add(row)
@@ -337,13 +328,7 @@ class Repository:
     async def list_runtime_config(self) -> dict[str, Any]:
         async with AsyncSession(self._engine) as session:
             results = await session.exec(select(RuntimeConfig))
-            out: dict[str, Any] = {}
-            for r in results.all():
-                try:
-                    out[r.key] = json.loads(r.value)
-                except json.JSONDecodeError:
-                    out[r.key] = r.value
-            return out
+            return {r.key: r.value for r in results.all()}
 
     # ── Per-pair operator pauses ───────────────────────────────
 
@@ -522,7 +507,7 @@ class Repository:
             asset_class=asset_class,
             source=source,
             decision=decision,
-            criteria=json.dumps(criteria) if criteria else None,
+            criteria=criteria,
             cache_hit=cache_hit,
         )
         async with AsyncSession(self._engine) as session:
@@ -536,10 +521,7 @@ class Repository:
             row = await session.get(HalalScreening, screening_id)
             if row is None:
                 return None
-            data = row.model_dump()
-            if data.get("criteria"):
-                data["criteria"] = json.loads(data["criteria"])
-            return data
+            return row.model_dump()
 
     # ── LLM Decisions (shared) ──────────────────────────────────
 
@@ -565,8 +547,8 @@ class Repository:
             model=model,
             prompt_summary=prompt_summary,
             raw_response=raw_response,
-            parsed_action=json.dumps(parsed_action) if parsed_action else None,
-            symbols=json.dumps(symbols) if symbols else None,
+            parsed_action=parsed_action,
+            symbols=symbols,
             execution_ms=execution_ms,
             thinking=thinking,
             prompt_version=prompt_version,
@@ -830,7 +812,7 @@ class Repository:
         compliance: str,
         category: str | None = None,
         market_cap: float | None = None,
-        screening_criteria: str | None = None,
+        screening_criteria: dict | None = None,
     ) -> None:
         async with AsyncSession(self._engine) as session:
             statement = select(CryptoHalalCache).where(CryptoHalalCache.symbol == symbol)

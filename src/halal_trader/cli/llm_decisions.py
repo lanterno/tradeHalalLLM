@@ -16,7 +16,6 @@ covers the rerun half.
 from __future__ import annotations
 
 import asyncio
-import json
 from collections import defaultdict
 from datetime import UTC, datetime, timedelta
 
@@ -143,18 +142,13 @@ def show_cmd(decision_id: int) -> None:
             console.print(f"  prompt_summary:  {row.prompt_summary or '—'}")
 
             if row.symbols:
-                try:
-                    syms = json.loads(row.symbols)
-                    console.print(f"  symbols:         {', '.join(syms) if syms else '—'}")
-                except Exception:
-                    console.print(f"  symbols:         {row.symbols}")
+                console.print(
+                    f"  symbols:         {', '.join(row.symbols) if row.symbols else '—'}"
+                )
 
             if row.parsed_action:
                 console.print("\n[bold]parsed_action:[/bold]")
-                try:
-                    console.print_json(row.parsed_action)
-                except Exception:
-                    console.print(row.parsed_action)
+                console.print_json(data=row.parsed_action)
 
             if row.raw_response:
                 console.print("\n[bold]raw_response:[/bold]")

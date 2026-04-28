@@ -13,7 +13,6 @@ async context.
 
 from __future__ import annotations
 
-import json
 import logging
 from collections.abc import Iterable
 from dataclasses import dataclass, field
@@ -82,7 +81,7 @@ class DBRationaleStore:
                 trade_id=trade_id,
                 symbol=symbol,
                 text=text,
-                vector=json.dumps(vec),
+                vector=list(vec),
                 outcome_pnl_pct=outcome_pnl_pct,
                 outcome_win=outcome_pnl_pct > 0,
                 setup_type=setup_type,
@@ -132,10 +131,7 @@ class DBRationaleStore:
             rows = (await s.execute(stmt)).scalars().all()
         scored: list[tuple[RationaleRowDC, float]] = []
         for r in rows:
-            try:
-                vec = json.loads(r.vector)
-            except (TypeError, ValueError) as _exc:  # noqa: F841 — keep parens, ruff format strips them otherwise
-                continue
+            vec = r.vector or []
             score = cosine(q, vec)
             if score >= min_similarity:
                 scored.append((_row_to_dc(r), score))
@@ -169,15 +165,11 @@ class DBRationaleStore:
 
 def _row_to_dc(row: RationaleRow) -> RationaleRowDC:
     """SQLModel row → public dataclass shape."""
-    try:
-        vec = json.loads(row.vector)
-    except (TypeError, ValueError) as _exc:  # noqa: F841 — keep parens, ruff format strips them otherwise
-        vec = []
     return RationaleRowDC(
         trade_id=row.trade_id,
         symbol=row.symbol,
         text=row.text,
-        vector=vec,
+        vector=row.vector or [],
         outcome_pnl_pct=row.outcome_pnl_pct,
         outcome_win=row.outcome_win,
         setup_type=row.setup_type,
