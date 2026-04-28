@@ -2,21 +2,13 @@
 
 The cycle, monitor, dashboard, CLI, and tests all want to read/write
 the same drift monitor, regime memory, shadow ledger, calibration
-curve, etc. Threading those through every constructor is noise — and
-the alternative (singletons sprinkled across modules) is hard to test
-and impossible to swap.
+curve, etc. Threading those through every constructor would be noise;
+*one* explicit instance per process is cleaner — the bot constructs it
+in ``crypto/components.py`` and passes it to the cycle / monitor /
+post-close fan-out, the web app instantiates its own at startup.
 
-This module gives one explicit place to look:
-
-    from halal_trader.core.insights_hub import hub
-    hub.drift.observe(pnl_pct)
-    hub.regime.add_today(features, ...)
-    hub.shadow.record(cycle_id=..., live_equity=..., shadow_equity=...)
-
-Every attribute is opt-in: cycles that don't care simply don't write,
-and dashboards / CLIs that don't see writes show "not available".
-
-Tests reset the hub via :func:`reset_hub` (called from a fixture).
+There is intentionally **no module-level singleton**. If you need a
+hub, take it as a constructor argument or build a fresh one in tests.
 """
 
 from __future__ import annotations
@@ -67,12 +59,3 @@ class InsightsHub:
             "rag": self.rag,
             "whale_flows": self.whale_flows,
         }
-
-
-hub = InsightsHub()
-
-
-def reset_hub() -> None:
-    """Replace every analytic with a fresh default. Intended for tests."""
-    global hub
-    hub = InsightsHub()

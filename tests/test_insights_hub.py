@@ -1,17 +1,15 @@
-"""Tests for the insights hub."""
+"""Tests for the InsightsHub dataclass."""
 
 from __future__ import annotations
 
-from halal_trader.core.insights_hub import hub, reset_hub
+from halal_trader.core.insights_hub import InsightsHub
 from halal_trader.core.shadow import ShadowLedger
 from halal_trader.ml.calibration import CalibrationCurve
 from halal_trader.ml.drift import DriftMonitor
 
 
 def test_hub_default_attributes_present() -> None:
-    reset_hub()
-    from halal_trader.core.insights_hub import hub as h
-
+    h = InsightsHub()
     assert isinstance(h.drift, DriftMonitor)
     # regime is None until the bot composes a DB engine and wires it.
     assert h.regime is None
@@ -20,9 +18,7 @@ def test_hub_default_attributes_present() -> None:
 
 
 def test_hub_state_snapshot_has_expected_keys() -> None:
-    reset_hub()
-    from halal_trader.core.insights_hub import hub as h
-
+    h = InsightsHub()
     snap = h.to_app_state()
     assert {
         "drift_monitor",
@@ -32,22 +28,19 @@ def test_hub_state_snapshot_has_expected_keys() -> None:
     } <= set(snap.keys())
 
 
-def test_hub_modifications_persist_until_reset() -> None:
-    reset_hub()
-    from halal_trader.core.insights_hub import hub as h
+def test_hub_modifications_persist_within_an_instance() -> None:
+    """Two ``InsightsHub`` instances are independent — no module-level state."""
+    h1 = InsightsHub()
+    h1.shadow.record(cycle_id="c1", live_equity=100, shadow_equity=99)
+    assert h1.shadow.size == 1
 
-    h.shadow.record(cycle_id="c1", live_equity=100, shadow_equity=99)
-    assert h.shadow.size == 1
-    reset_hub()
-    from halal_trader.core.insights_hub import hub as h2
-
+    h2 = InsightsHub()
     assert h2.shadow.size == 0
 
 
 def test_app_state_keys_match_web_route_lookup() -> None:
     """Sanity-check: hub keys align with what the insights routes read."""
-    reset_hub()
-    snap = hub.to_app_state()
-    # The web routes look these up under app_state["insights"]
+    h = InsightsHub()
+    snap = h.to_app_state()
     for key in ("drift_monitor", "shadow_ledger", "calibration_curve"):
         assert key in snap

@@ -230,47 +230,45 @@ def drift_cmd(limit: int) -> None:
 def shadow_cmd() -> None:
     """Show divergence between live and shadow equity curves.
 
-    Reads from the in-process ShadowLedger via ``insights_hub``. Empty
-    if the cycle hasn't recorded any rows yet.
+    The shadow ledger is in-process state on the running bot — a
+    standalone CLI invocation can't observe it. The dashboard's
+    ``/api/insights/shadow`` route is the right surface; this stub
+    stays so a tab-completing operator gets a clear hint instead
+    of a silent "empty" lie.
     """
+    from halal_trader.logging import console
 
-    def _run() -> None:
-        from halal_trader.core.insights_hub import hub
-        from halal_trader.core.shadow import (
-            divergence_metrics,
-            render_status,
-            shadow_alert_state,
-        )
-        from halal_trader.logging import console
-
-        led = hub.shadow
-        if led.size == 0:
-            console.print("[yellow]Shadow ledger empty — no cycles recorded yet.[/]")
-            return
-        metrics = divergence_metrics(led.entries)
-        level = shadow_alert_state(metrics)
-        console.print(render_status(metrics, level))
-
-    _run()
+    console.print(
+        "[yellow]Shadow ledger lives in the running bot's process — "
+        "use the dashboard's /api/insights/shadow endpoint, not the CLI.[/]"
+    )
 
 
 @insights.command("regime")
 def regime_cmd() -> None:
     """Show recent entries from the regime memory store."""
 
-    def _run() -> None:
-        from halal_trader.core.insights_hub import hub
+    async def _run() -> None:
+        from halal_trader.config import get_settings
+        from halal_trader.db.models import init_db
         from halal_trader.logging import console
+        from halal_trader.ml.regime_memory import RegimeMemory
 
-        mem = hub.regime
-        if mem.size == 0:
-            console.print("[yellow]Regime memory empty.[/]")
-            return
-        console.print(f"[bold]Regime memory:[/] {mem.size} snapshot(s)")
-        for s in mem.snapshots[-10:]:
-            console.print(f"  {s.label()}")
+        settings = get_settings()
+        engine = await init_db(settings.database_url)
+        try:
+            mem = RegimeMemory(engine=engine)
+            size = await mem.size()
+            if size == 0:
+                console.print("[yellow]Regime memory empty.[/]")
+                return
+            console.print(f"[bold]Regime memory:[/] {size} snapshot(s)")
+            for s in await mem.recent(limit=10):
+                console.print(f"  {s.label()}")
+        finally:
+            await engine.dispose()
 
-    _run()
+    asyncio.run(_run())
 
 
 @insights.command("purification")
@@ -417,54 +415,33 @@ def catalysts_cmd(symbols: tuple[str, ...], lookahead: int) -> None:
 def whale_cmd() -> None:
     """Show the latest on-chain whale-flow signals (Etherscan).
 
-    Reads from :data:`insights_hub.whale_flows`, populated each cycle
-    when ``ETHERSCAN_API_KEY`` is configured. Empty if the source is
-    not enabled or no recent flows met the min-transfer threshold.
+    The whale-flow snapshot lives in the running bot's process; a
+    standalone CLI invocation can't observe it. The dashboard's
+    ``/api/insights/whale-flows`` is the right surface — this stub
+    points there instead of pretending the hub is empty.
     """
+    from halal_trader.logging import console
 
-    def _run() -> None:
-        from halal_trader.core.insights_hub import hub
-        from halal_trader.crypto.onchain import format_whale_flows_for_prompt
-        from halal_trader.logging import console
-
-        flows = hub.whale_flows
-        if not flows:
-            console.print("[yellow]No whale flows recorded yet.[/]")
-            return
-        text = format_whale_flows_for_prompt(flows)
-        if text:
-            console.print(text)
-        else:
-            console.print("[yellow]All recent flows balanced — no actionable signal.[/]")
-
-    _run()
+    console.print(
+        "[yellow]Whale flows live in the running bot's process — "
+        "use the dashboard's /api/insights/whale-flows endpoint.[/]"
+    )
 
 
 @insights.command("velocity")
 def velocity_cmd() -> None:
     """Show the latest social mention-velocity per symbol.
 
-    Reads from :data:`insights_hub.velocity`, populated each cycle from
-    Reddit's public JSON endpoints (no OAuth). Empty until the cycle
-    has run at least once with the RedditPublicFetcher wired.
+    Velocity results live in the running bot's process; CLI can't
+    observe them. Use the dashboard's ``/api/insights/velocity``
+    endpoint.
     """
+    from halal_trader.logging import console
 
-    def _run() -> None:
-        from halal_trader.core.insights_hub import hub
-        from halal_trader.logging import console
-        from halal_trader.sentiment.velocity import format_velocity_for_prompt
-
-        results = hub.velocity
-        if not results:
-            console.print("[yellow]No velocity results recorded yet.[/]")
-            return
-        text = format_velocity_for_prompt(results)
-        if text:
-            console.print(text)
-        else:
-            console.print("[yellow]No surge labels — all symbols below threshold.[/]")
-
-    _run()
+    console.print(
+        "[yellow]Velocity results live in the running bot's process — "
+        "use the dashboard's /api/insights/velocity endpoint.[/]"
+    )
 
 
 @insights.command("rag")
@@ -561,7 +538,6 @@ def calibrate_cmd() -> None:
             _trades_to_closed_views,
         )
         from halal_trader.config import get_settings
-        from halal_trader.core.insights_hub import hub
         from halal_trader.logging import console
         from halal_trader.ml.calibration import (
             CalibrationSample,
@@ -582,7 +558,8 @@ def calibrate_cmd() -> None:
         out = settings.resolve_data_dir() / "analytics" / "calibration.json"
         out.parent.mkdir(parents=True, exist_ok=True)
         curve.save(out)
-        hub.calibration = curve  # update process-wide state if running
+        # The running bot reads the curve from disk on the next cycle;
+        # nothing to push to a process-wide singleton here.
 
         console.print(f"[bold]Refit:[/] method={curve.method}, n={curve.n_samples}")
         console.print(f"  ECE={metrics['ece']:.3f}  Brier={metrics['brier']:.3f}")

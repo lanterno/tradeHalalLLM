@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from halal_trader.config import get_settings
-from halal_trader.core.insights_hub import hub as insights_hub
+from halal_trader.core.insights_hub import InsightsHub
 from halal_trader.crypto.analytics import PerformanceAnalytics
 from halal_trader.db.models import init_db
 from halal_trader.db.repository import Repository
@@ -45,9 +45,15 @@ def create_app() -> Any:
         app_state["analytics"] = PerformanceAnalytics(app_state["repo"])
         app_state["started_at"] = datetime.now(timezone.utc)
         # Process-wide analytics: drift monitor, regime memory, shadow
-        # ledger, calibration curve. Cycles write into ``insights_hub``;
-        # web routes read via ``app_state["insights"]``.
-        app_state["insights"] = insights_hub.to_app_state()
+        # ledger, calibration curve. The standalone dashboard process
+        # builds an empty hub — DB-backed insights (regime, replay,
+        # exception queue) come through the ``engine`` directly; the
+        # in-memory ones stay empty until a co-hosted bot writes to them.
+        from halal_trader.ml.regime_memory import RegimeMemory
+
+        hub = InsightsHub(regime=RegimeMemory(engine=engine))
+        app_state["hub"] = hub
+        app_state["insights"] = hub.to_app_state()
         yield
         if "engine" in app_state:
             await app_state["engine"].dispose()

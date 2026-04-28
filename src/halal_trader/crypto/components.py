@@ -73,6 +73,10 @@ class CryptoComponents:
     notifier: TelegramNotifier
     alerts: AlertSink
 
+    # Process-wide analytics container — built once, shared by the
+    # cycle / monitor / web app.
+    hub: Any = None
+
     # Optional / conditionally-enabled
     sentiment_manager: Any = None
     timeframe_analyzer: Any = None
@@ -181,9 +185,9 @@ async def build_components(
             logger.warning("ensemble LLM init failed: %s — variant skipped", exc)
 
     # Build the post-close analytics recorder bundle. The hub is
-    # process-wide; the round-trip purification ledger anchors under
-    # the data dir.
-    from halal_trader.core.insights_hub import hub as insights_hub
+    # process-wide for *this* bot instance; the round-trip purification
+    # ledger anchors under the data dir.
+    from halal_trader.core.insights_hub import InsightsHub
     from halal_trader.core.llm.rag_db import DBRationaleStore
     from halal_trader.core.post_close import CloseRecorders
     from halal_trader.core.regret_db import DBRegretRecorder
@@ -191,6 +195,7 @@ async def build_components(
     from halal_trader.halal.round_trip_purification import (
         RoundTripLedger,
     )
+    from halal_trader.ml.regime_memory import RegimeMemory
 
     if engine is None:
         raise RuntimeError("CryptoComponents requires a live database engine")
@@ -200,11 +205,7 @@ async def build_components(
     rag_store: Any = DBRationaleStore(engine=engine)
     thesis_store: Any = DBThesisTagStore(engine=engine)
     regret_store: Any = DBRegretRecorder(engine=engine)
-    insights_hub.rag = rag_store
-    if insights_hub.regime is None:
-        from halal_trader.ml.regime_memory import RegimeMemory
-
-        insights_hub.regime = RegimeMemory(engine=engine)
+    insights_hub = InsightsHub(rag=rag_store, regime=RegimeMemory(engine=engine))
 
     # Optional Etherscan whale-flow source. The cycle records its
     # signal into insights_hub.whale_flows and the prompt builder
@@ -376,6 +377,7 @@ async def build_components(
         retrainer=retrainer,
         notifier=notifier,
         alerts=alerts,
+        hub=insights_hub,
         sentiment_manager=sentiment_manager,
         timeframe_analyzer=timeframe_analyzer,
         regime_detector=regime_detector,

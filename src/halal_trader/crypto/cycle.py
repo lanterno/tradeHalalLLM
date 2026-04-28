@@ -11,7 +11,7 @@ from binance import BinanceAPIException
 
 from halal_trader.config import get_settings
 from halal_trader.core.cycle import BaseCycleService
-from halal_trader.core.insights_hub import hub as insights_hub
+from halal_trader.core.insights_hub import InsightsHub
 from halal_trader.core.observability import cycle_id_var
 from halal_trader.core.tracing import tracer
 from halal_trader.crypto.analytics import PerformanceAnalytics
@@ -61,8 +61,10 @@ class CryptoCycleService(BaseCycleService):
         shadow_runner=None,
         whale_flow_source=None,
         reddit_fetcher=None,
+        hub: InsightsHub | None = None,
     ) -> None:
         super().__init__(alerts=alerts, engine=engine)
+        self._hub = hub or InsightsHub()
         self._live_mode_checker = live_mode_checker
         self._broker = broker
         self._screener = screener
@@ -466,7 +468,7 @@ class CryptoCycleService(BaseCycleService):
                 mentions = await self._reddit_fetcher.fetch_for_symbols(bases)
                 if mentions:
                     velocity = compute_velocity(mentions)
-                    insights_hub.velocity = velocity
+                    self._hub.velocity = velocity
                     velocity_block = format_velocity_for_prompt(velocity)
                     if velocity_block:
                         sentiment_text = (
@@ -608,7 +610,7 @@ class CryptoCycleService(BaseCycleService):
     ) -> str:
         """Append RAG hits over the closed-trade rationale store."""
         try:
-            rag_store = insights_hub.rag
+            rag_store = self._hub.rag
             if rag_store is None:
                 return regime_text
             from halal_trader.core.llm.rag import format_rag_for_prompt
@@ -646,7 +648,7 @@ class CryptoCycleService(BaseCycleService):
                 today_pnl=today_pnl,
                 equity=equity,
             )
-            regime_mem = insights_hub.regime
+            regime_mem = self._hub.regime
             if features is None or regime_mem is None:
                 return regime_text
             if await regime_mem.size() <= 0:
@@ -689,7 +691,7 @@ class CryptoCycleService(BaseCycleService):
         # to the runner's observe_cycle (driven from after-execute).
         if self._shadow_runner is None:
             try:
-                insights_hub.shadow.record(
+                self._hub.shadow.record(
                     cycle_id=cycle_id,
                     live_equity=equity,
                     shadow_equity=equity,
@@ -738,7 +740,7 @@ class CryptoCycleService(BaseCycleService):
                     today_pnl=today_pnl,
                     equity=equity,
                 )
-                regime_mem = insights_hub.regime
+                regime_mem = self._hub.regime
                 if feats is not None and regime_mem is not None:
                     await regime_mem.add_today(feats, today=today)
                     self._last_regime_snapshot_date = today
@@ -821,7 +823,7 @@ class CryptoCycleService(BaseCycleService):
 
             symbols_to_watch = list(TOKENS.keys())
             signals = await self._whale_flow_source.fetch(symbols_to_watch, prices=prices)
-            insights_hub.whale_flows = signals
+            self._hub.whale_flows = signals
             block = format_whale_flows_for_prompt(signals)
             if not block:
                 return microstructure_text
@@ -864,7 +866,7 @@ class CryptoCycleService(BaseCycleService):
                 )
                 if not spot_price:
                     continue
-                features[pair] = insights_hub.basis.observe(
+                features[pair] = self._hub.basis.observe(
                     pair=pair,
                     spot_price=float(spot_price),
                     perp_price=float(sig.get("mark_price", spot_price)),
