@@ -419,6 +419,21 @@ class Repository:
             results = await session.exec(statement)
             return [r.model_dump() for r in results.all()]
 
+    async def delete_old_web_actions(self, *, older_than: timedelta) -> int:
+        """Prune ``web_actions`` rows older than ``older_than``.
+
+        Returns the number of rows deleted. The daily-end scheduler
+        hook calls this so a long-running deployment doesn't accumulate
+        unbounded mutation-audit rows.
+        """
+        from sqlalchemy import delete as sa_delete
+
+        cutoff = datetime.now(UTC) - older_than
+        async with AsyncSession(self._engine) as session:
+            result = await session.exec(sa_delete(WebAction).where(WebAction.timestamp < cutoff))
+            await session.commit()
+            return int(result.rowcount or 0)
+
     # ── Purification ledger ────────────────────────────────────
 
     async def record_purification(

@@ -216,6 +216,8 @@ class CryptoTradingBot(BaseTradingBot):
         except Exception as e:
             logger.error("Crypto daily end failed: %s", e)
 
+        await self._prune_audit_log()
+
     async def _check_day_rollover(self) -> None:
         """Check if we've crossed into a new Eastern day and handle rollover."""
         today = today_eastern().isoformat()

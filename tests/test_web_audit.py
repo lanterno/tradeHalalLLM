@@ -104,3 +104,32 @@ def test_payload_truncated_for_huge_bodies(client):
         eng.dispose()
     assert payload.endswith("…[truncated]")
     assert len(payload) < 6_000
+
+
+async def test_delete_old_web_actions_prunes_only_old_rows(engine):
+    """Repository helper that the daily-end hook calls."""
+    from datetime import UTC, datetime, timedelta
+
+    import sqlalchemy as sa
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from halal_trader.db.models import WebAction
+    from halal_trader.db.repository import Repository
+
+    sm = async_sessionmaker(engine, expire_on_commit=False)
+    now = datetime.now(UTC)
+    async with sm() as s:
+        s.add(WebAction(actor="x", method="POST", path="/old", timestamp=now - timedelta(days=120)))
+        s.add(
+            WebAction(actor="x", method="POST", path="/recent", timestamp=now - timedelta(days=10))
+        )
+        await s.commit()
+
+    repo = Repository(engine)
+    deleted = await repo.delete_old_web_actions(older_than=timedelta(days=90))
+    assert deleted == 1
+
+    async with sm() as s:
+        result = await s.execute(sa.select(WebAction.path))
+        paths = sorted(row[0] for row in result.all())
+    assert paths == ["/recent"]

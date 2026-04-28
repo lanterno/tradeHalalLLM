@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import abc
 import logging
+from datetime import timedelta
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -67,3 +68,20 @@ class BaseTradingBot(abc.ABC):
     @abc.abstractmethod
     async def run(self) -> None:
         """Start the bot's main loop (subclass-specific)."""
+
+    async def _prune_audit_log(self) -> None:
+        """Delete ``web_actions`` rows older than the retention window.
+
+        Subclasses call this from their ``_daily_end`` so the audit
+        table doesn't grow unbounded on long-running deployments. A
+        retention of ``0`` disables the prune.
+        """
+        retention = int(getattr(self.settings.web, "audit_retention_days", 0) or 0)
+        if retention <= 0 or self._repo is None:
+            return
+        try:
+            deleted = await self._repo.delete_old_web_actions(older_than=timedelta(days=retention))
+            if deleted:
+                logger.info("Pruned %d web_actions row(s) older than %d days", deleted, retention)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("web_actions prune failed: %s", exc)

@@ -293,6 +293,9 @@ class WebSettings(BaseSettings):
     # Forced confirmation for destructive ops can be turned off in tests
     # so the runner doesn't have to forge headers — never disable in prod.
     require_confirmation: bool = Field(default=True)
+    # Days to keep mutation-audit rows in ``web_actions``. The daily
+    # bot-end hook prunes anything older. 0 disables the prune.
+    audit_retention_days: int = Field(default=90)
 
 
 # ── Top-level Settings ─────────────────────────────────────────

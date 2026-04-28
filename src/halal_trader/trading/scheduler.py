@@ -174,6 +174,7 @@ class TradingBot(BaseTradingBot):
 
     async def _daily_end(self) -> None:
         await self.end_of_day()
+        await self._prune_audit_log()
 
     # ── PID Lock ─────────────────────────────────────────────────
 
