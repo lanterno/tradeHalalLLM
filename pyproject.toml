@@ -94,6 +94,11 @@ filterwarnings = [
     # coroutines never get awaited because the access never escalated to a
     # call. These are mock-plumbing artifacts in tests, not production bugs.
     "ignore:coroutine 'AsyncMockMixin\\._execute_mock_call' was never awaited:RuntimeWarning",
+    # python-binance 1.0.36 imports ``websockets.WebSocketClientProtocol`` and
+    # ``websockets.legacy``, both deprecated by the websockets library. Not
+    # our bug to fix; filter so the warning summary stays usable.
+    "ignore:websockets\\.WebSocketClientProtocol is deprecated:DeprecationWarning",
+    "ignore:websockets\\.legacy is deprecated.*:DeprecationWarning",
 ]
 
 [tool.coverage.run]
