@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import date
 from typing import Any
 
 from binance import BinanceAPIException
@@ -99,6 +100,8 @@ class CryptoCycleService(BaseCycleService):
         # adaptive cadence selector. None until the first successful
         # cycle has populated the indicator cache.
         self.last_indicators_cache: dict[str, dict] | None = None
+        # First-cycle-of-the-day marker for daily regime snapshots.
+        self._last_regime_snapshot_date: date | None = None
 
     async def _pre_cycle_checks(self) -> bool:
         return True  # Crypto markets are 24/7
@@ -605,7 +608,7 @@ class CryptoCycleService(BaseCycleService):
     ) -> str:
         """Append RAG hits over the closed-trade rationale store."""
         try:
-            rag_store = getattr(insights_hub, "rag", None)
+            rag_store = insights_hub.rag
             if rag_store is None:
                 return regime_text
             from halal_trader.core.llm.rag import format_rag_for_prompt
@@ -694,7 +697,7 @@ class CryptoCycleService(BaseCycleService):
             except Exception as exc:  # noqa: BLE001
                 logger.debug("shadow ledger record failed: %s", exc)
 
-        replay_store = getattr(self, "_replay_store", None)
+        replay_store = self._replay_store
         if replay_store is not None:
             try:
                 from halal_trader.core.replay import (
@@ -729,7 +732,7 @@ class CryptoCycleService(BaseCycleService):
             from datetime import datetime as _dt
 
             today = _dt.now(UTC).date()
-            if getattr(self, "_last_regime_snapshot_date", None) != today:
+            if self._last_regime_snapshot_date != today:
                 feats = self._build_regime_features(
                     indicators_cache=indicators_cache,
                     today_pnl=today_pnl,
@@ -970,15 +973,10 @@ class CryptoCycleService(BaseCycleService):
         max_pairs = self._settings.crypto.max_pairs_per_cycle
         halal_symbols = await self._screener.get_halal_pairs()
 
-        # Pull paused pairs once per cycle. Falls back to the empty set
-        # if the repo isn't wired (defensive — pauses are non-critical).
+        # Pull paused pairs once per cycle.
         paused: set[str] = set()
         try:
-            from halal_trader.db.repository import Repository
-
-            repo: Repository | None = getattr(self._portfolio, "_repo", None)
-            if repo is not None:
-                paused = await repo.get_paused_pairs()
+            paused = await self._portfolio._repo.get_paused_pairs()
         except Exception as e:
             logger.debug("Could not fetch paused pairs: %s", e)
 

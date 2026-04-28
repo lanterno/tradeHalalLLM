@@ -247,7 +247,7 @@ class CryptoTradingBot(BaseTradingBot):
 
         components: list[tuple[str, object | None]] = [
             ("monitor", self._monitor),
-            ("news_reactor", getattr(self, "_news_reactor", None)),
+            ("news_reactor", self._news_reactor),
             ("sentiment", self._sentiment_manager),
             ("notifier", self._notifier),
             ("websocket", self._ws),
