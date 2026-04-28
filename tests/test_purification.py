@@ -7,8 +7,6 @@ the *dividend* flavour; this test set covers the new round-trip
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
 from halal_trader.halal.round_trip_purification import (
@@ -56,8 +54,8 @@ def test_load_rules_from_dicts() -> None:
         [
             {"symbol": "aapl", "impure_ratio": 0.02, "source": "aaoifi"},
             {"symbol": "msft", "impure_ratio": 0.005},
-            {"symbol": "", "impure_ratio": 0.5},  # skipped (no symbol)
-            {"symbol": "junk", "impure_ratio": "not-a-number"},  # skipped (bad ratio)
+            {"symbol": "", "impure_ratio": 0.5},
+            {"symbol": "junk", "impure_ratio": "not-a-number"},
         ]
     )
     assert "AAPL" in rules
@@ -69,143 +67,104 @@ def test_load_rules_from_dicts() -> None:
 # ── Ledger ───────────────────────────────────────────────────────
 
 
-def test_ledger_record_idempotent(tmp_path: Path) -> None:
-    led = RoundTripLedger(path=tmp_path / "purif.json")
+async def test_ledger_record_idempotent(engine) -> None:
+    led = RoundTripLedger(engine=engine)
     e = RoundTripEntry(
         entry_id="AAPL:t1",
         symbol="AAPL",
         gain_amount_usd=100,
         impure_ratio=0.02,
         purification_due_usd=2.0,
-        timestamp="2026-04-26T00:00:00Z",
+        timestamp="2026-04-26T00:00:00+00:00",
     )
-    assert led.record(e) is True
-    assert led.record(e) is False
-    assert led.outstanding() == 2.0
+    assert await led.record(e) is True
+    assert await led.record(e) is False
+    assert await led.outstanding() == 2.0
 
 
-def test_ledger_disburse_marks_entry(tmp_path: Path) -> None:
-    led = RoundTripLedger(path=tmp_path / "purif.json")
+async def test_ledger_disburse_marks_entry(engine) -> None:
+    led = RoundTripLedger(engine=engine)
     e = RoundTripEntry(
         entry_id="X:1",
         symbol="X",
         gain_amount_usd=100,
         impure_ratio=0.05,
         purification_due_usd=5.0,
-        timestamp="2026-04-26T00:00:00Z",
+        timestamp="2026-04-26T00:00:00+00:00",
     )
-    led.record(e)
-    assert led.outstanding() == 5.0
-    assert led.disbursed_total() == 0.0
-    assert led.mark_disbursed("X:1", to="charity-x") is True
-    assert led.outstanding() == 0.0
-    assert led.disbursed_total() == 5.0
-    assert led.mark_disbursed("X:1") is False
+    await led.record(e)
+    assert await led.outstanding() == 5.0
+    assert await led.disbursed_total() == 0.0
+    assert await led.mark_disbursed("X:1", to="charity-x") is True
+    assert await led.outstanding() == 0.0
+    assert await led.disbursed_total() == 5.0
+    assert await led.mark_disbursed("X:1") is False
 
 
-def test_ledger_persists_across_instances(tmp_path: Path) -> None:
-    p = tmp_path / "purif.json"
-    led1 = RoundTripLedger(path=p)
-    led1.record(
-        RoundTripEntry(
-            entry_id="X:1",
-            symbol="X",
-            gain_amount_usd=100,
-            impure_ratio=0.02,
-            purification_due_usd=2.0,
-            timestamp="2026-04-26T00:00:00Z",
+async def test_ledger_by_symbol_aggregates_outstanding(engine) -> None:
+    led = RoundTripLedger(engine=engine)
+    for entry_id, sym, due in [
+        ("AAPL:1", "AAPL", 2.0),
+        ("AAPL:2", "AAPL", 4.0),
+        ("MSFT:1", "MSFT", 1.0),
+    ]:
+        await led.record(
+            RoundTripEntry(
+                entry_id=entry_id,
+                symbol=sym,
+                gain_amount_usd=100,
+                impure_ratio=0.02,
+                purification_due_usd=due,
+                timestamp="2026-04-26T00:00:00+00:00",
+            )
         )
-    )
-    led2 = RoundTripLedger(path=p)
-    assert led2.outstanding() == 2.0
-
-
-def test_ledger_resilient_to_corrupt_file(tmp_path: Path) -> None:
-    p = tmp_path / "purif.json"
-    p.write_text("{not json")
-    led = RoundTripLedger(path=p)
-    assert led.outstanding() == 0.0
-
-
-def test_ledger_by_symbol_aggregates_outstanding(tmp_path: Path) -> None:
-    led = RoundTripLedger(path=tmp_path / "purif.json")
-    led.record(
-        RoundTripEntry(
-            entry_id="AAPL:1",
-            symbol="AAPL",
-            gain_amount_usd=100,
-            impure_ratio=0.02,
-            purification_due_usd=2.0,
-            timestamp="t",
-        )
-    )
-    led.record(
-        RoundTripEntry(
-            entry_id="AAPL:2",
-            symbol="AAPL",
-            gain_amount_usd=200,
-            impure_ratio=0.02,
-            purification_due_usd=4.0,
-            timestamp="t",
-        )
-    )
-    led.record(
-        RoundTripEntry(
-            entry_id="MSFT:1",
-            symbol="MSFT",
-            gain_amount_usd=100,
-            impure_ratio=0.01,
-            purification_due_usd=1.0,
-            timestamp="t",
-        )
-    )
-    led.mark_disbursed("AAPL:2")
-    by_sym = led.by_symbol()
+    await led.mark_disbursed("AAPL:2")
+    by_sym = await led.by_symbol()
     assert by_sym == {"AAPL": 2.0, "MSFT": 1.0}
 
 
 # ── record_round_trip ────────────────────────────────────────────
 
 
-def test_record_round_trip_no_rule_returns_none(tmp_path: Path) -> None:
-    led = RoundTripLedger(path=tmp_path / "purif.json")
-    out = record_round_trip(led, {}, trade_id="t1", symbol="AAPL", gain_usd=100)
+async def test_record_round_trip_no_rule_returns_none(engine) -> None:
+    led = RoundTripLedger(engine=engine)
+    out = await record_round_trip(led, {}, trade_id="t1", symbol="AAPL", gain_usd=100)
     assert out is None
-    assert led.outstanding() == 0.0
+    assert await led.outstanding() == 0.0
 
 
-def test_record_round_trip_zero_ratio_returns_none(tmp_path: Path) -> None:
-    led = RoundTripLedger(path=tmp_path / "purif.json")
+async def test_record_round_trip_zero_ratio_returns_none(engine) -> None:
+    led = RoundTripLedger(engine=engine)
     rules = {"AAPL": RoundTripRule(symbol="AAPL", impure_ratio=0.0)}
-    out = record_round_trip(led, rules, trade_id="t1", symbol="AAPL", gain_usd=100)
+    out = await record_round_trip(led, rules, trade_id="t1", symbol="AAPL", gain_usd=100)
     assert out is None
 
 
-def test_record_round_trip_loss_returns_none(tmp_path: Path) -> None:
-    led = RoundTripLedger(path=tmp_path / "purif.json")
+async def test_record_round_trip_loss_returns_none(engine) -> None:
+    led = RoundTripLedger(engine=engine)
     rules = {"AAPL": RoundTripRule(symbol="AAPL", impure_ratio=0.02)}
-    out = record_round_trip(led, rules, trade_id="t1", symbol="AAPL", gain_usd=-50)
+    out = await record_round_trip(led, rules, trade_id="t1", symbol="AAPL", gain_usd=-50)
     assert out is None
 
 
-def test_record_round_trip_writes_entry(tmp_path: Path) -> None:
-    led = RoundTripLedger(path=tmp_path / "purif.json")
+async def test_record_round_trip_writes_entry(engine) -> None:
+    led = RoundTripLedger(engine=engine)
     rules = {"AAPL": RoundTripRule(symbol="AAPL", impure_ratio=0.02)}
-    out = record_round_trip(led, rules, trade_id="t1", symbol="AAPL", gain_usd=100)
+    out = await record_round_trip(led, rules, trade_id="t1", symbol="AAPL", gain_usd=100)
     assert out is not None
     assert out.purification_due_usd == 2.0
-    assert led.outstanding() == 2.0
-    out2 = record_round_trip(led, rules, trade_id="t1", symbol="AAPL", gain_usd=100)
+    assert await led.outstanding() == 2.0
+    out2 = await record_round_trip(led, rules, trade_id="t1", symbol="AAPL", gain_usd=100)
     assert out2 is None
-    assert led.outstanding() == 2.0
+    assert await led.outstanding() == 2.0
 
 
-def test_outstanding_summary_shape(tmp_path: Path) -> None:
-    led = RoundTripLedger(path=tmp_path / "purif.json")
+async def test_outstanding_summary_shape(engine) -> None:
+    led = RoundTripLedger(engine=engine)
     rules = {"AAPL": RoundTripRule(symbol="AAPL", impure_ratio=0.02)}
-    record_round_trip(led, rules, trade_id="t1", symbol="AAPL", gain_usd=100)
-    record_round_trip(led, rules, trade_id="t2", symbol="AAPL", gain_usd=200)
-    summary = outstanding_round_trip_due(led)
+    await record_round_trip(led, rules, trade_id="t1", symbol="AAPL", gain_usd=100)
+    await record_round_trip(led, rules, trade_id="t2", symbol="AAPL", gain_usd=200)
+    summary = await outstanding_round_trip_due(led)
     assert summary["total_usd"] == 6.0
     assert summary["by_symbol"]["AAPL"] == 6.0
     assert summary["n_entries"] == 2

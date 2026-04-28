@@ -229,7 +229,7 @@ async def build_components(
         hub=insights_hub,
         thesis_store=thesis_store,
         regret_recorder=regret_store,
-        purification_ledger=RoundTripLedger(path=data_dir / "round_trip_purification.json"),
+        purification_ledger=RoundTripLedger(engine=engine),
         purification_rules={},  # Operator wires per-symbol rules later
         rag_store=rag_store,
     )

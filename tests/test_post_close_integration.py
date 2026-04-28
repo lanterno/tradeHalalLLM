@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from halal_trader.core.insights_hub import InsightsHub
 from halal_trader.core.post_close import (
     CloseEvent,
@@ -36,16 +34,17 @@ def _e(symbol: str, *, pnl: float, gain: float, **kw):
     return CloseEvent(**base)
 
 
-async def test_full_post_close_flow_to_dashboard_shape(engine, tmp_path: Path) -> None:
+async def test_full_post_close_flow_to_dashboard_shape(engine) -> None:
     """One winning close → drift observed + thesis tagged + regret + purification."""
     hub = InsightsHub()
     thesis_store = DBThesisTagStore(engine=engine)
     regret_recorder = DBRegretRecorder(engine=engine)
+    ledger = RoundTripLedger(engine=engine)
     rec = CloseRecorders(
         hub=hub,
         thesis_store=thesis_store,
         regret_recorder=regret_recorder,
-        purification_ledger=RoundTripLedger(path=tmp_path / "purif.json"),
+        purification_ledger=ledger,
         purification_rules={"BTCUSDT": RoundTripRule(symbol="BTCUSDT", impure_ratio=0.02)},
     )
     summary = await record_close(_e("BTCUSDT", pnl=0.02, gain=100.0), rec)
@@ -65,37 +64,39 @@ async def test_full_post_close_flow_to_dashboard_shape(engine, tmp_path: Path) -
     assert rows[0]["trade_id"] == "BTCUSDT-1"
     assert rows[0]["pnl_pct"] == 0.02
 
-    assert rec.purification_ledger.outstanding() == 2.0
+    assert await ledger.outstanding() == 2.0
     assert summary["purification_due_usd"] == 2.0
 
 
-async def test_loss_close_skips_purification(engine, tmp_path: Path) -> None:
+async def test_loss_close_skips_purification(engine) -> None:
     hub = InsightsHub()
     thesis_store = DBThesisTagStore(engine=engine)
     regret_recorder = DBRegretRecorder(engine=engine)
+    ledger = RoundTripLedger(engine=engine)
     rec = CloseRecorders(
         hub=hub,
         thesis_store=thesis_store,
         regret_recorder=regret_recorder,
-        purification_ledger=RoundTripLedger(path=tmp_path / "purif.json"),
+        purification_ledger=ledger,
         purification_rules={"BTCUSDT": RoundTripRule(symbol="BTCUSDT", impure_ratio=0.02)},
     )
     await record_close(_e("BTCUSDT", pnl=-0.02, gain=-100.0), rec)
-    assert rec.purification_ledger.outstanding() == 0.0
+    assert await ledger.outstanding() == 0.0
     assert hub.drift.n == 1
     assert await thesis_store.get("BTCUSDT-1") is not None
     assert len(await regret_recorder.all()) == 1
 
 
-async def test_multiple_closes_aggregate(engine, tmp_path: Path) -> None:
+async def test_multiple_closes_aggregate(engine) -> None:
     hub = InsightsHub()
     thesis_store = DBThesisTagStore(engine=engine)
     regret_recorder = DBRegretRecorder(engine=engine)
+    ledger = RoundTripLedger(engine=engine)
     rec = CloseRecorders(
         hub=hub,
         thesis_store=thesis_store,
         regret_recorder=regret_recorder,
-        purification_ledger=RoundTripLedger(path=tmp_path / "purif.json"),
+        purification_ledger=ledger,
         purification_rules={"AAPL": RoundTripRule(symbol="AAPL", impure_ratio=0.01)},
     )
     for i in range(20):
@@ -110,5 +111,5 @@ async def test_multiple_closes_aggregate(engine, tmp_path: Path) -> None:
             rec,
         )
     assert hub.drift.n == 20
-    assert rec.purification_ledger.outstanding() > 0
+    assert await ledger.outstanding() > 0
     assert len(await regret_recorder.all()) == 20

@@ -88,7 +88,7 @@ def test_normalises_symbol_case() -> None:
 
 
 def test_naive_timestamp_treated_as_utc() -> None:
-    naive = datetime.utcnow() - timedelta(hours=1)
+    naive = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=1)
     mentions = [Mention(symbol="X", timestamp=naive)]
     out = compute_velocity(mentions)
     assert "X" in out

@@ -380,6 +380,31 @@ class ThesisTagRow(SQLModel, table=True):
     )
 
 
+class RoundTripPurificationRow(SQLModel, table=True):
+    """One round-trip purification accrual on a closed-and-realised gain.
+
+    Capital-gains side of the purification accounting (the dividend-side
+    lives in :class:`PurificationEntry`). Idempotent on
+    ``(symbol, source_ref)`` so the close hook can call freely.
+    """
+
+    __tablename__ = "round_trip_purification"
+
+    entry_id: str = Field(primary_key=True)
+    symbol: str = Field(index=True)
+    gain_amount_usd: float
+    impure_ratio: float
+    purification_due_usd: float
+    timestamp: datetime = Field(
+        default_factory=lambda: datetime.now(UTC), sa_type=sa.DateTime(timezone=True)
+    )
+    source_ref: str = ""
+    note: str = ""
+    disbursed: bool = Field(default=False)
+    disbursed_at: datetime | None = Field(default=None, sa_type=sa.DateTime(timezone=True))
+    disbursed_to: str = ""
+
+
 class RegretRecordRow(SQLModel, table=True):
     """Hindsight regret record for one closed trade.
 

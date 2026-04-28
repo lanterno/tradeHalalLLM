@@ -12,25 +12,26 @@ It uses a separate primitive set so neither module needs to know about
 the other:
 
 * :class:`RoundTripRule` — symbol → impure-revenue ratio.
-* :class:`RoundTripEntry` — one purification accrual.
-* :class:`RoundTripLedger` — JSON-on-disk sidecar ledger.
+* :class:`RoundTripEntry` — one purification accrual (in-memory shape).
+* :class:`RoundTripLedger` — async DB-backed ledger over
+  ``round_trip_purification``.
 * :func:`compute_round_trip_purification` — pure helper.
 * :func:`record_round_trip` — idempotent (trade_id, symbol) recorder.
-
-Persistence is JSON sidecar; no schema migration. When the operator
-later wants to merge the dividend ledger and this one into one DB
-table, the sidecar is the source of truth for backfill.
 """
 
 from __future__ import annotations
 
-import json
 import logging
 from collections.abc import Iterable, Mapping
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import ROUND_HALF_UP, Decimal
-from pathlib import Path
+from typing import Any
+
+from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
+from sqlmodel import select
+
+from halal_trader.db.models import RoundTripPurificationRow
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +55,7 @@ class RoundTripRule:
             )
 
 
-# ── Ledger entry ─────────────────────────────────────────────────
+# ── Ledger entry (in-memory) ─────────────────────────────────────
 
 
 @dataclass
@@ -95,73 +96,143 @@ def compute_round_trip_purification(
 # ── Ledger ───────────────────────────────────────────────────────
 
 
+def _row_to_entry(row: RoundTripPurificationRow) -> RoundTripEntry:
+    return RoundTripEntry(
+        entry_id=row.entry_id,
+        symbol=row.symbol,
+        gain_amount_usd=row.gain_amount_usd,
+        impure_ratio=row.impure_ratio,
+        purification_due_usd=row.purification_due_usd,
+        timestamp=row.timestamp.isoformat() if row.timestamp else "",
+        source_ref=row.source_ref,
+        note=row.note,
+        disbursed=row.disbursed,
+        disbursed_at=row.disbursed_at.isoformat() if row.disbursed_at else None,
+        disbursed_to=row.disbursed_to,
+    )
+
+
+def _parse_ts(raw: str) -> datetime:
+    if not raw:
+        return datetime.now(UTC)
+    try:
+        ts = datetime.fromisoformat(raw)
+    except ValueError:
+        return datetime.now(UTC)
+    return ts if ts.tzinfo else ts.replace(tzinfo=UTC)
+
+
 @dataclass
 class RoundTripLedger:
-    """Append-only JSON-on-disk ledger of round-trip purification entries."""
+    """Async DB-backed ledger of round-trip purification entries."""
 
-    path: Path
-    entries: dict[str, RoundTripEntry] = field(default_factory=dict)
+    engine: AsyncEngine
 
-    def __post_init__(self) -> None:
-        self.path = Path(self.path)
-        if self.path.exists():
-            self._load()
+    @property
+    def _sm(self) -> "async_sessionmaker[Any]":
+        return async_sessionmaker(self.engine, expire_on_commit=False)
 
-    def _load(self) -> None:
-        try:
-            raw = json.loads(self.path.read_text())
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("round-trip purification ledger unreadable: %s — starting fresh", exc)
-            return
-        entries = raw.get("entries", {})
-        self.entries = {k: RoundTripEntry(**v) for k, v in entries.items() if isinstance(v, dict)}
-
-    def _save(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(
-            json.dumps(
-                {"entries": {k: asdict(v) for k, v in self.entries.items()}},
-                indent=2,
-                sort_keys=True,
+    async def record(self, entry: RoundTripEntry) -> bool:
+        """Idempotent on ``entry_id`` — returns True iff inserted."""
+        async with self._sm() as s:
+            existing = await s.get(RoundTripPurificationRow, entry.entry_id)
+            if existing is not None:
+                return False
+            s.add(
+                RoundTripPurificationRow(
+                    entry_id=entry.entry_id,
+                    symbol=entry.symbol,
+                    gain_amount_usd=entry.gain_amount_usd,
+                    impure_ratio=entry.impure_ratio,
+                    purification_due_usd=entry.purification_due_usd,
+                    timestamp=_parse_ts(entry.timestamp),
+                    source_ref=entry.source_ref,
+                    note=entry.note,
+                    disbursed=entry.disbursed,
+                    disbursed_at=(_parse_ts(entry.disbursed_at) if entry.disbursed_at else None),
+                    disbursed_to=entry.disbursed_to,
+                )
             )
-        )
+            await s.commit()
+            return True
 
-    def record(self, entry: RoundTripEntry) -> bool:
-        if entry.entry_id in self.entries:
-            return False
-        self.entries[entry.entry_id] = entry
-        self._save()
-        return True
+    async def mark_disbursed(self, entry_id: str, *, to: str = "") -> bool:
+        async with self._sm() as s:
+            row = await s.get(RoundTripPurificationRow, entry_id)
+            if row is None or row.disbursed:
+                return False
+            row.disbursed = True
+            row.disbursed_at = datetime.now(UTC)
+            row.disbursed_to = to
+            s.add(row)
+            await s.commit()
+            return True
 
-    def mark_disbursed(self, entry_id: str, *, to: str = "") -> bool:
-        e = self.entries.get(entry_id)
-        if e is None or e.disbursed:
-            return False
-        e.disbursed = True
-        e.disbursed_at = datetime.now(UTC).isoformat()
-        e.disbursed_to = to
-        self._save()
-        return True
+    async def outstanding(self) -> float:
+        async with self._sm() as s:
+            rows = (
+                (
+                    await s.execute(
+                        select(RoundTripPurificationRow).where(
+                            RoundTripPurificationRow.disbursed.is_(False)
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            return sum(r.purification_due_usd for r in rows)
 
-    def outstanding(self) -> float:
-        return sum(e.purification_due_usd for e in self.entries.values() if not e.disbursed)
+    async def disbursed_total(self) -> float:
+        async with self._sm() as s:
+            rows = (
+                (
+                    await s.execute(
+                        select(RoundTripPurificationRow).where(
+                            RoundTripPurificationRow.disbursed.is_(True)
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            return sum(r.purification_due_usd for r in rows)
 
-    def disbursed_total(self) -> float:
-        return sum(e.purification_due_usd for e in self.entries.values() if e.disbursed)
-
-    def by_symbol(self) -> dict[str, float]:
+    async def by_symbol(self) -> dict[str, float]:
+        async with self._sm() as s:
+            rows = (
+                (
+                    await s.execute(
+                        select(RoundTripPurificationRow).where(
+                            RoundTripPurificationRow.disbursed.is_(False)
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
         out: dict[str, float] = {}
-        for e in self.entries.values():
-            if e.disbursed:
-                continue
-            out[e.symbol] = out.get(e.symbol, 0.0) + e.purification_due_usd
+        for r in rows:
+            out[r.symbol] = out.get(r.symbol, 0.0) + r.purification_due_usd
         return out
+
+    async def all_entries(self) -> list[RoundTripEntry]:
+        async with self._sm() as s:
+            rows = (await s.execute(select(RoundTripPurificationRow))).scalars().all()
+            return [_row_to_entry(r) for r in rows]
+
+    async def count(self) -> int:
+        from sqlalchemy import func
+
+        async with self._sm() as s:
+            r = await s.execute(select(func.count()).select_from(RoundTripPurificationRow))
+            return int(r.scalar_one())
 
 
 # ── Convenience ──────────────────────────────────────────────────
 
 
-def record_round_trip(
+async def record_round_trip(
     ledger: RoundTripLedger,
     rules: Mapping[str, RoundTripRule],
     *,
@@ -193,17 +264,17 @@ def record_round_trip(
         source_ref=trade_id,
         note=note,
     )
-    if ledger.record(entry):
+    if await ledger.record(entry):
         return entry
     return None
 
 
-def outstanding_round_trip_due(ledger: RoundTripLedger) -> dict[str, float]:
+async def outstanding_round_trip_due(ledger: RoundTripLedger) -> dict[str, Any]:
     return {
-        "total_usd": ledger.outstanding(),
-        "by_symbol": ledger.by_symbol(),
-        "disbursed_total_usd": ledger.disbursed_total(),
-        "n_entries": len(ledger.entries),
+        "total_usd": await ledger.outstanding(),
+        "by_symbol": await ledger.by_symbol(),
+        "disbursed_total_usd": await ledger.disbursed_total(),
+        "n_entries": await ledger.count(),
     }
 
 

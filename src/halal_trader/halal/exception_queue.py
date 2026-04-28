@@ -8,8 +8,8 @@ the dashboard, and decisions are logged for future learning.
 
 Design choices:
 
-* JSON sidecar persistence — same pattern as thesis/regret/purification.
-  No schema migration; a Postgres-backed table is straightforward later.
+* JSON sidecar persistence for now — low write rate, operator-driven.
+  Promote to a Postgres table when concurrent multi-bot review lands.
 * Status FSM: ``pending`` → ``approved`` | ``rejected`` | ``deferred``.
   Decided entries are kept (not deleted) so the screener can learn from
   past rulings.

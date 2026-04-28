@@ -2,8 +2,6 @@
 
 from decimal import Decimal
 
-import pytest
-
 from halal_trader.core.halt import clear_halt, get_status, set_halt
 from halal_trader.core.llm import budget as budget_mod
 from halal_trader.core.llm.budget import LLMBudget
@@ -71,8 +69,3 @@ async def test_negative_or_zero_cost_is_noop(engine):
     await b.record(Decimal("0"))
     await b.record(Decimal("-5"))
     assert b.spent_today_usd == Decimal("0")
-
-
-@pytest.fixture(autouse=True)
-def _isolate_halt_state():
-    yield  # individual tests dispose their engine, so state is per-DB

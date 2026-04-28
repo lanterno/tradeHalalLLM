@@ -12,6 +12,31 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_DB: halal_trader
+          POSTGRES_USER: trader
+          POSTGRES_PASSWORD: trader-dev-only
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U trader -d halal_trader"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    env:
+      # tests/conftest.py reads these to reach the service container.
+      TEST_PG_HOST: localhost
+      TEST_PG_PORT: "5433"
+      TEST_PG_USER: trader
+      TEST_PG_PASS: trader-dev-only
+      TEST_PG_DB: halal_trader_test
+      DATABASE_URL: postgresql+asyncpg://trader:trader-dev-only@localhost:5433/halal_trader
+
     steps:
       - uses: actions/checkout@v4
 
@@ -35,6 +60,9 @@ jobs:
 
       - name: Type check (domain + core, strict)
         run: uv run mypy
+
+      - name: Apply Alembic migrations to runtime DB
+        run: uv run halal-trader db migrate
 
       - name: Test (with coverage gate on domain + core)
         run: >

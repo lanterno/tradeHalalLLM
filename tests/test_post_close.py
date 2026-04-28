@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from halal_trader.core.insights_hub import InsightsHub
 from halal_trader.core.llm.rag_db import DBRationaleStore
 from halal_trader.core.post_close import (
@@ -82,26 +80,26 @@ async def test_regret_appended(engine) -> None:
 # ── Purification dispatch ────────────────────────────────────────
 
 
-async def test_purification_recorded_on_winning_trade(tmp_path: Path) -> None:
-    led = RoundTripLedger(path=tmp_path / "purif.json")
+async def test_purification_recorded_on_winning_trade(engine) -> None:
+    led = RoundTripLedger(engine=engine)
     rules = {"BTCUSDT": RoundTripRule(symbol="BTCUSDT", impure_ratio=0.02)}
     rec = CloseRecorders(purification_ledger=led, purification_rules=rules)
     summary = await record_close(_event(gain_usd=100.0), rec)
     assert summary.get("purification_due_usd") == 2.0
-    assert led.outstanding() == 2.0
+    assert await led.outstanding() == 2.0
 
 
-async def test_purification_skipped_on_loss(tmp_path: Path) -> None:
-    led = RoundTripLedger(path=tmp_path / "purif.json")
+async def test_purification_skipped_on_loss(engine) -> None:
+    led = RoundTripLedger(engine=engine)
     rules = {"BTCUSDT": RoundTripRule(symbol="BTCUSDT", impure_ratio=0.02)}
     rec = CloseRecorders(purification_ledger=led, purification_rules=rules)
     summary = await record_close(_event(gain_usd=-50.0), rec)
     assert "purification_due_usd" not in summary
-    assert led.outstanding() == 0.0
+    assert await led.outstanding() == 0.0
 
 
-async def test_purification_skipped_when_no_rule(tmp_path: Path) -> None:
-    led = RoundTripLedger(path=tmp_path / "purif.json")
+async def test_purification_skipped_when_no_rule(engine) -> None:
+    led = RoundTripLedger(engine=engine)
     rec = CloseRecorders(purification_ledger=led, purification_rules={})
     summary = await record_close(_event(gain_usd=100.0), rec)
     assert "purification_due_usd" not in summary
@@ -119,13 +117,13 @@ async def test_record_close_never_raises_on_recorder_failure() -> None:
     await record_close(_event(), rec)
 
 
-async def test_full_fan_out(engine, tmp_path: Path) -> None:
+async def test_full_fan_out(engine) -> None:
     """End-to-end: every recorder fires for one event."""
     hub = InsightsHub()
     store = DBThesisTagStore(engine=engine)
     side = DBRegretRecorder(engine=engine)
     rag = DBRationaleStore(engine=engine)
-    led = RoundTripLedger(path=tmp_path / "purif.json")
+    led = RoundTripLedger(engine=engine)
     rules = {"BTCUSDT": RoundTripRule(symbol="BTCUSDT", impure_ratio=0.02)}
     rec = CloseRecorders(
         hub=hub,
@@ -139,6 +137,6 @@ async def test_full_fan_out(engine, tmp_path: Path) -> None:
     assert hub.drift.n == 1
     assert await store.get("t1") is not None
     assert len(await side.all()) == 1
-    assert led.outstanding() == 2.0
+    assert await led.outstanding() == 2.0
     for key in ("drift_state", "thesis_tag", "regret", "purification_due_usd", "rag_added"):
         assert key in summary

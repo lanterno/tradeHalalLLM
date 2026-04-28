@@ -651,9 +651,9 @@ The executor enforces several safety checks before placing orders:
 
 ## Dependencies
 
-- **Runtime**: Python 3.14+, SQLite
+- **Runtime**: Python 3.14+, Postgres 16 + pgvector
 - **Core**: `mcp`, `ollama`, `httpx`, `pydantic-settings`, `click`, `rich`
-- **Data**: `sqlmodel`, `aiosqlite`, `alembic`
+- **Data**: `sqlmodel`, `asyncpg`, `psycopg`, `alembic`, `pgvector`
 - **Trading**: `python-binance`, `numpy`, `apscheduler`
 - **ML**: `scikit-learn` (IsolationForest for anomaly detection, classifiers for signal prediction)
 - **LLM**: `openai`, `anthropic`

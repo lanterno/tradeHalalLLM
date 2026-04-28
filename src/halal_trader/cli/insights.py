@@ -277,8 +277,9 @@ def regime_cmd() -> None:
 def purification_cmd() -> None:
     """Outstanding round-trip purification due."""
 
-    def _run() -> None:
+    async def _run() -> None:
         from halal_trader.config import get_settings
+        from halal_trader.db.models import init_db
         from halal_trader.halal.round_trip_purification import (
             RoundTripLedger,
             outstanding_round_trip_due,
@@ -286,21 +287,24 @@ def purification_cmd() -> None:
         from halal_trader.logging import console
 
         settings = get_settings()
-        path = settings.resolve_data_dir() / "analytics" / "round_trip_purification.json"
-        if not path.exists():
-            console.print("[yellow]No purification ledger yet — no closed wins.[/]")
-            return
-        ledger = RoundTripLedger(path=path)
-        summary = outstanding_round_trip_due(ledger)
-        console.print(f"[bold]Outstanding:[/] ${summary['total_usd']:.2f}")
-        console.print(f"Disbursed total: ${summary['disbursed_total_usd']:.2f}")
-        console.print(f"Total entries: {summary['n_entries']}")
-        if summary["by_symbol"]:
-            console.print("[bold]By symbol:[/]")
-            for sym, due in sorted(summary["by_symbol"].items(), key=lambda kv: -kv[1]):
-                console.print(f"  {sym:<10} ${due:.2f}")
+        engine = await init_db(settings.database_url)
+        try:
+            ledger = RoundTripLedger(engine=engine)
+            summary = await outstanding_round_trip_due(ledger)
+            if summary["n_entries"] == 0:
+                console.print("[yellow]No purification ledger yet — no closed wins.[/]")
+                return
+            console.print(f"[bold]Outstanding:[/] ${summary['total_usd']:.2f}")
+            console.print(f"Disbursed total: ${summary['disbursed_total_usd']:.2f}")
+            console.print(f"Total entries: {summary['n_entries']}")
+            if summary["by_symbol"]:
+                console.print("[bold]By symbol:[/]")
+                for sym, due in sorted(summary["by_symbol"].items(), key=lambda kv: -kv[1]):
+                    console.print(f"  {sym:<10} ${due:.2f}")
+        finally:
+            await engine.dispose()
 
-    _run()
+    asyncio.run(_run())
 
 
 @insights.command("replay")

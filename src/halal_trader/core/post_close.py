@@ -193,7 +193,7 @@ async def record_close(event: CloseEvent, recorders: CloseRecorders) -> dict[str
                 record_round_trip,
             )
 
-            entry = record_round_trip(
+            entry = await record_round_trip(
                 recorders.purification_ledger,
                 recorders.purification_rules,
                 trade_id=event.trade_id,
