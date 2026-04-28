@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncEngine
-from sqlmodel import SQLModel, func, select
+from sqlmodel import col, func, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from halal_trader.db.models import (
@@ -35,7 +35,13 @@ class Repository:
 
     # ── Generic helpers (private) ─────────────────────────────
 
-    async def _get_today_rows(self, model: type[SQLModel]) -> list[dict[str, Any]]:
+    # The generic helpers below take ``type[Any]`` rather than
+    # ``type[SQLModel]``: the columns they touch (timestamp/date/
+    # symbol/compliance/updated_at) only exist on specific subclasses,
+    # and SQLModel's column-attribute typing is too weak for mypy
+    # strict to follow the polymorphism. Callers always pass a
+    # concrete ``table=True`` model class.
+    async def _get_today_rows(self, model: type[Any]) -> list[dict[str, Any]]:
         today = today_eastern()
         day_start = trading_day_start_utc(today)
         day_end = trading_day_end_utc(today)
@@ -44,18 +50,18 @@ class Repository:
                 select(model)
                 .where(model.timestamp >= day_start)
                 .where(model.timestamp < day_end)
-                .order_by(model.timestamp.desc())
+                .order_by(col(model.timestamp).desc())
             )
             results = await session.exec(statement)
             return [row.model_dump() for row in results.all()]
 
-    async def _get_recent_rows(self, model: type[SQLModel], limit: int) -> list[dict[str, Any]]:
+    async def _get_recent_rows(self, model: type[Any], limit: int) -> list[dict[str, Any]]:
         async with AsyncSession(self._engine) as session:
-            statement = select(model).order_by(model.timestamp.desc()).limit(limit)
+            statement = select(model).order_by(col(model.timestamp).desc()).limit(limit)
             results = await session.exec(statement)
             return [row.model_dump() for row in results.all()]
 
-    async def _start_day(self, pnl_model: type[SQLModel], starting_equity: float) -> None:
+    async def _start_day(self, pnl_model: type[Any], starting_equity: float) -> None:
         today = today_eastern().isoformat()
         async with AsyncSession(self._engine) as session:
             statement = select(pnl_model).where(pnl_model.date == today)
@@ -66,7 +72,7 @@ class Repository:
 
     async def _end_day(
         self,
-        pnl_model: type[SQLModel],
+        pnl_model: type[Any],
         ending_equity: float,
         realized_pnl: float,
         trades_count: int,
@@ -87,26 +93,26 @@ class Repository:
             session.add(row)
             await session.commit()
 
-    async def _get_pnl_history(self, pnl_model: type[SQLModel], limit: int) -> list[dict[str, Any]]:
+    async def _get_pnl_history(self, pnl_model: type[Any], limit: int) -> list[dict[str, Any]]:
         async with AsyncSession(self._engine) as session:
-            statement = select(pnl_model).order_by(pnl_model.date.desc()).limit(limit)
+            statement = select(pnl_model).order_by(col(pnl_model.date).desc()).limit(limit)
             results = await session.exec(statement)
             return [row.model_dump() for row in results.all()]
 
-    async def _get_halal_status(self, cache_model: type[SQLModel], symbol: str) -> str | None:
+    async def _get_halal_status(self, cache_model: type[Any], symbol: str) -> str | None:
         async with AsyncSession(self._engine) as session:
             statement = select(cache_model).where(cache_model.symbol == symbol)
             result = await session.exec(statement)
             row = result.first()
             return row.compliance if row else None
 
-    async def _get_halal_symbols(self, cache_model: type[SQLModel]) -> list[str]:
+    async def _get_halal_symbols(self, cache_model: type[Any]) -> list[str]:
         async with AsyncSession(self._engine) as session:
             statement = select(cache_model).where(cache_model.compliance == "halal")
             results = await session.exec(statement)
             return [row.symbol for row in results.all()]
 
-    async def _is_cache_fresh(self, cache_model: type[SQLModel], max_age_hours: int) -> bool:
+    async def _is_cache_fresh(self, cache_model: type[Any], max_age_hours: int) -> bool:
         cutoff = datetime.now(UTC) - timedelta(hours=max_age_hours)
         async with AsyncSession(self._engine) as session:
             statement = select(cache_model).where(cache_model.updated_at > cutoff)
@@ -152,6 +158,7 @@ class Repository:
             session.add(trade)
             await session.commit()
             await session.refresh(trade)
+            assert trade.id is not None
             return trade.id
 
     async def get_today_trades(self) -> list[dict[str, Any]]:
@@ -168,7 +175,9 @@ class Repository:
         history doesn't slow the per-tick scan.
         """
         async with AsyncSession(self._engine) as session:
-            statement = select(Trade).where(Trade.closed_at.is_(None)).where(Trade.side == "buy")
+            statement = (
+                select(Trade).where(col(Trade.closed_at).is_(None)).where(Trade.side == "buy")
+            )
             results = await session.exec(statement)
             return list(results.all())
 
@@ -241,13 +250,14 @@ class Repository:
     # ── Research jobs (backtest queue) ─────────────────────────
 
     async def enqueue_research_job(
-        self, *, kind: str, params: dict, name: str | None = None
+        self, *, kind: str, params: dict[str, Any], name: str | None = None
     ) -> int:
         row = ResearchJob(kind=kind, name=name, params=params)
         async with AsyncSession(self._engine) as session:
             session.add(row)
             await session.commit()
             await session.refresh(row)
+            assert row.id is not None
             return row.id
 
     async def update_research_job(
@@ -255,7 +265,7 @@ class Repository:
         job_id: int,
         *,
         status: str,
-        result: dict | None = None,
+        result: dict[str, Any] | None = None,
         error: str | None = None,
     ) -> None:
         from datetime import UTC as _UTC
@@ -284,7 +294,7 @@ class Repository:
 
     async def list_research_jobs(self, limit: int = 50) -> list[dict[str, Any]]:
         async with AsyncSession(self._engine) as session:
-            statement = select(ResearchJob).order_by(ResearchJob.id.desc()).limit(limit)
+            statement = select(ResearchJob).order_by(col(ResearchJob.id).desc()).limit(limit)
             results = await session.exec(statement)
             return [r.model_dump() for r in results.all()]
 
@@ -382,6 +392,7 @@ class Repository:
             session.add(row)
             await session.commit()
             await session.refresh(row)
+            assert row.id is not None
             return row.id
 
     async def complete_web_action(
@@ -400,7 +411,7 @@ class Repository:
 
     async def get_recent_web_actions(self, limit: int = 50) -> list[dict[str, Any]]:
         async with AsyncSession(self._engine) as session:
-            statement = select(WebAction).order_by(WebAction.id.desc()).limit(limit)
+            statement = select(WebAction).order_by(col(WebAction.id).desc()).limit(limit)
             results = await session.exec(statement)
             return [r.model_dump() for r in results.all()]
 
@@ -415,7 +426,9 @@ class Repository:
 
         cutoff = datetime.now(UTC) - older_than
         async with AsyncSession(self._engine) as session:
-            result = await session.exec(sa_delete(WebAction).where(WebAction.timestamp < cutoff))
+            result = await session.exec(
+                sa_delete(WebAction).where(col(WebAction.timestamp) < cutoff)
+            )
             await session.commit()
             return int(result.rowcount or 0)
 
@@ -442,6 +455,7 @@ class Repository:
             session.add(row)
             await session.commit()
             await session.refresh(row)
+            assert row.id is not None
             return row.id
 
     async def mark_purification_paid(self, entry_id: int, paid_at: datetime | None = None) -> bool:
@@ -460,8 +474,8 @@ class Repository:
         async with AsyncSession(self._engine) as session:
             statement = (
                 select(PurificationEntry)
-                .where(PurificationEntry.paid_at.is_(None))
-                .order_by(PurificationEntry.timestamp.desc())
+                .where(col(PurificationEntry.paid_at).is_(None))
+                .order_by(col(PurificationEntry.timestamp).desc())
             )
             results = await session.exec(statement)
             return [r.model_dump() for r in results.all()]
@@ -471,12 +485,12 @@ class Repository:
         async with AsyncSession(self._engine) as session:
             outstanding = await session.exec(
                 select(func.coalesce(func.sum(PurificationEntry.purification_usd), 0.0)).where(
-                    PurificationEntry.paid_at.is_(None)
+                    col(PurificationEntry.paid_at).is_(None)
                 )
             )
             paid = await session.exec(
                 select(func.coalesce(func.sum(PurificationEntry.purification_usd), 0.0)).where(
-                    PurificationEntry.paid_at.is_not(None)
+                    col(PurificationEntry.paid_at).is_not(None)
                 )
             )
             return {
@@ -493,7 +507,7 @@ class Repository:
         asset_class: str,
         source: str,
         decision: str,
-        criteria: dict | None = None,
+        criteria: dict[str, Any] | None = None,
         cache_hit: bool = False,
     ) -> int:
         """Persist a screening decision and return its row id.
@@ -514,6 +528,7 @@ class Repository:
             session.add(row)
             await session.commit()
             await session.refresh(row)
+            assert row.id is not None
             return row.id
 
     async def get_halal_screening(self, screening_id: int) -> dict[str, Any] | None:
@@ -531,7 +546,7 @@ class Repository:
         model: str,
         prompt_summary: str | None = None,
         raw_response: str | None = None,
-        parsed_action: dict | None = None,
+        parsed_action: dict[str, Any] | None = None,
         symbols: list[str] | None = None,
         execution_ms: int | None = None,
         thinking: str | None = None,
@@ -562,6 +577,7 @@ class Repository:
             session.add(decision)
             await session.commit()
             await session.refresh(decision)
+            assert decision.id is not None
             return decision.id
 
     async def get_recent_decisions(self, limit: int = 50) -> list[dict[str, Any]]:
@@ -610,6 +626,7 @@ class Repository:
             session.add(trade)
             await session.commit()
             await session.refresh(trade)
+            assert trade.id is not None
             return trade.id
 
     async def update_crypto_trade_stop_loss(self, trade_id: int, new_stop_loss: float) -> None:
@@ -646,9 +663,9 @@ class Repository:
             statement = (
                 select(CryptoTrade)
                 .where(CryptoTrade.side == "buy")
-                .where(CryptoTrade.closed_at.is_(None))
+                .where(col(CryptoTrade.closed_at).is_(None))
                 .where(CryptoTrade.status != "rejected")
-                .order_by(CryptoTrade.timestamp.asc())
+                .order_by(col(CryptoTrade.timestamp).asc())
             )
             results = await session.exec(statement)
             return list(results.all())
@@ -660,7 +677,7 @@ class Repository:
                 select(CryptoTrade)
                 .where(CryptoTrade.side == "buy")
                 .where(CryptoTrade.pair == pair)
-                .where(CryptoTrade.closed_at.is_(None))
+                .where(col(CryptoTrade.closed_at).is_(None))
                 .where(CryptoTrade.status != "rejected")
             )
             results = await session.exec(statement)
@@ -679,7 +696,7 @@ class Repository:
                 select(CryptoTrade)
                 .where(CryptoTrade.side == "buy")
                 .where(CryptoTrade.pair == pair)
-                .where(CryptoTrade.closed_at.is_(None))
+                .where(col(CryptoTrade.closed_at).is_(None))
                 .where(CryptoTrade.status != "rejected")
             )
             if exclude_id is not None:
@@ -714,12 +731,12 @@ class Repository:
             statement = (
                 select(Trade)
                 .where(Trade.side == "buy")
-                .where(Trade.closed_at.is_not(None))
-                .order_by(Trade.closed_at.desc())
+                .where(col(Trade.closed_at).is_not(None))
+                .order_by(col(Trade.closed_at).desc())
             )
             if lookback_days is not None:
                 cutoff = datetime.now(UTC) - timedelta(days=lookback_days)
-                statement = statement.where(Trade.closed_at >= cutoff)
+                statement = statement.where(col(Trade.closed_at) >= cutoff)
             statement = statement.limit(limit)
 
             results = await session.exec(statement)
@@ -756,12 +773,12 @@ class Repository:
             statement = (
                 select(CryptoTrade)
                 .where(CryptoTrade.side == "buy")
-                .where(CryptoTrade.closed_at.is_not(None))
-                .order_by(CryptoTrade.closed_at.desc())
+                .where(col(CryptoTrade.closed_at).is_not(None))
+                .order_by(col(CryptoTrade.closed_at).desc())
             )
             if lookback_days is not None:
                 cutoff = datetime.now(UTC) - timedelta(days=lookback_days)
-                statement = statement.where(CryptoTrade.closed_at >= cutoff)
+                statement = statement.where(col(CryptoTrade.closed_at) >= cutoff)
             statement = statement.limit(limit)
 
             results = await session.exec(statement)
@@ -812,7 +829,7 @@ class Repository:
         compliance: str,
         category: str | None = None,
         market_cap: float | None = None,
-        screening_criteria: dict | None = None,
+        screening_criteria: dict[str, Any] | None = None,
     ) -> None:
         async with AsyncSession(self._engine) as session:
             statement = select(CryptoHalalCache).where(CryptoHalalCache.symbol == symbol)
@@ -871,6 +888,7 @@ class Repository:
             session.add(snap)
             await session.commit()
             await session.refresh(snap)
+            assert snap.id is not None
             return snap.id
 
     async def label_indicator_snapshot(self, trade_id: int, label: int, return_pct: float) -> None:
@@ -888,8 +906,8 @@ class Repository:
         async with AsyncSession(self._engine) as session:
             statement = (
                 select(IndicatorSnapshot)
-                .where(IndicatorSnapshot.label.is_not(None))
-                .order_by(IndicatorSnapshot.timestamp.desc())
+                .where(col(IndicatorSnapshot.label).is_not(None))
+                .order_by(col(IndicatorSnapshot.timestamp).desc())
                 .limit(5000)
             )
             results = await session.exec(statement)
@@ -917,12 +935,15 @@ class Repository:
             session.add(adj)
             await session.commit()
             await session.refresh(adj)
+            assert adj.id is not None
             return adj.id
 
     async def get_latest_strategy_adjustments(self) -> dict[str, float]:
         async with AsyncSession(self._engine) as session:
             statement = (
-                select(StrategyAdjustment).order_by(StrategyAdjustment.timestamp.desc()).limit(100)
+                select(StrategyAdjustment)
+                .order_by(col(StrategyAdjustment.timestamp).desc())
+                .limit(100)
             )
             results = await session.exec(statement)
             latest: dict[str, float] = {}

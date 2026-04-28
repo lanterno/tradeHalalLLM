@@ -118,13 +118,18 @@ exclude_lines = [
 ]
 
 # ── mypy ────────────────────────────────────────────────────────
-# CI gates only on the contract / lifecycle layer (`domain` Protocols +
-# `core` base classes) where correctness drift is most expensive. Other
-# packages are intentionally NOT in `files` — run `mypy src/` ad-hoc to
-# survey and tighten incrementally.
+# CI gates on the contract / lifecycle layer (`domain` Protocols +
+# `core` base classes) plus the data-access layer (`db/repository.py`)
+# where correctness drift is most expensive. Other packages are
+# intentionally NOT in `files` — run `mypy src/` ad-hoc to survey
+# and tighten incrementally.
 [tool.mypy]
 python_version = "3.14"
-files = ["src/halal_trader/domain", "src/halal_trader/core"]
+files = [
+    "src/halal_trader/domain",
+    "src/halal_trader/core",
+    "src/halal_trader/db/repository.py",
+]
 ignore_missing_imports = true
 warn_redundant_casts = true
 warn_unused_ignores = false
