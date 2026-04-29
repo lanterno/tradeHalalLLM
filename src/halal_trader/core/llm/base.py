@@ -114,3 +114,25 @@ class BaseLLM(ABC):
             logger.debug("LLM thinking (%d chars): %.200s…", len(thinking), thinking)
         parsed: dict[str, Any] = json.loads(_clean_json_body(body))
         return parsed
+
+    async def generate_tool_call(
+        self,
+        prompt: str,
+        *,
+        tools: "list[Any]",
+        system: str | None = None,
+        force_tool: str | None = None,
+    ) -> "list[Any]":
+        """Provider-native tool-use call. Returns ToolCall instances.
+
+        Default implementation falls back to ``generate_json`` and
+        materialises a single tool call from the parsed JSON, matching
+        ``force_tool`` if provided. Provider subclasses (Anthropic,
+        OpenAI) override with native tool-use semantics.
+        """
+        from halal_trader.core.llm.tools import ToolCall
+
+        target_tool = force_tool or (tools[0].name if tools else "submit_plan")
+        # Fallback path: just ask for JSON matching the tool's schema and wrap it.
+        parsed = await self.generate_json(prompt, system)
+        return [ToolCall(name=target_tool, args=parsed)]

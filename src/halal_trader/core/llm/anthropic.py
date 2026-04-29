@@ -105,3 +105,63 @@ class AnthropicLLM(BaseLLM):
         )
         text: str = response.content[0].text
         return text
+
+    async def generate_tool_call(
+        self,
+        prompt: str,
+        *,
+        tools: list[Any],
+        system: str | None = None,
+        force_tool: str | None = None,
+    ) -> list[Any]:
+        """Anthropic-native tool-use: returns one ToolCall per emitted tool block."""
+        from halal_trader.core.llm.tools import ToolCall
+
+        client = self._get_client()
+        anthropic_tools = [t.for_anthropic() for t in tools]
+
+        kwargs: dict[str, Any] = {
+            "model": self.model,
+            "max_tokens": 4096,
+            "system": self._system_payload(system),
+            "messages": [{"role": "user", "content": prompt}],
+            "tools": anthropic_tools,
+        }
+        if force_tool:
+            kwargs["tool_choice"] = {"type": "tool", "name": force_tool}
+
+        t0 = time.monotonic()
+        response = await asyncio.wait_for(
+            client.messages.create(**kwargs),
+            timeout=self._TIMEOUT_SECONDS,
+        )
+        elapsed = time.monotonic() - t0
+
+        usage = CallUsage(provider="anthropic", model=self.model, elapsed_ms=int(elapsed * 1000))
+        if hasattr(response, "usage") and response.usage:
+            u = response.usage
+            usage.input_tokens = getattr(u, "input_tokens", 0) or 0
+            usage.output_tokens = getattr(u, "output_tokens", 0) or 0
+            usage.cache_read_tokens = getattr(u, "cache_read_input_tokens", 0) or 0
+            usage.cache_write_tokens = getattr(u, "cache_creation_input_tokens", 0) or 0
+            usage.cost_usd = compute_cost_usd(
+                self.model,
+                input_tokens=usage.input_tokens,
+                output_tokens=usage.output_tokens,
+                cache_read_tokens=usage.cache_read_tokens,
+                cache_write_tokens=usage.cache_write_tokens,
+            )
+            self._track_usage(usage.total_tokens)
+        self.last_usage = usage
+
+        calls: list[ToolCall] = []
+        for block in response.content:
+            if getattr(block, "type", "") == "tool_use":
+                calls.append(
+                    ToolCall(
+                        name=block.name,
+                        args=dict(block.input or {}),
+                        id=getattr(block, "id", None),
+                    )
+                )
+        return calls
