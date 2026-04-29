@@ -37,6 +37,8 @@ dependencies = [
     "pgvector>=0.4.2",
     # Structured concurrency for the supervisor
     "anyio>=4",
+    # Prometheus client for native histograms (Wave J)
+    "prometheus-client>=0.20",
 ]
 
 [project.optional-dependencies]
