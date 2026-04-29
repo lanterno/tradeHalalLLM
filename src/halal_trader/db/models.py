@@ -540,6 +540,36 @@ class RegimeSnapshotRow(SQLModel, table=True):
     )
 
 
+class PromptGenome(SQLModel, table=True):
+    """One candidate prompt produced by the prompt-evolution GA.
+
+    Each row is a slot→allele mapping (``genome``) with its measured
+    fitness over a panel of replay snapshots, plus optional lineage
+    pointers for the dashboard's evolution tree view. The dashboard
+    can promote a row to live by writing its ``short`` to the
+    ``ACTIVE_PROMPT_VERSION`` runtime-config key.
+    """
+
+    __tablename__ = "prompt_genomes"
+
+    id: int | None = Field(default=None, primary_key=True)
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(UTC),
+        sa_type=sa.DateTime(timezone=True),
+        index=True,
+    )
+    name: str = Field(index=True)  # which prompt slot is being evolved
+    genome: dict = Field(sa_column=sa.Column("genome", JSONB, nullable=False))
+    fitness: float = 0.0
+    n_cycles: int = 0  # how many replay snapshots the fitness was measured over
+    parent_ids: list = Field(
+        default_factory=list,
+        sa_column=sa.Column("parent_ids", JSONB, nullable=False, default="[]"),
+    )
+    promoted_at: datetime | None = Field(default=None, sa_type=sa.DateTime(timezone=True))
+    notes: str = ""
+
+
 class KillSwitch(SQLModel, table=True):
     """Single-row operator kill-switch.
 
