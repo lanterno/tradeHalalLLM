@@ -14,15 +14,15 @@ above entry / TP below entry (long-only sanity), and write a
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from halal_trader.core.context import DashboardContext
 from halal_trader.db.models import CryptoTrade, Trade
-from halal_trader.db.repository import Repository
+from halal_trader.web.dependencies import get_ctx
 from halal_trader.web.middleware.confirm import require_confirmation
 
 logger = logging.getLogger(__name__)
@@ -40,20 +40,23 @@ class ManualCloseRequest(BaseModel):
     reason: str = Field(default="operator_manual_close", min_length=1, max_length=100)
 
 
-def register(app: FastAPI, app_state: dict[str, Any]) -> None:
+def register(app: FastAPI) -> None:
     @app.patch(
         "/api/admin/trades/{trade_id}/sl_tp",
         dependencies=[Depends(require_confirmation)],
     )
-    async def edit_sl_tp(trade_id: int, req: EditSLTPRequest) -> JSONResponse:
+    async def edit_sl_tp(
+        trade_id: int,
+        req: EditSLTPRequest,
+        ctx: DashboardContext = Depends(get_ctx),
+    ) -> JSONResponse:
         """Update SL or TP on an open BUY trade."""
         if req.stop_loss is None and req.target_price is None:
             raise HTTPException(422, "must provide stop_loss or target_price")
 
-        engine = app_state["engine"]
         model = CryptoTrade if req.asset_class == "crypto" else Trade
 
-        async with AsyncSession(engine) as session:
+        async with AsyncSession(ctx.engine) as session:
             trade = await session.get(model, trade_id)
             if trade is None:
                 raise HTTPException(404, f"trade {trade_id} not found")
@@ -97,22 +100,18 @@ def register(app: FastAPI, app_state: dict[str, Any]) -> None:
         "/api/admin/trades/{trade_id}/close",
         dependencies=[Depends(require_confirmation)],
     )
-    async def manual_close_trade(trade_id: int, req: ManualCloseRequest) -> JSONResponse:
-        """Stamp a trade as closed at an operator-supplied exit price.
-
-        Note: this DOES NOT submit a broker order. The expected workflow
-        is to use ``/api/admin/positions/{symbol}/close`` (W1) for the
-        broker exit, then this endpoint to record the realised exit
-        price/reason on the specific trade row. The two are separate so
-        a partial fill can be reconciled accurately.
-        """
-        repo: Repository = app_state["repo"]
+    async def manual_close_trade(
+        trade_id: int,
+        req: ManualCloseRequest,
+        ctx: DashboardContext = Depends(get_ctx),
+    ) -> JSONResponse:
+        """Stamp a trade as closed at an operator-supplied exit price."""
         if req.asset_class == "crypto":
-            await repo.close_crypto_trade(
+            await ctx.repo.close_crypto_trade(
                 trade_id, exit_price=req.exit_price, exit_reason=req.reason
             )
         else:
-            await repo.close_trade(trade_id, exit_price=req.exit_price, exit_reason=req.reason)
+            await ctx.repo.close_trade(trade_id, exit_price=req.exit_price, exit_reason=req.reason)
         return JSONResponse(
             {
                 "trade_id": trade_id,
@@ -123,25 +122,27 @@ def register(app: FastAPI, app_state: dict[str, Any]) -> None:
         )
 
     @app.get("/api/trades/{asset_class}/{trade_id}/audit")
-    async def trade_audit_drawer(asset_class: str, trade_id: int) -> JSONResponse:
+    async def trade_audit_drawer(
+        asset_class: str,
+        trade_id: int,
+        ctx: DashboardContext = Depends(get_ctx),
+    ) -> JSONResponse:
         """Combined audit drawer: trade row + halal receipt + indicator snapshot."""
         if asset_class not in ("stock", "crypto"):
             raise HTTPException(400, "asset_class must be 'stock' or 'crypto'")
 
-        engine = app_state["engine"]
         model = CryptoTrade if asset_class == "crypto" else Trade
-        async with AsyncSession(engine) as session:
+        async with AsyncSession(ctx.engine) as session:
             trade = await session.get(model, trade_id)
             if trade is None:
                 raise HTTPException(404, f"trade {trade_id} not found")
 
         from halal_trader.halal.audit import export_receipt
 
-        receipt = await export_receipt(engine, trade_id=trade_id, asset_class=asset_class)
+        receipt = await export_receipt(ctx.engine, trade_id=trade_id, asset_class=asset_class)
 
-        # Indicator snapshot — trades that came in via the cycle have one.
         snapshot: dict | None = None
-        async with AsyncSession(engine) as session:
+        async with AsyncSession(ctx.engine) as session:
             from sqlmodel import select
 
             from halal_trader.db.models import IndicatorSnapshot

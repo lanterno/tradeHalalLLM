@@ -2,16 +2,15 @@
 
 from __future__ import annotations
 
-from typing import Any
-
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.responses import JSONResponse
 
-from halal_trader.db.repository import Repository
+from halal_trader.core.context import DashboardContext
 from halal_trader.web._serializer import serialize
+from halal_trader.web.dependencies import get_ctx
 
 
-def register(app: FastAPI, app_state: dict[str, Any]) -> None:
+def register(app: FastAPI) -> None:
     @app.get("/api/trades")
     async def api_trades(
         limit: int = 100,
@@ -21,9 +20,9 @@ def register(app: FastAPI, app_state: dict[str, Any]) -> None:
         status: str | None = None,
         from_date: str | None = None,
         to_date: str | None = None,
+        ctx: DashboardContext = Depends(get_ctx),
     ) -> JSONResponse:
-        repo: Repository = app_state["repo"]
-        trades = await repo.get_recent_crypto_trades(limit=limit + offset)
+        trades = await ctx.repo.get_recent_crypto_trades(limit=limit + offset)
         result = trades[offset:]
         if pair:
             result = [t for t in result if t.get("pair") == pair]

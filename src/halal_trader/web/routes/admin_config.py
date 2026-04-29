@@ -26,7 +26,8 @@ from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from halal_trader.db.repository import Repository
+from halal_trader.core.context import DashboardContext
+from halal_trader.web.dependencies import get_ctx
 from halal_trader.web.middleware.confirm import require_confirmation
 
 logger = logging.getLogger(__name__)
@@ -38,21 +39,22 @@ class ConfigPatchRequest(BaseModel):
     value: Any  # any JSON-native type; validation happens server-side
 
 
-def register(app: FastAPI, app_state: dict[str, Any]) -> None:
+def register(app: FastAPI) -> None:
     @app.get("/api/admin/config/runtime")
-    async def get_runtime_config() -> JSONResponse:
-        """All keys currently overridden by the runtime overlay."""
-        repo: Repository = app_state["repo"]
-        return JSONResponse(await repo.list_runtime_config())
+    async def get_runtime_config(
+        ctx: DashboardContext = Depends(get_ctx),
+    ) -> JSONResponse:
+        return JSONResponse(await ctx.repo.list_runtime_config())
 
     @app.patch(
         "/api/admin/config/runtime/{key}",
         dependencies=[Depends(require_confirmation)],
     )
-    async def patch_runtime_config(key: str, body: ConfigPatchRequest) -> JSONResponse:
-        repo: Repository = app_state["repo"]
-        # Validate against the schema endpoint's type info — refuse keys
-        # we don't recognise and out-of-range numerics.
+    async def patch_runtime_config(
+        key: str,
+        body: ConfigPatchRequest,
+        ctx: DashboardContext = Depends(get_ctx),
+    ) -> JSONResponse:
         from halal_trader.config import Settings
         from halal_trader.web.routes.config import _walk_settings_schema
 
@@ -67,27 +69,23 @@ def register(app: FastAPI, app_state: dict[str, Any]) -> None:
                 f"(type {schema[key.upper()]['type']})",
             )
 
-        await repo.set_runtime_config(key, body.value, set_by="dashboard")
+        await ctx.repo.set_runtime_config(key, body.value, set_by="dashboard")
         return JSONResponse({"key": key.upper(), "value": body.value})
 
     @app.delete(
         "/api/admin/config/runtime/{key}",
         dependencies=[Depends(require_confirmation)],
     )
-    async def delete_runtime_config(key: str) -> JSONResponse:
-        repo: Repository = app_state["repo"]
-        ok = await repo.delete_runtime_config(key)
+    async def delete_runtime_config(
+        key: str, ctx: DashboardContext = Depends(get_ctx)
+    ) -> JSONResponse:
+        ok = await ctx.repo.delete_runtime_config(key)
         if not ok:
             raise HTTPException(404, f"no override for {key.upper()}")
         return JSONResponse({"key": key.upper(), "reverted": True})
 
-    # ── Prompt registry ──────────────────────────────────────
-
     @app.get("/api/admin/prompts")
-    async def list_prompts() -> JSONResponse:
-        # Re-register from each module's PROMPT_VERSION constant so the
-        # registry is populated even when a previous test cleared it.
-        # Re-registration with the same template is idempotent.
+    async def list_prompts(ctx: DashboardContext = Depends(get_ctx)) -> JSONResponse:
         import halal_trader.crypto.prompts as crypto_prompts
         import halal_trader.trading.strategy as trading_strategy
         from halal_trader.core.llm.prompts import list_versions, register
@@ -102,10 +100,9 @@ def register(app: FastAPI, app_state: dict[str, Any]) -> None:
                 try:
                     register(pv.name, pv.template)
                 except ValueError:
-                    pass  # collision with a different template — keep existing
+                    pass
 
-        repo: Repository = app_state["repo"]
-        active = (await repo.list_runtime_config()).get("ACTIVE_PROMPT_VERSION")
+        active = (await ctx.repo.list_runtime_config()).get("ACTIVE_PROMPT_VERSION")
 
         out = []
         for name, pv in list_versions().items():
@@ -123,34 +120,33 @@ def register(app: FastAPI, app_state: dict[str, Any]) -> None:
         "/api/admin/prompts/active",
         dependencies=[Depends(require_confirmation)],
     )
-    async def set_active_prompt(body: dict[str, str]) -> JSONResponse:
+    async def set_active_prompt(
+        body: dict[str, str], ctx: DashboardContext = Depends(get_ctx)
+    ) -> JSONResponse:
         version = body.get("version", "").strip()
         if not version or "@" not in version:
             raise HTTPException(422, "body must include 'version' as 'name@hash'")
-        repo: Repository = app_state["repo"]
-        await repo.set_runtime_config("ACTIVE_PROMPT_VERSION", version, set_by="dashboard")
+        await ctx.repo.set_runtime_config("ACTIVE_PROMPT_VERSION", version, set_by="dashboard")
         return JSONResponse({"active": version})
 
-    # ── A/B router weights ───────────────────────────────────
-
     @app.get("/api/admin/ab/weights")
-    async def get_ab_weights() -> JSONResponse:
-        repo: Repository = app_state["repo"]
-        weights = (await repo.list_runtime_config()).get("AB_VARIANT_WEIGHTS", {})
+    async def get_ab_weights(ctx: DashboardContext = Depends(get_ctx)) -> JSONResponse:
+        weights = (await ctx.repo.list_runtime_config()).get("AB_VARIANT_WEIGHTS", {})
         return JSONResponse(weights)
 
     @app.patch(
         "/api/admin/ab/weights",
         dependencies=[Depends(require_confirmation)],
     )
-    async def patch_ab_weights(body: dict[str, float]) -> JSONResponse:
+    async def patch_ab_weights(
+        body: dict[str, float], ctx: DashboardContext = Depends(get_ctx)
+    ) -> JSONResponse:
         if not body:
             raise HTTPException(422, "weights map cannot be empty")
         for k, v in body.items():
             if not isinstance(v, (int, float)) or v < 0:
                 raise HTTPException(422, f"weight for {k!r} must be a non-negative number")
-        repo: Repository = app_state["repo"]
-        await repo.set_runtime_config("AB_VARIANT_WEIGHTS", dict(body), set_by="dashboard")
+        await ctx.repo.set_runtime_config("AB_VARIANT_WEIGHTS", dict(body), set_by="dashboard")
         return JSONResponse(body)
 
 

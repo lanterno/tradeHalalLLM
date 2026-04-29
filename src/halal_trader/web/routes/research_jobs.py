@@ -22,8 +22,10 @@ from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+from halal_trader.core.context import DashboardContext
 from halal_trader.db.repository import Repository
 from halal_trader.web._serializer import serialize
+from halal_trader.web.dependencies import get_ctx
 from halal_trader.web.middleware.confirm import require_confirmation
 
 logger = logging.getLogger(__name__)
@@ -38,44 +40,43 @@ class JobRequest(BaseModel):
     params: dict[str, Any] = Field(default_factory=dict)
 
 
-def register(app: FastAPI, app_state: dict[str, Any]) -> None:
+def register(app: FastAPI) -> None:
     @app.post(
         "/api/research/backtest/run",
         dependencies=[Depends(require_confirmation)],
     )
-    async def enqueue_job(req: JobRequest) -> JSONResponse:
+    async def enqueue_job(
+        req: JobRequest, ctx: DashboardContext = Depends(get_ctx)
+    ) -> JSONResponse:
         if req.kind not in _VALID_KINDS:
             raise HTTPException(422, f"kind must be one of {_VALID_KINDS}")
-        repo: Repository = app_state["repo"]
-        job_id = await repo.enqueue_research_job(kind=req.kind, name=req.name, params=req.params)
-        # Fire-and-forget worker — caller polls the job row for status.
+        job_id = await ctx.repo.enqueue_research_job(
+            kind=req.kind, name=req.name, params=req.params
+        )
         asyncio.create_task(
-            _run_job(repo, job_id=job_id, kind=req.kind, params=req.params),
+            _run_job(ctx.repo, job_id=job_id, kind=req.kind, params=req.params),
             name=f"research-job-{job_id}",
         )
         return JSONResponse({"job_id": job_id, "status": "queued"})
 
     @app.get("/api/research/jobs/{job_id}")
-    async def get_job(job_id: int) -> JSONResponse:
-        repo: Repository = app_state["repo"]
-        data = await repo.get_research_job(job_id)
+    async def get_job(job_id: int, ctx: DashboardContext = Depends(get_ctx)) -> JSONResponse:
+        data = await ctx.repo.get_research_job(job_id)
         if data is None:
             raise HTTPException(404, f"job {job_id} not found")
         return JSONResponse(serialize(data))
 
     @app.get("/api/research/jobs")
-    async def list_jobs(limit: int = 50) -> JSONResponse:
-        repo: Repository = app_state["repo"]
-        rows = await repo.list_research_jobs(limit=limit)
+    async def list_jobs(limit: int = 50, ctx: DashboardContext = Depends(get_ctx)) -> JSONResponse:
+        rows = await ctx.repo.list_research_jobs(limit=limit)
         return JSONResponse(serialize(rows))
 
     @app.post(
         "/api/research/jobs/{job_id}/pin",
         dependencies=[Depends(require_confirmation)],
     )
-    async def pin_job(job_id: int) -> JSONResponse:
-        repo: Repository = app_state["repo"]
-        ok = await repo.pin_research_job(job_id, True)
+    async def pin_job(job_id: int, ctx: DashboardContext = Depends(get_ctx)) -> JSONResponse:
+        ok = await ctx.repo.pin_research_job(job_id, True)
         if not ok:
             raise HTTPException(404, f"job {job_id} not found")
         return JSONResponse({"job_id": job_id, "pinned": True})
@@ -84,9 +85,8 @@ def register(app: FastAPI, app_state: dict[str, Any]) -> None:
         "/api/research/jobs/{job_id}/pin",
         dependencies=[Depends(require_confirmation)],
     )
-    async def unpin_job(job_id: int) -> JSONResponse:
-        repo: Repository = app_state["repo"]
-        ok = await repo.pin_research_job(job_id, False)
+    async def unpin_job(job_id: int, ctx: DashboardContext = Depends(get_ctx)) -> JSONResponse:
+        ok = await ctx.repo.pin_research_job(job_id, False)
         if not ok:
             raise HTTPException(404, f"job {job_id} not found")
         return JSONResponse({"job_id": job_id, "pinned": False})

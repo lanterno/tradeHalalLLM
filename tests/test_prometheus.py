@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
+from halal_trader.core.context import RuntimeView
 from halal_trader.web import app as web_app
 from halal_trader.web.prometheus import (
     MetricSnapshot,
@@ -50,28 +51,26 @@ def test_render_empty_returns_empty_string():
 # ── collect_default_snapshots ─────────────────────────────────
 
 
-def test_collector_skips_missing_keys():
-    """Empty state → empty snapshots; we don't fabricate zeros."""
-    assert collect_default_snapshots({}) == []
-
-
 def test_collector_emits_bot_running():
-    snaps = collect_default_snapshots({"bot_running": True})
+    rt = RuntimeView(bot_running=True)
+    snaps = collect_default_snapshots(rt)
     names = [s.name for s in snaps]
     assert "halal_trader_bot_running" in names
     assert next(s for s in snaps if s.name == "halal_trader_bot_running").value == 1.0
 
 
 def test_collector_emits_open_positions_per_asset():
-    state = {"open_positions_by_asset": {"crypto": 3, "stock": 1}}
-    snaps = collect_default_snapshots(state)
-    by_label = {s.labels["asset_class"]: s.value for s in snaps}
+    rt = RuntimeView(open_positions_by_asset={"crypto": [{}, {}, {}], "stock": [{}]})
+    snaps = collect_default_snapshots(rt)
+    by_label = {s.labels["asset_class"]: s.value for s in snaps if s.labels}
     assert by_label == {"crypto": 3, "stock": 1}
 
 
 def test_collector_skips_none_drawdown():
-    state = {"risk_state": {"drawdown_pct": None, "portfolio_heat_pct": 0.02}}
-    snaps = collect_default_snapshots(state)
+    rt = RuntimeView(
+        risk_state={"drawdown_pct": None, "portfolio_heat_pct": 0.02},
+    )
+    snaps = collect_default_snapshots(rt)
     names = [s.name for s in snaps]
     assert "halal_trader_drawdown_pct" not in names
     assert "halal_trader_portfolio_heat_pct" in names
@@ -84,11 +83,11 @@ def test_collector_skips_none_drawdown():
 def client(tmp_path, monkeypatch):
     monkeypatch.setenv("LOG_DIR", str(tmp_path / "logs"))
     web_app.app_state.clear()
-    web_app.app_state["bot_running"] = True
-    web_app.app_state["llm_cost_today_usd"] = 0.42
     app = web_app.create_app()
 
     with TestClient(app) as c:
+        c.app.state.ctx.runtime.bot_running = True
+        c.app.state.ctx.runtime.llm_cost_today_usd = 0.42
         yield c
 
 

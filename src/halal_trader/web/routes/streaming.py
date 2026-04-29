@@ -5,23 +5,22 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import Any
 
-from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
 
-from halal_trader.db.repository import Repository
+from halal_trader.core.context import DashboardContext
+from halal_trader.web.dependencies import get_ctx
 
 logger = logging.getLogger(__name__)
 
 
-def register(app: FastAPI, app_state: dict[str, Any]) -> None:
+def register(app: FastAPI) -> None:
     @app.get("/api/sse")
-    async def sse() -> StreamingResponse:
+    async def sse(ctx: DashboardContext = Depends(get_ctx)) -> StreamingResponse:
         async def event_stream():
             while True:
-                repo: Repository = app_state["repo"]
-                trades = await repo.get_recent_crypto_trades(5)
+                trades = await ctx.repo.get_recent_crypto_trades(5)
                 data = json.dumps({"trades": trades}, default=str)
                 yield f"data: {data}\n\n"
                 await asyncio.sleep(10)
@@ -33,11 +32,14 @@ def register(app: FastAPI, app_state: dict[str, Any]) -> None:
         websocket: WebSocket,
         symbols: list[str] = Query(default=[]),
     ) -> None:
+        # WebSocket routes don't get FastAPI's Depends resolution the
+        # same way as HTTP routes; pull the context off the ASGI app.
+        ctx: DashboardContext | None = getattr(websocket.app.state, "ctx", None)
         await websocket.accept()
         try:
             while True:
                 prices: dict[str, float] = {}
-                ws_mgr = app_state.get("ws_manager")
+                ws_mgr = ctx.runtime.ws_manager if ctx else None
                 for sym in symbols:
                     price = None
                     if ws_mgr and hasattr(ws_mgr, "get_latest_price"):

@@ -2,23 +2,21 @@
 
 from __future__ import annotations
 
-from typing import Any
-
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.responses import JSONResponse
 
-from halal_trader.config import get_settings
+from halal_trader.core.context import DashboardContext
+from halal_trader.web.dependencies import get_ctx
 
 
-def register(app: FastAPI, app_state: dict[str, Any]) -> None:
-    del app_state  # metrics read directly from log files
-
+def register(app: FastAPI) -> None:
     @app.get("/api/metrics/cycles")
-    async def api_metrics_cycles(window: int = 3600) -> JSONResponse:
+    async def api_metrics_cycles(
+        window: int = 3600, ctx: DashboardContext = Depends(get_ctx)
+    ) -> JSONResponse:
         from halal_trader.web.metrics import cycle_metrics
 
-        settings = get_settings()
-        log_path = settings.log.dir / "halal_trader.log"
+        log_path = ctx.settings.log.dir / "halal_trader.log"
         m = cycle_metrics(log_path, window_seconds=window)
         return JSONResponse(
             {
@@ -33,11 +31,12 @@ def register(app: FastAPI, app_state: dict[str, Any]) -> None:
         )
 
     @app.get("/api/metrics/llm")
-    async def api_metrics_llm(window: int = 86400) -> JSONResponse:
+    async def api_metrics_llm(
+        window: int = 86400, ctx: DashboardContext = Depends(get_ctx)
+    ) -> JSONResponse:
         from halal_trader.web.metrics import llm_metrics
 
-        settings = get_settings()
-        log_path = settings.log.dir / "halal_trader.log"
+        log_path = ctx.settings.log.dir / "halal_trader.log"
         m = llm_metrics(log_path, window_seconds=window)
         return JSONResponse(
             {

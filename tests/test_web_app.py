@@ -90,7 +90,7 @@ def test_risk_state_unavailable_when_unset(client):
 
 
 def test_risk_state_round_trips_cached_value(client):
-    web_app.app_state["risk_state"] = {
+    client.app.state.ctx.runtime.risk_state = {
         "is_halted": False,
         "halt_reason": None,
         "portfolio_heat_pct": 0.012,

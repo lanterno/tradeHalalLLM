@@ -44,12 +44,12 @@ async def audit_middleware(
     if not _is_audit_request(request):
         return await call_next(request)
 
-    # Pull the repo from app_state — same shape every other route module
-    # uses. If the app didn't initialise the engine yet (cold-start race)
+    # Pull the repo from the typed DashboardContext attached at lifespan
+    # start. If the app didn't initialise the engine yet (cold-start race)
     # we just log and pass through; missing audit is preferable to
     # blocking the request.
-    app_state = getattr(request.app.state, "ext_state", None) or _get_app_state(request)
-    repo = (app_state or {}).get("repo")
+    ctx = getattr(request.app.state, "ctx", None)
+    repo = ctx.repo if ctx is not None else None
 
     body_bytes = b""
     try:
@@ -93,21 +93,6 @@ async def audit_middleware(
                 await repo.complete_web_action(action_id, status_code=status, error=error)
             except Exception as e:
                 logger.debug("audit complete_web_action failed: %s", e)
-
-
-def _get_app_state(request: Request) -> dict | None:
-    """Reach into the module-level app_state used by web/app.py.
-
-    We can't store it on ``request.app.state`` without changing the
-    bootstrap; instead, every existing route looks up the module-level
-    dict, so we do the same.
-    """
-    try:
-        from halal_trader.web.app import app_state
-
-        return app_state
-    except Exception:
-        return None
 
 
 def _truncate_payload(body: bytes) -> str | None:

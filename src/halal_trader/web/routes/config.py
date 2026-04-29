@@ -4,20 +4,20 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.responses import JSONResponse
 from pydantic.fields import FieldInfo
 from pydantic_settings import BaseSettings
 
-from halal_trader.config import Settings, get_settings
+from halal_trader.config import Settings
+from halal_trader.core.context import DashboardContext
+from halal_trader.web.dependencies import get_ctx
 
 
-def register(app: FastAPI, app_state: dict[str, Any]) -> None:
-    del app_state  # unused — settings come from get_settings()
-
+def register(app: FastAPI) -> None:
     @app.get("/api/config")
-    async def api_config() -> JSONResponse:
-        settings = get_settings()
+    async def api_config(ctx: DashboardContext = Depends(get_ctx)) -> JSONResponse:
+        settings = ctx.settings
         return JSONResponse(
             {
                 "llm_provider": settings.llm.provider.value,

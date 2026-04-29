@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
-from typing import Any
-
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.responses import JSONResponse
 
+from halal_trader.core.context import DashboardContext
+from halal_trader.web.dependencies import get_ctx
 
-def register(app: FastAPI, app_state: dict[str, Any]) -> None:
+
+def register(app: FastAPI) -> None:
     @app.get("/api/sentiment")
-    async def api_sentiment() -> JSONResponse:
-        mgr = app_state.get("sentiment_manager")
+    async def api_sentiment(ctx: DashboardContext = Depends(get_ctx)) -> JSONResponse:
+        mgr = ctx.runtime.sentiment_manager
         if not mgr or not hasattr(mgr, "latest_signals"):
             return JSONResponse([])
 

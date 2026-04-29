@@ -1,8 +1,10 @@
-"""Route registry — each module exports register(app, app_state) -> None."""
+"""Route registry — each module exports ``register(app)``.
+
+Routes pull dependencies via ``Depends(get_ctx)`` from
+``web.dependencies``; the registry just walks the module list.
+"""
 
 from __future__ import annotations
-
-from typing import Any
 
 from fastapi import FastAPI
 
@@ -55,7 +57,7 @@ _MODULES = (
 )
 
 
-def register_all(app: FastAPI, app_state: dict[str, Any]) -> None:
+def register_all(app: FastAPI) -> None:
     """Register every route module with the FastAPI app."""
     for mod in _MODULES:
-        mod.register(app, app_state)
+        mod.register(app)

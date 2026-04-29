@@ -12,14 +12,14 @@ the dashboard:
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from halal_trader.db.repository import Repository
+from halal_trader.core.context import DashboardContext
 from halal_trader.web._serializer import serialize
+from halal_trader.web.dependencies import get_ctx
 from halal_trader.web.middleware.confirm import require_confirmation
 
 logger = logging.getLogger(__name__)
@@ -32,14 +32,13 @@ class RecordPurificationRequest(BaseModel):
     notes: str | None = Field(default=None, max_length=500)
 
 
-def register(app: FastAPI, app_state: dict[str, Any]) -> None:
-    # ── Purification ledger ────────────────────────────────────
-
+def register(app: FastAPI) -> None:
     @app.get("/api/admin/purification")
-    async def list_purification() -> JSONResponse:
-        repo: Repository = app_state["repo"]
-        outstanding = await repo.get_outstanding_purification()
-        totals = await repo.get_purification_totals()
+    async def list_purification(
+        ctx: DashboardContext = Depends(get_ctx),
+    ) -> JSONResponse:
+        outstanding = await ctx.repo.get_outstanding_purification()
+        totals = await ctx.repo.get_purification_totals()
         return JSONResponse(
             {
                 "outstanding": serialize(outstanding),
@@ -51,8 +50,10 @@ def register(app: FastAPI, app_state: dict[str, Any]) -> None:
         "/api/admin/purification",
         dependencies=[Depends(require_confirmation)],
     )
-    async def record_purification(req: RecordPurificationRequest) -> JSONResponse:
-        repo: Repository = app_state["repo"]
+    async def record_purification(
+        req: RecordPurificationRequest,
+        ctx: DashboardContext = Depends(get_ctx),
+    ) -> JSONResponse:
         from halal_trader.halal.purification import compute_purification
 
         entry = compute_purification(
@@ -61,7 +62,7 @@ def register(app: FastAPI, app_state: dict[str, Any]) -> None:
             haram_revenue_pct=req.haram_pct,
             notes=req.notes or "",
         )
-        eid = await repo.record_purification(
+        eid = await ctx.repo.record_purification(
             symbol=entry.symbol,
             dividend_usd=float(entry.dividend_usd),
             haram_pct=float(entry.haram_pct),
@@ -80,32 +81,22 @@ def register(app: FastAPI, app_state: dict[str, Any]) -> None:
         "/api/admin/purification/{entry_id}/mark_paid",
         dependencies=[Depends(require_confirmation)],
     )
-    async def mark_paid(entry_id: int) -> JSONResponse:
-        repo: Repository = app_state["repo"]
-        ok = await repo.mark_purification_paid(entry_id)
+    async def mark_paid(entry_id: int, ctx: DashboardContext = Depends(get_ctx)) -> JSONResponse:
+        ok = await ctx.repo.mark_purification_paid(entry_id)
         if not ok:
             raise HTTPException(404, f"purification entry {entry_id} not found")
         return JSONResponse({"id": entry_id, "paid": True})
-
-    # ── Halal-cache refresh ───────────────────────────────────
 
     @app.post(
         "/api/admin/halal/refresh",
         dependencies=[Depends(require_confirmation)],
     )
-    async def force_halal_refresh() -> JSONResponse:
-        """Force-rebuild the halal cache (Zoya / overrides) regardless of TTL.
-
-        The screener is wired up in the bot composition root; for
-        dashboard refreshes we recreate it on demand using the same
-        repository so we don't have to thread it through ``app_state``
-        from the trading bot's process. The two share the DB and so the
-        dashboard refresh is visible to the bot on the next cycle.
-        """
+    async def force_halal_refresh(
+        ctx: DashboardContext = Depends(get_ctx),
+    ) -> JSONResponse:
         from halal_trader.halal.cache import HalalScreener
 
-        repo: Repository = app_state["repo"]
-        screener = HalalScreener(repo, zoya=None)
+        screener = HalalScreener(ctx.repo, zoya=None)
         await screener.ensure_cache(force=True)
         symbols = await screener.get_halal_symbols()
         return JSONResponse(
@@ -115,24 +106,17 @@ def register(app: FastAPI, app_state: dict[str, Any]) -> None:
             }
         )
 
-    # ── Sector allocation snapshot ────────────────────────────
-
     @app.get("/api/admin/halal/sector-allocation")
-    async def sector_allocation() -> JSONResponse:
-        """Current per-sector $ exposure across open stock positions.
-
-        Reads the in-process app_state (set by the live bot) for the
-        most recent broker positions snapshot. When the dashboard runs
-        standalone (no bot bound), returns an empty allocation so the
-        UI can render "no live data" cleanly.
-        """
+    async def sector_allocation(
+        ctx: DashboardContext = Depends(get_ctx),
+    ) -> JSONResponse:
         from halal_trader.halal.sector_limits import (
             UNKNOWN_SECTOR,
             compute_allocation,
         )
 
-        positions = app_state.get("stock_positions") or []
-        equity = app_state.get("stock_equity") or 0.0
+        positions = ctx.runtime.stock_positions or []
+        equity = ctx.runtime.stock_equity or 0.0
 
         positions_value = {
             getattr(p, "symbol", "?"): float(getattr(p, "qty", 0))

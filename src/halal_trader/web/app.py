@@ -2,17 +2,24 @@
 
 The route handlers live in ``halal_trader.web.routes.*`` modules; this file
 just composes them with lifespan, middleware, and the SPA static fallback.
+
+Each route takes its dependencies via ``Depends(get_ctx)`` (see
+``web/dependencies.py``). The single source of truth for state is the
+:class:`~halal_trader.core.context.DashboardContext` attached to
+``app.state.ctx`` at lifespan start.
 """
 
 from __future__ import annotations
 
 import logging
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from halal_trader.config import get_settings
+from halal_trader.core.context import DashboardContext, RuntimeView
+from halal_trader.core.event_bus import EventBus
 from halal_trader.core.insights_hub import InsightsHub
 from halal_trader.crypto.analytics import PerformanceAnalytics
 from halal_trader.db.models import init_db
@@ -24,6 +31,8 @@ logger = logging.getLogger(__name__)
 _DASHBOARD_DIST = Path(__file__).resolve().parent.parent.parent.parent / "dashboard" / "dist"
 
 
+# Backwards-compat dict view — kept as an empty dict so legacy callers
+# don't ImportError. New code uses ``Depends(get_ctx)`` instead.
 app_state: dict[str, Any] = {}
 
 
@@ -40,25 +49,30 @@ def create_app() -> Any:
     async def lifespan(_app: FastAPI):
         settings = get_settings()
         engine = await init_db(settings.database_url)
-        app_state["engine"] = engine
-        app_state["repo"] = Repository(engine)
-        app_state["analytics"] = PerformanceAnalytics(app_state["repo"])
-        app_state["started_at"] = datetime.now(timezone.utc)
-        # Process-wide analytics: drift monitor, regime memory, shadow
-        # ledger, calibration curve. The standalone dashboard process
-        # builds an empty hub — DB-backed insights (regime, replay,
-        # exception queue) come through the ``engine`` directly; the
-        # in-memory ones stay empty until a co-hosted bot writes to them.
+        repo = Repository(engine)
+        analytics = PerformanceAnalytics(repo)
+        # The standalone dashboard process builds an empty hub —
+        # DB-backed insights (regime, replay, exception queue) come
+        # through the engine directly; the in-memory ones stay empty
+        # until a co-hosted bot writes to them.
         from halal_trader.ml.regime_memory import RegimeMemory
 
         hub = InsightsHub(regime=RegimeMemory(engine=engine))
-        app_state["hub"] = hub
-        app_state["insights"] = hub.to_app_state()
+        runtime = RuntimeView(started_at=datetime.now(UTC))
+        ctx = DashboardContext(
+            engine=engine,
+            repo=repo,
+            hub=hub,
+            analytics=analytics,
+            settings=settings,
+            bus=EventBus(),
+            runtime=runtime,
+        )
+        _app.state.ctx = ctx
         yield
-        if "engine" in app_state:
-            await app_state["engine"].dispose()
+        await engine.dispose()
 
-    app = FastAPI(title="Halal Trader Dashboard", version="0.2.0", lifespan=lifespan)
+    app = FastAPI(title="Halal Trader Dashboard", version="0.3.0", lifespan=lifespan)
 
     app.add_middleware(
         CORSMiddleware,
@@ -89,7 +103,7 @@ def create_app() -> Any:
     app.middleware("http")(audit_middleware)
     app.middleware("http")(auth_middleware)
 
-    register_all(app, app_state)
+    register_all(app)
 
     if _DASHBOARD_DIST.exists():
         app.mount(

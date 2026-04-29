@@ -21,7 +21,10 @@ Each metric has a ``HELP`` + ``TYPE`` header per Prometheus convention.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from halal_trader.core.context import RuntimeView
 
 
 @dataclass
@@ -66,27 +69,24 @@ def _format_value(value: float) -> str:
     return f"{value:g}"
 
 
-def collect_default_snapshots(state: dict[str, Any]) -> list[MetricSnapshot]:
-    """Pull standard halal-trader metrics out of the dashboard ``app_state``.
+def collect_default_snapshots(runtime: "RuntimeView") -> list[MetricSnapshot]:
+    """Pull standard halal-trader metrics out of the dashboard runtime view.
 
-    The state dict is the single source of in-process truth — populated
-    by the cycle, monitor, and analytics surfaces. This collector is the
-    only place that knows the dict's shape; if a metric is absent we
-    skip it rather than fabricate a zero so Prometheus alerting can
-    detect the gap explicitly.
+    Populated by the cycle, monitor, and analytics surfaces. Absent
+    metrics are skipped (not fabricated as zero) so Prometheus alerting
+    can detect the gap explicitly.
     """
     out: list[MetricSnapshot] = []
 
-    if "bot_running" in state:
-        out.append(
-            MetricSnapshot(
-                name="halal_trader_bot_running",
-                help_text="1 if the bot's main loop is running, 0 otherwise",
-                value=1.0 if state["bot_running"] else 0.0,
-            )
+    out.append(
+        MetricSnapshot(
+            name="halal_trader_bot_running",
+            help_text="1 if the bot's main loop is running, 0 otherwise",
+            value=1.0 if runtime.bot_running else 0.0,
         )
+    )
 
-    risk = state.get("risk_state") or {}
+    risk = runtime.risk_state or {}
     if isinstance(risk, dict):
         if "drawdown_pct" in risk and risk["drawdown_pct"] is not None:
             out.append(
@@ -105,43 +105,33 @@ def collect_default_snapshots(state: dict[str, Any]) -> list[MetricSnapshot]:
                 )
             )
 
-    if "last_cycle_latency_ms" in state:
+    last_cycle = runtime.last_cycle or {}
+    if isinstance(last_cycle, dict) and "latency_ms" in last_cycle:
         out.append(
             MetricSnapshot(
                 name="halal_trader_cycle_latency_ms",
                 help_text="Most recent cycle wall-clock duration in milliseconds",
-                value=float(state["last_cycle_latency_ms"]),
+                value=float(last_cycle["latency_ms"]),
             )
         )
 
-    if "llm_cost_today_usd" in state:
+    if runtime.llm_cost_today_usd is not None:
         out.append(
             MetricSnapshot(
                 name="halal_trader_llm_cost_today_usd",
                 help_text="Running cumulative LLM spend for the current UTC day",
-                value=float(state["llm_cost_today_usd"]),
+                value=float(runtime.llm_cost_today_usd),
             )
         )
 
-    if "llm_cache_read_ratio" in state:
+    for asset_class, positions in (runtime.open_positions_by_asset or {}).items():
         out.append(
             MetricSnapshot(
-                name="halal_trader_llm_cache_read_ratio",
-                help_text="Fraction of input tokens served from prompt cache",
-                value=float(state["llm_cache_read_ratio"]),
+                name="halal_trader_open_positions",
+                help_text="Open position count per asset class",
+                value=float(len(positions)),
+                labels={"asset_class": str(asset_class)},
             )
         )
-
-    open_positions = state.get("open_positions_by_asset") or {}
-    if isinstance(open_positions, dict):
-        for asset_class, count in open_positions.items():
-            out.append(
-                MetricSnapshot(
-                    name="halal_trader_open_positions",
-                    help_text="Open position count per asset class",
-                    value=float(count),
-                    labels={"asset_class": str(asset_class)},
-                )
-            )
 
     return out

@@ -122,8 +122,8 @@ def test_sector_allocation_buckets_by_sector(client):
     p2.qty = 10
     p2.current_price = 150.0
     p2.avg_entry_price = 150.0
-    web_app.app_state["stock_positions"] = [p1, p2]
-    web_app.app_state["stock_equity"] = 20_000
+    client.app.state.ctx.runtime.stock_positions = [p1, p2]
+    client.app.state.ctx.runtime.stock_equity = 20_000
 
     r = client.get("/api/admin/halal/sector-allocation").json()
     by_sector = {row["sector"]: row["value_usd"] for row in r["allocations"]}

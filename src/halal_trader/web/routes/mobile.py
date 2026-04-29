@@ -1,15 +1,4 @@
-"""Mobile-friendly summary endpoint + state-push WebSocket.
-
-The dashboard's existing pages are desktop-tab heavy. The phone view
-needs a single rolled-up endpoint so the operator can refresh once and
-see the four numbers that matter (P&L, halt status, open positions,
-last cycle), plus a halt button. This module backs that view.
-
-It also adds ``/ws/state`` — a WebSocket that pushes the same summary
-on each price tick so the phone tab stays live without polling. The
-push payload reuses the summary endpoint's shape so the React side
-renders it through one component.
-"""
+"""Mobile-friendly summary endpoint + state-push WebSocket."""
 
 from __future__ import annotations
 
@@ -18,11 +7,12 @@ import logging
 import time
 from typing import Any
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 
+from halal_trader.core.context import DashboardContext
 from halal_trader.core.halt import get_status
-from halal_trader.db.repository import Repository
+from halal_trader.web.dependencies import get_ctx
 
 logger = logging.getLogger(__name__)
 
@@ -30,72 +20,58 @@ logger = logging.getLogger(__name__)
 _PUSH_INTERVAL_SECONDS = 5.0
 
 
-async def _build_summary(app_state: dict[str, Any]) -> dict[str, Any]:
-    """Roll up the dashboard's frequently-needed state into one payload.
-
-    Tolerant of partially-initialised app_state — anything missing
-    falls back to a sane placeholder so the phone view never renders
-    "undefined". The frontend can show greyed-out tiles for missing
-    fields rather than blowing up.
-    """
-    engine = app_state.get("engine")
-    repo: Repository | None = app_state.get("repo")
-
+async def _build_summary(ctx: DashboardContext) -> dict[str, Any]:
+    """Roll up the dashboard's frequently-needed state into one payload."""
     halt_payload: dict[str, Any] = {"enabled": False, "reason": None}
-    if engine is not None:
-        try:
-            halt = await get_status(engine)
-            halt_payload = {
-                "enabled": halt.enabled,
-                "reason": halt.reason,
-                "set_by": halt.set_by,
-                "set_at": halt.set_at.isoformat() if halt.set_at else None,
-            }
-        except Exception as e:
-            logger.debug("halt status read failed: %s", e)
+    try:
+        halt = await get_status(ctx.engine)
+        halt_payload = {
+            "enabled": halt.enabled,
+            "reason": halt.reason,
+            "set_by": halt.set_by,
+            "set_at": halt.set_at.isoformat() if halt.set_at else None,
+        }
+    except Exception as e:
+        logger.debug("halt status read failed: %s", e)
 
-    last_cycle = app_state.get("last_cycle")
-    bot_running = bool(app_state.get("bot_running"))
-
-    risk = app_state.get("risk_state") or {}
+    risk = ctx.runtime.risk_state or {}
     drawdown = risk.get("drawdown_pct") if isinstance(risk, dict) else None
 
-    open_positions_by_asset = app_state.get("open_positions_by_asset") or {}
-
     pnl_today_usd: float | None = None
-    if repo is not None:
-        try:
-            recent = await repo.get_crypto_pnl_history(limit=1)
-            if recent:
-                pnl_today_usd = float(recent[0].get("realized_pnl") or 0.0)
-        except Exception as e:
-            logger.debug("pnl read failed: %s", e)
+    try:
+        recent = await ctx.repo.get_crypto_pnl_history(limit=1)
+        if recent:
+            pnl_today_usd = float(recent[0].get("realized_pnl") or 0.0)
+    except Exception as e:
+        logger.debug("pnl read failed: %s", e)
 
     return {
         "ts": time.time(),
         "halt": halt_payload,
-        "bot_running": bot_running,
-        "last_cycle": last_cycle,
+        "bot_running": ctx.runtime.bot_running,
+        "last_cycle": ctx.runtime.last_cycle,
         "drawdown_pct": drawdown,
-        "open_positions_by_asset": dict(open_positions_by_asset),
+        "open_positions_by_asset": dict(ctx.runtime.open_positions_by_asset),
         "pnl_today_usd": pnl_today_usd,
-        "llm_cost_today_usd": app_state.get("llm_cost_today_usd"),
+        "llm_cost_today_usd": ctx.runtime.llm_cost_today_usd,
     }
 
 
-def register(app: FastAPI, app_state: dict[str, Any]) -> None:
+def register(app: FastAPI) -> None:
     @app.get("/api/mobile/summary")
-    async def mobile_summary() -> JSONResponse:
-        """Roll-up endpoint for the phone view (4-tile dashboard)."""
-        return JSONResponse(await _build_summary(app_state))
+    async def mobile_summary(ctx: DashboardContext = Depends(get_ctx)) -> JSONResponse:
+        return JSONResponse(await _build_summary(ctx))
 
     @app.websocket("/ws/state")
     async def ws_state(websocket: WebSocket) -> None:
-        """Push the summary on every interval so the phone view stays live."""
+        ctx: DashboardContext | None = getattr(websocket.app.state, "ctx", None)
         await websocket.accept()
+        if ctx is None:
+            await websocket.close(code=1011)
+            return
         try:
             while True:
-                payload = await _build_summary(app_state)
+                payload = await _build_summary(ctx)
                 try:
                     await websocket.send_json(payload)
                 except Exception as e:

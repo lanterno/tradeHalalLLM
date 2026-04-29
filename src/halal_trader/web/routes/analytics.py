@@ -2,19 +2,19 @@
 
 from __future__ import annotations
 
-from typing import Any
-
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.responses import JSONResponse
 
-from halal_trader.crypto.analytics import PerformanceAnalytics
+from halal_trader.core.context import DashboardContext
+from halal_trader.web.dependencies import get_ctx
 
 
-def register(app: FastAPI, app_state: dict[str, Any]) -> None:
+def register(app: FastAPI) -> None:
     @app.get("/api/analytics")
-    async def api_analytics(days: int = 7) -> JSONResponse:
-        analytics: PerformanceAnalytics = app_state["analytics"]
-        stats = await analytics.compute_stats(lookback_days=days)
+    async def api_analytics(
+        days: int = 7, ctx: DashboardContext = Depends(get_ctx)
+    ) -> JSONResponse:
+        stats = await ctx.analytics.compute_stats(lookback_days=days)
         pf = stats.profit_factor
         if pf == float("inf"):
             pf = 999999.0

@@ -35,6 +35,10 @@ class InsightsHub:
     shadow: ShadowLedger = field(default_factory=ShadowLedger)
     calibration: CalibrationCurve = field(default_factory=CalibrationCurve.identity)
     basis: BasisTracker = field(default_factory=BasisTracker)
+    # Optional reference to the dashboard's mutable RuntimeView so the
+    # cycle can push live state (risk_state, last_cycle, …) into the
+    # surface the dashboard reads. Threaded by the composition root.
+    runtime: Any = None
     # Latest computed velocity result per symbol; populated by the
     # sentiment manager once it exposes raw mention timestamps.
     velocity: dict[str, Any] = field(default_factory=dict)

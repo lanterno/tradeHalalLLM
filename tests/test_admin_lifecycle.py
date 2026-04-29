@@ -25,9 +25,9 @@ def client(database_url, tmp_path, monkeypatch):
     crypto.cancel_order = AsyncMock(return_value={"orderId": "x"})
     crypto.get_balances = AsyncMock(return_value=[])
     crypto.place_order = AsyncMock(return_value={"orderId": "y"})
-    web_app.app_state["crypto_broker"] = crypto
 
     with TestClient(app) as c:
+        c.app.state.ctx.runtime.crypto_broker = crypto
         c.headers["X-Trader-Token"] = "secret"
         yield c
 
@@ -105,7 +105,7 @@ def test_cancel_all_orders_no_open_orders(client):
 def test_cancel_one_order_calls_broker(client):
     r = client.delete("/api/admin/orders/abc123?symbol=BTCUSDT&asset_class=crypto")
     assert r.status_code == 200
-    web_app.app_state["crypto_broker"].cancel_order.assert_awaited_once_with(
+    client.app.state.ctx.runtime.crypto_broker.cancel_order.assert_awaited_once_with(
         symbol="BTCUSDT", order_id="abc123"
     )
 
@@ -116,7 +116,7 @@ def test_cancel_invalid_asset_class(client):
 
 
 def test_cancel_503_when_broker_not_bound(client):
-    web_app.app_state.pop("crypto_broker", None)
+    client.app.state.ctx.runtime.crypto_broker = None
     r = client.delete("/api/admin/orders?asset_class=crypto")
     assert r.status_code == 503
 
@@ -125,7 +125,7 @@ def test_cancel_503_when_broker_not_bound(client):
 
 
 def test_force_close_crypto_calls_broker(client):
-    crypto = web_app.app_state["crypto_broker"]
+    crypto = client.app.state.ctx.runtime.crypto_broker
     bal = MagicMock()
     bal.asset = "BTC"
     bal.free = 0.5
@@ -139,7 +139,7 @@ def test_force_close_crypto_calls_broker(client):
 
 
 def test_force_close_404_when_no_balance(client):
-    crypto = web_app.app_state["crypto_broker"]
+    crypto = client.app.state.ctx.runtime.crypto_broker
     crypto.get_balances = AsyncMock(return_value=[])
     r = client.post(
         "/api/admin/positions/BTCUSDT/close",

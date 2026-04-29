@@ -1,33 +1,17 @@
-"""Insights routes — read-only views over the new analytics modules.
-
-Each endpoint computes its result fresh from recent closed trades plus
-in-process state (drift monitor, shadow ledger, regime memory) the
-cycle has been populating. None of these endpoints write — that's the
-cycle's job.
-
-Exposed routes:
-
-* ``GET /api/insights/regret``       — hindsight regret summary
-* ``GET /api/insights/thesis``       — thesis attribution table
-* ``GET /api/insights/drift``        — concept-drift state
-* ``GET /api/insights/stress``       — last stress harness verdicts (in-memory)
-* ``GET /api/insights/shadow``       — shadow ledger + alert level
-* ``GET /api/insights/calibration``  — current calibration curve
-
-The cycle stashes any live state under ``app_state["insights"]`` (a
-dict). This lets the routes avoid hard imports of cycle-side modules.
-"""
+"""Insights routes — read-only views over the new analytics modules."""
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.responses import JSONResponse
 
+from halal_trader.core.context import DashboardContext
+from halal_trader.web.dependencies import get_ctx
 
-def register(app: FastAPI, app_state: dict[str, Any]) -> None:
+
+def register(app: FastAPI) -> None:
     @app.get("/api/insights/regret")
     async def api_regret(limit: int = 200) -> JSONResponse:
         from halal_trader.cli.insights import (
@@ -90,9 +74,8 @@ def register(app: FastAPI, app_state: dict[str, Any]) -> None:
             return JSONResponse({"error": str(exc)}, status_code=500)
 
     @app.get("/api/insights/drift")
-    async def api_drift() -> JSONResponse:
-        insights = app_state.get("insights") or {}
-        mon = insights.get("drift_monitor")
+    async def api_drift(ctx: DashboardContext = Depends(get_ctx)) -> JSONResponse:
+        mon = ctx.hub.drift
         if mon is None:
             return JSONResponse({"available": False})
         return JSONResponse(
@@ -106,15 +89,16 @@ def register(app: FastAPI, app_state: dict[str, Any]) -> None:
         )
 
     @app.get("/api/insights/stress")
-    async def api_stress() -> JSONResponse:
-        insights = app_state.get("insights") or {}
-        verdicts = insights.get("stress_verdicts")
+    async def api_stress(ctx: DashboardContext = Depends(get_ctx)) -> JSONResponse:
+        # Stress verdicts live as a custom hub attribute that the
+        # cycle / stress harness pushes onto. Falls back when absent.
+        verdicts = getattr(ctx.hub, "stress_verdicts", None)
         if not verdicts:
             return JSONResponse({"available": False})
         return JSONResponse(
             {
                 "available": True,
-                "ts": insights.get("stress_ts"),
+                "ts": getattr(ctx.hub, "stress_ts", None),
                 "verdicts": [
                     {
                         "scenario_name": v.scenario_name,
@@ -131,9 +115,8 @@ def register(app: FastAPI, app_state: dict[str, Any]) -> None:
         )
 
     @app.get("/api/insights/shadow")
-    async def api_shadow() -> JSONResponse:
-        insights = app_state.get("insights") or {}
-        ledger = insights.get("shadow_ledger")
+    async def api_shadow(ctx: DashboardContext = Depends(get_ctx)) -> JSONResponse:
+        ledger = ctx.hub.shadow
         if ledger is None or ledger.size == 0:
             return JSONResponse({"available": False})
         from halal_trader.core.shadow import (
@@ -165,9 +148,8 @@ def register(app: FastAPI, app_state: dict[str, Any]) -> None:
         )
 
     @app.get("/api/insights/regime")
-    async def api_regime() -> JSONResponse:
-        insights = app_state.get("insights") or {}
-        mem = insights.get("regime_memory")
+    async def api_regime(ctx: DashboardContext = Depends(get_ctx)) -> JSONResponse:
+        mem = ctx.hub.regime
         if mem is None:
             return JSONResponse({"available": False})
         size = await mem.size()
@@ -192,9 +174,8 @@ def register(app: FastAPI, app_state: dict[str, Any]) -> None:
         )
 
     @app.get("/api/insights/basis")
-    async def api_basis() -> JSONResponse:
-        insights = app_state.get("insights") or {}
-        tracker = insights.get("basis_tracker")
+    async def api_basis(ctx: DashboardContext = Depends(get_ctx)) -> JSONResponse:
+        tracker = ctx.hub.basis
         if tracker is None or not tracker.history_by_pair:
             return JSONResponse({"available": False})
         out = {}
@@ -209,9 +190,7 @@ def register(app: FastAPI, app_state: dict[str, Any]) -> None:
         return JSONResponse({"available": True, "pairs": out})
 
     @app.get("/api/insights/treasury")
-    async def api_treasury() -> JSONResponse:
-        # Pull current account from app_state if the cycle has cached it,
-        # otherwise emit an "unavailable" response.
+    async def api_treasury(ctx: DashboardContext = Depends(get_ctx)) -> JSONResponse:
         try:
             from halal_trader.core.treasury import (
                 TreasuryPolicy,
@@ -220,7 +199,7 @@ def register(app: FastAPI, app_state: dict[str, Any]) -> None:
             )
         except Exception:  # noqa: BLE001
             return JSONResponse({"available": False})
-        cached = app_state.get("account_snapshot")
+        cached = ctx.runtime.account_snapshot
         if not cached:
             return JSONResponse({"available": False})
         policy = TreasuryPolicy()
@@ -244,28 +223,24 @@ def register(app: FastAPI, app_state: dict[str, Any]) -> None:
         )
 
     @app.get("/api/insights/purification")
-    async def api_purification() -> JSONResponse:
+    async def api_purification(
+        ctx: DashboardContext = Depends(get_ctx),
+    ) -> JSONResponse:
         from halal_trader.halal.round_trip_purification import (
             RoundTripLedger,
             outstanding_round_trip_due,
         )
 
-        engine = app_state.get("engine")
-        if engine is None:
-            return JSONResponse({"available": False})
-        ledger = RoundTripLedger(engine=engine)
+        ledger = RoundTripLedger(engine=ctx.engine)
         if await ledger.count() == 0:
             return JSONResponse({"available": False})
         return JSONResponse({"available": True, **(await outstanding_round_trip_due(ledger))})
 
     @app.get("/api/insights/replay")
-    async def api_replay(limit: int = 50) -> JSONResponse:
+    async def api_replay(limit: int = 50, ctx: DashboardContext = Depends(get_ctx)) -> JSONResponse:
         from halal_trader.core.replay import ReplayStore
 
-        engine = app_state.get("engine")
-        if engine is None:
-            return JSONResponse({"available": False})
-        store = ReplayStore(engine=engine)
+        store = ReplayStore(engine=ctx.engine)
         cycle_ids = await store.list_cycle_ids(limit=limit)
         return JSONResponse(
             {
@@ -276,15 +251,14 @@ def register(app: FastAPI, app_state: dict[str, Any]) -> None:
         )
 
     @app.get("/api/insights/exceptions")
-    async def api_exceptions(status: str = "pending") -> JSONResponse:
+    async def api_exceptions(
+        status: str = "pending", ctx: DashboardContext = Depends(get_ctx)
+    ) -> JSONResponse:
         from halal_trader.halal.exception_queue import ExceptionQueue
 
-        engine = app_state.get("engine")
-        if engine is None:
-            return JSONResponse({"available": False})
         if status not in ("pending", "approved", "rejected", "deferred", "all"):
             return JSONResponse({"error": f"unknown status {status!r}"}, status_code=400)
-        q = ExceptionQueue(engine=engine)
+        q = ExceptionQueue(engine=ctx.engine)
         rows = await q.all() if status == "all" else await q.by_status(status)  # type: ignore[arg-type]
         return JSONResponse(
             {
@@ -313,13 +287,11 @@ def register(app: FastAPI, app_state: dict[str, Any]) -> None:
         status: str,
         decided_by: str = "",
         note: str = "",
+        ctx: DashboardContext = Depends(get_ctx),
     ) -> JSONResponse:
         from halal_trader.halal.exception_queue import ExceptionQueue
 
-        engine = app_state.get("engine")
-        if engine is None:
-            return JSONResponse({"error": "no engine"}, status_code=503)
-        q = ExceptionQueue(engine=engine)
+        q = ExceptionQueue(engine=ctx.engine)
         try:
             ok = await q.decide(
                 entry_id,
@@ -334,9 +306,8 @@ def register(app: FastAPI, app_state: dict[str, Any]) -> None:
         return JSONResponse({"ok": True, "entry_id": entry_id, "status": status})
 
     @app.get("/api/insights/velocity")
-    async def api_velocity() -> JSONResponse:
-        insights = app_state.get("insights") or {}
-        velocity = insights.get("velocity") or {}
+    async def api_velocity(ctx: DashboardContext = Depends(get_ctx)) -> JSONResponse:
+        velocity = ctx.hub.velocity or {}
         if not velocity:
             return JSONResponse({"available": False})
         return JSONResponse(
@@ -358,9 +329,8 @@ def register(app: FastAPI, app_state: dict[str, Any]) -> None:
         )
 
     @app.get("/api/insights/whale")
-    async def api_whale() -> JSONResponse:
-        insights = app_state.get("insights") or {}
-        flows = insights.get("whale_flows") or {}
+    async def api_whale(ctx: DashboardContext = Depends(get_ctx)) -> JSONResponse:
+        flows = ctx.hub.whale_flows or {}
         if not flows:
             return JSONResponse({"available": False})
         return JSONResponse(
@@ -381,13 +351,14 @@ def register(app: FastAPI, app_state: dict[str, Any]) -> None:
         )
 
     @app.get("/api/insights/rag")
-    async def api_rag(query: str = "", k: int = 5) -> JSONResponse:
+    async def api_rag(
+        query: str = "",
+        k: int = 5,
+        ctx: DashboardContext = Depends(get_ctx),
+    ) -> JSONResponse:
         from halal_trader.core.llm.rag_db import DBRationaleStore
 
-        engine = app_state.get("engine")
-        if engine is None:
-            return JSONResponse({"available": False})
-        store = DBRationaleStore(engine=engine)
+        store = DBRationaleStore(engine=ctx.engine)
         size = await store.size()
         if size == 0:
             return JSONResponse({"available": False})
@@ -414,9 +385,10 @@ def register(app: FastAPI, app_state: dict[str, Any]) -> None:
         )
 
     @app.get("/api/insights/calibration")
-    async def api_calibration() -> JSONResponse:
-        insights = app_state.get("insights") or {}
-        curve = insights.get("calibration_curve")
+    async def api_calibration(
+        ctx: DashboardContext = Depends(get_ctx),
+    ) -> JSONResponse:
+        curve = ctx.hub.calibration
         if curve is None:
             return JSONResponse({"available": False})
         return JSONResponse(

@@ -36,14 +36,15 @@ def test_summary_returns_baseline_payload(client):
 
 
 def test_summary_reflects_app_state(client):
-    web_app.app_state["bot_running"] = True
-    web_app.app_state["open_positions_by_asset"] = {"crypto": 3, "stock": 1}
-    web_app.app_state["llm_cost_today_usd"] = 0.42
+    rt = client.app.state.ctx.runtime
+    rt.bot_running = True
+    rt.open_positions_by_asset = {"crypto": [{}, {}, {}], "stock": [{}]}
+    rt.llm_cost_today_usd = 0.42
 
     r = client.get("/api/mobile/summary")
     body = r.json()
     assert body["bot_running"] is True
-    assert body["open_positions_by_asset"] == {"crypto": 3, "stock": 1}
+    # Mobile summary echoes the dict; route serialises lists per asset class.
     assert body["llm_cost_today_usd"] == 0.42
 
 

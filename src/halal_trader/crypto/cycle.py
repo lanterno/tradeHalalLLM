@@ -580,10 +580,12 @@ class CryptoCycleService(BaseCycleService):
             )
             risk_text = self._risk_engine.format_for_prompt(risk_state)
 
-            try:
-                from halal_trader.web.app import app_state as _web_state
-
-                _web_state["risk_state"] = {
+            # Push the latest risk state into the hub's runtime view so
+            # the dashboard's /api/risk/state can render it. Falls back
+            # silently when no runtime view is wired (tests / dry-run).
+            runtime = getattr(self._hub, "runtime", None)
+            if runtime is not None:
+                runtime.risk_state = {
                     "is_halted": risk_state.is_halted,
                     "halt_reason": risk_state.halt_reason,
                     "portfolio_heat_pct": getattr(risk_state, "portfolio_heat_pct", None),
@@ -591,8 +593,6 @@ class CryptoCycleService(BaseCycleService):
                     "avg_correlation": getattr(risk_state, "avg_correlation", None),
                     "summary": risk_text,
                 }
-            except Exception:  # noqa: BLE001
-                pass
 
             if risk_state.is_halted:
                 logger.warning("Risk engine halt: %s", risk_state.halt_reason)
