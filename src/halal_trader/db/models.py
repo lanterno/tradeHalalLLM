@@ -120,6 +120,14 @@ class LlmDecision(SQLModel, table=True):
     cache_write_tokens: int | None = None
     cost_usd: float | None = None  # rounded float — Decimal aggregation done in code
 
+    # Wave H — agentic mode persists each tool call's name/args/result
+    # so the dashboard can render a tree of the model's chain-of-thought.
+    # None when the cycle ran in single-prompt mode.
+    tool_transcript: list | None = Field(
+        default=None,
+        sa_column=sa.Column("tool_transcript", JSONB, nullable=True),
+    )
+
 
 # ── Crypto Tables ──────────────────────────────────────────────
 

@@ -218,6 +218,13 @@ class CryptoSettings(BaseSettings):
     llm_failure_threshold: int = Field(default=5, ge=1)
     llm_cooldown_seconds: int = Field(default=600, ge=60)
 
+    # Agentic mode (Wave H) — when on, the LLM gets a toolbelt and
+    # decides whether to fetch more context before submitting its
+    # plan. Per-cycle budget caps cost.
+    agentic_enabled: bool = Field(default=False)
+    agentic_max_turns: int = Field(default=5, ge=1, le=20)
+    agentic_max_seconds: float = Field(default=30.0, gt=0, le=120.0)
+
 
 # ── Sentiment ──────────────────────────────────────────────────
 
