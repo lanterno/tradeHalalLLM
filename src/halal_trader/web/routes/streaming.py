@@ -1,10 +1,11 @@
-"""SSE /api/sse and WebSocket /ws/prices."""
+"""SSE /api/sse, WebSocket /ws/prices, and live-cycle stream /ws/cycle."""
 
 from __future__ import annotations
 
 import asyncio
 import json
 import logging
+from datetime import datetime
 
 from fastapi import Depends, FastAPI, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
@@ -53,3 +54,39 @@ def register(app: FastAPI) -> None:
             pass
         except Exception:
             logger.debug("WebSocket connection closed")
+
+    @app.websocket("/ws/cycle")
+    async def ws_cycle(websocket: WebSocket, topic: str = "*") -> None:
+        """Wave I — stream structured cycle events to the dashboard.
+
+        Subscribers see ``cycle.start``, ``cycle.stage.start``,
+        ``cycle.stage.end``, ``cycle.complete``, ``cycle.failed``,
+        ``llm.call.complete``, ``executor.fill``, etc — anything the
+        bot publishes on the EventBus matching ``topic`` (default
+        ``*`` — everything).
+        """
+        ctx: DashboardContext | None = getattr(websocket.app.state, "ctx", None)
+        await websocket.accept()
+        if ctx is None:
+            await websocket.send_json(
+                {
+                    "topic": "_error",
+                    "ts": datetime.utcnow().isoformat(),
+                    "payload": {"error": "no context — bot not running in this process"},
+                }
+            )
+            await websocket.close(code=1011)
+            return
+
+        try:
+            async for event in ctx.bus.subscribe(topic):
+                payload = {
+                    "topic": event.topic,
+                    "ts": event.ts.isoformat(),
+                    "payload": event.payload,
+                }
+                await websocket.send_json(payload)
+        except WebSocketDisconnect:
+            pass
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("ws_cycle closed: %s", exc)
