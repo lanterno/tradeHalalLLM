@@ -578,6 +578,40 @@ class PromptGenome(SQLModel, table=True):
     notes: str = ""
 
 
+class MlArtefact(SQLModel, table=True):
+    """Versioned ML model blob.
+
+    Wave K replaces ``models/*.pkl`` with this table so the bot's
+    state replicates with the DB and rolls back atomically alongside
+    the schema. Each row is one (name, version) — the loader picks
+    the highest version for a given name; the retrainer inserts a
+    new row with version+1.
+
+    The payload stores either a sklearn pickle (BYTEA) or a small
+    JSON blob (slippage model, calibration curve), keyed by
+    ``payload_format``. HuggingFace caches (~GBs of Chronos
+    weights) intentionally stay on the filesystem.
+    """
+
+    __tablename__ = "ml_artefacts"
+
+    id: int | None = Field(default=None, primary_key=True)
+    name: str = Field(index=True)
+    version: int
+    payload_format: str  # "json" | "pickle"
+    payload_bytes: bytes | None = Field(
+        default=None, sa_column=sa.Column("payload_bytes", sa.LargeBinary, nullable=True)
+    )
+    payload_json: dict | None = Field(
+        default=None, sa_column=sa.Column("payload_json", JSONB, nullable=True)
+    )
+    sklearn_version: str = ""
+    feature_hash: str = ""
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(UTC), sa_type=sa.DateTime(timezone=True)
+    )
+
+
 class KillSwitch(SQLModel, table=True):
     """Single-row operator kill-switch.
 
