@@ -76,6 +76,9 @@ class CryptoComponents:
     # Process-wide analytics container — built once, shared by the
     # cycle / monitor / web app.
     hub: Any = None
+    # Event bus — built alongside the hub; cycle / monitor / web app
+    # mount their publishers / subscribers on the same instance.
+    bus: Any = None
 
     # Optional / conditionally-enabled
     sentiment_manager: Any = None
@@ -205,6 +208,9 @@ async def build_components(
     rag_store: Any = DBRationaleStore(engine=engine)
     thesis_store: Any = DBThesisTagStore(engine=engine)
     regret_store: Any = DBRegretRecorder(engine=engine)
+    from halal_trader.core.event_bus import EventBus
+
+    event_bus = EventBus()
     insights_hub = InsightsHub(rag=rag_store, regime=RegimeMemory(engine=engine))
 
     # Optional Etherscan whale-flow source. The cycle records its
@@ -378,6 +384,7 @@ async def build_components(
         notifier=notifier,
         alerts=alerts,
         hub=insights_hub,
+        bus=event_bus,
         sentiment_manager=sentiment_manager,
         timeframe_analyzer=timeframe_analyzer,
         regime_detector=regime_detector,

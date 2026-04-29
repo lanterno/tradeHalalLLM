@@ -11,6 +11,8 @@ from binance import BinanceAPIException
 
 from halal_trader.config import get_settings
 from halal_trader.core.cycle import BaseCycleService
+from halal_trader.core.cycle_pipeline import stage
+from halal_trader.core.event_bus import EventBus
 from halal_trader.core.insights_hub import InsightsHub
 from halal_trader.core.observability import cycle_id_var
 from halal_trader.core.tracing import tracer
@@ -62,9 +64,11 @@ class CryptoCycleService(BaseCycleService):
         whale_flow_source=None,
         reddit_fetcher=None,
         hub: InsightsHub | None = None,
+        bus: "EventBus | None" = None,
     ) -> None:
         super().__init__(alerts=alerts, engine=engine)
         self._hub = hub or InsightsHub()
+        self._bus = bus
         self._live_mode_checker = live_mode_checker
         self._broker = broker
         self._screener = screener
@@ -215,19 +219,26 @@ class CryptoCycleService(BaseCycleService):
                 usdt_free,
             )
 
-        performance_text = await self._build_performance_text()
-        sentiment_text = await self._build_sentiment_text(halal_pairs)
-        timeframe_text = await self._build_timeframe_text(halal_pairs)
-        regime_text = self._build_regime_text(klines_by_symbol, indicators_cache)
-        ml_signals_text = self._build_ml_signals_text(klines_by_symbol, indicators_cache)
+        async with stage(self._bus, "build_performance_text"):
+            performance_text = await self._build_performance_text()
+        async with stage(self._bus, "build_sentiment_text"):
+            sentiment_text = await self._build_sentiment_text(halal_pairs)
+        async with stage(self._bus, "build_timeframe_text"):
+            timeframe_text = await self._build_timeframe_text(halal_pairs)
+        async with stage(self._bus, "build_regime_text"):
+            regime_text = self._build_regime_text(klines_by_symbol, indicators_cache)
+        async with stage(self._bus, "build_ml_signals_text"):
+            ml_signals_text = self._build_ml_signals_text(klines_by_symbol, indicators_cache)
 
-        risk_text, halt = self._evaluate_portfolio_risk(
-            account=account,
-            klines_by_symbol=klines_by_symbol,
-            indicators_cache=indicators_cache,
-            open_trades=open_trades,
-            current_prices=current_prices,
-        )
+        async with stage(self._bus, "evaluate_portfolio_risk") as risk_outcome:
+            risk_text, halt = self._evaluate_portfolio_risk(
+                account=account,
+                klines_by_symbol=klines_by_symbol,
+                indicators_cache=indicators_cache,
+                open_trades=open_trades,
+                current_prices=current_prices,
+            )
+            risk_outcome.extra["halt"] = halt
         if halt:
             return
 
@@ -237,50 +248,60 @@ class CryptoCycleService(BaseCycleService):
 
         exchange_rules_text = self._broker.format_filters_for_prompt()
 
-        microstructure_text = self._build_microstructure_text(orderbooks)
-        microstructure_text = await self._augment_with_basis(
-            microstructure_text, halal_pairs, klines_by_symbol
-        )
-        microstructure_text = await self._augment_with_whale_flows(
-            microstructure_text, klines_by_symbol
-        )
+        async with stage(self._bus, "build_microstructure_text"):
+            microstructure_text = self._build_microstructure_text(orderbooks)
+            microstructure_text = await self._augment_with_basis(
+                microstructure_text, halal_pairs, klines_by_symbol
+            )
+            microstructure_text = await self._augment_with_whale_flows(
+                microstructure_text, klines_by_symbol
+            )
         news_text = self._build_news_text(halal_pairs)
 
-        regime_text = await self._augment_regime_with_rag(
-            regime_text, indicators_cache, sentiment_text
-        )
-        regime_text = await self._augment_regime_with_memory(
-            regime_text,
-            indicators_cache=indicators_cache,
-            today_pnl=today_pnl,
-            equity=account.total_balance_usdt or 0.0,
-        )
+        async with stage(self._bus, "augment_regime_with_rag"):
+            regime_text = await self._augment_regime_with_rag(
+                regime_text, indicators_cache, sentiment_text
+            )
+        async with stage(self._bus, "augment_regime_with_memory"):
+            regime_text = await self._augment_regime_with_memory(
+                regime_text,
+                indicators_cache=indicators_cache,
+                today_pnl=today_pnl,
+                equity=account.total_balance_usdt or 0.0,
+            )
 
-        async with tracer.aspan(
-            "cycle.strategy_analyze",
+        async with stage(
+            self._bus,
+            "strategy_analyze",
+            swallow=False,
             pair_count=len(halal_pairs),
             open_positions=open_position_count,
         ):
-            plan = await self._strategy.analyze(
-                account=account,
-                positions_text=positions_text,
-                halal_pairs=halal_pairs,
-                klines_by_symbol=klines_by_symbol,
-                orderbooks=orderbooks,
-                today_pnl=today_pnl,
-                performance_text=performance_text,
-                sentiment_text=sentiment_text,
-                timeframe_text=timeframe_text,
-                ml_signals_text=ml_signals_text,
-                regime_text=regime_text,
-                active_adjustments=active_adjustments,
-                exchange_rules_text=exchange_rules_text,
-                indicators_cache=indicators_cache,
-                open_position_count=open_position_count,
-                risk_text=risk_text,
-                microstructure_text=microstructure_text,
-                news_text=news_text,
-            )
+            async with tracer.aspan(
+                "cycle.strategy_analyze",
+                pair_count=len(halal_pairs),
+                open_positions=open_position_count,
+            ):
+                plan = await self._strategy.analyze(
+                    account=account,
+                    positions_text=positions_text,
+                    halal_pairs=halal_pairs,
+                    klines_by_symbol=klines_by_symbol,
+                    orderbooks=orderbooks,
+                    today_pnl=today_pnl,
+                    performance_text=performance_text,
+                    sentiment_text=sentiment_text,
+                    timeframe_text=timeframe_text,
+                    ml_signals_text=ml_signals_text,
+                    regime_text=regime_text,
+                    active_adjustments=active_adjustments,
+                    exchange_rules_text=exchange_rules_text,
+                    indicators_cache=indicators_cache,
+                    open_position_count=open_position_count,
+                    risk_text=risk_text,
+                    microstructure_text=microstructure_text,
+                    news_text=news_text,
+                )
 
         self._apply_regime_gate(plan, klines_by_symbol, indicators_cache)
 

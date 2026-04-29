@@ -99,6 +99,7 @@ class CryptoTradingBot(BaseTradingBot):
             whale_flow_source=comps.whale_flow_source,
             reddit_fetcher=comps.reddit_fetcher,
             hub=comps.hub,
+            bus=comps.bus,
         )
 
         # Start background tasks the scheduler owns.
