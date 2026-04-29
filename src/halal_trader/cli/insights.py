@@ -601,3 +601,35 @@ def calibration_cmd(limit: int) -> None:
         console.print(f"Brier         : {metrics['brier']:.3f}")
 
     asyncio.run(_run())
+
+
+@insights.command("explain")
+@click.argument("asset_class", type=click.Choice(["stock", "crypto"]))
+@click.argument("trade_id", type=int)
+def explain_cmd(asset_class: str, trade_id: int) -> None:
+    """Render the halal-compliance explanation for one trade (Wave L)."""
+
+    async def _run() -> None:
+        from halal_trader.config import get_settings
+        from halal_trader.db.models import init_db
+        from halal_trader.halal.audit import export_receipt
+        from halal_trader.halal.explainer import explain_screening
+        from halal_trader.logging import console
+
+        settings = get_settings()
+        engine = await init_db(settings.database_url)
+        try:
+            receipt = await export_receipt(engine, trade_id=trade_id, asset_class=asset_class)
+            if receipt is None:
+                console.print(f"[red]No {asset_class} trade with id {trade_id}[/]")
+                return
+            explanation = explain_screening(receipt.payload)
+            console.print(explanation.body_md)
+            if explanation.sources:
+                console.print("\n[dim]Sources:[/]")
+                for s in explanation.sources:
+                    console.print(f"  · {s}")
+        finally:
+            await engine.dispose()
+
+    asyncio.run(_run())
