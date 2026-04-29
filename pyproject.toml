@@ -35,6 +35,8 @@ dependencies = [
     "asyncpg>=0.31.0",
     "psycopg[binary]>=3.3.3",
     "pgvector>=0.4.2",
+    # Structured concurrency for the supervisor
+    "anyio>=4",
 ]
 
 [project.optional-dependencies]
