@@ -17,6 +17,7 @@ from halal_trader.web.routes import (
     analytics,
     config,
     decisions,
+    halal_compliance,
     halal_explain,
     insights,
     metrics,
@@ -58,6 +59,7 @@ _MODULES = (
     insights,
     prompts,
     halal_explain,
+    halal_compliance,
 )
 
 

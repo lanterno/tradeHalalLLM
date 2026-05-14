@@ -88,12 +88,15 @@ def collect_default_snapshots(runtime: "RuntimeView") -> list[MetricSnapshot]:
 
     risk = runtime.risk_state or {}
     if isinstance(risk, dict):
+        # Discriminate crypto vs stocks pushes — see :class:`CycleState`.
+        market_label = {"market": str(risk.get("market", "unknown"))}
         if "drawdown_pct" in risk and risk["drawdown_pct"] is not None:
             out.append(
                 MetricSnapshot(
                     name="halal_trader_drawdown_pct",
                     help_text="Current portfolio drawdown from peak (fraction)",
                     value=float(risk["drawdown_pct"]),
+                    labels=market_label,
                 )
             )
         if "portfolio_heat_pct" in risk and risk["portfolio_heat_pct"] is not None:
@@ -102,6 +105,7 @@ def collect_default_snapshots(runtime: "RuntimeView") -> list[MetricSnapshot]:
                     name="halal_trader_portfolio_heat_pct",
                     help_text="Portfolio unrealized P&L as fraction of equity",
                     value=float(risk["portfolio_heat_pct"]),
+                    labels=market_label,
                 )
             )
 

@@ -23,7 +23,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from halal_trader.core.context import DashboardContext
-from halal_trader.db.repository import Repository
+from halal_trader.db.repos import ResearchJobRepo
 from halal_trader.web._serializer import serialize
 from halal_trader.web.dependencies import get_ctx
 from halal_trader.web.middleware.confirm import require_confirmation
@@ -95,7 +95,9 @@ def register(app: FastAPI) -> None:
 # ── In-process worker ─────────────────────────────────────────
 
 
-async def _run_job(repo: Repository, *, job_id: int, kind: str, params: dict[str, Any]) -> None:
+async def _run_job(
+    repo: ResearchJobRepo, *, job_id: int, kind: str, params: dict[str, Any]
+) -> None:
     """Execute one job, recording the outcome on the row.
 
     The worker only catches exceptions to record them — it never lets

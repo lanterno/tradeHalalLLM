@@ -104,6 +104,22 @@ def test_risk_state_round_trips_cached_value(client):
     assert body["portfolio_heat_pct"] == 0.012
 
 
+def test_risk_state_passes_market_discriminator_through(client):
+    """The cycle pushes ``risk_state["market"]``; the route must echo it
+    so the frontend can label whose risk this snapshot is."""
+    client.app.state.ctx.runtime.risk_state = {
+        "market": "crypto",
+        "is_halted": True,
+        "halt_reason": "drawdown_breach",
+        "portfolio_heat_pct": 0.03,
+        "drawdown_pct": 0.08,
+        "summary": "halted",
+    }
+    body = client.get("/api/risk/state").json()
+    assert body["market"] == "crypto"
+    assert body["is_halted"] is True
+
+
 def test_halt_get_returns_disabled_initially(client):
     r = client.get("/api/system/halt")
     assert r.status_code == 200

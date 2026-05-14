@@ -134,12 +134,31 @@ export default function RiskAndSystem() {
       {/* Portfolio risk state */}
       <section>
         <h2 className="mb-3 text-sm font-medium uppercase tracking-wider text-muted">
-          Portfolio Risk (last cycle)
+          Portfolio Risk (last cycle{risk.data?.market ? ` · ${risk.data.market}` : ""})
+          {(() => {
+            // Stale-snapshot badge: surface "stale Nm" when the cycle
+            // hasn't pushed in a while. Stocks cycle is 15 min, crypto
+            // cycle is ~60 s — different thresholds keep the badge
+            // honest for each.
+            const pushedAt = risk.data?.pushed_at;
+            if (!pushedAt) return null;
+            const ageMs = Date.now() - new Date(pushedAt).getTime();
+            if (Number.isNaN(ageMs)) return null;
+            const market = risk.data?.market;
+            const thresholdMs = market === "stocks" ? 20 * 60 * 1000 : 3 * 60 * 1000;
+            if (ageMs < thresholdMs) return null;
+            const ageMin = Math.floor(ageMs / 60000);
+            return (
+              <span className="ml-2 rounded bg-loss/20 px-2 py-0.5 text-xs text-loss">
+                stale {ageMin}m
+              </span>
+            );
+          })()}
         </h2>
 
         {!risk.data?.available ? (
           <div className="rounded-xl border border-border bg-surface p-4 text-sm text-muted">
-            No risk state cached yet — wait for the next crypto cycle to populate it.
+            No risk state cached yet — wait for the next cycle to populate it.
           </div>
         ) : (
           <>

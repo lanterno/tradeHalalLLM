@@ -48,6 +48,28 @@ def test_summary_reflects_app_state(client):
     assert body["llm_cost_today_usd"] == 0.42
 
 
+def test_summary_exposes_risk_market_discriminator(client):
+    """The cycle pushes ``risk_state["market"]``; the summary must
+    surface it as ``drawdown_market`` so the phone shows whose risk
+    snapshot the drawdown belongs to."""
+    rt = client.app.state.ctx.runtime
+    rt.risk_state = {
+        "market": "stocks",
+        "drawdown_pct": 0.018,
+        "portfolio_heat_pct": 0.04,
+    }
+    body = client.get("/api/mobile/summary").json()
+    assert body["drawdown_pct"] == 0.018
+    assert body["drawdown_market"] == "stocks"
+
+
+def test_summary_drawdown_market_none_when_no_risk_state(client):
+    """No cycle has run yet → no risk_state → ``drawdown_market`` None."""
+    body = client.get("/api/mobile/summary").json()
+    assert body["drawdown_pct"] is None
+    assert body["drawdown_market"] is None
+
+
 def test_summary_reflects_engaged_halt(client):
     """After /api/admin/halt, the mobile summary should show enabled=True."""
     client.post("/api/admin/halt", json={"reason": "test halt drill"})

@@ -76,6 +76,34 @@ def test_collector_skips_none_drawdown():
     assert "halal_trader_portfolio_heat_pct" in names
 
 
+def test_collector_labels_risk_metrics_with_market():
+    """The crypto/stocks discriminator on ``risk_state`` flows through
+    to a Prometheus ``market="…"`` label so dashboards can graph the
+    two bots' heat / drawdown separately."""
+    rt = RuntimeView(
+        risk_state={
+            "market": "stocks",
+            "drawdown_pct": 0.012,
+            "portfolio_heat_pct": 0.04,
+        },
+    )
+    snaps = collect_default_snapshots(rt)
+    by_name = {s.name: s for s in snaps if s.labels.get("market") == "stocks"}
+    assert "halal_trader_drawdown_pct" in by_name
+    assert "halal_trader_portfolio_heat_pct" in by_name
+    assert by_name["halal_trader_drawdown_pct"].value == 0.012
+
+
+def test_collector_falls_back_to_unknown_market_label():
+    """Pre-discriminator runtime pushes (no ``market`` key) still emit
+    the metric — labelled ``market="unknown"`` so the collector path
+    stays consistent."""
+    rt = RuntimeView(risk_state={"drawdown_pct": 0.005})
+    snaps = collect_default_snapshots(rt)
+    matches = [s for s in snaps if s.name == "halal_trader_drawdown_pct"]
+    assert matches and matches[0].labels.get("market") == "unknown"
+
+
 # ── /metrics endpoint ─────────────────────────────────────────
 
 

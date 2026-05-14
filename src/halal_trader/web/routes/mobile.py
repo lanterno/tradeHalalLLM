@@ -36,6 +36,10 @@ async def _build_summary(ctx: DashboardContext) -> dict[str, Any]:
 
     risk = ctx.runtime.risk_state or {}
     drawdown = risk.get("drawdown_pct") if isinstance(risk, dict) else None
+    # The risk_state push carries which bot wrote it ("crypto" / "stocks" /
+    # absent → unknown) so a glance at the mobile summary tells the
+    # operator which cycle the drawdown belongs to.
+    risk_market = risk.get("market") if isinstance(risk, dict) else None
 
     pnl_today_usd: float | None = None
     try:
@@ -51,6 +55,7 @@ async def _build_summary(ctx: DashboardContext) -> dict[str, Any]:
         "bot_running": ctx.runtime.bot_running,
         "last_cycle": ctx.runtime.last_cycle,
         "drawdown_pct": drawdown,
+        "drawdown_market": risk_market,
         "open_positions_by_asset": dict(ctx.runtime.open_positions_by_asset),
         "pnl_today_usd": pnl_today_usd,
         "llm_cost_today_usd": ctx.runtime.llm_cost_today_usd,

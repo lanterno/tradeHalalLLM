@@ -149,6 +149,12 @@ export interface RiskState {
   drawdown_pct?: number | null;
   avg_correlation?: number | null;
   summary?: string;
+  // Which bot wrote the snapshot — populated by the cycle's
+  // runtime push so the dashboard can show whose risk this is.
+  market?: "crypto" | "stocks" | string;
+  // ISO timestamp of when the cycle wrote this snapshot — useful
+  // for surfacing staleness if the cycle has stopped running.
+  pushed_at?: string;
 }
 
 export interface HaltStatus {
