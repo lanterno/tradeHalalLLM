@@ -1,13 +1,18 @@
 # Halal Trader — single-host Docker Compose deployment.
 #
-# Four services:
-#   * postgres      — Postgres 16 + pgvector for the canonical DB.
-#   * trader-crypto — the 24/7 crypto bot.
-#   * trader-stocks — the market-hours stock bot.
-#   * trader-web    — the FastAPI dashboard + Prometheus /metrics.
+# Services:
+#   * postgres        — Postgres 16 + pgvector for the canonical DB.
+#   * trader-migrate  — one-shot Alembic migrate (init container).
+#   * trader-crypto   — the 24/7 crypto bot.
+#   * trader-stocks   — the market-hours stock bot.
+#   * trader-web      — the FastAPI dashboard + Prometheus /metrics.
 #
 # All three bot services share the same Postgres instance — multi-bot
 # concurrent writes are first-class now (no SQLite WAL limits).
+#
+# trader-migrate runs `halal-trader db migrate` to head, exits cleanly,
+# and gates every bot's startup (`depends_on: condition: service_completed_successfully`)
+# so the schema is always at head before any bot opens the engine.
 #
 # Optional Prometheus + Grafana sidecars are commented out — uncomment
 # when an operator actually wants the dashboards. They scrape the
@@ -33,12 +38,26 @@ services:
       timeout: 3s
       retries: 10
 
-  trader-crypto:
+  # One-shot Alembic migrate. Runs to head, exits, gates every bot.
+  trader-migrate:
     build:
       context: ..
       dockerfile: infra/Dockerfile
       args:
         EXTRAS: "ml,sentiment"
+    image: halal-trader:latest
+    container_name: trader-migrate
+    restart: "no"
+    env_file:
+      - ../.env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://trader:${POSTGRES_PASSWORD:-trader-dev-only}@postgres:5432/halal_trader
+    command: ["halal-trader", "db", "migrate"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  trader-crypto:
     image: halal-trader:latest
     container_name: trader-crypto
     restart: unless-stopped
@@ -53,8 +72,8 @@ services:
       - trader-logs:/app/logs
     command: ["halal-trader", "crypto", "start"]
     depends_on:
-      postgres:
-        condition: service_healthy
+      trader-migrate:
+        condition: service_completed_successfully
 
   trader-stocks:
     image: halal-trader:latest
@@ -69,8 +88,8 @@ services:
       - trader-logs:/app/logs
     command: ["halal-trader", "start"]
     depends_on:
-      postgres:
-        condition: service_healthy
+      trader-migrate:
+        condition: service_completed_successfully
 
   trader-web:
     image: halal-trader:latest
@@ -85,8 +104,6 @@ services:
     volumes:
       - trader-data:/app/data
       - trader-logs:/app/logs
-      # Mount the pre-built SPA so the FastAPI app can serve /
-      - ../dashboard/dist:/app/dashboard/dist:ro
     command:
       - "uvicorn"
       - "halal_trader.web.app:create_app"
@@ -96,8 +113,8 @@ services:
       - "--port"
       - "8082"
     depends_on:
-      postgres:
-        condition: service_healthy
+      trader-migrate:
+        condition: service_completed_successfully
 
   # ── Optional observability stack ──
   # prometheus:

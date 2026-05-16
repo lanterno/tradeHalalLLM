@@ -155,3 +155,44 @@ pg-down:
 # Drop + recreate the test database (run before pytest if it gets corrupted)
 test-db-reset:
     docker exec halal-trader-pg psql -U trader -d postgres -c 'DROP DATABASE IF EXISTS halal_trader_test'
+
+# ── Full Docker stack (postgres + bots + web in containers) ──
+
+# Build the bot image (multi-stage: deps + venv → slim runtime)
+docker-build:
+    docker compose -f infra/docker-compose.yml build
+
+# Start everything (postgres + crypto + stocks + web) in the background
+docker-up:
+    docker compose -f infra/docker-compose.yml up -d
+
+# Stop and remove all containers (data volumes persist)
+docker-down:
+    docker compose -f infra/docker-compose.yml down
+
+# Rebuild from scratch and recreate all containers (picks up .env + code changes)
+docker-rebuild:
+    docker compose -f infra/docker-compose.yml build
+    docker compose -f infra/docker-compose.yml up -d --force-recreate
+
+# Tail logs from a single service (default: crypto). Usage: just docker-logs [service]
+docker-logs service="trader-crypto":
+    docker compose -f infra/docker-compose.yml logs -f --tail=50 {{service}}
+
+# Tail logs from every service interleaved
+docker-logs-all:
+    docker compose -f infra/docker-compose.yml logs -f --tail=20
+
+# Apply Alembic migrations inside the running stack
+docker-migrate:
+    docker compose -f infra/docker-compose.yml run --rm trader-crypto halal-trader db migrate
+
+# Open a psql shell against the containerised Postgres
+docker-psql:
+    docker compose -f infra/docker-compose.yml exec postgres psql -U trader halal_trader
+
+# Quick health check on every service + the web API
+docker-status:
+    @docker compose -f infra/docker-compose.yml ps
+    @echo "---"
+    @curl -s -o /dev/null -w "Web /api/health → HTTP %{http_code}\n" http://localhost:8082/api/health

@@ -19,10 +19,19 @@ class OpenAILLM(BaseLLM):
 
     _TIMEOUT_SECONDS = 30
 
+    # Reasoning models (o1, o3, gpt-5, gpt-5.5, …) only accept the
+    # default temperature; passing 0.2 returns a 400. Match by prefix
+    # so future variants are picked up without code changes.
+    _DEFAULT_TEMP_ONLY_PREFIXES = ("o1", "o3", "gpt-5")
+
     def __init__(self, model: str, api_key: str) -> None:
         super().__init__(model)
         self.api_key = api_key
         self._client: Any = None
+
+    def _accepts_custom_temperature(self) -> bool:
+        m = self.model.lower()
+        return not any(m.startswith(p) for p in self._DEFAULT_TEMP_ONLY_PREFIXES)
 
     def _get_client(self) -> Any:
         if self._client is None:
@@ -38,14 +47,17 @@ class OpenAILLM(BaseLLM):
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
 
+        kwargs: dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+            "response_format": {"type": "json_object"},
+        }
+        if self._accepts_custom_temperature():
+            kwargs["temperature"] = 0.2
+
         t0 = time.monotonic()
         response = await asyncio.wait_for(
-            client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                response_format={"type": "json_object"},
-                temperature=0.2,
-            ),
+            client.chat.completions.create(**kwargs),
             timeout=self._TIMEOUT_SECONDS,
         )
         elapsed = time.monotonic() - t0

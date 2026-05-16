@@ -1,9 +1,27 @@
 # Halal Trader runtime image — Python 3.14 + uv-managed dependencies.
 #
-# Multi-stage build keeps the final image lean: stage 1 fetches
-# dependencies into a virtualenv with uv; stage 2 copies the venv +
-# source into a slim runtime image. uv is a build-time dependency
-# only, not runtime, so we don't ship its 30MB binary in production.
+# Three-stage build:
+#   1. spa-builder  — Node 22 builds the React dashboard (Vite)
+#   2. py-builder   — Python 3.14 + uv resolves the venv
+#   3. runtime      — slim image with venv + source + dashboard/dist
+#
+# The dashboard is built inside the image so the runtime is fully
+# self-contained — no host bind-mount required. uv is kept in the
+# runtime stage because `uvx` launches the Alpaca MCP subprocess.
+
+# ── Stage 1: dashboard SPA ──
+FROM node:22-alpine AS spa-builder
+
+WORKDIR /spa
+
+# Lock-file first for cache reuse.
+COPY dashboard/package.json dashboard/package-lock.json* ./
+RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi
+
+COPY dashboard/ ./
+RUN npm run build
+
+# ── Stage 2: Python venv ──
 FROM python:3.14-slim AS builder
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -50,6 +68,10 @@ WORKDIR /app
 RUN pip install --no-cache-dir uv
 
 COPY --from=builder /app /app
+
+# Drop the built SPA into the runtime image where web/app.py looks for it
+# (../../../dashboard/dist relative to web/app.py → /app/dashboard/dist).
+COPY --from=spa-builder /spa/dist /app/dashboard/dist
 
 # Non-root user so a container escape doesn't land you on root.
 # We need a real home dir for `uvx` to write its cache when launching
