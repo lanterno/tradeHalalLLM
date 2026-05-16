@@ -46,9 +46,12 @@ class AlpacaMCPClient:
         """Spawn the Alpaca MCP server and establish a session."""
         settings = get_settings()
 
+        # The alpaca-mcp-server CLI has no "serve" subcommand — it
+        # defaults to stdio transport when launched with no args, which
+        # is exactly what MCP's StdioServerParameters expects.
         server_params = StdioServerParameters(
             command="uvx",
-            args=["alpaca-mcp-server", "serve"],
+            args=["alpaca-mcp-server"],
             env={
                 "ALPACA_API_KEY": settings.alpaca.api_key,
                 "ALPACA_SECRET_KEY": settings.alpaca.secret_key,

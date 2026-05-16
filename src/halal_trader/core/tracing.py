@@ -125,12 +125,17 @@ class LogSpanExporter(SpanExporter):
         self.level = level
 
     def export(self, span: Span) -> None:
+        # ``Span.to_dict()`` has a "name" key that collides with the
+        # LogRecord's built-in name attribute (logger name). Rename it
+        # so ``logging`` doesn't reject the extra dict.
+        payload = span.to_dict()
+        payload["span_name"] = payload.pop("name")
         logger.log(
             self.level,
             "trace.span %s closed (%.2fms)",
             span.name,
             span.duration_ms,
-            extra={"event": "trace.span", **span.to_dict()},
+            extra={"event": "trace.span", **payload},
         )
 
 

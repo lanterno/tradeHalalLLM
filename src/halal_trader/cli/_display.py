@@ -35,7 +35,7 @@ def print_config() -> None:
         "Zoya API",
         "Configured" if settings.zoya.api_key else "[yellow]Not configured (defaults)[/yellow]",
     )
-    table.add_row("Database", str(settings.db_path))
+    table.add_row("Database", settings.database_url.split("@")[-1])
 
     console.print(table)
 
@@ -63,7 +63,7 @@ def print_crypto_config() -> None:
         "Binance API Key",
         settings.binance.api_key[:8] + "..." if settings.binance.api_key else "[red]NOT SET[/red]",
     )
-    table.add_row("Database", str(settings.db_path))
+    table.add_row("Database", settings.database_url.split("@")[-1])
 
     console.print(table)
 

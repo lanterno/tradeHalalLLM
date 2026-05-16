@@ -24,7 +24,7 @@ services:
       # Override in .env for prod; sane default for local dev.
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-trader-dev-only}
     ports:
-      - "127.0.0.1:5433:5432"
+      - "5433:5432"
     volumes:
       - pg-data:/var/lib/postgresql/data
     healthcheck:
@@ -44,6 +44,10 @@ services:
     restart: unless-stopped
     env_file:
       - ../.env
+    # Override the host's DATABASE_URL — inside the compose network the
+    # bot reaches Postgres at the service hostname on its internal port.
+    environment:
+      DATABASE_URL: postgresql+asyncpg://trader:${POSTGRES_PASSWORD:-trader-dev-only}@postgres:5432/halal_trader
     volumes:
       - trader-data:/app/data
       - trader-logs:/app/logs
@@ -58,6 +62,8 @@ services:
     restart: unless-stopped
     env_file:
       - ../.env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://trader:${POSTGRES_PASSWORD:-trader-dev-only}@postgres:5432/halal_trader
     volumes:
       - trader-data:/app/data
       - trader-logs:/app/logs
@@ -72,11 +78,15 @@ services:
     restart: unless-stopped
     env_file:
       - ../.env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://trader:${POSTGRES_PASSWORD:-trader-dev-only}@postgres:5432/halal_trader
     ports:
       - "8082:8082"
     volumes:
       - trader-data:/app/data
       - trader-logs:/app/logs
+      # Mount the pre-built SPA so the FastAPI app can serve /
+      - ../dashboard/dist:/app/dashboard/dist:ro
     command:
       - "uvicorn"
       - "halal_trader.web.app:create_app"

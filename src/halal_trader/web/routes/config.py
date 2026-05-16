@@ -27,7 +27,7 @@ def register(app: FastAPI) -> None:
                 "crypto_max_position_pct": settings.crypto.max_position_pct,
                 "crypto_daily_loss_limit": settings.crypto.daily_loss_limit,
                 "crypto_daily_return_target": settings.crypto.daily_return_target,
-                "db_path": str(settings.db_path),
+                "database": settings.database_url.split("@")[-1],
             }
         )
 

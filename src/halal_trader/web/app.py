@@ -112,8 +112,11 @@ def create_app() -> Any:
             name="static",
         )
 
-        @app.get("/{full_path:path}")
-        async def spa_catch_all(full_path: str) -> FileResponse:
+        # Excluded from the OpenAPI schema so the FileResponse return-type
+        # forward ref doesn't crash pydantic's schema generation at
+        # /openapi.json (and therefore /docs).
+        @app.get("/{full_path:path}", include_in_schema=False)
+        async def spa_catch_all(full_path: str):
             file = _DASHBOARD_DIST / full_path
             if file.exists() and file.is_file():
                 return FileResponse(str(file))

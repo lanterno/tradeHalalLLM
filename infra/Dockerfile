@@ -17,8 +17,9 @@ WORKDIR /app
 
 # Copy dependency manifests first so a code change doesn't bust the
 # layer cache for sync — uv reads pyproject.toml + uv.lock to decide
-# what to install.
-COPY pyproject.toml uv.lock ./
+# what to install. README.md is referenced by pyproject's [project]
+# table so it must be present at sync time.
+COPY pyproject.toml uv.lock README.md ./
 
 # Sync core deps; the dashboard / ml / sentiment extras are optional
 # and the operator can rebuild with --build-arg EXTRAS="ml,sentiment".
@@ -39,17 +40,25 @@ FROM python:3.14-slim AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PATH="/app/.venv/bin:${PATH}"
+    PATH="/app/.venv/bin:/usr/local/bin:${PATH}"
 
 WORKDIR /app
 
-# Bring just the venv + project source in — no pip / uv in the final image.
+# Bring the venv + project source in. We also need `uvx` at runtime
+# because the Alpaca MCP adapter launches its server via `uvx`; install
+# uv (which provides uvx) into the final image.
+RUN pip install --no-cache-dir uv
+
 COPY --from=builder /app /app
 
 # Non-root user so a container escape doesn't land you on root.
-RUN useradd --no-create-home --uid 1000 trader \
-    && chown -R trader:trader /app
+# We need a real home dir for `uvx` to write its cache when launching
+# the Alpaca MCP subprocess — bot otherwise crashes on stocks startup.
+RUN useradd --create-home --uid 1000 trader \
+    && chown -R trader:trader /app /home/trader
 USER trader
+ENV HOME=/home/trader \
+    UV_CACHE_DIR=/home/trader/.cache/uv
 
 # Default to the crypto bot; override at run time for stocks or web.
 CMD ["halal-trader", "crypto", "start"]
