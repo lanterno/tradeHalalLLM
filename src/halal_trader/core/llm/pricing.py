@@ -48,6 +48,11 @@ _PRICING: dict[str, ModelPricing] = {
     "gpt-4o": _p("2.50", "10.00", "1.25", "2.50"),
     "gpt-4o-mini": _p("0.15", "0.60", "0.075", "0.15"),
     "gpt-4-turbo": _p("10.00", "30.00", "5.00", "10.00"),
+    # NOTE: gpt-5* / o1 / o3 intentionally NOT listed here — pin prices
+    # only when they're verified against OpenAI's published rates. The
+    # ``DEFAULT_PRICING`` fallback (high) is the right behavior for an
+    # unrecognized model — it errs toward tripping the spend cap rather
+    # than silently undercharging.
     # Local Ollama models — cost is electricity, treat as zero.
     "ollama": _p("0", "0", "0", "0"),
 }

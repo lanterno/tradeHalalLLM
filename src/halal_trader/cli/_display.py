@@ -8,6 +8,40 @@ from rich.text import Text
 
 from halal_trader.logging import console
 
+_CLOUD_LLM_PROVIDERS = {"openai", "anthropic"}
+
+
+def _warn_uncapped_cloud_llm() -> None:
+    """Print a loud warning when a cloud LLM is configured with no spend cap.
+
+    The combination ``LLM_PROVIDER ∈ {openai, anthropic}`` + ``LLM_DAILY_USD_CAP=0``
+    means the bot will keep calling the cloud API regardless of cost — a
+    runaway cycle loop can spend hundreds in an hour. Surface the risk at
+    startup so the operator sees it before they walk away from the
+    terminal.
+    """
+    from halal_trader.config import get_settings
+
+    settings = get_settings()
+    if settings.llm.provider.value not in _CLOUD_LLM_PROVIDERS:
+        return
+    if settings.llm.daily_usd_cap > 0:
+        return
+    console.print(
+        Panel.fit(
+            Text.from_markup(
+                "[bold red]⚠ LLM_DAILY_USD_CAP=0[/bold red] with cloud provider "
+                f"[bold]{settings.llm.provider.value}[/bold]\n"
+                "No daily spend cap is enforced. A runaway cycle can spend\n"
+                "hundreds in an hour. Set [cyan]LLM_DAILY_USD_CAP=10.0[/cyan] "
+                "(or similar) in .env\n"
+                "then restart — the kill-switch will engage if exceeded."
+            ),
+            border_style="red",
+            title="Spend safety",
+        )
+    )
+
 
 def print_config() -> None:
     """Print the stock-side configuration table."""
@@ -38,6 +72,7 @@ def print_config() -> None:
     table.add_row("Database", settings.database_url.split("@")[-1])
 
     console.print(table)
+    _warn_uncapped_cloud_llm()
 
 
 def print_crypto_config() -> None:
@@ -66,6 +101,7 @@ def print_crypto_config() -> None:
     table.add_row("Database", settings.database_url.split("@")[-1])
 
     console.print(table)
+    _warn_uncapped_cloud_llm()
 
 
 def print_account(account: object) -> None:
