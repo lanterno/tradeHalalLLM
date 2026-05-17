@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
-from halal_trader.db.repository import Repository
+from halal_trader.db.repos import CryptoTradeRepo, StrategyAdjustmentRepo
 from halal_trader.domain.ports import LLMBackend
 
 if TYPE_CHECKING:
@@ -93,14 +93,16 @@ class TradeSelfReview:
     def __init__(
         self,
         llm: LLMBackend,
-        repo: Repository,
         *,
+        strategy_adjustments: StrategyAdjustmentRepo,
+        crypto_trades: CryptoTradeRepo,
         strategy: CryptoTradingStrategy | None = None,
         consecutive_loss_trigger: int = 3,
         exec_failure_trigger: int = 10,
     ) -> None:
         self._llm = llm
-        self._repo = repo
+        self._strategy_adjustments = strategy_adjustments
+        self._crypto_trades = crypto_trades
         self._strategy = strategy
         self._consecutive_loss_trigger = consecutive_loss_trigger
         self._exec_failure_trigger = exec_failure_trigger
@@ -113,7 +115,7 @@ class TradeSelfReview:
     async def load_from_db(self) -> None:
         """Load previously saved adjustments from the database."""
         try:
-            saved = await self._repo.get_latest_strategy_adjustments()
+            saved = await self._strategy_adjustments.get_latest_strategy_adjustments()
             if saved:
                 for param, value in saved.items():
                     if param in _SAFE_BOUNDS:
@@ -176,7 +178,7 @@ class TradeSelfReview:
         if total_exec_failures >= self._exec_failure_trigger:
             return True
 
-        round_trips = await self._repo.get_completed_round_trips(
+        round_trips = await self._crypto_trades.get_completed_round_trips(
             limit=self._consecutive_loss_trigger
         )
         if len(round_trips) < self._consecutive_loss_trigger:
@@ -191,7 +193,7 @@ class TradeSelfReview:
 
         self._last_review_time = _time.monotonic()
 
-        round_trips = await self._repo.get_completed_round_trips(
+        round_trips = await self._crypto_trades.get_completed_round_trips(
             limit=100, lookback_days=lookback_days
         )
 
@@ -227,7 +229,7 @@ Analyze these trades and execution failures, and suggest improvements.
             result = self._parse_review(raw)
 
             for adj in result.adjustments:
-                await self._repo.record_strategy_adjustment(
+                await self._strategy_adjustments.record_strategy_adjustment(
                     parameter=adj.parameter,
                     old_value=adj.old_value,
                     new_value=adj.new_value,
@@ -247,7 +249,20 @@ Analyze these trades and execution failures, and suggest improvements.
             return result
 
         except Exception as e:
-            logger.error("Self-review failed: %s", e)
+            # Mirror the strategy's insufficient_quota handling: this
+            # error is non-transient, every retry burns another API
+            # call. Push the next-eligible review out by a long stretch
+            # (1 hour) instead of letting it retrigger after the normal
+            # cooldown. Operator gets one log per hour, not one per 5min.
+            err_text = str(e)
+            if "insufficient_quota" in err_text or "exceeded your current quota" in err_text:
+                self._last_review_time = _time.monotonic() + 3600 - self._review_cooldown
+                logger.critical(
+                    "Self-review LLM out of credits — review backed off 1h",
+                    extra={"event": "llm.insufficient_quota"},
+                )
+            else:
+                logger.error("Self-review failed: %s", e)
             return ReviewResult()
 
     def _format_trades_for_review(self, round_trips: list[dict[str, Any]]) -> str:
