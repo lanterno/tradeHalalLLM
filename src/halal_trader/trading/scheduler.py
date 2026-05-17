@@ -263,9 +263,16 @@ class TradingBot(BaseTradingBot):
             "=== PRE-MARKET ROUTINE === (current time: %s ET)", now.strftime("%Y-%m-%d %H:%M:%S")
         )
 
-        # Skip entirely on market holidays (cron fires Mon-Fri regardless)
+        # Skip entirely on weekends and market holidays. APScheduler's
+        # cron only fires Mon-Fri so weekends shouldn't normally hit
+        # here, but the cycle can also be invoked manually (--once) or
+        # during startup orchestration, so the check stays.
         if not is_trading_day(now.date()):
-            logger.info("Today is not a trading day (holiday), skipping pre-market routine")
+            day_kind = "weekend" if now.weekday() >= 5 else "market holiday"
+            logger.info(
+                "Today is not a trading day (%s), skipping pre-market routine",
+                day_kind,
+            )
             return
 
         screener, _, portfolio, _ = self._require_initialized()
