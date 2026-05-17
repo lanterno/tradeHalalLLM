@@ -155,6 +155,69 @@ class TestCircuitBreaker:
         assert "cooldown" in plan.market_outlook.lower()
         assert llm.generate_json.await_count == 2
 
+    async def test_insufficient_quota_engages_cooldown_immediately(self):
+        """Pin: 'insufficient_quota' (out-of-credits) is non-transient.
+        Trip cooldown on the first failure instead of waiting for the
+        threshold — otherwise the bot burns ~25min hammering the API.
+        """
+        strategy, llm, repo = _make_strategy(
+            llm_error=RuntimeError(
+                "Error code: 429 - {'message': 'You exceeded your current quota', "
+                "'code': 'insufficient_quota'}"
+            ),
+            llm_failure_threshold=5,
+            llm_cooldown_seconds=60,
+        )
+
+        # First failure should already trip cooldown.
+        await strategy.analyze(
+            account=_make_account(),
+            positions_text="",
+            halal_pairs=["BTCUSDT"],
+            klines_by_symbol={"BTCUSDT": _make_klines()},
+            orderbooks={},
+        )
+
+        # Next call should be skipped because cooldown is active.
+        plan = await strategy.analyze(
+            account=_make_account(),
+            positions_text="",
+            halal_pairs=["BTCUSDT"],
+            klines_by_symbol={"BTCUSDT": _make_klines()},
+            orderbooks={},
+        )
+        assert "cooldown" in plan.market_outlook.lower()
+        assert llm.generate_json.await_count == 1  # only the first try fired
+
+    async def test_transient_error_waits_for_threshold(self):
+        """Pin: ordinary errors should NOT short-circuit cooldown —
+        the threshold still applies. Only insufficient_quota is special.
+        """
+        strategy, llm, repo = _make_strategy(
+            llm_error=RuntimeError("Connection reset"),
+            llm_failure_threshold=3,
+            llm_cooldown_seconds=60,
+        )
+
+        # First failure does NOT trip cooldown.
+        await strategy.analyze(
+            account=_make_account(),
+            positions_text="",
+            halal_pairs=["BTCUSDT"],
+            klines_by_symbol={"BTCUSDT": _make_klines()},
+            orderbooks={},
+        )
+
+        # Second call should fire the LLM again (cooldown not yet active).
+        await strategy.analyze(
+            account=_make_account(),
+            positions_text="",
+            halal_pairs=["BTCUSDT"],
+            klines_by_symbol={"BTCUSDT": _make_klines()},
+            orderbooks={},
+        )
+        assert llm.generate_json.await_count == 2
+
     async def test_success_resets_failure_counter(self):
         strategy, llm, repo = _make_strategy(llm_failure_threshold=3)
 
