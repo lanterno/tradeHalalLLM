@@ -210,6 +210,53 @@ def crypto_stats(days: int) -> None:
                 )
             console.print(rt_table)
 
+        # LLM cost / token usage — single query keeps the stats view
+        # self-contained instead of forcing the operator to also run
+        # `halal-trader llm-decisions cost-summary` after `crypto stats`.
+        from sqlalchemy import text
+        from sqlalchemy.ext.asyncio import AsyncSession
+
+        async with AsyncSession(engine) as session:
+            row = (
+                await session.execute(
+                    text(
+                        "SELECT COUNT(*)::int, COALESCE(SUM(input_tokens),0)::bigint, "
+                        "COALESCE(SUM(output_tokens),0)::bigint, "
+                        "COALESCE(SUM(cache_read_tokens),0)::bigint, "
+                        "COALESCE(SUM(cost_usd),0)::float "
+                        "FROM llm_decisions "
+                        "WHERE timestamp > NOW() - make_interval(days => :days)"
+                    ),
+                    {"days": days},
+                )
+            ).first()
+        if row and row[0]:
+            llm_calls = int(row[0])
+            input_tok = int(row[1])
+            output_tok = int(row[2])
+            cache_rd = int(row[3])
+            llm_cost = float(row[4])
+            cache_pct = (cache_rd / input_tok * 100) if input_tok else 0.0
+            cost_per_trade = llm_cost / stats.total_trades if stats.total_trades else 0.0
+            llm_table = Table(
+                title=f"LLM Usage (last {days} days)",
+                show_header=True,
+                header_style="bold cyan",
+            )
+            llm_table.add_column("Metric", style="dim")
+            llm_table.add_column("Value", justify="right")
+            llm_table.add_row("LLM Calls", f"{llm_calls:,}")
+            llm_table.add_row("Input Tokens", f"{input_tok:,}")
+            llm_table.add_row("Output Tokens", f"{output_tok:,}")
+            llm_table.add_row("Cache Read", f"{cache_rd:,}  ({cache_pct:.1f}%)")
+            llm_table.add_row("Total Cost", f"${llm_cost:,.4f}")
+            llm_table.add_row("Cost / Trade", f"${cost_per_trade:,.4f}")
+            llm_table.add_row(
+                "Avg Cost / Call",
+                f"${(llm_cost / llm_calls):,.4f}" if llm_calls else "—",
+            )
+            console.print(llm_table)
+
         await engine.dispose()
 
     asyncio.run(_stats())
