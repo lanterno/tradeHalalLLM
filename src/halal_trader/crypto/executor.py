@@ -42,6 +42,7 @@ class CryptoExecutor(BaseExecutor):
         exiting_pairs: set[str] | None = None,
         stop_loss_pct: float = 0.01,
         take_profit_pct: float = 0.02,
+        min_hold_seconds: int = 600,
     ) -> None:
         super().__init__(
             max_position_pct=max_position_pct,
@@ -65,6 +66,10 @@ class CryptoExecutor(BaseExecutor):
         # position monitor needs concrete prices to enforce exits.
         self._stop_loss_pct = stop_loss_pct
         self._take_profit_pct = take_profit_pct
+        # Min-hold guard for LLM-driven sells (SL/TP via monitor bypasses).
+        # Prevents the LLM from panic-selling positions within the first
+        # N seconds on noise-level adverse moves.
+        self._min_hold_seconds = min_hold_seconds
 
     def is_pair_blocked(self, symbol: str) -> bool:
         """Check if a pair is temporarily blocked due to repeated errors."""
@@ -407,6 +412,50 @@ class CryptoExecutor(BaseExecutor):
                 "status": "rejected",
                 "reason": "exit in progress for this pair",
             }
+
+        # Min-hold guard for LLM-driven sells. Position monitor (SL/TP)
+        # bypasses this path entirely, so genuine stop-loss / take-profit
+        # exits still fire instantly. The 24h-window audit found 4 of
+        # 7 LLM-sells held under 11 min for -0.02% to -0.12% — noise-
+        # level adverse moves the LLM panic-sold into. SL is the right
+        # exit for adverse moves; the LLM should reserve sells for real
+        # regime changes that need 5+ minutes to confirm.
+        try:
+            from datetime import UTC, datetime
+
+            open_buys = await self._repo.get_open_crypto_trades_for_pair(decision.symbol)
+            if open_buys:
+                now = datetime.now(UTC)
+                newest = max(
+                    open_buys,
+                    key=lambda t: t.timestamp if t.timestamp else now,
+                )
+                if newest.timestamp:
+                    ts = (
+                        newest.timestamp
+                        if newest.timestamp.tzinfo
+                        else newest.timestamp.replace(tzinfo=UTC)
+                    )
+                    held_seconds = (now - ts).total_seconds()
+                    if held_seconds < self._min_hold_seconds:
+                        logger.info(
+                            "Skipping SELL %s — min-hold not met (%.0fs < %ds); SL/TP still active",
+                            decision.symbol,
+                            held_seconds,
+                            self._min_hold_seconds,
+                        )
+                        return {
+                            "symbol": decision.symbol,
+                            "action": "sell",
+                            "status": "rejected",
+                            "reason": (
+                                f"min-hold not met ({held_seconds:.0f}s < "
+                                f"{self._min_hold_seconds}s)"
+                            ),
+                        }
+        except Exception as exc:  # noqa: BLE001
+            # Don't let a min-hold check failure block the sell — fall through.
+            logger.debug("min-hold check failed for %s: %s", decision.symbol, exc)
 
         try:
             base_asset = decision.symbol.upper().removesuffix("USDT").removesuffix("BUSD")

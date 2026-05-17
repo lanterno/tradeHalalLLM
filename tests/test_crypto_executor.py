@@ -165,6 +165,52 @@ class TestExecuteSell:
         assert results[0]["status"] == "rejected"
         assert "No" in results[0]["reason"]
 
+    async def test_min_hold_blocks_panic_sell(self):
+        """Pin: LLM-driven sell of a position younger than min_hold_seconds
+        is rejected. SL/TP via the position monitor bypasses this path."""
+        from datetime import UTC, datetime
+        from unittest.mock import MagicMock
+
+        executor, broker, repo = _make_executor(balances=[CryptoBalance(asset="BTC", free=0.01)])
+        executor._min_hold_seconds = 600  # 10 min
+
+        # Mock a buy row from 2 min ago.
+        fresh_buy = MagicMock()
+        fresh_buy.timestamp = datetime.now(UTC).replace(microsecond=0)
+        fresh_buy.timestamp = fresh_buy.timestamp.replace(second=fresh_buy.timestamp.second)
+        # Subtract 120s.
+        from datetime import timedelta
+
+        fresh_buy.timestamp = datetime.now(UTC) - timedelta(seconds=120)
+        repo.get_open_crypto_trades_for_pair.return_value = [fresh_buy]
+
+        plan = _make_plan([_make_sell()])
+        results = await executor.execute_plan(plan, account=_make_account())
+
+        assert results[0]["status"] == "rejected"
+        assert "min-hold" in results[0]["reason"]
+        broker.place_order.assert_not_called()
+
+    async def test_min_hold_allows_sell_after_window(self):
+        """Pin: once the position is older than min_hold_seconds, the LLM
+        can sell normally."""
+        from datetime import UTC, datetime, timedelta
+        from unittest.mock import MagicMock
+
+        executor, broker, repo = _make_executor(balances=[CryptoBalance(asset="BTC", free=0.01)])
+        executor._min_hold_seconds = 600
+
+        old_buy = MagicMock()
+        old_buy.timestamp = datetime.now(UTC) - timedelta(seconds=900)  # 15 min ago
+        repo.get_open_crypto_trades_for_pair.return_value = [old_buy]
+
+        plan = _make_plan([_make_sell()])
+        results = await executor.execute_plan(plan, account=_make_account())
+
+        assert results[0]["action"] == "sell"
+        assert results[0]["status"] != "rejected"
+        broker.place_order.assert_awaited_once()
+
     async def test_filled_sell_consolidates_open_buy_rows(self):
         """Pin: an LLM-driven sell that fills must close any open buy rows
         for the same pair via close_open_crypto_trades_for_pair. Without
