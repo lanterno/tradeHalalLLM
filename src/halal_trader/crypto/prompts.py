@@ -59,6 +59,32 @@ OUTPUT JSON SCHEMA (keep it minimal — every extra field costs tokens):
 Per-decision SL/TP overrides are OPTIONAL — only include them when your read differs \
 from the {stop_loss_pct:.1%}/{take_profit_pct:.1%} defaults. When you do include them, \
 use exactly the field names "stop_loss" and "target_price" (numeric, USDT prices).
+
+DECISION EXAMPLES (shape only — actual numbers depend on the market data you receive):
+
+High-confidence breakout, 80% sizing on a $2,500 max position:
+  {{"action": "buy", "symbol": "BTCUSDT", "quantity": 0.025, "confidence": 0.82}}
+
+Moderate setup, 35% sizing:
+  {{"action": "buy", "symbol": "ETHUSDT", "quantity": 0.45, "confidence": 0.55}}
+
+Take profit on an existing position before a regime shift:
+  {{"action": "sell", "symbol": "SOLUSDT", "quantity": 12.5, "confidence": 0.72}}
+
+No edge — explicit hold (cheaper than fabricating a low-conviction trade):
+  {{"action": "hold", "symbol": "ADAUSDT", "quantity": 0, "confidence": 0.50}}
+
+Custom SL/TP because the indicator structure suggests a wider stop:
+  {{"action": "buy", "symbol": "BTCUSDT", "quantity": 0.025, "confidence": 0.78, \
+"stop_loss": 67500.0, "target_price": 69800.0}}
+
+DECISION QUALITY HEURISTICS:
+- Prefer fewer, higher-conviction trades over many low-conviction ones — every \
+trade pays fees (~0.2% per leg).
+- If the indicators contradict each other (e.g. RSI overbought but MACD bullish), \
+lean toward "hold" unless price action breaks the deadlock.
+- After a stop-loss hit on a pair, give it 1-2 cycles before re-entering — \
+mean-reversion is rarely instant.
 """
 
 USER_PROMPT_TEMPLATE = """\
@@ -72,12 +98,6 @@ Open Positions: {open_position_count}/{max_positions}
 {position_limit_warning}
 === CURRENT POSITIONS ===
 {positions_text}
-
-=== HALAL TRADING PAIRS ===
-{halal_pairs}
-
-=== EXCHANGE TRADING RULES ===
-{exchange_rules_text}
 
 === TECHNICAL INDICATORS ===
 {indicators_text}
@@ -231,6 +251,20 @@ def build_prompts(ctx: PromptContext, params: StrategyParams) -> tuple[str, str]
         take_profit_pct=params.take_profit_pct,
     )
 
+    # Append the stable HALAL PAIRS + EXCHANGE TRADING RULES to the
+    # system prompt. These sections are stable across calls (halal cache
+    # refreshes every 6h; exchange rules change rarely), so moving them
+    # into ``system`` pushes the message above Anthropic's 1024-token
+    # cache minimum and lets ``cache_control: ephemeral`` actually fire.
+    # The dynamic per-cycle data (indicators, orderbook, etc.) stays in
+    # the user message.
+    system += (
+        "\n\n=== HALAL TRADING PAIRS ===\n"
+        f"{', '.join(ctx.halal_pairs)}\n\n"
+        "=== EXCHANGE TRADING RULES ===\n"
+        f"{ctx.exchange_rules_text or 'No exchange trading rules available.'}"
+    )
+
     if at_max:
         system += (
             "\n\n*** SELL-ONLY MODE ***\n"
@@ -272,9 +306,7 @@ def build_prompts(ctx: PromptContext, params: StrategyParams) -> tuple[str, str]
         max_positions=params.max_positions,
         position_limit_warning=position_limit_warning,
         positions_text=ctx.positions_text or "No open positions.",
-        halal_pairs=", ".join(ctx.halal_pairs),
         indicators_text=indicators_text,
-        exchange_rules_text=ctx.exchange_rules_text or "No exchange trading rules available.",
         orderbook_text=orderbook_text,
         sentiment_text=ctx.sentiment_text or "No sentiment data available.",
         timeframe_text=ctx.timeframe_text or "No multi-timeframe data available.",
