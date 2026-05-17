@@ -129,3 +129,9 @@ def setup_logging(settings: Settings, *, cli_log_level: str | None = None) -> No
     # that drown out useful application logs even in the JSON file.
     for name in ("binance", "websockets"):
         logging.getLogger(name).setLevel(logging.WARNING)
+    # Alembic's plugin-registry module logs "setup plugin alembic.X"
+    # at INFO on every import — pure discovery noise that fires 6×
+    # any time the migrate-env loads (transitively on bot startup +
+    # most CLI subcommands). Useful migration progress lives under
+    # `alembic.runtime.migration` — leave that at INFO.
+    logging.getLogger("alembic.runtime.plugins").setLevel(logging.WARNING)
