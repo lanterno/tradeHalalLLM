@@ -195,6 +195,35 @@ class CryptoTradingBot(BaseTradingBot):
         logger.info("=== CRYPTO DAILY END ===")
         try:
             summary = await self._portfolio.record_day_end()
+
+            # Enrich the summary with ops/spend stats from the DB so the
+            # richer Telegram daily-summary template prints them. These
+            # are best-effort — failures here shouldn't break the rest of
+            # the daily-end routine.
+            summary["market"] = "crypto"
+            from datetime import UTC, datetime
+
+            summary["date"] = datetime.now(UTC).date().isoformat()
+            if self._engine is not None:
+                try:
+                    from sqlalchemy import text
+                    from sqlalchemy.ext.asyncio import AsyncSession
+
+                    async with AsyncSession(self._engine) as session:
+                        row = (
+                            await session.execute(
+                                text(
+                                    "SELECT COUNT(*)::int, COALESCE(SUM(cost_usd), 0)::float "
+                                    "FROM llm_decisions WHERE timestamp::date = CURRENT_DATE"
+                                )
+                            )
+                        ).first()
+                        if row:
+                            summary["llm_calls"] = int(row[0] or 0)
+                            summary["llm_cost_usd"] = float(row[1] or 0.0)
+                except Exception as exc:
+                    logger.debug("Failed to enrich daily summary with LLM cost: %s", exc)
+
             logger.info("Crypto daily summary: %s", summary)
 
             # Run self-review
