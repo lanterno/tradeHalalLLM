@@ -155,7 +155,7 @@ def _function_signature(func: Any) -> str:
 
     try:
         sig = inspect.signature(func)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return ""
     return f"{func.__name__}{sig}"
 

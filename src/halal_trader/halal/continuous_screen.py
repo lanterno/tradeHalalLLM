@@ -188,7 +188,12 @@ def _diff_snapshots(
 ) -> tuple[ScreenChange, ...]:
     out: list[ScreenChange] = []
     triples = (
-        ("debt_to_market_cap", previous.debt_to_market_cap, current.debt_to_market_cap, policy.debt_ratio_cap),
+        (
+            "debt_to_market_cap",
+            previous.debt_to_market_cap,
+            current.debt_to_market_cap,
+            policy.debt_ratio_cap,
+        ),
         (
             "interest_income_to_revenue",
             previous.interest_income_to_revenue,
@@ -309,7 +314,6 @@ def render_result(result: RescreenResult) -> str:
     for ch in result.changes:
         marker = "‼" if ch.crossed_cap else "·"
         lines.append(
-            f"  {marker} {ch.metric}: {ch.previous:.4f}→{ch.current:.4f} "
-            f"(Δ{ch.delta:+.4f})"
+            f"  {marker} {ch.metric}: {ch.previous:.4f}→{ch.current:.4f} (Δ{ch.delta:+.4f})"
         )
     return _scrub("\n".join(lines))

@@ -114,7 +114,9 @@ def _good_saudi() -> SourceVerdict:
 
 def test_route_strictest_all_pass_approves():
     pol = RoutingPolicy(operator_jurisdiction=Jurisdiction.USA)
-    r = route_symbol("2222.SR", Jurisdiction.SAUDI_ARABIA, [_good_global(), _good_saudi()], policy=pol)
+    r = route_symbol(
+        "2222.SR", Jurisdiction.SAUDI_ARABIA, [_good_global(), _good_saudi()], policy=pol
+    )
     assert r.outcome is CompositeOutcome.APPROVED
 
 
@@ -126,9 +128,7 @@ def test_route_strictest_one_fails_blocks():
         verdict=JurisdictionVerdict.IMPERMISSIBLE,
         note="debt 35%",
     )
-    r = route_symbol(
-        "1180.SR", Jurisdiction.SAUDI_ARABIA, [_good_global(), bad_saudi], policy=pol
-    )
+    r = route_symbol("1180.SR", Jurisdiction.SAUDI_ARABIA, [_good_global(), bad_saudi], policy=pol)
     assert r.outcome is CompositeOutcome.BLOCKED
     assert "CMA Shariah" in r.blocking_sources
 
@@ -169,9 +169,7 @@ def test_route_any_mode_one_pass_approves():
         jurisdiction=Jurisdiction.SAUDI_ARABIA,
         verdict=JurisdictionVerdict.IMPERMISSIBLE,
     )
-    r = route_symbol(
-        "X", Jurisdiction.SAUDI_ARABIA, [_good_global(), bad_saudi], policy=pol
-    )
+    r = route_symbol("X", Jurisdiction.SAUDI_ARABIA, [_good_global(), bad_saudi], policy=pol)
     assert r.outcome is CompositeOutcome.APPROVED
 
 
@@ -187,15 +185,15 @@ def test_route_any_mode_all_fail_blocks():
         jurisdiction=Jurisdiction.SAUDI_ARABIA,
         verdict=JurisdictionVerdict.IMPERMISSIBLE,
     )
-    r = route_symbol(
-        "X", Jurisdiction.SAUDI_ARABIA, [bad_global, bad_saudi], policy=pol
-    )
+    r = route_symbol("X", Jurisdiction.SAUDI_ARABIA, [bad_global, bad_saudi], policy=pol)
     assert r.outcome is CompositeOutcome.BLOCKED
 
 
 def test_route_home_only_ignores_global():
     pol = RoutingPolicy(operator_jurisdiction=Jurisdiction.USA, mode=RoutingMode.HOME_ONLY)
-    r = route_symbol("2222.SR", Jurisdiction.SAUDI_ARABIA, [_good_global(), _good_saudi()], policy=pol)
+    r = route_symbol(
+        "2222.SR", Jurisdiction.SAUDI_ARABIA, [_good_global(), _good_saudi()], policy=pol
+    )
     # Only Saudi source is applicable — global is ignored
     assert all(v.jurisdiction is Jurisdiction.SAUDI_ARABIA for v in r.applicable_sources)
     assert r.outcome is CompositeOutcome.APPROVED
@@ -286,7 +284,9 @@ def test_filter_blocked_only_returns_blocked():
 
 def test_render_approved():
     pol = RoutingPolicy(operator_jurisdiction=Jurisdiction.USA)
-    r = route_symbol("2222.SR", Jurisdiction.SAUDI_ARABIA, [_good_global(), _good_saudi()], policy=pol)
+    r = route_symbol(
+        "2222.SR", Jurisdiction.SAUDI_ARABIA, [_good_global(), _good_saudi()], policy=pol
+    )
     out = render_result(r)
     assert "✅" in out
     assert "approved" in out
@@ -309,7 +309,9 @@ def test_render_blocked_includes_blocker():
 
 def test_render_no_secret_leak():
     pol = RoutingPolicy(operator_jurisdiction=Jurisdiction.USA)
-    r = route_symbol("2222.SR", Jurisdiction.SAUDI_ARABIA, [_good_global(), _good_saudi()], policy=pol)
+    r = route_symbol(
+        "2222.SR", Jurisdiction.SAUDI_ARABIA, [_good_global(), _good_saudi()], policy=pol
+    )
     out = render_result(r)
     for token in ("@", "zoom.us", "meet.google", "private_email", "+1-", "Authorization"):
         assert token not in out

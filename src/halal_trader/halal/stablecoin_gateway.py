@@ -128,9 +128,7 @@ def screen(
     # USD-T-bill backed → transactional-only at best
     if inputs.backing_type is BackingType.USD_TBILL:
         if pol.allow_transactional_use:
-            reasons.append(
-                "USD-T-bill backed: transactional use only with riba purification"
-            )
+            reasons.append("USD-T-bill backed: transactional use only with riba purification")
             return GatewayAssessment(
                 coin_symbol=inputs.coin_symbol,
                 backing_type=inputs.backing_type,

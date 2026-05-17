@@ -257,7 +257,13 @@ def test_custom_policy_strict_debt_cap():
     """Operator with strict 0.20 cap fails ratios that default policy would pass."""
     prev = _snap()
     curr = _snap(debt_to_market_cap=0.25)
-    r = reassess(prev, curr, _ev(), today=date(2026, 5, 1), policy=ScreenPolicy(debt_ratio_cap=0.20, flag_buffer=0.01))
+    r = reassess(
+        prev,
+        curr,
+        _ev(),
+        today=date(2026, 5, 1),
+        policy=ScreenPolicy(debt_ratio_cap=0.20, flag_buffer=0.01),
+    )
     assert r.new_status is ScreenStatus.FAILED
 
 
@@ -267,7 +273,13 @@ def test_custom_policy_strict_debt_cap():
 def test_reassess_batch_returns_one_per_pair():
     pairs = [
         (_snap(), _snap(), _ev()),
-        (_snap(ticker="MSFT"), _snap(ticker="MSFT", debt_to_market_cap=0.40), CorporateEvent(ticker="MSFT", action=CorporateAction.DEBT_ISSUANCE, event_date=date(2026, 5, 1))),
+        (
+            _snap(ticker="MSFT"),
+            _snap(ticker="MSFT", debt_to_market_cap=0.40),
+            CorporateEvent(
+                ticker="MSFT", action=CorporateAction.DEBT_ISSUANCE, event_date=date(2026, 5, 1)
+            ),
+        ),
     ]
     results = reassess_batch(pairs, today=date(2026, 5, 1))
     assert len(results) == 2

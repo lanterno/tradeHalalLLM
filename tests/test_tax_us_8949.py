@@ -306,9 +306,15 @@ def test_render_no_secret_leak():
 def test_e2e_year_end_8949_summary():
     """Year-end: mix of short + long, gain + loss → consistent summary."""
     slices = [
-        _slice(qty=100, basis=50, proceeds=60, acq=date(2024, 1, 1), sale=date(2025, 6, 1)),  # LT gain
-        _slice(qty=100, basis=70, proceeds=60, acq=date(2024, 1, 1), sale=date(2025, 6, 1)),  # LT loss
-        _slice(qty=100, basis=50, proceeds=60, acq=date(2025, 1, 1), sale=date(2025, 6, 1)),  # ST gain
+        _slice(
+            qty=100, basis=50, proceeds=60, acq=date(2024, 1, 1), sale=date(2025, 6, 1)
+        ),  # LT gain
+        _slice(
+            qty=100, basis=70, proceeds=60, acq=date(2024, 1, 1), sale=date(2025, 6, 1)
+        ),  # LT loss
+        _slice(
+            qty=100, basis=50, proceeds=60, acq=date(2025, 1, 1), sale=date(2025, 6, 1)
+        ),  # ST gain
     ]
     rows = slices_to_8949_rows(slices, symbol="AAPL")
     totals = box_totals(rows)

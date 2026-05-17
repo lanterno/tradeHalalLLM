@@ -140,8 +140,7 @@ def test_slice_equal_intervals():
         )
     )
     intervals = [
-        (schedule[i + 1].submit_time - schedule[i].submit_time)
-        for i in range(len(schedule) - 1)
+        (schedule[i + 1].submit_time - schedule[i].submit_time) for i in range(len(schedule) - 1)
     ]
     assert all(intv == intervals[0] for intv in intervals)
     # First slice at start, last at end

@@ -186,20 +186,32 @@ def test_strike_within_50pct_passes():
 
 
 def test_bilateral_pair_same_parties_opposite_directions_detected():
-    a = _call_inputs(waad_id="A", promisor="X", promisee="Y", direction=WaadDirection.PROMISE_TO_BUY)
-    b = _call_inputs(waad_id="B", promisor="Y", promisee="X", direction=WaadDirection.PROMISE_TO_SELL)
+    a = _call_inputs(
+        waad_id="A", promisor="X", promisee="Y", direction=WaadDirection.PROMISE_TO_BUY
+    )
+    b = _call_inputs(
+        waad_id="B", promisor="Y", promisee="X", direction=WaadDirection.PROMISE_TO_SELL
+    )
     assert detect_bilateral_pair(a, b)
 
 
 def test_bilateral_pair_different_parties_not_bilateral():
-    a = _call_inputs(waad_id="A", promisor="X", promisee="Y", direction=WaadDirection.PROMISE_TO_BUY)
-    b = _call_inputs(waad_id="B", promisor="Z", promisee="Y", direction=WaadDirection.PROMISE_TO_SELL)
+    a = _call_inputs(
+        waad_id="A", promisor="X", promisee="Y", direction=WaadDirection.PROMISE_TO_BUY
+    )
+    b = _call_inputs(
+        waad_id="B", promisor="Z", promisee="Y", direction=WaadDirection.PROMISE_TO_SELL
+    )
     assert not detect_bilateral_pair(a, b)
 
 
 def test_bilateral_pair_same_direction_not_bilateral():
-    a = _call_inputs(waad_id="A", promisor="X", promisee="Y", direction=WaadDirection.PROMISE_TO_BUY)
-    b = _call_inputs(waad_id="B", promisor="X", promisee="Y", direction=WaadDirection.PROMISE_TO_BUY)
+    a = _call_inputs(
+        waad_id="A", promisor="X", promisee="Y", direction=WaadDirection.PROMISE_TO_BUY
+    )
+    b = _call_inputs(
+        waad_id="B", promisor="X", promisee="Y", direction=WaadDirection.PROMISE_TO_BUY
+    )
     assert not detect_bilateral_pair(a, b)
 
 
@@ -222,8 +234,12 @@ def test_bilateral_pair_different_underlying_not_bilateral():
 
 
 def test_structure_pair_flags_bilateral():
-    a = _call_inputs(waad_id="A", promisor="X", promisee="Y", direction=WaadDirection.PROMISE_TO_BUY)
-    b = _call_inputs(waad_id="B", promisor="Y", promisee="X", direction=WaadDirection.PROMISE_TO_SELL)
+    a = _call_inputs(
+        waad_id="A", promisor="X", promisee="Y", direction=WaadDirection.PROMISE_TO_BUY
+    )
+    b = _call_inputs(
+        waad_id="B", promisor="Y", promisee="X", direction=WaadDirection.PROMISE_TO_SELL
+    )
     ra, rb = structure_pair(a, b)
     assert WaadIssue.BILATERAL_WAAD_BAN in ra.issues
     assert WaadIssue.BILATERAL_WAAD_BAN in rb.issues
@@ -233,8 +249,12 @@ def test_structure_pair_flags_bilateral():
 
 def test_structure_pair_distinct_counterparties_passes():
     """Two Wa'ds with different counterparties — bot can promise A→buy, B→sell separately."""
-    a = _call_inputs(waad_id="A", promisor="Bot", promisee="X", direction=WaadDirection.PROMISE_TO_BUY)
-    b = _call_inputs(waad_id="B", promisor="Bot", promisee="Y", direction=WaadDirection.PROMISE_TO_SELL)
+    a = _call_inputs(
+        waad_id="A", promisor="Bot", promisee="X", direction=WaadDirection.PROMISE_TO_BUY
+    )
+    b = _call_inputs(
+        waad_id="B", promisor="Bot", promisee="Y", direction=WaadDirection.PROMISE_TO_SELL
+    )
     ra, rb = structure_pair(a, b)
     assert ra.is_valid
     assert rb.is_valid

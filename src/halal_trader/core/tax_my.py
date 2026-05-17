@@ -96,9 +96,7 @@ class TaxClassification:
             raise ValueError("taxable_amount must be non-negative")
 
 
-def classify(
-    event: DisposalEvent, *, policy: TaxPolicy | None = None
-) -> TaxClassification:
+def classify(event: DisposalEvent, *, policy: TaxPolicy | None = None) -> TaxClassification:
     """Classify a disposal/dividend event by Malaysia tax status."""
     pol = policy if policy is not None else TaxPolicy()
 
@@ -158,12 +156,8 @@ def total_exempt_dividends(
     events: Iterable[DisposalEvent],
 ) -> float:
     """Sum exempt dividend receipts."""
-    return sum(
-        e.proceeds for e in events if e.asset_category is AssetCategory.DIVIDEND
-    )
+    return sum(e.proceeds for e in events if e.asset_category is AssetCategory.DIVIDEND)
 
 
 def render_classification(c: TaxClassification) -> str:
-    return (
-        f"{c.event_id}: {c.status.value} taxable=RM{c.taxable_amount:.2f}"
-    )
+    return f"{c.event_id}: {c.status.value} taxable=RM{c.taxable_amount:.2f}"

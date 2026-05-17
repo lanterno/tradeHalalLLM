@@ -51,9 +51,7 @@ class IndicatorSnapshotRepoImpl:
             assert snap.id is not None
             return snap.id
 
-    async def label_indicator_snapshot(
-        self, trade_id: int, label: int, return_pct: float
-    ) -> None:
+    async def label_indicator_snapshot(self, trade_id: int, label: int, return_pct: float) -> None:
         async with AsyncSession(self._engine) as session:
             statement = select(IndicatorSnapshot).where(IndicatorSnapshot.trade_id == trade_id)
             result = await session.exec(statement)

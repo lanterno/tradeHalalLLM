@@ -66,9 +66,7 @@ def test_event_negative_daily_count_rejected():
 
 def test_classification_negative_taxable_rejected():
     with pytest.raises(ValueError):
-        TaxClassification(
-            event_id="x", status=TaxStatus.EXEMPT_LISTED, taxable_amount=-1
-        )
+        TaxClassification(event_id="x", status=TaxStatus.EXEMPT_LISTED, taxable_amount=-1)
 
 
 def test_default_policy():
@@ -195,8 +193,18 @@ def test_classify_batch():
 
 def test_total_taxable_sums():
     events = [
-        _event(event_id="E1", asset_category=AssetCategory.REAL_PROPERTY_RPGT, proceeds=500000, cost_basis=400000),
-        _event(event_id="E2", asset_category=AssetCategory.LISTED_EQUITY_FOREIGN, proceeds=1500, cost_basis=1000),
+        _event(
+            event_id="E1",
+            asset_category=AssetCategory.REAL_PROPERTY_RPGT,
+            proceeds=500000,
+            cost_basis=400000,
+        ),
+        _event(
+            event_id="E2",
+            asset_category=AssetCategory.LISTED_EQUITY_FOREIGN,
+            proceeds=1500,
+            cost_basis=1000,
+        ),
     ]
     classes = classify_batch(events)
     assert total_taxable(classes) == 100000 + 500
@@ -227,9 +235,16 @@ def test_render_includes_status_and_amount():
 
 def test_e2e_typical_my_resident_year():
     events = [
-        _event(event_id="E1", asset_category=AssetCategory.LISTED_EQUITY_BURSA, daily_trade_count=2),
+        _event(
+            event_id="E1", asset_category=AssetCategory.LISTED_EQUITY_BURSA, daily_trade_count=2
+        ),
         _event(event_id="E2", asset_category=AssetCategory.DIVIDEND, proceeds=500, cost_basis=0),
-        _event(event_id="E3", asset_category=AssetCategory.REAL_PROPERTY_RPGT, proceeds=600000, cost_basis=500000),
+        _event(
+            event_id="E3",
+            asset_category=AssetCategory.REAL_PROPERTY_RPGT,
+            proceeds=600000,
+            cost_basis=500000,
+        ),
     ]
     classes = classify_batch(events)
     statuses = [c.status for c in classes]

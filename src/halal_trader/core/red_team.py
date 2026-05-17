@@ -74,9 +74,7 @@ class RedTeamPolicy:
 
     def __post_init__(self) -> None:
         if not 0.0 < self.caution_severity_threshold <= self.veto_severity_threshold <= 1.0:
-            raise ValueError(
-                "0 < caution_severity_threshold <= veto_severity_threshold <= 1"
-            )
+            raise ValueError("0 < caution_severity_threshold <= veto_severity_threshold <= 1")
         if not 0.0 <= self.veto_committee_confidence_max <= 1.0:
             raise ValueError("veto_committee_confidence_max must be in [0, 1]")
 
@@ -159,7 +157,5 @@ def render_verdict(v: RedTeamVerdict) -> str:
     )
     lines = [head]
     for arg in sorted(v.arguments, key=lambda a: -a.severity):
-        lines.append(
-            f"  • {arg.concern.value} (severity={arg.severity:.2f}): {arg.summary}"
-        )
+        lines.append(f"  • {arg.concern.value} (severity={arg.severity:.2f}): {arg.summary}")
     return _scrub("\n".join(lines))

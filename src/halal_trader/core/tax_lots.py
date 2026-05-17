@@ -91,9 +91,7 @@ def _ordered_for_method(lots: Iterable[TaxLot], method: LotMethod) -> list[TaxLo
     if method is LotMethod.LIFO:
         return sorted(lots, key=lambda l: (l.acquisition_date, l.lot_id), reverse=True)
     if method is LotMethod.HIFO:
-        return sorted(
-            lots, key=lambda l: (-l.cost_basis_per_share, l.acquisition_date, l.lot_id)
-        )
+        return sorted(lots, key=lambda l: (-l.cost_basis_per_share, l.acquisition_date, l.lot_id))
     raise AssertionError("unreachable")  # pragma: no cover
 
 
@@ -112,9 +110,7 @@ def apply_sale(
         raise ValueError("proceeds_per_share must be non-negative")
     total_open = sum(l.quantity for l in pool)
     if quantity > total_open + 1e-9:
-        raise ValueError(
-            f"sale quantity {quantity} exceeds open pool quantity {total_open}"
-        )
+        raise ValueError(f"sale quantity {quantity} exceeds open pool quantity {total_open}")
 
     ordered = _ordered_for_method(pool, method)
     remaining = quantity

@@ -157,7 +157,11 @@ def test_report_lower_le_point_le_upper():
     returns = [0.01, -0.005, 0.015, -0.01, 0.005] * 20
     report = report_with_ci(returns, seed=42)
     for e in report:
-        if math.isfinite(e.lower_ci) and math.isfinite(e.upper_ci) and math.isfinite(e.point_estimate):
+        if (
+            math.isfinite(e.lower_ci)
+            and math.isfinite(e.upper_ci)
+            and math.isfinite(e.point_estimate)
+        ):
             assert e.lower_ci <= e.upper_ci
 
 

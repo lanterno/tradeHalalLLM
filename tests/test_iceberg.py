@@ -177,7 +177,9 @@ def test_fill_time_based_does_not_replenish_on_fill():
 
 def test_replenish_time_tops_up_visible():
     state = _init(parent_quantity=1000.0)
-    new_state = fill_visible(state, 100, policy=IcebergPolicy(replenish_strategy=ReplenishStrategy.TIME_BASED))
+    new_state = fill_visible(
+        state, 100, policy=IcebergPolicy(replenish_strategy=ReplenishStrategy.TIME_BASED)
+    )
     # Visible=0, hidden=900
     topped = replenish_time(new_state)
     assert topped.visible_quantity == pytest.approx(100.0)

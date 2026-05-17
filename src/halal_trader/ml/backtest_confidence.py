@@ -196,9 +196,7 @@ def report_with_ci(
     if not returns:
         raise ValueError("returns must be non-empty")
     pol = policy if policy is not None else BootstrapPolicy()
-    return tuple(
-        _bootstrap_metric(returns, m, policy=pol, seed=seed) for m in metrics
-    )
+    return tuple(_bootstrap_metric(returns, m, policy=pol, seed=seed) for m in metrics)
 
 
 def render_report(estimates: Sequence[MetricEstimate]) -> str:

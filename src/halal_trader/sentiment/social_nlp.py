@@ -118,9 +118,7 @@ class SentimentPolicy:
 
     def __post_init__(self) -> None:
         if self.bullish_threshold <= 0 or self.bearish_threshold >= 0:
-            raise ValueError(
-                "bullish_threshold > 0 and bearish_threshold < 0 required"
-            )
+            raise ValueError("bullish_threshold > 0 and bearish_threshold < 0 required")
         if not 1.0 <= self.caps_amplification <= 3.0:
             raise ValueError("caps_amplification must be in [1.0, 3.0]")
         if self.negation_window <= 0:
@@ -152,9 +150,7 @@ def _is_all_caps(token: str) -> bool:
     return len(token) >= 2 and token.isalpha() and token.isupper()
 
 
-def score_message(
-    text: str, *, policy: SentimentPolicy | None = None
-) -> SentimentScore:
+def score_message(text: str, *, policy: SentimentPolicy | None = None) -> SentimentScore:
     """Score a single message on [-1, +1] sentiment axis."""
     pol = policy if policy is not None else SentimentPolicy()
     if not text or not text.strip():

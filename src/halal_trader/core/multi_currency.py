@@ -147,19 +147,12 @@ def translate_batch(
     )
 
 
-def total_in(
-    amounts: Iterable[CurrencyAmount], target_currency: str, *, book: FxRateBook
-) -> float:
+def total_in(amounts: Iterable[CurrencyAmount], target_currency: str, *, book: FxRateBook) -> float:
     """Sum a heterogeneous bag of currency amounts in target currency."""
-    return sum(
-        translate(a, target_currency=target_currency, book=book).amount
-        for a in amounts
-    )
+    return sum(translate(a, target_currency=target_currency, book=book).amount for a in amounts)
 
 
-def render_translation(
-    src: CurrencyAmount, dst: CurrencyAmount, method: TranslationMethod
-) -> str:
+def render_translation(src: CurrencyAmount, dst: CurrencyAmount, method: TranslationMethod) -> str:
     return (
         f"{src.amount:.2f} {src.currency} ({src.as_of_date.isoformat()}) "
         f"→ {dst.amount:.2f} {dst.currency} via {method.value}"

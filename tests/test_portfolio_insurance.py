@@ -94,18 +94,14 @@ def test_position_market_value():
 
 
 def test_empty_portfolio_returns_empty_plan():
-    plan = compose_hedge(
-        [], promisor="Bot", counterparty="Counterparty", today=date(2026, 5, 1)
-    )
+    plan = compose_hedge([], promisor="Bot", counterparty="Counterparty", today=date(2026, 5, 1))
     assert plan.waads == ()
     assert plan.portfolio_value == 0
 
 
 def test_compose_partial_floor_one_position():
     positions = [_pos(qty=100, price=200)]  # value $20k, floor $18k
-    plan = compose_hedge(
-        positions, promisor="Bot", counterparty="C", today=date(2026, 5, 1)
-    )
+    plan = compose_hedge(positions, promisor="Bot", counterparty="C", today=date(2026, 5, 1))
     assert len(plan.waads) == 1
     assert plan.portfolio_value == 20000
     assert plan.floor_value == 18000
@@ -130,9 +126,7 @@ def test_compose_tail_only_uses_tail_strike():
         promisor="Bot",
         counterparty="C",
         today=date(2026, 5, 1),
-        policy=HedgePolicy(
-            mode=HedgeMode.TAIL_ONLY, floor_pct=0.90, tail_threshold_pct=0.75
-        ),
+        policy=HedgePolicy(mode=HedgeMode.TAIL_ONLY, floor_pct=0.90, tail_threshold_pct=0.75),
     )
     assert plan.waads[0].strike_price == 75.0
 
@@ -150,17 +144,13 @@ def test_compose_coverage_ratio_scales_qty():
 
 def test_compose_multiple_positions():
     positions = [_pos(symbol="A", qty=100, price=200), _pos(symbol="B", qty=50, price=300)]
-    plan = compose_hedge(
-        positions, promisor="Bot", counterparty="C", today=date(2026, 5, 1)
-    )
+    plan = compose_hedge(positions, promisor="Bot", counterparty="C", today=date(2026, 5, 1))
     assert len(plan.waads) == 2
     assert plan.portfolio_value == 100 * 200 + 50 * 300
 
 
 def test_compose_all_waads_valid_when_inputs_clean():
-    plan = compose_hedge(
-        [_pos()], promisor="Bot", counterparty="C", today=date(2026, 5, 1)
-    )
+    plan = compose_hedge([_pos()], promisor="Bot", counterparty="C", today=date(2026, 5, 1))
     assert plan.all_valid()
 
 
@@ -179,26 +169,20 @@ def test_compose_expected_payoff_at_floor_positive():
 
 
 def test_render_plan_includes_summary():
-    plan = compose_hedge(
-        [_pos()], promisor="Bot", counterparty="C", today=date(2026, 5, 1)
-    )
+    plan = compose_hedge([_pos()], promisor="Bot", counterparty="C", today=date(2026, 5, 1))
     out = render_plan(plan)
     assert "Hedge plan" in out
     assert "AAPL" in out
 
 
 def test_render_plan_uses_shield_emoji_when_valid():
-    plan = compose_hedge(
-        [_pos()], promisor="Bot", counterparty="C", today=date(2026, 5, 1)
-    )
+    plan = compose_hedge([_pos()], promisor="Bot", counterparty="C", today=date(2026, 5, 1))
     out = render_plan(plan)
     assert "🛡️" in out
 
 
 def test_render_no_secret_leak():
-    plan = compose_hedge(
-        [_pos()], promisor="Bot", counterparty="C", today=date(2026, 5, 1)
-    )
+    plan = compose_hedge([_pos()], promisor="Bot", counterparty="C", today=date(2026, 5, 1))
     out = render_plan(plan)
     for token in ("@", "zoom.us", "meet.google", "private_email", "+1-", "Authorization"):
         assert token not in out
@@ -226,10 +210,6 @@ def test_e2e_diversified_portfolio_partial_floor_hedge():
 
 
 def test_replay_consistency():
-    a = compose_hedge(
-        [_pos()], promisor="Bot", counterparty="C", today=date(2026, 5, 1)
-    )
-    b = compose_hedge(
-        [_pos()], promisor="Bot", counterparty="C", today=date(2026, 5, 1)
-    )
+    a = compose_hedge([_pos()], promisor="Bot", counterparty="C", today=date(2026, 5, 1))
+    b = compose_hedge([_pos()], promisor="Bot", counterparty="C", today=date(2026, 5, 1))
     assert a == b

@@ -87,23 +87,17 @@ def test_deep_for_tight_spread_small_pos():
 
 
 def test_normal_tier():
-    a = assess_liquidity(
-        _inputs(bid_ask_spread_bps=15.0, position_size=2_000_000)
-    )
+    a = assess_liquidity(_inputs(bid_ask_spread_bps=15.0, position_size=2_000_000))
     assert a.tier is LiquidityTier.NORMAL
 
 
 def test_thin_tier():
-    a = assess_liquidity(
-        _inputs(bid_ask_spread_bps=50.0, position_size=10_000_000)
-    )
+    a = assess_liquidity(_inputs(bid_ask_spread_bps=50.0, position_size=10_000_000))
     assert a.tier is LiquidityTier.THIN
 
 
 def test_illiquid_for_huge_position():
-    a = assess_liquidity(
-        _inputs(bid_ask_spread_bps=200.0, position_size=30_000_000)
-    )
+    a = assess_liquidity(_inputs(bid_ask_spread_bps=200.0, position_size=30_000_000))
     assert a.tier is LiquidityTier.ILLIQUID
 
 
@@ -192,9 +186,7 @@ def test_render_no_secret_leak():
 
 def test_e2e_thin_name_inflates_var():
     """A 1% of ADV position in a 50 bps spread name has noticeable liq cost."""
-    a = assess_liquidity(
-        _inputs(bid_ask_spread_bps=50.0, position_size=1_000_000)
-    )
+    a = assess_liquidity(_inputs(bid_ask_spread_bps=50.0, position_size=1_000_000))
     adjusted = liquidity_adjusted_var(10000.0, a)
     assert adjusted > 10000
 

@@ -105,9 +105,7 @@ class BridgeAssessment:
             raise ValueError("is_compliant=False but issues empty")
 
 
-def screen_bridge(
-    inputs: BridgeInputs, *, policy: BridgePolicy | None = None
-) -> BridgeAssessment:
+def screen_bridge(inputs: BridgeInputs, *, policy: BridgePolicy | None = None) -> BridgeAssessment:
     """Run the bridge through the halal screen."""
     pol = policy if policy is not None else BridgePolicy()
     issues: set[BridgeIssue] = set()

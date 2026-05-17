@@ -100,9 +100,7 @@ class PoolDistribution:
     per_partner: tuple[tuple[str, float], ...]  # (handle, share_amount)
 
 
-def settle_pool(
-    pool: MusharakahPool, *, final_pool_value: float
-) -> PoolDistribution:
+def settle_pool(pool: MusharakahPool, *, final_pool_value: float) -> PoolDistribution:
     """Distribute the final pool value among partners per the rules."""
     if pool.status not in (PoolStatus.ACTIVE, PoolStatus.DISSOLVING):
         raise ValueError("can only settle ACTIVE or DISSOLVING pools")

@@ -262,7 +262,16 @@ def test_render_no_secret_leak():
         artefacts=[_artefact(k) for k in REQUIRED_ARTEFACTS],
     )
     out = render_bundle(bundle)
-    for token in ("@", "zoom.us", "meet.google", "private_email", "+1-", "Authorization", "SSN", "TaxID"):
+    for token in (
+        "@",
+        "zoom.us",
+        "meet.google",
+        "private_email",
+        "+1-",
+        "Authorization",
+        "SSN",
+        "TaxID",
+    ):
         assert token not in out
 
 

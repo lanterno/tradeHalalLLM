@@ -65,9 +65,7 @@ class AlignmentPolicy:
         if abs(total - 1.0) > 1e-6:
             raise ValueError("pillar weights must sum to 1.0")
         if not 0.0 < self.neutral_threshold < self.aligned_threshold < self.leader_threshold < 1.0:
-            raise ValueError(
-                "thresholds must be strictly increasing in (0, 1)"
-            )
+            raise ValueError("thresholds must be strictly increasing in (0, 1)")
 
 
 @dataclass(frozen=True)
@@ -157,14 +155,10 @@ def render_report(r: AlignmentReport) -> str:
         AlignmentTier.NEUTRAL: "⚪",
         AlignmentTier.MISALIGNED: "⚠️",
     }[r.tier]
-    head = (
-        f"{emoji} {r.issuer}: {r.tier.value} "
-        f"(composite={r.composite_score:.2f})"
-    )
+    head = f"{emoji} {r.issuer}: {r.tier.value} (composite={r.composite_score:.2f})"
     lines = [head]
     for s in sorted(r.pillar_scores, key=lambda x: x.pillar.value):
         lines.append(
-            f"  • {s.pillar.value}: {s.score:.2f}"
-            + (f" — {s.rationale}" if s.rationale else "")
+            f"  • {s.pillar.value}: {s.score:.2f}" + (f" — {s.rationale}" if s.rationale else "")
         )
     return "\n".join(lines)

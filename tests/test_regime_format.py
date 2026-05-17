@@ -23,9 +23,7 @@ def test_single_pair_renders_regime_label_uppercase():
 
 
 def test_renders_confidence_as_percent():
-    out = format_regime_for_prompt(
-        {"BTCUSDT": (MarketRegime.RANGING, 0.6, "use mean reversion")}
-    )
+    out = format_regime_for_prompt({"BTCUSDT": (MarketRegime.RANGING, 0.6, "use mean reversion")})
     assert "60%" in out
 
 
@@ -52,9 +50,7 @@ def test_multiple_pairs_sorted_alphabetically():
 
 def test_each_pair_renders_two_lines():
     """One line for the regime label + one for strategy text."""
-    out = format_regime_for_prompt(
-        {"BTCUSDT": (MarketRegime.TRENDING_DOWN, 0.7, "shrink size")}
-    )
+    out = format_regime_for_prompt({"BTCUSDT": (MarketRegime.TRENDING_DOWN, 0.7, "shrink size")})
     lines = out.split("\n")
     assert len(lines) == 2
     assert "TRENDING_DOWN" in lines[0]
@@ -62,14 +58,10 @@ def test_each_pair_renders_two_lines():
 
 
 def test_confidence_zero_renders_zero_percent():
-    out = format_regime_for_prompt(
-        {"BTCUSDT": (MarketRegime.RANGING, 0.0, "be cautious")}
-    )
+    out = format_regime_for_prompt({"BTCUSDT": (MarketRegime.RANGING, 0.0, "be cautious")})
     assert "0%" in out
 
 
 def test_confidence_one_renders_hundred_percent():
-    out = format_regime_for_prompt(
-        {"BTCUSDT": (MarketRegime.TRENDING_UP, 1.0, "max conviction")}
-    )
+    out = format_regime_for_prompt({"BTCUSDT": (MarketRegime.TRENDING_UP, 1.0, "max conviction")})
     assert "100%" in out

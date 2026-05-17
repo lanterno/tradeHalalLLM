@@ -290,7 +290,7 @@ RibaInputs validation; **all 6 halal-by-default classes return
 clean pin** (spot equity, physical commodity, sukuk, wa'd
 forward, salam forward, arboun option); **conventional bond
 NASIYAH always pin**; conventional future EMBEDDED_FINANCING;
-conventional option EMBEDDED_FINANCING; **CFD both EMBEDDED + 
+conventional option EMBEDDED_FINANCING; **CFD both EMBEDDED +
 LEVERAGE pin**; leveraged ETF LEVERAGE_INTEREST; inverse ETF
 EMBEDDED_FINANCING; interest-rate swap NASIYAH; currency swap
 EMBEDDED_FINANCING; **margin-flag adds LEVERAGE pin**; **borrow-

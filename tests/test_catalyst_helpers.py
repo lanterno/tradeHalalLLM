@@ -179,9 +179,7 @@ def test_size_multiplier_full_when_no_relevant_catalysts():
 def test_size_multiplier_shrinks_inside_pre_event_window():
     """Earnings 2 hours away → 0.5× (within the 4-hour pre-event window)."""
     now = datetime(2026, 5, 10, 12, 0, tzinfo=UTC)
-    earnings = _cat(
-        "AAPL", kind="earnings", when=datetime(2026, 5, 10, 14, 0, tzinfo=UTC)
-    )
+    earnings = _cat("AAPL", kind="earnings", when=datetime(2026, 5, 10, 14, 0, tzinfo=UTC))
     pol = CatalystRiskPolicy()
     assert pol.size_multiplier_for("AAPL", [earnings], now=now) == 0.5
 
@@ -189,9 +187,7 @@ def test_size_multiplier_shrinks_inside_pre_event_window():
 def test_size_multiplier_full_outside_pre_event_window():
     """Earnings 8 hours away → 1.0× (outside the 4h window)."""
     now = datetime(2026, 5, 10, 6, 0, tzinfo=UTC)
-    earnings = _cat(
-        "AAPL", kind="earnings", when=datetime(2026, 5, 10, 14, 0, tzinfo=UTC)
-    )
+    earnings = _cat("AAPL", kind="earnings", when=datetime(2026, 5, 10, 14, 0, tzinfo=UTC))
     pol = CatalystRiskPolicy()
     assert pol.size_multiplier_for("AAPL", [earnings], now=now) == 1.0
 
@@ -199,9 +195,7 @@ def test_size_multiplier_full_outside_pre_event_window():
 def test_size_multiplier_full_for_past_catalyst():
     """Catalysts in the past don't shrink size — the event already happened."""
     now = datetime(2026, 5, 10, 18, 0, tzinfo=UTC)
-    earnings = _cat(
-        "AAPL", kind="earnings", when=datetime(2026, 5, 10, 14, 0, tzinfo=UTC)
-    )
+    earnings = _cat("AAPL", kind="earnings", when=datetime(2026, 5, 10, 14, 0, tzinfo=UTC))
     pol = CatalystRiskPolicy()
     assert pol.size_multiplier_for("AAPL", [earnings], now=now) == 1.0
 
@@ -216,9 +210,7 @@ def test_size_multiplier_ignores_low_impact_kinds():
 
 def test_size_multiplier_only_applies_to_matching_symbol():
     now = datetime(2026, 5, 10, 12, 0, tzinfo=UTC)
-    earnings = _cat(
-        "MSFT", kind="earnings", when=datetime(2026, 5, 10, 14, 0, tzinfo=UTC)
-    )
+    earnings = _cat("MSFT", kind="earnings", when=datetime(2026, 5, 10, 14, 0, tzinfo=UTC))
     pol = CatalystRiskPolicy()
     assert pol.size_multiplier_for("AAPL", [earnings], now=now) == 1.0
 

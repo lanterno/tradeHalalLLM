@@ -38,9 +38,7 @@ def _wire(llm: OpenAILLM, response: SimpleNamespace) -> AsyncMock:
     """Inject a fake AsyncOpenAI client whose chat.completions.create
     returns the response we want."""
     create_mock = AsyncMock(return_value=response)
-    client = SimpleNamespace(
-        chat=SimpleNamespace(completions=SimpleNamespace(create=create_mock))
-    )
+    client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create_mock)))
     llm._client = client
     return create_mock
 

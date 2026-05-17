@@ -112,9 +112,7 @@ def test_fractional_reserve_blocked():
 
 def test_liquidity_pool_blocked_with_strict_policy():
     pol = BridgePolicy(block_liquidity_pool_models=True)
-    a = screen_bridge(
-        _inputs(mechanism=BridgeMechanism.LIQUIDITY_POOL), policy=pol
-    )
+    a = screen_bridge(_inputs(mechanism=BridgeMechanism.LIQUIDITY_POOL), policy=pol)
     assert BridgeIssue.FRACTIONAL_RESERVE_RISK in a.issues
 
 

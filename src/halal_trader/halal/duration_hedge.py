@@ -76,9 +76,7 @@ class PortfolioDuration:
             raise ValueError("total_market_value must be non-negative")
 
 
-def compute_portfolio_duration(
-    holdings: Iterable[tuple[Sukuk, float, float]]
-) -> PortfolioDuration:
+def compute_portfolio_duration(holdings: Iterable[tuple[Sukuk, float, float]]) -> PortfolioDuration:
     """Compute portfolio-level dollar duration.
 
     Each holding tuple = ``(sukuk, yield_rate, market_value)``.

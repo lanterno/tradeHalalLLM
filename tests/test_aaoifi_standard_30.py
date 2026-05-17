@@ -151,9 +151,7 @@ def test_dependent_third_party_flagged():
 
 def test_perpetual_rate_tracking_flagged():
     a = screen_tawarruq(
-        TawarruqInputs(
-            structure=TawarruqStructure.ORGANISED_TAWARRUQ, perpetual_rate_tracking=True
-        )
+        TawarruqInputs(structure=TawarruqStructure.ORGANISED_TAWARRUQ, perpetual_rate_tracking=True)
     )
     assert TawarruqViolation.RATE_TRACKING_PERPETUAL in a.violations
 

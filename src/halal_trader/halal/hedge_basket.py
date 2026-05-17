@@ -120,9 +120,7 @@ def _risk_parity_weights(
     asset_list = list(assets)
     if not asset_list:
         return {}
-    inverse_vols = {
-        a: 1.0 / max(vol_estimates.get(a, 0.10), 1e-6) for a in asset_list
-    }
+    inverse_vols = {a: 1.0 / max(vol_estimates.get(a, 0.10), 1e-6) for a in asset_list}
     total = sum(inverse_vols.values())
     if total == 0:
         return _equal_weights(asset_list)
@@ -142,9 +140,7 @@ def compose(
     pol = policy if policy is not None else BasketPolicy()
     asset_list = list(assets)
     if not asset_list:
-        return HedgeBasket(
-            portfolio_value=portfolio_value, hedge_notional=0.0, allocations=()
-        )
+        return HedgeBasket(portfolio_value=portfolio_value, hedge_notional=0.0, allocations=())
 
     vols = vol_estimates if vol_estimates is not None else _DEFAULT_VOL
 
@@ -173,13 +169,11 @@ def compose(
 
 def render_basket(basket: HedgeBasket) -> str:
     head = (
-        f"🛡️ Hedge basket: ${basket.hedge_notional:.2f} "
-        f"(of ${basket.portfolio_value:.2f} portfolio)"
+        f"🛡️ Hedge basket: ${basket.hedge_notional:.2f} (of ${basket.portfolio_value:.2f} portfolio)"
     )
     lines = [head]
     for a in basket.allocations:
         lines.append(
-            f"  • {a.asset.value:24s} weight={a.weight * 100:.1f}% "
-            f"notional=${a.notional:.2f}"
+            f"  • {a.asset.value:24s} weight={a.weight * 100:.1f}% notional=${a.notional:.2f}"
         )
     return "\n".join(lines)

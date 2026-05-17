@@ -137,8 +137,7 @@ _RAW_CLAUSES: tuple[StandardClause, ...] = (
         clause_id="3.2",
         title="Debt-to-market-cap ratio cap",
         rule=ScreenerRule.DEBT_RATIO_LIMIT,
-        summary="Interest-bearing debt to 12-month-trailing market cap must remain below "
-        "30%.",
+        summary="Interest-bearing debt to 12-month-trailing market cap must remain below 30%.",
         sample_test="Total debt / market cap = 25% → permissible; 35% → not.",
     ),
     StandardClause(
@@ -294,8 +293,7 @@ def render_coverage_matrix(summary: CoverageSummary | None = None) -> str:
     """Render the full coverage matrix as a multiline string for the dashboard tile."""
     sm = summary if summary is not None else coverage_summary(_iter_default_rules())
     header = (
-        f"AAOIFI Standard 21 coverage — {sm.engaged_clauses}/{sm.total_clauses} "
-        "clauses engaged"
+        f"AAOIFI Standard 21 coverage — {sm.engaged_clauses}/{sm.total_clauses} clauses engaged"
     )
     lines = [header, "-" * len(header)]
     for clause in CLAUSES:

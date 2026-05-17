@@ -145,9 +145,8 @@ def compute_cgt(
     same_day_qty = sum(a.quantity for a in same_day_acqs)
     if same_day_qty > 0 and remaining > 0:
         take = min(same_day_qty, remaining)
-        weighted_cost = (
-            sum(a.quantity * a.cost_per_share for a in same_day_acqs)
-            * (take / same_day_qty)
+        weighted_cost = sum(a.quantity * a.cost_per_share for a in same_day_acqs) * (
+            take / same_day_qty
         )
         matches.append(
             CgtMatch(
@@ -163,9 +162,7 @@ def compute_cgt(
     if remaining > 0:
         window_end = disposal.disposal_date + timedelta(days=30)
         thirty_day_acqs = [
-            a
-            for a in same_symbol_acqs
-            if disposal.disposal_date < a.acq_date <= window_end
+            a for a in same_symbol_acqs if disposal.disposal_date < a.acq_date <= window_end
         ]
         # Match in order of acquisition date
         thirty_day_acqs.sort(key=lambda a: a.acq_date)

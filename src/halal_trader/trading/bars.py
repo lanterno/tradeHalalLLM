@@ -105,7 +105,7 @@ def extract_last_price(snap: Any, symbol: str) -> float | None:
         if ok and node is not None:
             try:
                 return float(node)
-            except (TypeError, ValueError):
+            except TypeError, ValueError:
                 continue
     return None
 

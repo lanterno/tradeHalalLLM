@@ -36,9 +36,7 @@ def test_default_role_is_user_when_missing():
 def test_tool_result_renders_with_tool_marker():
     """`tool_result` rows get a `[tool NAME result]` prefix so the
     flattened blob preserves the tool/answer association."""
-    out = _flatten(
-        [{"role": "tool_result", "tool": "fetch_news", "content": "Bullish news"}]
-    )
+    out = _flatten([{"role": "tool_result", "tool": "fetch_news", "content": "Bullish news"}])
     assert "[tool fetch_news result]" in out
     assert "Bullish news" in out
 

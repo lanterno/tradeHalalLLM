@@ -163,10 +163,7 @@ def _scrub(text: str) -> str:
 
 def render_assessment(inputs: NftInputs, assessment: NftAssessment) -> str:
     emoji = "✅" if assessment.is_compliant else "❌"
-    head = (
-        f"{emoji} {inputs.nft_id}: {inputs.title} "
-        f"({inputs.subject_matter.value})"
-    )
+    head = f"{emoji} {inputs.nft_id}: {inputs.title} ({inputs.subject_matter.value})"
     lines = [head]
     for issue in sorted(assessment.issues, key=lambda x: x.value):
         lines.append(f"  • {issue.value}")

@@ -98,9 +98,7 @@ class ChildOrder:
             raise ValueError("submit_time must be timezone-aware")
 
 
-def slice_twap(
-    inputs: TwapInputs, *, policy: TwapPolicy | None = None
-) -> tuple[ChildOrder, ...]:
+def slice_twap(inputs: TwapInputs, *, policy: TwapPolicy | None = None) -> tuple[ChildOrder, ...]:
     """Slice a parent order into a TWAP schedule of child orders."""
     pol = policy if policy is not None else TwapPolicy()
     if inputs.n_slices > pol.max_slices:
@@ -174,8 +172,5 @@ def render_schedule(children: tuple[ChildOrder, ...]) -> str:
     )
     lines = [head]
     for c in children:
-        lines.append(
-            f"  • slice {c.slice_index}: {c.quantity:.4f} @ "
-            f"{c.submit_time.isoformat()}"
-        )
+        lines.append(f"  • slice {c.slice_index}: {c.quantity:.4f} @ {c.submit_time.isoformat()}")
     return _scrub("\n".join(lines))

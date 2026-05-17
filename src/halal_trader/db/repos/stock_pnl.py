@@ -33,9 +33,7 @@ class StockPnlRepoImpl:
                 session.add(DailyPnl(date=today, starting_equity=starting_equity))
                 await session.commit()
 
-    async def end_day(
-        self, ending_equity: float, realized_pnl: float, trades_count: int
-    ) -> None:
+    async def end_day(self, ending_equity: float, realized_pnl: float, trades_count: int) -> None:
         today = today_eastern().isoformat()
         async with AsyncSession(self._engine) as session:
             statement = select(DailyPnl).where(DailyPnl.date == today)

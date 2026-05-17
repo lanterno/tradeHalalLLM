@@ -137,9 +137,7 @@ class BuildTimeframeStage:
     async def run(self, state: CycleState) -> CycleState:
         from halal_trader.crypto.timeframes import build_timeframe_text
 
-        state.timeframe_text = await build_timeframe_text(
-            self._analyzer, state.halal_pairs
-        )
+        state.timeframe_text = await build_timeframe_text(self._analyzer, state.halal_pairs)
         return state
 
 
@@ -361,10 +359,7 @@ class BuildSentimentStage:
                 )
 
                 bases = sorted(
-                    {
-                        p.upper().removesuffix("USDT").removesuffix("BUSD")
-                        for p in state.halal_pairs
-                    }
+                    {p.upper().removesuffix("USDT").removesuffix("BUSD") for p in state.halal_pairs}
                 )
                 mentions = await self._reddit_fetcher.fetch_for_symbols(bases)
                 if mentions:
@@ -666,9 +661,7 @@ class AugmentMicrostructureWithBasisStage:
             try:
                 spot_klines = state.klines_by_symbol.get(pair) or []
                 spot_price = (
-                    spot_klines[-1].close
-                    if spot_klines
-                    else self._broker.get_cached_price(pair)
+                    spot_klines[-1].close if spot_klines else self._broker.get_cached_price(pair)
                 )
                 if not spot_price:
                     continue
@@ -730,9 +723,7 @@ class AugmentRegimeWithRagStage:
             rag_text = format_rag_for_prompt(hits)
             if rag_text:
                 state.regime_text = (
-                    state.regime_text + "\n\n" + rag_text
-                    if state.regime_text
-                    else rag_text
+                    state.regime_text + "\n\n" + rag_text if state.regime_text else rag_text
                 )
         except Exception as exc:  # noqa: BLE001
             logger.debug("RAG query failed: %s", exc)
@@ -785,9 +776,7 @@ class AugmentRegimeWithMemoryStage:
             analog_text = format_for_prompt(features, hits)
             if analog_text and "No analogous" not in analog_text:
                 state.regime_text = (
-                    state.regime_text + "\n\n" + analog_text
-                    if state.regime_text
-                    else analog_text
+                    state.regime_text + "\n\n" + analog_text if state.regime_text else analog_text
                 )
         except Exception as exc:  # noqa: BLE001
             logger.debug("regime memory query failed: %s", exc)

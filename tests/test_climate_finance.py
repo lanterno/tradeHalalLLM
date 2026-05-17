@@ -109,9 +109,7 @@ def test_renewable_equity_passes():
 
 def test_green_sukuk_no_shariah_opinion_blocked():
     a = screen_instrument(
-        _inputs(
-            instrument=ClimateInstrument.GREEN_SUKUK, has_shariah_opinion=False
-        )
+        _inputs(instrument=ClimateInstrument.GREEN_SUKUK, has_shariah_opinion=False)
     )
     assert ClimateIssue.NO_SHARIAH_OPINION in a.issues
 

@@ -171,7 +171,15 @@ def test_render_blocked_red():
 def test_render_no_secret_leak():
     a = screen(_inputs())
     out = render_assessment(a)
-    for token in ("@", "zoom.us", "meet.google", "private_email", "+1-", "Authorization", "wallet_address"):
+    for token in (
+        "@",
+        "zoom.us",
+        "meet.google",
+        "private_email",
+        "+1-",
+        "Authorization",
+        "wallet_address",
+    ):
         assert token not in out
 
 

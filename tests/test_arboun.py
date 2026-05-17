@@ -127,24 +127,18 @@ def test_arboun_interest_account_blocked():
 
 
 def test_arboun_exercise_in_past_blocked():
-    r = structure_arboun(
-        _inputs(promise_date=date(2026, 5, 1), exercise_date=date(2026, 4, 1))
-    )
+    r = structure_arboun(_inputs(promise_date=date(2026, 5, 1), exercise_date=date(2026, 4, 1)))
     assert ArbounIssue.EXERCISE_DATE_NOT_FUTURE in r.issues
 
 
 def test_arboun_exercise_too_far_blocked():
-    r = structure_arboun(
-        _inputs(promise_date=date(2026, 1, 1), exercise_date=date(2027, 1, 1))
-    )
+    r = structure_arboun(_inputs(promise_date=date(2026, 1, 1), exercise_date=date(2027, 1, 1)))
     assert ArbounIssue.EXERCISE_DATE_TOO_FAR in r.issues
 
 
 def test_arboun_at_max_term_passes():
     """Exactly 180 days should pass."""
-    r = structure_arboun(
-        _inputs(promise_date=date(2026, 1, 1), exercise_date=date(2026, 6, 30))
-    )
+    r = structure_arboun(_inputs(promise_date=date(2026, 1, 1), exercise_date=date(2026, 6, 30)))
     assert ArbounIssue.EXERCISE_DATE_TOO_FAR not in r.issues
 
 
@@ -159,15 +153,15 @@ def test_arboun_at_max_pct_passes():
 
 
 def test_arboun_records_down_payment_pct():
-    r = structure_arboun(_inputs(down_payment_amount=6000.0, purchase_price_per_unit=60000, quantity=1))
+    r = structure_arboun(
+        _inputs(down_payment_amount=6000.0, purchase_price_per_unit=60000, quantity=1)
+    )
     assert r.down_payment_pct == pytest.approx(0.10)
 
 
 def test_result_invariant_invalid_with_no_issues_rejected():
     with pytest.raises(ValueError):
-        StructuringResult(
-            arboun_id="x", issues=frozenset(), is_valid=False, down_payment_pct=0.10
-        )
+        StructuringResult(arboun_id="x", issues=frozenset(), is_valid=False, down_payment_pct=0.10)
 
 
 def test_result_invariant_valid_with_issues_rejected():
@@ -272,9 +266,7 @@ def test_render_no_secret_leak():
 
 def test_e2e_btc_arboun_call_exercise():
     """Bullish 3-month BTC view via Arboun, in-the-money at expiry."""
-    inp = _inputs(
-        quantity=1.0, purchase_price_per_unit=60000.0, down_payment_amount=6000.0
-    )
+    inp = _inputs(quantity=1.0, purchase_price_per_unit=60000.0, down_payment_amount=6000.0)
     r = structure_arboun(inp)
     assert r.is_valid
     decision = decide_exercise(inp, settlement_price_per_unit=72000.0)

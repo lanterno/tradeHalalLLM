@@ -109,9 +109,7 @@ class SukukClause:
 
     def __post_init__(self) -> None:
         if not self.clause_id or not _CLAUSE_ID_RE.match(self.clause_id):
-            raise ValueError(
-                f"clause_id must be dotted-numeric; got {self.clause_id!r}"
-            )
+            raise ValueError(f"clause_id must be dotted-numeric; got {self.clause_id!r}")
         if not self.title or not self.title.strip():
             raise ValueError("title must be non-empty")
         if not self.summary or not self.summary.strip():
@@ -336,8 +334,7 @@ def render_assessment(assessment: SukukAssessment) -> str:
     emoji = "✅" if assessment.is_compliant else "❌"
     secondary = "tradable on secondary" if assessment.secondary_tradable else "primary-only"
     lines = [
-        f"{emoji} {assessment.issuer} — sukuk type: {assessment.sukuk_type.value} "
-        f"({secondary})"
+        f"{emoji} {assessment.issuer} — sukuk type: {assessment.sukuk_type.value} ({secondary})"
     ]
     if assessment.violated_rules:
         for r in sorted(assessment.violated_rules, key=lambda x: x.value):
@@ -346,9 +343,7 @@ def render_assessment(assessment: SukukAssessment) -> str:
 
 
 def render_clause(clause: SukukClause) -> str:
-    return _scrub_render(
-        f"§{clause.clause_id} — {clause.title} [{clause.rule.value}]"
-    )
+    return _scrub_render(f"§{clause.clause_id} — {clause.title} [{clause.rule.value}]")
 
 
 def render_coverage_matrix(rules_engaged: Iterable[SukukRule] | None = None) -> str:
@@ -359,8 +354,7 @@ def render_coverage_matrix(rules_engaged: Iterable[SukukRule] | None = None) -> 
     )
     engaged_clauses = sum(1 for c in CLAUSES if c.rule in engaged)
     header = (
-        f"AAOIFI Standard 17 (Investment Sukuk) — {engaged_clauses}/{len(CLAUSES)} "
-        "clauses engaged"
+        f"AAOIFI Standard 17 (Investment Sukuk) — {engaged_clauses}/{len(CLAUSES)} clauses engaged"
     )
     lines = [header, "-" * len(header)]
     for c in CLAUSES:

@@ -86,9 +86,7 @@ def estimate(inputs: QueueInputs) -> QueueAssessment:
     if inputs.market_volume_rate_at_level <= 0:
         expected_seconds = float("inf") if inputs.current_size_ahead > 0 else 0.0
     else:
-        expected_seconds = (
-            inputs.current_size_ahead / inputs.market_volume_rate_at_level
-        )
+        expected_seconds = inputs.current_size_ahead / inputs.market_volume_rate_at_level
 
     return QueueAssessment(
         order_id=inputs.order_id,

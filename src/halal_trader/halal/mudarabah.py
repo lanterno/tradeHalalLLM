@@ -128,9 +128,7 @@ def settle(
     )
 
 
-def advance_status(
-    contract: MudarabahContract, target: MudarabahStatus
-) -> MudarabahContract:
+def advance_status(contract: MudarabahContract, target: MudarabahStatus) -> MudarabahContract:
     """Advance the contract through its lifecycle."""
     valid_transitions = {
         MudarabahStatus.DRAFT: {MudarabahStatus.ACTIVE},
@@ -139,9 +137,7 @@ def advance_status(
     }
     allowed = valid_transitions.get(contract.status, set())
     if target not in allowed:
-        raise ValueError(
-            f"cannot transition {contract.status.value} → {target.value}"
-        )
+        raise ValueError(f"cannot transition {contract.status.value} → {target.value}")
     return MudarabahContract(
         contract_id=contract.contract_id,
         rabb_handle=contract.rabb_handle,

@@ -67,9 +67,7 @@ class Scenario:
             raise ValueError("description must be non-empty")
         for ac, shock in self.shocks.items():
             if not -1.0 <= shock <= 5.0:
-                raise ValueError(
-                    f"shock for {ac.value} must be in [-1.0, 5.0]; got {shock}"
-                )
+                raise ValueError(f"shock for {ac.value} must be in [-1.0, 5.0]; got {shock}")
 
 
 # Module-level catalogue of curated scenarios. Numbers based on
@@ -244,9 +242,7 @@ class StressResult:
     per_position: tuple[tuple[str, float, float], ...]  # (symbol, old, new)
 
 
-def apply_scenario(
-    positions: Iterable[Position], scenario: Scenario
-) -> StressResult:
+def apply_scenario(positions: Iterable[Position], scenario: Scenario) -> StressResult:
     starting_value = 0.0
     projected_value = 0.0
     per_pos: list[tuple[str, float, float]] = []
@@ -258,11 +254,7 @@ def apply_scenario(
         projected_value += new_value
         per_pos.append((p.symbol, p.market_value, new_value))
 
-    pct_change = (
-        (projected_value - starting_value) / starting_value
-        if starting_value > 0
-        else 0.0
-    )
+    pct_change = (projected_value - starting_value) / starting_value if starting_value > 0 else 0.0
     return StressResult(
         scenario_kind=scenario.kind,
         starting_value=starting_value,

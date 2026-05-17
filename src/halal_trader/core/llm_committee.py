@@ -183,13 +183,9 @@ def _scrub(text: str) -> str:
 def render_verdict(verdict: CommitteeVerdict) -> str:
     flag = " [HALAL VETO]" if verdict.veto_invoked else ""
     head = (
-        f"Committee verdict: {verdict.stance.value.upper()} "
-        f"(conf={verdict.confidence:.2f}){flag}"
+        f"Committee verdict: {verdict.stance.value.upper()} (conf={verdict.confidence:.2f}){flag}"
     )
     lines = [head]
     for v in verdict.votes:
-        lines.append(
-            f"  • {v.role.value:18s} → {v.stance.value:5s} "
-            f"conf={v.confidence:.2f}"
-        )
+        lines.append(f"  • {v.role.value:18s} → {v.stance.value:5s} conf={v.confidence:.2f}")
     return _scrub("\n".join(lines))

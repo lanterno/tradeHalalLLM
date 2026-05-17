@@ -158,9 +158,7 @@ def detect(
     )
 
 
-def transitioned(
-    previous: RegimeAssessment | None, current: RegimeAssessment
-) -> bool:
+def transitioned(previous: RegimeAssessment | None, current: RegimeAssessment) -> bool:
     """True if the regime moved across this assessment."""
     if previous is None:
         return False

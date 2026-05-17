@@ -59,16 +59,12 @@ def test_disposal_zero_qty_rejected():
 
 def test_match_negative_proceeds_rejected():
     with pytest.raises(ValueError):
-        CgtMatch(
-            kind=MatchKind.SAME_DAY, quantity=10, matched_cost=100, proceeds=-1
-        )
+        CgtMatch(kind=MatchKind.SAME_DAY, quantity=10, matched_cost=100, proceeds=-1)
 
 
 def test_match_zero_qty_rejected():
     with pytest.raises(ValueError):
-        CgtMatch(
-            kind=MatchKind.SAME_DAY, quantity=0, matched_cost=100, proceeds=110
-        )
+        CgtMatch(kind=MatchKind.SAME_DAY, quantity=0, matched_cost=100, proceeds=110)
 
 
 def test_match_gain_property():
@@ -108,9 +104,7 @@ def test_same_day_partial_consumption():
         UkAcquisition("A1", "AAPL", 50, 100, date(2026, 5, 1)),
     ]
     disposal = UkDisposal("D1", "AAPL", 100, 110, date(2026, 5, 1))
-    comp = compute_cgt(
-        disposal, acquisitions, s104_pool_quantity=50, s104_pool_cost=4000
-    )
+    comp = compute_cgt(disposal, acquisitions, s104_pool_quantity=50, s104_pool_cost=4000)
     kinds = [m.kind for m in comp.matches]
     assert MatchKind.SAME_DAY in kinds
     assert MatchKind.S104 in kinds
@@ -147,9 +141,7 @@ def test_thirty_day_rule_just_past_boundary_excluded():
         UkAcquisition("A1", "AAPL", 100, 105, date(2026, 6, 1)),  # 31d
     ]
     disposal = UkDisposal("D1", "AAPL", 100, 110, date(2026, 5, 1))
-    comp = compute_cgt(
-        disposal, acquisitions, s104_pool_quantity=100, s104_pool_cost=10000
-    )
+    comp = compute_cgt(disposal, acquisitions, s104_pool_quantity=100, s104_pool_cost=10000)
     assert all(m.kind is not MatchKind.THIRTY_DAY for m in comp.matches)
 
 
@@ -159,9 +151,7 @@ def test_thirty_day_rule_pre_disposal_buys_excluded():
         UkAcquisition("A1", "AAPL", 100, 105, date(2026, 4, 25)),
     ]
     disposal = UkDisposal("D1", "AAPL", 100, 110, date(2026, 5, 1))
-    comp = compute_cgt(
-        disposal, acquisitions, s104_pool_quantity=100, s104_pool_cost=10000
-    )
+    comp = compute_cgt(disposal, acquisitions, s104_pool_quantity=100, s104_pool_cost=10000)
     # 30-day rule looks AFTER disposal; pre-disposal buys go to s104.
     kinds = [m.kind for m in comp.matches]
     assert MatchKind.S104 in kinds
@@ -216,9 +206,7 @@ def test_negative_s104_cost_rejected():
 
 
 def test_render_includes_summary():
-    acquisitions = [
-        UkAcquisition("A1", "AAPL", 100, 100, date(2026, 5, 1))
-    ]
+    acquisitions = [UkAcquisition("A1", "AAPL", 100, 100, date(2026, 5, 1))]
     disposal = UkDisposal("D1", "AAPL", 100, 110, date(2026, 5, 1))
     comp = compute_cgt(disposal, acquisitions)
     out = render_computation(comp)
@@ -228,9 +216,7 @@ def test_render_includes_summary():
 
 
 def test_render_loss_signed():
-    acquisitions = [
-        UkAcquisition("A1", "AAPL", 100, 110, date(2026, 5, 1))
-    ]
+    acquisitions = [UkAcquisition("A1", "AAPL", 100, 110, date(2026, 5, 1))]
     disposal = UkDisposal("D1", "AAPL", 100, 100, date(2026, 5, 1))
     comp = compute_cgt(disposal, acquisitions)
     out = render_computation(comp)
@@ -239,9 +225,7 @@ def test_render_loss_signed():
 
 
 def test_render_no_secret_leak():
-    acquisitions = [
-        UkAcquisition("A1", "AAPL", 100, 100, date(2026, 5, 1))
-    ]
+    acquisitions = [UkAcquisition("A1", "AAPL", 100, 100, date(2026, 5, 1))]
     disposal = UkDisposal("D1", "AAPL", 100, 110, date(2026, 5, 1))
     comp = compute_cgt(disposal, acquisitions)
     out = render_computation(comp)
@@ -259,9 +243,7 @@ def test_e2e_full_uk_matching_chain():
         UkAcquisition("A2", "AAPL", 40, 105, date(2026, 5, 10)),  # 30-day
     ]
     disposal = UkDisposal("D1", "AAPL", 100, 110, date(2026, 5, 1))
-    comp = compute_cgt(
-        disposal, acquisitions, s104_pool_quantity=30, s104_pool_cost=2700
-    )
+    comp = compute_cgt(disposal, acquisitions, s104_pool_quantity=30, s104_pool_cost=2700)
     kinds = [m.kind for m in comp.matches]
     assert MatchKind.SAME_DAY in kinds
     assert MatchKind.THIRTY_DAY in kinds

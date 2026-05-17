@@ -158,9 +158,7 @@ def test_non_halal_fallback_blocked():
 
 def test_structural_failure_propagates():
     """If the structural Standard-17 check fails, overall fails."""
-    a = screen_onchain(
-        _inputs(structural=_structural(purpose_is_halal=False))
-    )
+    a = screen_onchain(_inputs(structural=_structural(purpose_is_halal=False)))
     assert not a.structural_compliant
     assert not a.is_compliant
 

@@ -95,9 +95,7 @@ class PatternDetection:
     triggering_window_end: date | None
 
 
-def _trades_in_window(
-    trades: list[InsiderTrade], start: date, end: date
-) -> list[InsiderTrade]:
+def _trades_in_window(trades: list[InsiderTrade], start: date, end: date) -> list[InsiderTrade]:
     return [t for t in trades if start <= t.trade_date <= end]
 
 
@@ -112,9 +110,7 @@ def detect(
     if not symbol.strip():
         raise ValueError("symbol must be non-empty")
     pol = policy if policy is not None else DetectorPolicy()
-    relevant = sorted(
-        [t for t in trades if t.symbol == symbol], key=lambda t: t.trade_date
-    )
+    relevant = sorted([t for t in trades if t.symbol == symbol], key=lambda t: t.trade_date)
 
     if not relevant:
         return PatternDetection(

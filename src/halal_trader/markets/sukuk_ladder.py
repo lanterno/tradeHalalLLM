@@ -114,9 +114,7 @@ def build_ladder(
     return Ladder(rungs=sorted_rungs, base_currency=base_currency)
 
 
-def even_distribution_target_tenors(
-    n_rungs: int, max_tenor_years: int
-) -> tuple[int, ...]:
+def even_distribution_target_tenors(n_rungs: int, max_tenor_years: int) -> tuple[int, ...]:
     """Returns target tenors in years for an even-distribution ladder."""
     if n_rungs <= 0:
         raise ValueError("n_rungs must be positive")
@@ -147,9 +145,7 @@ def roll(
     # The replacement must mature later than every active rung.
     active = ladder.active_rungs(today)
     if active and replacement.maturity_date <= active[-1].maturity_date:
-        raise ValueError(
-            "replacement maturity must be after the longest active rung's maturity"
-        )
+        raise ValueError("replacement maturity must be after the longest active rung's maturity")
 
     new_rungs = list(active) + [replacement]
     return build_ladder(new_rungs, base_currency=ladder.base_currency)

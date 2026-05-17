@@ -103,9 +103,7 @@ def simulate(
     cov = np.array(inputs.daily_covariance, dtype=float)
 
     # Sample daily-return vectors: shape (n_paths, horizon_days, n_assets)
-    samples = rng.multivariate_normal(
-        mean=means, cov=cov, size=(n_paths, inputs.horizon_days)
-    )
+    samples = rng.multivariate_normal(mean=means, cov=cov, size=(n_paths, inputs.horizon_days))
 
     # Project portfolio daily returns: shape (n_paths, horizon_days)
     portfolio_daily = samples @ weights

@@ -159,7 +159,5 @@ def test_bb_width_returns_none_when_middle_zero(detector):
 
 def test_bb_width_correct_value(detector):
     """(upper - lower) / middle."""
-    out = detector._compute_bb_width(
-        {"bb_upper": 110.0, "bb_lower": 90.0, "bb_middle": 100.0}
-    )
+    out = detector._compute_bb_width({"bb_upper": 110.0, "bb_lower": 90.0, "bb_middle": 100.0})
     assert out == pytest.approx(0.20)

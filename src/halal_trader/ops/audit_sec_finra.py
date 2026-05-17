@@ -135,9 +135,7 @@ def build_bundle(
     # Each artefact's period must lie within the audit window.
     for a in artefacts_t:
         if a.period_start < audit_period_start or a.period_end > audit_period_end:
-            raise ValueError(
-                f"artefact {a.kind.value} period outside audit window"
-            )
+            raise ValueError(f"artefact {a.kind.value} period outside audit window")
 
     present = {a.kind for a in artefacts_t}
     missing = REQUIRED_ARTEFACTS - present

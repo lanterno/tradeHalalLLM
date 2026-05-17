@@ -142,9 +142,7 @@ def test_predictable_cadence_detected():
 
 def test_large_size_detected():
     a = assess(
-        _signal(
-            submission_times=_IRREGULAR_TIMES, parent_quantity=10000, recent_volume=100000
-        )
+        _signal(submission_times=_IRREGULAR_TIMES, parent_quantity=10000, recent_volume=100000)
     )
     assert FrontrunSignal.LARGE_RELATIVE_SIZE in a.signals
     assert Mitigation.SLICED_SMALLER in a.recommended_mitigations

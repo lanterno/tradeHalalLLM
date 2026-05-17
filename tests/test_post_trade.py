@@ -236,9 +236,7 @@ def test_report_zero_avg_fill_rejected():
 
 def test_render_includes_summary():
     fills = (_fill(price=100.5),)
-    report = analyze(
-        _inputs(fills=fills, arrival_price=100.0, twap_price=100.0, vwap_price=100.0)
-    )
+    report = analyze(_inputs(fills=fills, arrival_price=100.0, twap_price=100.0, vwap_price=100.0))
     out = render_report(report)
     assert "Post-trade" in out
     assert "P-001" in out

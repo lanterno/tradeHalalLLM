@@ -62,9 +62,7 @@ def test_regime_text_formats_multiple_symbols():
         (MarketRegime.TRENDING_UP, 0.85, "trade with the trend"),
         (MarketRegime.RANGING, 0.6, "use mean reversion"),
     ]
-    text = build_regime_text(
-        detector, {"AAPL": {"rsi_14": 60}, "MSFT": {"rsi_14": 50}}
-    )
+    text = build_regime_text(detector, {"AAPL": {"rsi_14": 60}, "MSFT": {"rsi_14": 50}})
     assert "AAPL" in text
     assert "MSFT" in text
     assert "TRENDING_UP" in text

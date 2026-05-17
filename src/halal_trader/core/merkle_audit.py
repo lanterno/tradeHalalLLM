@@ -157,9 +157,7 @@ def chain_root(chain: tuple[ChainEntry, ...]) -> str:
 def append_chain(chain: tuple[ChainEntry, ...], payload: bytes) -> tuple[ChainEntry, ...]:
     prior = chain_root(chain)
     digest = _h(bytes.fromhex(prior) + b"\n" + payload)
-    return chain + (
-        ChainEntry(payload=payload, prior_root=prior, current_root=digest),
-    )
+    return chain + (ChainEntry(payload=payload, prior_root=prior, current_root=digest),)
 
 
 def verify_chain(chain: tuple[ChainEntry, ...]) -> bool:
@@ -180,8 +178,7 @@ def verify_chain(chain: tuple[ChainEntry, ...]) -> bool:
 def render_tree_summary(tree: MerkleTree) -> str:
     """Short summary — never includes raw payloads."""
     return (
-        f"Merkle tree: {len(tree)} leaves, "
-        f"root={tree.root()[:16]}…"
+        f"Merkle tree: {len(tree)} leaves, root={tree.root()[:16]}…"
         if tree.leaves
         else "Merkle tree: empty (root=0…0)"
     )

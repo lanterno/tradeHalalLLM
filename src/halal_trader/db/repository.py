@@ -340,9 +340,7 @@ class Repository:
     async def update_crypto_trade_stop_loss(self, trade_id: int, new_stop_loss: float) -> None:
         await self._crypto_trades.update_crypto_trade_stop_loss(trade_id, new_stop_loss)
 
-    async def close_crypto_trade(
-        self, trade_id: int, exit_price: float, exit_reason: str
-    ) -> None:
+    async def close_crypto_trade(self, trade_id: int, exit_price: float, exit_reason: str) -> None:
         await self._crypto_trades.close_crypto_trade(trade_id, exit_price, exit_reason)
 
     async def get_today_crypto_trades(self) -> list[dict[str, Any]]:

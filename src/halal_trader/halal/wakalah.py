@@ -148,18 +148,14 @@ def settle(
     )
 
 
-def advance_status(
-    contract: WakalahContract, target: WakalahStatus
-) -> WakalahContract:
+def advance_status(contract: WakalahContract, target: WakalahStatus) -> WakalahContract:
     valid = {
         WakalahStatus.DRAFT: {WakalahStatus.ACTIVE},
         WakalahStatus.ACTIVE: {WakalahStatus.SETTLING},
         WakalahStatus.SETTLING: {WakalahStatus.CLOSED},
     }
     if target not in valid.get(contract.status, set()):
-        raise ValueError(
-            f"cannot transition {contract.status.value} → {target.value}"
-        )
+        raise ValueError(f"cannot transition {contract.status.value} → {target.value}")
     return WakalahContract(
         contract_id=contract.contract_id,
         principal_handle=contract.principal_handle,

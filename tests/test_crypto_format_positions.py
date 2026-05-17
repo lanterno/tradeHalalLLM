@@ -76,9 +76,7 @@ def test_only_relevant_assets_rendered_when_configured_pairs_given():
         CryptoBalance(asset="ETH", free=0.01),
         CryptoBalance(asset="DOGE", free=1000.0),  # not configured
     ]
-    out = _tracker().format_positions_for_prompt(
-        balances, configured_pairs=["BTCUSDT", "ETHUSDT"]
-    )
+    out = _tracker().format_positions_for_prompt(balances, configured_pairs=["BTCUSDT", "ETHUSDT"])
     assert "BTC" in out
     assert "ETH" in out
     assert "DOGE" not in out

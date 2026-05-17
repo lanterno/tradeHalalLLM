@@ -119,9 +119,7 @@ def slices_to_8949_rows(
     basis_reported_to_irs: bool = True,
 ) -> tuple[Form8949Row, ...]:
     return tuple(
-        slice_to_8949_row(
-            s, symbol=symbol, basis_reported_to_irs=basis_reported_to_irs
-        )
+        slice_to_8949_row(s, symbol=symbol, basis_reported_to_irs=basis_reported_to_irs)
         for s in slices
     )
 

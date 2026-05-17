@@ -50,18 +50,14 @@ def test_create_returns_ollama_when_provider_is_ollama():
 def test_create_returns_openai_when_configured():
     from halal_trader.core.llm.openai import OpenAILLM
 
-    out = create_llm(
-        _settings(provider=LLMProvider.OPENAI, openai_key="sk-test")
-    )
+    out = create_llm(_settings(provider=LLMProvider.OPENAI, openai_key="sk-test"))
     assert isinstance(out, OpenAILLM)
 
 
 def test_create_returns_anthropic_when_configured():
     from halal_trader.core.llm.anthropic import AnthropicLLM
 
-    out = create_llm(
-        _settings(provider=LLMProvider.ANTHROPIC, anthropic_key="sk-ant")
-    )
+    out = create_llm(_settings(provider=LLMProvider.ANTHROPIC, anthropic_key="sk-ant"))
     assert isinstance(out, AnthropicLLM)
 
 

@@ -300,9 +300,7 @@ def test_e2e_5y_ladder_construction_and_roll():
     ladder = build_ladder(rungs)
     assert len(ladder.rungs) == 5
     # After 1 year, the 1y rung matures → roll into a new 5y rung
-    replacement = _rung(
-        issue=date(2026, 1, 2), matur=date(2031, 1, 2), face=1000.0, coupon=0.06
-    )
+    replacement = _rung(issue=date(2026, 1, 2), matur=date(2031, 1, 2), face=1000.0, coupon=0.06)
     new_ladder = roll(ladder, today=date(2026, 1, 1), replacement=replacement)
     assert len(new_ladder.rungs) == 5  # 4 active + 1 new
     assert new_ladder.rungs[-1].maturity_date == date(2031, 1, 2)

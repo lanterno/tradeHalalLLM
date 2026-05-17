@@ -159,9 +159,7 @@ def test_apply_empty_portfolio():
 
 def test_apply_currency_deval_cash_drops():
     positions = [Position("USD", AssetClass.CASH, 10000)]
-    result = apply_scenario(
-        positions, scenario_by_kind(ScenarioKind.CURRENCY_DEVAL)
-    )
+    result = apply_scenario(positions, scenario_by_kind(ScenarioKind.CURRENCY_DEVAL))
     assert result.projected_value == pytest.approx(7000)
 
 
@@ -191,9 +189,7 @@ def test_render_result_loss_uses_down_arrow():
 def test_render_result_gain_uses_up_arrow():
     """Currency-deval scenario can produce gains for crypto-heavy portfolio."""
     positions = [Position("BTC", AssetClass.CRYPTO, 10000)]
-    result = apply_scenario(
-        positions, scenario_by_kind(ScenarioKind.CURRENCY_DEVAL)
-    )
+    result = apply_scenario(positions, scenario_by_kind(ScenarioKind.CURRENCY_DEVAL))
     out = render_result(result)
     assert "▲" in out
 

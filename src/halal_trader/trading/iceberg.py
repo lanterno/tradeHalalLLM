@@ -131,9 +131,7 @@ def fill_visible(
     if fill_quantity <= 0:
         raise ValueError("fill_quantity must be positive")
     if fill_quantity > state.visible_quantity + 1e-6:
-        raise ValueError(
-            f"fill_quantity {fill_quantity} exceeds visible {state.visible_quantity}"
-        )
+        raise ValueError(f"fill_quantity {fill_quantity} exceeds visible {state.visible_quantity}")
 
     new_filled = state.filled_quantity + fill_quantity
     remaining_visible = state.visible_quantity - fill_quantity
@@ -167,9 +165,7 @@ def fill_visible(
     )
 
 
-def replenish_time(
-    state: IcebergState, *, policy: IcebergPolicy | None = None
-) -> IcebergState:
+def replenish_time(state: IcebergState, *, policy: IcebergPolicy | None = None) -> IcebergState:
     """Top up the visible tip from hidden — for TIME_BASED replenish strategy."""
     pol = policy if policy is not None else IcebergPolicy()
     if state.hidden_quantity <= 0:

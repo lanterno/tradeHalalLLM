@@ -103,9 +103,7 @@ async def load_artefact(*, engine: AsyncEngine, name: str) -> dict[str, Any] | N
         return None
 
 
-async def list_versions(
-    *, engine: AsyncEngine, name: str | None = None
-) -> list[dict[str, Any]]:
+async def list_versions(*, engine: AsyncEngine, name: str | None = None) -> list[dict[str, Any]]:
     """All versions of ``name`` (newest first), or every artefact when None."""
     async with AsyncSession(engine) as s:
         stmt = select(MlArtefact).order_by(col(MlArtefact.created_at).desc())

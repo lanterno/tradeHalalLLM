@@ -92,7 +92,7 @@ def _row_return(row: Any) -> float | None:
         return None
     try:
         f = float(val)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
     if not np.isfinite(f):
         return None

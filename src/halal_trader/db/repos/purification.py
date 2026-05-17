@@ -47,9 +47,7 @@ class PurificationRepoImpl:
             assert row.id is not None
             return row.id
 
-    async def mark_purification_paid(
-        self, entry_id: int, paid_at: datetime | None = None
-    ) -> bool:
+    async def mark_purification_paid(self, entry_id: int, paid_at: datetime | None = None) -> bool:
         """Stamp ``paid_at`` on an entry. Returns ``False`` if the id is unknown."""
         async with AsyncSession(self._engine) as session:
             row = await session.get(PurificationEntry, entry_id)
@@ -75,14 +73,14 @@ class PurificationRepoImpl:
         """Aggregate outstanding + paid totals in USD across all rows."""
         async with AsyncSession(self._engine) as session:
             outstanding = await session.exec(
-                select(
-                    func.coalesce(func.sum(PurificationEntry.purification_usd), 0.0)
-                ).where(col(PurificationEntry.paid_at).is_(None))
+                select(func.coalesce(func.sum(PurificationEntry.purification_usd), 0.0)).where(
+                    col(PurificationEntry.paid_at).is_(None)
+                )
             )
             paid = await session.exec(
-                select(
-                    func.coalesce(func.sum(PurificationEntry.purification_usd), 0.0)
-                ).where(col(PurificationEntry.paid_at).is_not(None))
+                select(func.coalesce(func.sum(PurificationEntry.purification_usd), 0.0)).where(
+                    col(PurificationEntry.paid_at).is_not(None)
+                )
             )
             return {
                 "outstanding_usd": float(outstanding.one() or 0.0),

@@ -185,9 +185,7 @@ def test_e2e_clean_swiss_vault_passes_tier_1():
 
 
 def test_e2e_paper_gold_with_lending_rejected():
-    a = screen_custodian(
-        _inputs(metal_lent_for_interest=True, fully_physical_backed=False)
-    )
+    a = screen_custodian(_inputs(metal_lent_for_interest=True, fully_physical_backed=False))
     assert a.tier is CustodianTier.REJECTED
 
 

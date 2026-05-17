@@ -234,25 +234,19 @@ def test_hifo_minimises_gain_among_methods():
 def test_sale_quantity_exceeds_pool_rejected():
     pool = (_lot("L1", qty=10),)
     with pytest.raises(ValueError):
-        apply_sale(
-            pool, quantity=100, proceeds_per_share=50, sale_date=date(2025, 1, 1)
-        )
+        apply_sale(pool, quantity=100, proceeds_per_share=50, sale_date=date(2025, 1, 1))
 
 
 def test_sale_zero_quantity_rejected():
     pool = (_lot("L1", qty=10),)
     with pytest.raises(ValueError):
-        apply_sale(
-            pool, quantity=0, proceeds_per_share=50, sale_date=date(2025, 1, 1)
-        )
+        apply_sale(pool, quantity=0, proceeds_per_share=50, sale_date=date(2025, 1, 1))
 
 
 def test_sale_negative_proceeds_rejected():
     pool = (_lot("L1", qty=10),)
     with pytest.raises(ValueError):
-        apply_sale(
-            pool, quantity=5, proceeds_per_share=-1, sale_date=date(2025, 1, 1)
-        )
+        apply_sale(pool, quantity=5, proceeds_per_share=-1, sale_date=date(2025, 1, 1))
 
 
 def test_sale_full_pool_returns_empty_remaining():
@@ -341,7 +335,16 @@ def test_render_realisation_marks_long_term():
 def test_render_no_secret_leak():
     pool = (_lot("L1"),)
     out = render_pool(pool)
-    for token in ("@", "zoom.us", "meet.google", "private_email", "+1-", "Authorization", "SSN", "TaxID"):
+    for token in (
+        "@",
+        "zoom.us",
+        "meet.google",
+        "private_email",
+        "+1-",
+        "Authorization",
+        "SSN",
+        "TaxID",
+    ):
         assert token not in out
 
 

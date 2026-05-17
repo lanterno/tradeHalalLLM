@@ -197,9 +197,7 @@ def route_symbol(
         else:
             outcome = CompositeOutcome.APPROVED
     else:  # ANY
-        any_pass = any(
-            v.verdict is JurisdictionVerdict.PERMISSIBLE for v in relevant_known
-        )
+        any_pass = any(v.verdict is JurisdictionVerdict.PERMISSIBLE for v in relevant_known)
         outcome = CompositeOutcome.APPROVED if any_pass else CompositeOutcome.BLOCKED
 
     return RoutingResult(
@@ -212,15 +210,12 @@ def route_symbol(
 
 
 def route_batch(
-    candidates: Iterable[
-        tuple[str, Jurisdiction, tuple[SourceVerdict, ...]]
-    ],
+    candidates: Iterable[tuple[str, Jurisdiction, tuple[SourceVerdict, ...]]],
     *,
     policy: RoutingPolicy,
 ) -> tuple[RoutingResult, ...]:
     return tuple(
-        route_symbol(sym, market, verdicts, policy=policy)
-        for sym, market, verdicts in candidates
+        route_symbol(sym, market, verdicts, policy=policy) for sym, market, verdicts in candidates
     )
 
 
@@ -255,11 +250,7 @@ def render_result(result: RoutingResult) -> str:
         CompositeOutcome.BLOCKED: "❌",
         CompositeOutcome.INSUFFICIENT_DATA: "❔",
     }[result.outcome]
-    head = (
-        f"{emoji} {result.symbol} "
-        f"[{result.listing_market.value}] "
-        f"→ {result.outcome.value}"
-    )
+    head = f"{emoji} {result.symbol} [{result.listing_market.value}] → {result.outcome.value}"
     lines = [head]
     for v in result.applicable_sources:
         verdict_emoji = {

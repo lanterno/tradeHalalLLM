@@ -56,10 +56,14 @@ class CorrelationPolicy:
     hysteresis: float = 0.05
 
     def __post_init__(self) -> None:
-        if not 0.0 <= self.decorrelated_threshold < self.normal_threshold < self.elevated_threshold < 1.0:
-            raise ValueError(
-                "thresholds must be increasing in [0, 1)"
-            )
+        if (
+            not 0.0
+            <= self.decorrelated_threshold
+            < self.normal_threshold
+            < self.elevated_threshold
+            < 1.0
+        ):
+            raise ValueError("thresholds must be increasing in [0, 1)")
         if not 0.0 <= self.hysteresis <= 0.20:
             raise ValueError("hysteresis must be in [0, 0.20]")
 

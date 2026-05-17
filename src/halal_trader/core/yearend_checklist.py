@@ -187,7 +187,6 @@ def render_checklist(checklist: Iterable[ChecklistTask]) -> str:
     for t in items:
         juris = "/".join(sorted(j.value for j in t.jurisdictions))[:40]
         lines.append(
-            f"  □ [{t.deadline.isoformat()}] {t.task_id}: {t.title} "
-            f"({t.category.value}, {juris})"
+            f"  □ [{t.deadline.isoformat()}] {t.task_id}: {t.title} ({t.category.value}, {juris})"
         )
     return "\n".join(lines)

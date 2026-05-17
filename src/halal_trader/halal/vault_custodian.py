@@ -109,13 +109,10 @@ def screen_custodian(
 
     # Tier laddering
     n_issues = len(issues)
-    if n_issues == 0 and (
-        not pol.require_aaoifi_certification or inputs.aaoifi_certified
-    ):
+    if n_issues == 0 and (not pol.require_aaoifi_certification or inputs.aaoifi_certified):
         tier = CustodianTier.TIER_1
     elif n_issues <= 1 and not (
-        VaultIssue.METAL_LENT_OUT in issues
-        or VaultIssue.PAPER_BACKED_NOT_PHYSICAL in issues
+        VaultIssue.METAL_LENT_OUT in issues or VaultIssue.PAPER_BACKED_NOT_PHYSICAL in issues
     ):
         tier = CustodianTier.TIER_2
     elif n_issues <= 3 and VaultIssue.METAL_LENT_OUT not in issues:

@@ -54,8 +54,12 @@ class Topic(str, Enum):
 
 # Lexicon mapping topic → keyword set
 _TOPIC_KEYWORDS: dict[Topic, frozenset[str]] = {
-    Topic.DEBT_ISSUANCE: frozenset({"debt issuance", "bond offering", "issued bonds", "raised debt"}),
-    Topic.DEBT_RETIREMENT: frozenset({"debt retirement", "retired debt", "paid off debt", "redeemed bonds"}),
+    Topic.DEBT_ISSUANCE: frozenset(
+        {"debt issuance", "bond offering", "issued bonds", "raised debt"}
+    ),
+    Topic.DEBT_RETIREMENT: frozenset(
+        {"debt retirement", "retired debt", "paid off debt", "redeemed bonds"}
+    ),
     Topic.ACQUISITION: frozenset({"acquisition", "acquired", "buyout", "merger"}),
     Topic.DIVESTITURE: frozenset({"divestiture", "divested", "sold subsidiary", "spinoff"}),
     Topic.EARNINGS: frozenset({"earnings", "quarterly results", "revenue", "eps", "guidance"}),

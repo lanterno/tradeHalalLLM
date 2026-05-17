@@ -106,7 +106,9 @@ def _coerce_for_snapshot(value: Any) -> Any:
     if isinstance(value, Enum):
         return value.value
     if dataclasses.is_dataclass(value) and not isinstance(value, type):
-        return {f.name: _coerce_for_snapshot(getattr(value, f.name)) for f in dataclasses.fields(value)}
+        return {
+            f.name: _coerce_for_snapshot(getattr(value, f.name)) for f in dataclasses.fields(value)
+        }
     if isinstance(value, (frozenset, set)):
         return sorted(_coerce_for_snapshot(v) for v in value)
     if isinstance(value, tuple):
@@ -153,9 +155,7 @@ def snapshot_from_dict(policy_id: str, data: Mapping[str, Any]) -> Any:
     if extras:
         raise ValueError(f"unknown fields for {policy_id!r}: {sorted(extras)}")
     kwargs = {
-        name: _coerce_field_value(f, data[name])
-        for name, f in field_map.items()
-        if name in data
+        name: _coerce_field_value(f, data[name]) for name, f in field_map.items() if name in data
     }
     return cls(**kwargs)
 

@@ -74,9 +74,7 @@ class CryptoTradeRepoImpl:
             assert trade.id is not None
             return trade.id
 
-    async def update_crypto_trade_stop_loss(
-        self, trade_id: int, new_stop_loss: float
-    ) -> None:
+    async def update_crypto_trade_stop_loss(self, trade_id: int, new_stop_loss: float) -> None:
         async with AsyncSession(self._engine) as session:
             trade = await session.get(CryptoTrade, trade_id)
             if trade is None:
@@ -85,9 +83,7 @@ class CryptoTradeRepoImpl:
             session.add(trade)
             await session.commit()
 
-    async def close_crypto_trade(
-        self, trade_id: int, exit_price: float, exit_reason: str
-    ) -> None:
+    async def close_crypto_trade(self, trade_id: int, exit_price: float, exit_reason: str) -> None:
         async with AsyncSession(self._engine) as session:
             trade = await session.get(CryptoTrade, trade_id)
             if trade is None:
@@ -173,9 +169,7 @@ class CryptoTradeRepoImpl:
 
     async def get_recent_crypto_trades(self, limit: int = 50) -> list[dict[str, Any]]:
         async with AsyncSession(self._engine) as session:
-            statement = (
-                select(CryptoTrade).order_by(col(CryptoTrade.timestamp).desc()).limit(limit)
-            )
+            statement = select(CryptoTrade).order_by(col(CryptoTrade.timestamp).desc()).limit(limit)
             results = await session.exec(statement)
             return [r.model_dump() for r in results.all()]
 
@@ -203,9 +197,7 @@ class CryptoTradeRepoImpl:
                 pnl_pct = (exit_p - entry) / entry if entry > 0 else 0
                 duration_min = 0.0
                 if trade.closed_at and trade.timestamp:
-                    duration_min = (
-                        trade.closed_at - trade.timestamp
-                    ).total_seconds() / 60
+                    duration_min = (trade.closed_at - trade.timestamp).total_seconds() / 60
                 round_trips.append(
                     {
                         "id": trade.id,

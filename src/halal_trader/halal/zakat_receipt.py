@@ -75,9 +75,7 @@ class ZakatReceipt:
         if self.status is ReceiptStatus.SIGNED_BY_OPERATOR and (
             not self.operator_signature_hex or self.recipient_signature_hex
         ):
-            raise ValueError(
-                "SIGNED_BY_OPERATOR requires operator signature only"
-            )
+            raise ValueError("SIGNED_BY_OPERATOR requires operator signature only")
         if self.status is ReceiptStatus.COUNTER_SIGNED and (
             not self.operator_signature_hex or not self.recipient_signature_hex
         ):
@@ -217,8 +215,7 @@ def render_receipt(receipt: ZakatReceipt) -> str:
         head,
         f"  operator: {receipt.operator_handle} (sig: {sig_op})",
         f"  recipient: {receipt.recipient_charity} (sig: {sig_rcp})",
-        f"  amount: {receipt.amount:.2f} {receipt.currency} on "
-        f"{receipt.payment_date.isoformat()}",
+        f"  amount: {receipt.amount:.2f} {receipt.currency} on {receipt.payment_date.isoformat()}",
         f"  zakat year: {receipt.zakat_year_label} ({receipt.nisab_basis} basis)",
         f"  digest: {digest[:16]}…",
     ]

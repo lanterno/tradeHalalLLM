@@ -71,9 +71,7 @@ def test_empirical_anticorrelated_zero_lower_tail():
     """Perfect anti-correlation → no lower-tail co-movement."""
     a = list(range(100))
     b = [-x for x in a]
-    val = empirical_tail_dependence(
-        a, b, q=0.10, direction=TailDirection.LOWER
-    )
+    val = empirical_tail_dependence(a, b, q=0.10, direction=TailDirection.LOWER)
     # When A is in lower tail (smallest), B is in upper tail → λ_L should be 0
     assert val == 0.0
 

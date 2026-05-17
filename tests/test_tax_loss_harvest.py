@@ -60,9 +60,7 @@ def test_policy_above_one_min_pct_rejected():
 
 def test_candidate_negative_market_rejected():
     with pytest.raises(ValueError):
-        HarvestCandidate(
-            lot=_lot(), market_price=-1.0, unrealised_loss=10.0, loss_pct=0.1
-        )
+        HarvestCandidate(lot=_lot(), market_price=-1.0, unrealised_loss=10.0, loss_pct=0.1)
 
 
 def test_candidate_negative_loss_rejected():
@@ -241,7 +239,16 @@ def test_render_no_secret_leak():
     prices = {"AAPL": 80.0}
     candidates = select_candidates(pool, prices, today=date(2025, 6, 1))
     out = render_candidates(candidates)
-    for token in ("@", "zoom.us", "meet.google", "private_email", "+1-", "Authorization", "SSN", "TaxID"):
+    for token in (
+        "@",
+        "zoom.us",
+        "meet.google",
+        "private_email",
+        "+1-",
+        "Authorization",
+        "SSN",
+        "TaxID",
+    ):
         assert token not in out
 
 

@@ -72,18 +72,14 @@ async def test_prune_calls_bundle_with_correct_window():
     bundle.web_audit.delete_old_web_actions = AsyncMock(return_value=42)
     bot = _bot(retention=14, bundle=bundle)
     await bot._prune_audit_log()
-    bundle.web_audit.delete_old_web_actions.assert_awaited_once_with(
-        older_than=timedelta(days=14)
-    )
+    bundle.web_audit.delete_old_web_actions.assert_awaited_once_with(older_than=timedelta(days=14))
 
 
 @pytest.mark.asyncio
 async def test_prune_swallows_repo_exception():
     """A failed prune must not abort the daily-end routine."""
     bundle = MagicMock()
-    bundle.web_audit.delete_old_web_actions = AsyncMock(
-        side_effect=RuntimeError("DB locked")
-    )
+    bundle.web_audit.delete_old_web_actions = AsyncMock(side_effect=RuntimeError("DB locked"))
     bot = _bot(retention=7, bundle=bundle)
     await bot._prune_audit_log()  # must not raise
 

@@ -146,9 +146,7 @@ def route(
     pol = policy if policy is not None else RoutingPolicy()
 
     if pol.mode is RoutingMode.VENUE_PINNED:
-        pinned = next(
-            (q for q in inputs.venue_quotes if q.venue == pol.pinned_venue), None
-        )
+        pinned = next((q for q in inputs.venue_quotes if q.venue == pol.pinned_venue), None)
         if pinned is None or pinned.available_quantity <= 0:
             return RoutingDecision(
                 parent_id=inputs.parent_id,
@@ -172,13 +170,9 @@ def route(
 
     # Sort venues by effective price.
     if inputs.side is Side.BUY:
-        sorted_quotes = sorted(
-            inputs.venue_quotes, key=lambda q: q.effective_price(Side.BUY)
-        )
+        sorted_quotes = sorted(inputs.venue_quotes, key=lambda q: q.effective_price(Side.BUY))
     else:
-        sorted_quotes = sorted(
-            inputs.venue_quotes, key=lambda q: -q.effective_price(Side.SELL)
-        )
+        sorted_quotes = sorted(inputs.venue_quotes, key=lambda q: -q.effective_price(Side.SELL))
 
     if pol.mode is RoutingMode.BEST_PRICE:
         # Find the first venue with available capacity.
@@ -256,7 +250,5 @@ def render_decision(decision: RoutingDecision) -> str:
         head = f"{head}, {decision.unallocated_quantity:.4f} UNALLOCATED"
     lines = [head]
     for a in decision.allocations:
-        lines.append(
-            f"  • {a.venue} {a.quantity:.4f} @ ${a.expected_price:.4f}"
-        )
+        lines.append(f"  • {a.venue} {a.quantity:.4f} @ ${a.expected_price:.4f}")
     return _scrub("\n".join(lines))

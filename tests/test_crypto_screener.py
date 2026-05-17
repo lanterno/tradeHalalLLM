@@ -135,9 +135,7 @@ def test_well_capped_clean_token_returns_halal():
 
 def test_get_categories_normalises_to_lowercase_dashes():
     s = _screener()
-    cats = s._get_categories(
-        {"categories": ["Smart Contract Platform", "Layer 1"]}
-    )
+    cats = s._get_categories({"categories": ["Smart Contract Platform", "Layer 1"]})
     assert "smart-contract-platform" in cats
     assert "layer-1" in cats
 

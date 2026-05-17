@@ -63,9 +63,7 @@ class ArbounPolicy:
 
     def __post_init__(self) -> None:
         if not 0.0 < self.min_down_payment_pct < self.max_down_payment_pct <= 1.0:
-            raise ValueError(
-                "0 < min_down_payment_pct < max_down_payment_pct <= 1.0"
-            )
+            raise ValueError("0 < min_down_payment_pct < max_down_payment_pct <= 1.0")
         if self.max_term_days <= 0:
             raise ValueError("max_term_days must be positive")
 
@@ -134,9 +132,7 @@ def structure_arboun(
         issues.add(ArbounIssue.EXERCISE_DATE_TOO_FAR)
 
     purchase_total = inputs.purchase_price_per_unit * inputs.quantity
-    down_pct = (
-        inputs.down_payment_amount / purchase_total if purchase_total > 0 else 0.0
-    )
+    down_pct = inputs.down_payment_amount / purchase_total if purchase_total > 0 else 0.0
     if purchase_total > 0:
         if down_pct < pol.min_down_payment_pct:
             issues.add(ArbounIssue.DOWN_PAYMENT_TOO_SMALL)
@@ -165,9 +161,7 @@ class ExerciseDecision:
             raise ValueError("settlement_price_per_unit must be non-negative")
 
 
-def decide_exercise(
-    inputs: ArbounInputs, settlement_price_per_unit: float
-) -> ExerciseDecision:
+def decide_exercise(inputs: ArbounInputs, settlement_price_per_unit: float) -> ExerciseDecision:
     """Decide whether to exercise the Arboun at expiry.
 
     Rational buyer exercises if settlement_price > purchase_price (the
@@ -179,9 +173,7 @@ def decide_exercise(
 
     # Net payoff if exercised: (S - K) × qty — down-payment counts toward purchase.
     # Net payoff if forfeited: -down_payment (sunk cost).
-    exercise_payoff = (
-        settlement_price_per_unit - inputs.purchase_price_per_unit
-    ) * inputs.quantity
+    exercise_payoff = (settlement_price_per_unit - inputs.purchase_price_per_unit) * inputs.quantity
     forfeit_payoff = -inputs.down_payment_amount
 
     if exercise_payoff > forfeit_payoff:

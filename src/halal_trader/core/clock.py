@@ -170,9 +170,7 @@ class SeededIdSource:
         # Hex over a deterministic byte stream from seed+counter.
         out = bytearray()
         while len(out) < nbytes:
-            chunk = uuid.uuid5(
-                self._NAMESPACE, f"token:{self._seed}:{self._counter}"
-            ).bytes
+            chunk = uuid.uuid5(self._NAMESPACE, f"token:{self._seed}:{self._counter}").bytes
             self._counter += 1
             out.extend(chunk)
         return out[:nbytes].hex()

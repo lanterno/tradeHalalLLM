@@ -53,9 +53,7 @@ def test_dollar_duration_negative_mv_rejected():
 
 def test_portfolio_negative_mv_rejected():
     with pytest.raises(ValueError):
-        PortfolioDuration(
-            total_market_value=-1, total_dollar_duration=0, average_duration=0
-        )
+        PortfolioDuration(total_market_value=-1, total_dollar_duration=0, average_duration=0)
 
 
 def test_hedge_negative_mv_rejected():
@@ -132,12 +130,8 @@ def test_portfolio_average_weighted():
 
 
 def test_recommend_zero_target_offsets_full_portfolio():
-    portfolio = compute_portfolio_duration(
-        [(_ijara_sukuk(years=10), 0.05, 100000.0)]
-    )
-    rec = recommend_hedge(
-        portfolio, hedge_sukuk=_ijara_sukuk(years=5), hedge_yield=0.05
-    )
+    portfolio = compute_portfolio_duration([(_ijara_sukuk(years=10), 0.05, 100000.0)])
+    rec = recommend_hedge(portfolio, hedge_sukuk=_ijara_sukuk(years=5), hedge_yield=0.05)
     assert rec.stance is HedgeStance.OFFSETTING
     assert rec.hedge_market_value > 0
 
@@ -165,9 +159,7 @@ def test_recommend_zero_duration_hedge_returns_neutral():
         cashflows=(Cashflow(amount=1000.0, time_years=0.001),),
         face_value=1000.0,
     )
-    portfolio = compute_portfolio_duration(
-        [(_ijara_sukuk(years=10), 0.05, 100000.0)]
-    )
+    portfolio = compute_portfolio_duration([(_ijara_sukuk(years=10), 0.05, 100000.0)])
     rec = recommend_hedge(portfolio, hedge_sukuk=s, hedge_yield=0.05)
     # Hedge MV will be huge but not zero; we just check it's a finite non-negative
     assert rec.hedge_market_value >= 0
@@ -188,12 +180,8 @@ def test_render_neutral():
 
 
 def test_render_offsetting():
-    portfolio = compute_portfolio_duration(
-        [(_ijara_sukuk(years=10), 0.05, 100000.0)]
-    )
-    rec = recommend_hedge(
-        portfolio, hedge_sukuk=_ijara_sukuk(years=5), hedge_yield=0.05
-    )
+    portfolio = compute_portfolio_duration([(_ijara_sukuk(years=10), 0.05, 100000.0)])
+    rec = recommend_hedge(portfolio, hedge_sukuk=_ijara_sukuk(years=5), hedge_yield=0.05)
     out = render_recommendation(rec)
     assert "🛡️" in out
     assert "offsetting" in out
@@ -215,12 +203,8 @@ def test_render_no_secret_leak():
 
 def test_e2e_long_book_hedged_by_short_sukuk():
     """Operator's book is dominated by long-dated sukuk; hedge with short."""
-    portfolio = compute_portfolio_duration(
-        [(_ijara_sukuk(years=10), 0.05, 1_000_000.0)]
-    )
-    rec = recommend_hedge(
-        portfolio, hedge_sukuk=_ijara_sukuk(years=2), hedge_yield=0.05
-    )
+    portfolio = compute_portfolio_duration([(_ijara_sukuk(years=10), 0.05, 1_000_000.0)])
+    rec = recommend_hedge(portfolio, hedge_sukuk=_ijara_sukuk(years=2), hedge_yield=0.05)
     assert rec.stance is HedgeStance.OFFSETTING
     # Hedge MV should be larger than book size since short sukuk has lower duration
     assert rec.hedge_market_value > 1_000_000

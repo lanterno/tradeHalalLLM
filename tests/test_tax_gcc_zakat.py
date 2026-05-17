@@ -177,7 +177,16 @@ def test_render_no_secret_leak():
         zakat_calculation=_calc(),
     )
     out = render_report(report)
-    for token in ("@", "zoom.us", "meet.google", "private_email", "+1-", "Authorization", "IBAN", "Bank-"):
+    for token in (
+        "@",
+        "zoom.us",
+        "meet.google",
+        "private_email",
+        "+1-",
+        "Authorization",
+        "IBAN",
+        "Bank-",
+    ):
         assert token not in out
 
 

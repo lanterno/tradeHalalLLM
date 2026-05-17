@@ -119,9 +119,7 @@ class ChildOrder:
             raise ValueError("submit_time must be timezone-aware")
 
 
-def slice_vwap(
-    inputs: VwapInputs, *, policy: VwapPolicy | None = None
-) -> tuple[ChildOrder, ...]:
+def slice_vwap(inputs: VwapInputs, *, policy: VwapPolicy | None = None) -> tuple[ChildOrder, ...]:
     """Slice a parent order in proportion to the volume profile."""
     pol = policy if policy is not None else VwapPolicy()
     if len(inputs.profile) > pol.max_buckets:
@@ -217,8 +215,7 @@ def u_shape_profile(buckets: Iterable[datetime]) -> VolumeProfile:
     fractions = [w / total for w in raw_weights]
     return VolumeProfile(
         buckets=tuple(
-            VolumeBucket(start_time=t, fraction=f)
-            for t, f in zip(bucket_list, fractions)
+            VolumeBucket(start_time=t, fraction=f) for t, f in zip(bucket_list, fractions)
         ),
     )
 
@@ -249,8 +246,5 @@ def render_schedule(children: tuple[ChildOrder, ...]) -> str:
     )
     lines = [head]
     for c in children:
-        lines.append(
-            f"  • bucket {c.bucket_index}: {c.quantity:.4f} @ "
-            f"{c.submit_time.isoformat()}"
-        )
+        lines.append(f"  • bucket {c.bucket_index}: {c.quantity:.4f} @ {c.submit_time.isoformat()}")
     return _scrub("\n".join(lines))

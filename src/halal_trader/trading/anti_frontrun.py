@@ -116,10 +116,7 @@ def _cadence_cv(times: Sequence[datetime]) -> float:
     if len(times) < 3:
         return 1.0  # too few to be predictable; high CV
     sorted_t = sorted(times)
-    gaps = [
-        (sorted_t[i + 1] - sorted_t[i]).total_seconds()
-        for i in range(len(sorted_t) - 1)
-    ]
+    gaps = [(sorted_t[i + 1] - sorted_t[i]).total_seconds() for i in range(len(sorted_t) - 1)]
     mean = statistics.mean(gaps)
     if mean == 0:
         return 0.0
@@ -127,9 +124,7 @@ def _cadence_cv(times: Sequence[datetime]) -> float:
     return stdev / mean
 
 
-def assess(
-    signal: OrderSignal, *, policy: FrontrunPolicy | None = None
-) -> FrontrunAssessment:
+def assess(signal: OrderSignal, *, policy: FrontrunPolicy | None = None) -> FrontrunAssessment:
     """Run the detection engine and return an assessment + mitigations."""
     pol = policy if policy is not None else FrontrunPolicy()
     signals: set[FrontrunSignal] = set()

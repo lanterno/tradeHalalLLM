@@ -66,13 +66,12 @@ class LiquidityPolicy:
 
     def __post_init__(self) -> None:
         if not (
-            0.0 < self.deep_spread_max_bps
-            < self.normal_spread_max_bps
-            < self.thin_spread_max_bps
+            0.0 < self.deep_spread_max_bps < self.normal_spread_max_bps < self.thin_spread_max_bps
         ):
             raise ValueError("spread thresholds must increase")
         if not (
-            0.0 < self.deep_pos_pct_adv
+            0.0
+            < self.deep_pos_pct_adv
             < self.normal_pos_pct_adv
             < self.illiquid_threshold_pos_pct_adv
         ):
@@ -111,14 +110,10 @@ def assess_liquidity(
     )
 
     # Tier laddering
-    if (
-        inputs.bid_ask_spread_bps <= pol.deep_spread_max_bps
-        and pos_pct <= pol.deep_pos_pct_adv
-    ):
+    if inputs.bid_ask_spread_bps <= pol.deep_spread_max_bps and pos_pct <= pol.deep_pos_pct_adv:
         tier = LiquidityTier.DEEP
     elif (
-        inputs.bid_ask_spread_bps <= pol.normal_spread_max_bps
-        and pos_pct <= pol.normal_pos_pct_adv
+        inputs.bid_ask_spread_bps <= pol.normal_spread_max_bps and pos_pct <= pol.normal_pos_pct_adv
     ):
         tier = LiquidityTier.NORMAL
     elif (
@@ -130,15 +125,11 @@ def assess_liquidity(
         tier = LiquidityTier.ILLIQUID
 
     # Score: simple two-component blend
-    spread_score = max(
-        0.0, 1.0 - inputs.bid_ask_spread_bps / pol.thin_spread_max_bps
-    )
+    spread_score = max(0.0, 1.0 - inputs.bid_ask_spread_bps / pol.thin_spread_max_bps)
     if pos_pct == float("inf"):
         size_score = 0.0
     else:
-        size_score = max(
-            0.0, 1.0 - pos_pct / pol.illiquid_threshold_pos_pct_adv
-        )
+        size_score = max(0.0, 1.0 - pos_pct / pol.illiquid_threshold_pos_pct_adv)
     score = (spread_score + size_score) / 2.0
     score = max(0.0, min(1.0, score))
 
@@ -159,9 +150,7 @@ def assess_liquidity(
     )
 
 
-def liquidity_adjusted_var(
-    base_var: float, assessment: LiquidityAssessment
-) -> float:
+def liquidity_adjusted_var(base_var: float, assessment: LiquidityAssessment) -> float:
     """Inflate base VaR by the estimated liquidation-cost fraction."""
     if base_var < 0:
         raise ValueError("base_var must be non-negative")

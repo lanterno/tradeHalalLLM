@@ -105,16 +105,12 @@ def test_estimation_zero_volume_infinite_eta():
 
 
 def test_estimation_zero_volume_at_front_zero_eta():
-    a = estimate(
-        _inputs(market_volume_rate_at_level=0.0, current_size_ahead=0)
-    )
+    a = estimate(_inputs(market_volume_rate_at_level=0.0, current_size_ahead=0))
     assert a.expected_seconds_to_fill == 0.0
 
 
 def test_estimation_zero_arrival_treats_consumed_as_one():
-    a = estimate(
-        _inputs(arrival_size_ahead=0, current_size_ahead=0)
-    )
+    a = estimate(_inputs(arrival_size_ahead=0, current_size_ahead=0))
     assert a.fraction_consumed == 1.0
 
 

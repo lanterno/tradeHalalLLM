@@ -167,9 +167,7 @@ async def test_ml_signals_stage_runs_detectors():
     signal = MagicMock()
     signal.predict_confidence.return_value = 0.71
     state = CycleState(indicators_cache={"AAPL": {"rsi_14": 50}})
-    out = await BuildMlSignalsStage(
-        anomaly_detector=anomaly, signal_classifier=signal
-    ).run(state)
+    out = await BuildMlSignalsStage(anomaly_detector=anomaly, signal_classifier=signal).run(state)
     assert "ANOMALY DETECTED" in out.ml_signals_text
     assert "ML confidence" in out.ml_signals_text
     assert anomaly.add_sample.call_count == 1
@@ -626,9 +624,7 @@ async def test_stock_risk_stage_threads_halt_signal():
         open_positions=[],
         account=account,
     )
-    with patch(
-        "halal_trader.trading.risk.evaluate_stock_risk", return_value=output
-    ):
+    with patch("halal_trader.trading.risk.evaluate_stock_risk", return_value=output):
         out = await BuildStockRiskStage().run(state)
     assert out.halt is True
     assert out.risk_state is halted_state
@@ -824,9 +820,7 @@ async def test_whale_flows_stage_swallows_failure():
     source = MagicMock()
     source.fetch = AsyncMock(side_effect=RuntimeError("etherscan down"))
     state = CycleState(microstructure_text="seeded")
-    out = await AugmentMicrostructureWithWhaleFlowsStage(
-        whale_flow_source=source
-    ).run(state)
+    out = await AugmentMicrostructureWithWhaleFlowsStage(whale_flow_source=source).run(state)
     assert out.microstructure_text == "seeded"
 
 
@@ -844,9 +838,7 @@ async def test_whale_flows_stage_has_stable_name():
 @pytest.mark.asyncio
 async def test_basis_stage_no_broker_leaves_text_unchanged():
     state = CycleState(microstructure_text="seeded", halal_pairs=["BTCUSDT"])
-    out = await AugmentMicrostructureWithBasisStage(
-        broker=None, basis_tracker=None
-    ).run(state)
+    out = await AugmentMicrostructureWithBasisStage(broker=None, basis_tracker=None).run(state)
     assert out.microstructure_text == "seeded"
 
 
@@ -854,9 +846,9 @@ async def test_basis_stage_no_broker_leaves_text_unchanged():
 async def test_basis_stage_skips_brokers_without_funding_signal():
     broker = MagicMock(spec=[])  # no get_funding_signal method
     state = CycleState(microstructure_text="seeded", halal_pairs=["BTCUSDT"])
-    out = await AugmentMicrostructureWithBasisStage(
-        broker=broker, basis_tracker=MagicMock()
-    ).run(state)
+    out = await AugmentMicrostructureWithBasisStage(broker=broker, basis_tracker=MagicMock()).run(
+        state
+    )
     assert out.microstructure_text == "seeded"
 
 
@@ -865,9 +857,9 @@ async def test_basis_stage_no_pairs_leaves_text_unchanged():
     broker = MagicMock()
     broker.get_funding_signal = AsyncMock()
     state = CycleState(microstructure_text="seeded")  # empty halal_pairs
-    out = await AugmentMicrostructureWithBasisStage(
-        broker=broker, basis_tracker=MagicMock()
-    ).run(state)
+    out = await AugmentMicrostructureWithBasisStage(broker=broker, basis_tracker=MagicMock()).run(
+        state
+    )
     assert out.microstructure_text == "seeded"
     assert broker.get_funding_signal.call_count == 0
 

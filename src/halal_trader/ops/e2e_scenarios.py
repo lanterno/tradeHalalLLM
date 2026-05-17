@@ -173,8 +173,7 @@ _SEED_SCENARIOS: dict[str, Scenario] = {
         kind=ScenarioKind.ORDER,
         required_broker=RequiredBroker.BINANCE_TESTNET,
         description=(
-            "Place market order on testnet, observe fill, "
-            "record submitted/filled timestamps"
+            "Place market order on testnet, observe fill, record submitted/filled timestamps"
         ),
         expected_outcome=(
             "submitted_at and filled_at populated; filled_quantity matches "

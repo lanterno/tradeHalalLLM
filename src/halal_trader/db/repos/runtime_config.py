@@ -23,9 +23,7 @@ class RuntimeConfigRepoImpl:
     def __init__(self, engine: AsyncEngine) -> None:
         self._engine = engine
 
-    async def set_runtime_config(
-        self, key: str, value: Any, *, set_by: str | None = None
-    ) -> None:
+    async def set_runtime_config(self, key: str, value: Any, *, set_by: str | None = None) -> None:
         """Insert/update a runtime overlay value (JSONB — any JSON shape)."""
         async with AsyncSession(self._engine) as session:
             row = await session.get(RuntimeConfig, key.upper())
