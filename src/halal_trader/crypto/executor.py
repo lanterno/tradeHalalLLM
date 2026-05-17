@@ -12,7 +12,7 @@ from halal_trader.core import events
 from halal_trader.core.executor import BaseExecutor
 from halal_trader.core.fills import confirm_binance
 from halal_trader.crypto.exchange import DUST_NOTIONAL_USD, BinanceClient
-from halal_trader.db.repository import Repository
+from halal_trader.db.repos import CryptoTradeRepo
 from halal_trader.domain.models import (
     CryptoAccount,
     CryptoTradingPlan,
@@ -31,7 +31,7 @@ class CryptoExecutor(BaseExecutor):
     def __init__(
         self,
         broker: BinanceClient,
-        repo: Repository,
+        repo: CryptoTradeRepo,
         *,
         max_position_pct: float,
         max_simultaneous_positions: int,
@@ -42,10 +42,10 @@ class CryptoExecutor(BaseExecutor):
         exiting_pairs: set[str] | None = None,
     ) -> None:
         super().__init__(
-            repo,
             max_position_pct=max_position_pct,
             max_simultaneous_positions=max_simultaneous_positions,
         )
+        self._repo = repo
         self._broker = broker
         self._tracked_bases = {
             p.upper().removesuffix("USDT").removesuffix("BUSD") for p in (configured_pairs or [])
@@ -486,6 +486,26 @@ class CryptoExecutor(BaseExecutor):
                 filled_price=fill.filled_price,
                 filled_quantity=fill.filled_quantity,
             )
+
+            # Close all open BUY rows for this pair — without this, the
+            # bot's DB keeps "open" buy rows even after the position was
+            # fully liquidated by an LLM-driven sell, which causes
+            # reconcile drift warnings (db says we hold X, broker says 0)
+            # and double-counts heat in the portfolio risk engine. The
+            # monitor's SL/TP path already does this; the executor's
+            # LLM-driven path was missing it.
+            if db_status in ("filled", "partial"):
+                consolidated = await self._repo.close_open_crypto_trades_for_pair(
+                    decision.symbol,
+                    fill_price,
+                    "llm_sell",
+                )
+                if consolidated > 0:
+                    logger.info(
+                        "Consolidated %d open buy row(s) for %s after LLM sell",
+                        consolidated,
+                        decision.symbol,
+                    )
 
             return {
                 "symbol": decision.symbol,
