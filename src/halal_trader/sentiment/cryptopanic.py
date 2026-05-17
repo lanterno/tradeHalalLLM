@@ -177,15 +177,17 @@ class CryptoPanicCollector:
         }
 
         client = self._get_client()
-        # 400/401/403 also signal "wrong tier" — CryptoPanic returns 400
-        # when the auth_token doesn't have access to that tier's endpoint,
-        # not 404. Treat them all as "try the next tier".
+        # 400/401/403/404 signal "wrong tier" — try the next URL.
+        # 429 is rate-limit — engage backoff immediately; trying another
+        # tier won't help and we don't want to keep hammering at the
+        # sentiment-update cadence (every 5 min).
         _TIER_MISMATCH = {400, 401, 403, 404}
+        _RATE_LIMITED = {429}
         for url in urls_to_try:
             resp = await client.get(url, params=params)
             if resp.status_code in _TIER_MISMATCH and url != urls_to_try[-1]:
                 continue
-            if resp.status_code in _TIER_MISMATCH:
+            if resp.status_code in _TIER_MISMATCH or resp.status_code in _RATE_LIMITED:
                 self._consecutive_failures += 1
                 retry_after = min(
                     _INITIAL_RETRY_SECONDS * 2 ** (self._consecutive_failures - 1),
@@ -193,7 +195,7 @@ class CryptoPanicCollector:
                 )
                 self._disabled_until = time.monotonic() + retry_after
                 logger.warning(
-                    "CryptoPanic API returned %d on %s — retrying in %ds (attempt %d)",
+                    "CryptoPanic API returned %d on %s — backing off %ds (attempt %d)",
                     resp.status_code,
                     url,
                     retry_after,
