@@ -570,7 +570,10 @@ class CryptoCycleService(BaseCycleService):
         )
 
     def _log_treasury_plan(self, *, account) -> None:
-        """Emit a treasury plan log line when the bot is fully flat."""
+        """Emit a treasury plan log line when the bot is fully flat —
+        only when the plan changes vs the last cycle, otherwise the same
+        line fires every 90s when the bot is idle and clutters the
+        operator's view."""
         if account.in_order_usdt > 0 or account.available_balance_usdt < 50:
             return
         try:
@@ -585,14 +588,22 @@ class CryptoCycleService(BaseCycleService):
                 current_treasury_value=0.0,
                 policy=TreasuryPolicy(),
             )
-            if not plan.is_noop:
-                logger.info(
-                    "treasury: %s $%.2f into %s — %s",
-                    plan.action,
-                    plan.amount_usd,
-                    plan.instrument,
-                    plan.reason,
-                )
+            if plan.is_noop:
+                return
+            # Dedupe: round amount to nearest $10 so trivial drift doesn't
+            # re-fire the log. Same action+instrument+rounded-amount → skip.
+            key = (plan.action, plan.instrument, round(plan.amount_usd / 10) * 10)
+            last_key = getattr(self, "_last_treasury_key", None)
+            if key == last_key:
+                return
+            self._last_treasury_key = key  # type: ignore[attr-defined]
+            logger.info(
+                "treasury: %s $%.2f into %s — %s",
+                plan.action,
+                plan.amount_usd,
+                plan.instrument,
+                plan.reason,
+            )
         except Exception as exc:  # noqa: BLE001
             logger.debug("treasury plan computation failed: %s", exc)
 
