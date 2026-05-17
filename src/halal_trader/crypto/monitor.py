@@ -335,12 +335,21 @@ class PositionMonitor:
 
             if self._notifier and self._notifier.enabled:
                 try:
+                    # hold_seconds is computed above for the post-close
+                    # recorder; reuse it (set to 0 if computation was
+                    # skipped because trade.timestamp was missing).
+                    hold_minutes_val: float | None = None
+                    if "hold_seconds" in locals() and hold_seconds:
+                        hold_minutes_val = hold_seconds / 60.0
                     await self._notifier.notify_sl_tp(
                         pair=trade.pair,
                         exit_reason=reason,
                         entry_price=trade.entry_price or 0,
                         exit_price=fill_price,
                         pnl=pnl,
+                        quantity=quantity,
+                        hold_minutes=hold_minutes_val,
+                        market="crypto",
                     )
                 except Exception as e:
                     logger.debug("Failed to send SL/TP notification: %s", e)

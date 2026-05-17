@@ -21,7 +21,6 @@ from halal_trader.crypto.exchange import BinanceClient
 from halal_trader.crypto.executor import CryptoExecutor
 from halal_trader.crypto.indicators import compute_all
 from halal_trader.crypto.portfolio import CryptoPortfolioTracker
-from halal_trader.crypto.regime import MarketRegime
 from halal_trader.crypto.risk import PortfolioRiskEngine
 from halal_trader.crypto.screener import CryptoHalalScreener
 from halal_trader.crypto.strategy import CryptoTradingStrategy
@@ -219,56 +218,108 @@ class CryptoCycleService(BaseCycleService):
                 usdt_free,
             )
 
-        async with stage(self._bus, "build_performance_text"):
-            performance_text = await self._build_performance_text()
-        async with stage(self._bus, "build_sentiment_text"):
-            sentiment_text = await self._build_sentiment_text(halal_pairs)
-        async with stage(self._bus, "build_timeframe_text"):
-            timeframe_text = await self._build_timeframe_text(halal_pairs)
-        async with stage(self._bus, "build_regime_text"):
-            regime_text = self._build_regime_text(klines_by_symbol, indicators_cache)
-        async with stage(self._bus, "build_ml_signals_text"):
-            ml_signals_text = self._build_ml_signals_text(klines_by_symbol, indicators_cache)
+        # ── Wave B: a single CycleState carries the full prompt-context ──
+        from halal_trader.core.cycle_pipeline import CycleState, run_stages
+        from halal_trader.core.cycle_stages import (
+            AugmentMicrostructureWithBasisStage,
+            AugmentMicrostructureWithWhaleFlowsStage,
+            AugmentRegimeWithMemoryStage,
+            AugmentRegimeWithRagStage,
+            BuildActiveAdjustmentsStage,
+            BuildCryptoRiskStage,
+            BuildExchangeRulesStage,
+            BuildForecastsStage,
+            BuildMicrostructureStage,
+            BuildMlSignalsStage,
+            BuildNewsStage,
+            BuildPerformanceStage,
+            BuildRegimeStage,
+            BuildSentimentStage,
+            BuildTimeframeStage,
+        )
 
-        async with stage(self._bus, "evaluate_portfolio_risk") as risk_outcome:
-            risk_text, halt = self._evaluate_portfolio_risk(
-                account=account,
-                klines_by_symbol=klines_by_symbol,
-                indicators_cache=indicators_cache,
-                open_trades=open_trades,
-                current_prices=current_prices,
+        # Indicators are scoped to symbols we actually have klines for.
+        scoped_indicators = {p: indicators_cache.get(p, {}) for p in klines_by_symbol}
+
+        state = CycleState(
+            account=account,
+            halal_pairs=halal_pairs,
+            today_pnl=today_pnl,
+            klines_by_symbol=klines_by_symbol,
+            indicators_cache=scoped_indicators,
+            orderbooks=orderbooks,
+            current_prices=current_prices,
+        )
+        # ── Wave B: one stage list drives the full prompt-context build ──
+        # The risk stage may set ``state.halt = True``; ``stop_on_halt``
+        # short-circuits the rest of the chain so we don't pay for
+        # augmenter work the cycle is about to discard.
+        await run_stages(
+            state,
+            [
+                BuildPerformanceStage(self._analytics),
+                BuildSentimentStage(
+                    sentiment_manager=self._sentiment,
+                    reddit_fetcher=self._reddit_fetcher,
+                    hub=self._hub,
+                    notifier=self._notifier,
+                ),
+                BuildTimeframeStage(self._timeframes),
+                BuildRegimeStage(self._regime),
+                BuildForecastsStage(self._ml_forecaster),
+                BuildMlSignalsStage(
+                    anomaly_detector=self._ml_anomaly,
+                    signal_classifier=self._ml_signal,
+                ),
+                BuildCryptoRiskStage(
+                    risk_engine=self._risk_engine,
+                    broker=self._broker,
+                    open_trades=open_trades or [],
+                ),
+                BuildActiveAdjustmentsStage(self._self_review),
+                BuildExchangeRulesStage(self._broker),
+                BuildMicrostructureStage(),
+                AugmentMicrostructureWithBasisStage(
+                    broker=self._broker,
+                    basis_tracker=getattr(self._hub, "basis", None),
+                ),
+                AugmentMicrostructureWithWhaleFlowsStage(
+                    whale_flow_source=self._whale_flow_source,
+                    hub=self._hub,
+                ),
+                BuildNewsStage(self._news_feed),
+                AugmentRegimeWithRagStage(getattr(self._hub, "rag", None)),
+                AugmentRegimeWithMemoryStage(getattr(self._hub, "regime", None)),
+            ],
+            bus=self._bus,
+            stop_on_halt=True,
+        )
+
+        # Push the structured risk state into the hub's runtime view so
+        # the dashboard's /api/risk/state can render it. Falls back
+        # silently when no runtime view or no risk state is present.
+        runtime = getattr(self._hub, "runtime", None)
+        rs = state.risk_state
+        if runtime is not None and rs is not None:
+            from datetime import UTC
+            from datetime import datetime as _dt
+
+            runtime.risk_state = {
+                "market": "crypto",
+                "is_halted": getattr(rs, "is_halted", False),
+                "halt_reason": getattr(rs, "halt_reason", ""),
+                "portfolio_heat_pct": getattr(rs, "portfolio_heat_pct", None),
+                "drawdown_pct": getattr(rs, "drawdown_pct", None),
+                "avg_correlation": getattr(rs, "avg_correlation", None),
+                "summary": state.risk_text,
+                "pushed_at": _dt.now(UTC).isoformat(),
+            }
+        if state.halt:
+            logger.warning(
+                "Crypto risk engine halt: %s",
+                getattr(rs, "halt_reason", "unspecified"),
             )
-            risk_outcome.extra["halt"] = halt
-        if halt:
             return
-
-        active_adjustments = ""
-        if self._self_review:
-            active_adjustments = self._self_review.format_adjustments_for_prompt()
-
-        exchange_rules_text = self._broker.format_filters_for_prompt()
-
-        async with stage(self._bus, "build_microstructure_text"):
-            microstructure_text = self._build_microstructure_text(orderbooks)
-            microstructure_text = await self._augment_with_basis(
-                microstructure_text, halal_pairs, klines_by_symbol
-            )
-            microstructure_text = await self._augment_with_whale_flows(
-                microstructure_text, klines_by_symbol
-            )
-        news_text = self._build_news_text(halal_pairs)
-
-        async with stage(self._bus, "augment_regime_with_rag"):
-            regime_text = await self._augment_regime_with_rag(
-                regime_text, indicators_cache, sentiment_text
-            )
-        async with stage(self._bus, "augment_regime_with_memory"):
-            regime_text = await self._augment_regime_with_memory(
-                regime_text,
-                indicators_cache=indicators_cache,
-                today_pnl=today_pnl,
-                equity=account.total_balance_usdt or 0.0,
-            )
 
         async with stage(
             self._bus,
@@ -282,28 +333,34 @@ class CryptoCycleService(BaseCycleService):
                 pair_count=len(halal_pairs),
                 open_positions=open_position_count,
             ):
-                plan = await self._strategy.analyze(
+                # Build the kwargs dict once — the shadow runner needs
+                # the same shape, so duplicating it inline drifts.
+                analyze_kwargs = dict(
                     account=account,
                     positions_text=positions_text,
                     halal_pairs=halal_pairs,
                     klines_by_symbol=klines_by_symbol,
                     orderbooks=orderbooks,
-                    today_pnl=today_pnl,
-                    performance_text=performance_text,
-                    sentiment_text=sentiment_text,
-                    timeframe_text=timeframe_text,
-                    ml_signals_text=ml_signals_text,
-                    regime_text=regime_text,
-                    active_adjustments=active_adjustments,
-                    exchange_rules_text=exchange_rules_text,
+                    today_pnl=state.today_pnl,
+                    performance_text=state.performance_text,
+                    sentiment_text=state.sentiment_text,
+                    timeframe_text=state.timeframe_text,
+                    ml_signals_text=state.ml_signals_text,
+                    regime_text=state.regime_text,
+                    active_adjustments=state.active_adjustments,
+                    exchange_rules_text=state.exchange_rules_text,
                     indicators_cache=indicators_cache,
                     open_position_count=open_position_count,
-                    risk_text=risk_text,
-                    microstructure_text=microstructure_text,
-                    news_text=news_text,
+                    risk_text=state.risk_text,
+                    microstructure_text=state.microstructure_text,
+                    news_text=state.news_text,
                 )
+                plan = await self._strategy.analyze(**analyze_kwargs)
 
-        self._apply_regime_gate(plan, klines_by_symbol, indicators_cache)
+        from halal_trader.core.cycle_stages import ApplyRegimeGateStage
+
+        state.plan = plan
+        await run_stages(state, [ApplyRegimeGateStage(self._regime)], bus=self._bus)
 
         logger.info(
             "Crypto plan: %s | %d buys, %d sells",
@@ -319,11 +376,11 @@ class CryptoCycleService(BaseCycleService):
             klines_by_symbol=klines_by_symbol,
             indicators_cache=indicators_cache,
             halal_pairs=halal_pairs,
-            today_pnl=today_pnl,
-            sentiment_text=sentiment_text,
-            regime_text=regime_text,
-            risk_text=risk_text,
-            microstructure_text=microstructure_text,
+            today_pnl=state.today_pnl,
+            sentiment_text=state.sentiment_text,
+            regime_text=state.regime_text,
+            risk_text=state.risk_text,
+            microstructure_text=state.microstructure_text,
         )
 
         await self._execute_and_notify(
@@ -331,59 +388,10 @@ class CryptoCycleService(BaseCycleService):
             account=account,
             indicators_cache=indicators_cache,
             klines_by_symbol=klines_by_symbol,
-            shadow_kwargs=dict(
-                account=account,
-                positions_text=positions_text,
-                halal_pairs=halal_pairs,
-                klines_by_symbol=klines_by_symbol,
-                orderbooks=orderbooks,
-                today_pnl=today_pnl,
-                performance_text=performance_text,
-                sentiment_text=sentiment_text,
-                timeframe_text=timeframe_text,
-                ml_signals_text=ml_signals_text,
-                regime_text=regime_text,
-                active_adjustments=active_adjustments,
-                exchange_rules_text=exchange_rules_text,
-                indicators_cache=indicators_cache,
-                open_position_count=open_position_count,
-                risk_text=risk_text,
-                microstructure_text=microstructure_text,
-                news_text=news_text,
-            ),
+            shadow_kwargs=analyze_kwargs,
         )
 
     # ── Plan post-processing + execution ───────────────────────
-
-    def _apply_regime_gate(
-        self,
-        plan,
-        klines_by_symbol: dict,
-        indicators_cache: dict[str, dict],
-    ) -> None:
-        """Strip BUYs in confirmed downtrend pairs from the plan in place."""
-        if not (self._regime and plan.buys):
-            return
-        downtrend_pairs: set[str] = set()
-        for pair in klines_by_symbol:
-            indicators = indicators_cache.get(pair, {})
-            if not indicators or "error" in indicators:
-                continue
-            regime, confidence, _ = self._regime.detect(indicators)
-            if regime == MarketRegime.TRENDING_DOWN and confidence >= 0.6:
-                downtrend_pairs.add(pair)
-        if not downtrend_pairs:
-            return
-        blocked = [d for d in plan.buys if d.symbol in downtrend_pairs]
-        if not blocked:
-            return
-        for d in blocked:
-            plan.decisions.remove(d)
-        logger.warning(
-            "Regime gate blocked %d BUY(s) in downtrend: %s",
-            len(blocked),
-            ", ".join(d.symbol for d in blocked),
-        )
 
     async def _execute_and_notify(
         self,
@@ -399,288 +407,65 @@ class CryptoCycleService(BaseCycleService):
         if plan.decisions:
             async with tracer.aspan("cycle.execute_plan", decision_count=len(plan.decisions)):
                 results = await self._executor.execute_plan(plan, account=account)
+        else:
+            logger.info("No crypto trades to execute this cycle")
 
-        if self._shadow_runner is None:
-            if not plan.decisions:
-                logger.info("No crypto trades to execute this cycle")
-            return
+        # Shadow-runner observation is best-effort and independent of
+        # whether the executor produced any fills — the runner records
+        # divergence even on hold-only cycles.
+        if self._shadow_runner is not None:
+            try:
+                latest_prices = {
+                    pair: (klines[-1].close if klines else 0.0)
+                    for pair, klines in klines_by_symbol.items()
+                }
+                await self._shadow_runner.observe_cycle(
+                    cycle_id=cycle_id_var.get() or "cycle-unknown",
+                    live_equity=account.total_balance_usdt or 0.0,
+                    latest_prices=latest_prices,
+                    analyze_kwargs=shadow_kwargs,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("shadow runner observe_cycle failed: %s", exc)
 
-        try:
-            latest_prices = {
-                pair: (klines[-1].close if klines else 0.0)
-                for pair, klines in klines_by_symbol.items()
-            }
-            await self._shadow_runner.observe_cycle(
-                cycle_id=cycle_id_var.get() or "cycle-unknown",
-                live_equity=account.total_balance_usdt or 0.0,
-                latest_prices=latest_prices,
-                analyze_kwargs=shadow_kwargs,
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.debug("shadow runner observe_cycle failed: %s", exc)
-
+        # Per-fill bookkeeping must run regardless of shadow runner —
+        # the ML retraining loop depends on the indicator snapshot, and
+        # the operator depends on the trade notification.
         for r in results:
             logger.info("Crypto execution: %s", r)
-            if r.get("status") in ("submitted", "filled") and r.get("action") == "buy":
+            status = r.get("status")
+            if status in ("submitted", "filled") and r.get("action") == "buy":
                 trade_id = r.get("trade_id")
                 symbol = r.get("symbol", "")
                 if trade_id and symbol in indicators_cache:
                     try:
-                        await self._portfolio._repo.record_indicator_snapshot(
+                        await self._portfolio.record_indicator_snapshot(
                             trade_id=trade_id,
                             pair=symbol,
                             indicators=indicators_cache[symbol],
                         )
                     except Exception as exc:  # noqa: BLE001
                         logger.debug("Failed to record indicator snapshot: %s", exc)
-            if self._notifier and r.get("status") in ("submitted", "filled"):
+            if self._notifier and status in ("submitted", "filled"):
                 try:
                     await self._notifier.notify_trade(
                         pair=r.get("symbol", ""),
                         side=r.get("action", ""),
                         quantity=r.get("quantity", 0),
                         price=r.get("price", 0),
+                        market="crypto",
+                        order_id=str(r.get("order_id", "")),
                     )
                 except Exception as exc:  # noqa: BLE001
                     logger.debug("Failed to send trade notification: %s", exc)
 
-    # ── Prompt-fragment builders (each best-effort) ────────────
-
-    async def _build_performance_text(self) -> str:
-        if not self._analytics:
-            return ""
-        try:
-            stats = await self._analytics.compute_stats(lookback_days=7)
-            return self._analytics.format_for_prompt(stats)
-        except Exception as e:  # noqa: BLE001
-            logger.debug("Performance stats unavailable: %s", e)
-            return ""
-
-    async def _build_sentiment_text(self, halal_pairs: list[str]) -> str:
-        """CryptoPanic + Reddit composite sentiment + mention-velocity."""
-        sentiment_text = ""
-        if self._sentiment and self._sentiment.enabled:
-            try:
-                from halal_trader.sentiment.scoring import format_sentiment_for_prompt
-
-                signals = self._sentiment.latest_signals
-                if signals:
-                    sentiment_text = format_sentiment_for_prompt(signals)
-                    if self._notifier:
-                        for pair, sig in signals.items():
-                            if sig.buzz >= 3.0:
-                                try:
-                                    await self._notifier.notify_buzz(pair, sig.buzz, sig.score)
-                                except Exception as exc:  # noqa: BLE001
-                                    logger.debug("Failed to send buzz alert: %s", exc)
-            except Exception as e:  # noqa: BLE001
-                logger.debug("Sentiment data unavailable: %s", e)
-
-        if self._reddit_fetcher is not None:
-            try:
-                from halal_trader.sentiment.velocity import (
-                    compute_velocity,
-                    format_velocity_for_prompt,
-                )
-
-                bases = sorted(
-                    {p.upper().removesuffix("USDT").removesuffix("BUSD") for p in halal_pairs}
-                )
-                mentions = await self._reddit_fetcher.fetch_for_symbols(bases)
-                if mentions:
-                    velocity = compute_velocity(mentions)
-                    self._hub.velocity = velocity
-                    velocity_block = format_velocity_for_prompt(velocity)
-                    if velocity_block:
-                        sentiment_text = (
-                            sentiment_text + "\n\n" + velocity_block
-                            if sentiment_text
-                            else velocity_block
-                        )
-            except Exception as exc:  # noqa: BLE001
-                logger.debug("Reddit velocity fetch failed: %s", exc)
-        return sentiment_text
-
-    async def _build_timeframe_text(self, halal_pairs: list[str]) -> str:
-        if not self._timeframes:
-            return ""
-        try:
-            from halal_trader.crypto.timeframes import format_timeframes_for_prompt
-
-            tf_results = await self._timeframes.analyze(halal_pairs)
-            if tf_results:
-                return format_timeframes_for_prompt(tf_results)
-        except Exception as e:  # noqa: BLE001
-            logger.debug("Multi-timeframe analysis unavailable: %s", e)
-        return ""
-
-    def _build_regime_text(self, klines_by_symbol: dict, indicators_cache: dict[str, dict]) -> str:
-        if not self._regime:
-            return ""
-        try:
-            from halal_trader.crypto.regime import format_regime_for_prompt
-
-            regimes = {}
-            for pair in klines_by_symbol:
-                indicators = indicators_cache.get(pair, {})
-                if not indicators or "error" in indicators:
-                    continue
-                regimes[pair] = self._regime.detect(indicators)
-            if regimes:
-                return format_regime_for_prompt(regimes)
-        except Exception as e:  # noqa: BLE001
-            logger.debug("Regime detection unavailable: %s", e)
-        return ""
-
-    def _build_ml_signals_text(
-        self, klines_by_symbol: dict, indicators_cache: dict[str, dict]
-    ) -> str:
-        if not (self._ml_forecaster or self._ml_anomaly or self._ml_signal):
-            return ""
-        try:
-            from halal_trader.ml.anomaly import format_ml_signals_for_prompt
-            from halal_trader.ml.forecaster import format_forecasts_for_prompt
-
-            forecasts: dict = {}
-            anomalies: dict = {}
-            ml_confidence: dict = {}
-
-            for pair, klines in klines_by_symbol.items():
-                if self._ml_forecaster and len(klines) >= 20:
-                    closes = [k.close for k in klines]
-                    fc = self._ml_forecaster.forecast(pair, closes)
-                    if fc:
-                        forecasts[pair] = fc
-
-                indicators = indicators_cache.get(pair, {})
-                if not indicators or "error" in indicators:
-                    continue
-                if self._ml_anomaly:
-                    self._ml_anomaly.add_sample(indicators)
-                    anomalies[pair] = self._ml_anomaly.detect(indicators)
-                if self._ml_signal:
-                    conf = self._ml_signal.predict_confidence(indicators)
-                    if conf is not None:
-                        ml_confidence[pair] = conf
-
-            forecasts_text = format_forecasts_for_prompt(forecasts)
-            return format_ml_signals_for_prompt(
-                forecasts_text, anomalies or None, ml_confidence or None
-            )
-        except Exception as e:  # noqa: BLE001
-            logger.debug("ML signals unavailable: %s", e)
-        return ""
-
-    def _evaluate_portfolio_risk(
-        self,
-        *,
-        account,
-        klines_by_symbol: dict,
-        indicators_cache: dict[str, dict],
-        open_trades,
-        current_prices: dict[str, float],
-    ) -> tuple[str, bool]:
-        """Run the portfolio-risk engine. Returns (risk_text, should_halt)."""
-        if not self._risk_engine:
-            return "", False
-        try:
-            open_pos_value: dict[str, float] = {}
-            unrealized_pnl: dict[str, float] = {}
-            for t in open_trades or []:
-                price = current_prices.get(t.pair) or self._broker.get_cached_price(t.pair)
-                if price and t.entry_price:
-                    open_pos_value[t.pair] = t.quantity * price
-                    unrealized_pnl[t.pair] = (price - t.entry_price) * t.quantity
-
-            risk_state = self._risk_engine.evaluate(
-                klines_by_symbol=klines_by_symbol,
-                indicators_cache=indicators_cache,
-                open_positions_value=open_pos_value,
-                unrealized_pnl=unrealized_pnl,
-                total_equity=account.total_balance_usdt,
-            )
-            risk_text = self._risk_engine.format_for_prompt(risk_state)
-
-            # Push the latest risk state into the hub's runtime view so
-            # the dashboard's /api/risk/state can render it. Falls back
-            # silently when no runtime view is wired (tests / dry-run).
-            runtime = getattr(self._hub, "runtime", None)
-            if runtime is not None:
-                runtime.risk_state = {
-                    "is_halted": risk_state.is_halted,
-                    "halt_reason": risk_state.halt_reason,
-                    "portfolio_heat_pct": getattr(risk_state, "portfolio_heat_pct", None),
-                    "drawdown_pct": getattr(risk_state, "drawdown_pct", None),
-                    "avg_correlation": getattr(risk_state, "avg_correlation", None),
-                    "summary": risk_text,
-                }
-
-            if risk_state.is_halted:
-                logger.warning("Risk engine halt: %s", risk_state.halt_reason)
-                return risk_text, True
-            return risk_text, False
-        except Exception as e:  # noqa: BLE001
-            logger.debug("Risk engine evaluation failed: %s", e)
-            return "", False
-
-    async def _augment_regime_with_rag(
-        self,
-        regime_text: str,
-        indicators_cache: dict[str, dict],
-        sentiment_text: str,
-    ) -> str:
-        """Append RAG hits over the closed-trade rationale store."""
-        try:
-            rag_store = self._hub.rag
-            if rag_store is None:
-                return regime_text
-            from halal_trader.core.llm.rag import format_rag_for_prompt
-
-            size = await rag_store.size()
-            if size <= 0:
-                return regime_text
-            rag_query = self._build_rag_query(
-                indicators_cache=indicators_cache,
-                sentiment_text=sentiment_text,
-                regime_text=regime_text,
-            )
-            hits = await rag_store.query(rag_query, k=5, min_similarity=0.0)
-            rag_text = format_rag_for_prompt(hits)
-            if rag_text:
-                return regime_text + "\n\n" + rag_text if regime_text else rag_text
-        except Exception as exc:  # noqa: BLE001
-            logger.debug("RAG query failed: %s", exc)
-        return regime_text
-
-    async def _augment_regime_with_memory(
-        self,
-        regime_text: str,
-        *,
-        indicators_cache: dict[str, dict],
-        today_pnl: float,
-        equity: float,
-    ) -> str:
-        """Append the top-K analogous past regimes to the regime block."""
-        try:
-            from halal_trader.ml.regime_memory import format_for_prompt
-
-            features = self._build_regime_features(
-                indicators_cache=indicators_cache,
-                today_pnl=today_pnl,
-                equity=equity,
-            )
-            regime_mem = self._hub.regime
-            if features is None or regime_mem is None:
-                return regime_text
-            if await regime_mem.size() <= 0:
-                return regime_text
-            hits = await regime_mem.query(features, k=3)
-            analog_text = format_for_prompt(features, hits)
-            if analog_text and "No analogous" not in analog_text:
-                return regime_text + "\n\n" + analog_text if regime_text else analog_text
-        except Exception as exc:  # noqa: BLE001
-            logger.debug("regime memory query failed: %s", exc)
-        return regime_text
+    # ── Prompt-fragment builders ───────────────────────────────
+    # Performance / sentiment / timeframe / regime / ML-signals are
+    # all driven by the Wave B stage list in ``_run_cycle_impl`` (see
+    # :func:`core.cycle_pipeline.run_stages`). The legacy methods that
+    # used to live here are gone; their behaviour is preserved by the
+    # stage classes under :mod:`core.cycle_stages` plus the per-stage
+    # tests in ``tests/test_cycle_stages.py``.
 
     # ── Private helpers ────────────────────────────────────────
 
@@ -774,169 +559,14 @@ class CryptoCycleService(BaseCycleService):
         except Exception as exc:  # noqa: BLE001
             logger.debug("treasury plan failed: %s", exc)
 
-    def _build_rag_query(
-        self,
-        *,
-        indicators_cache: dict,
-        sentiment_text: str,
-        regime_text: str,
-    ) -> str:
-        """Render a short text query summarising the current setup.
-
-        The query is hashed by HashingEmbedder, so we want token overlap
-        with what the LLM typically writes in its ``reasoning`` field —
-        keep it terse, technical-language-flavoured.
-        """
-        parts: list[str] = []
-        for pair, inds in (indicators_cache or {}).items():
-            if not inds or "error" in inds:
-                continue
-            rsi = inds.get("rsi_14")
-            macd = inds.get("macd_histogram")
-            bb = inds.get("bb_position")
-            ev: list[str] = [pair]
-            if rsi is not None:
-                if rsi < 35:
-                    ev.append("rsi oversold")
-                elif rsi > 65:
-                    ev.append("rsi overbought")
-                else:
-                    ev.append("rsi neutral")
-            if macd is not None:
-                ev.append("macd bullish" if macd > 0 else "macd bearish")
-            if bb is not None:
-                if bb < 0.2:
-                    ev.append("bb lower")
-                elif bb > 0.8:
-                    ev.append("bb upper")
-            parts.append(" ".join(ev))
-        if regime_text:
-            parts.append(regime_text[:80])
-        if sentiment_text:
-            parts.append(sentiment_text[:80])
-        return " | ".join(parts)[:600]
-
-    async def _augment_with_whale_flows(
-        self,
-        microstructure_text: str,
-        klines_by_symbol: dict,
-    ) -> str:
-        """Pull on-chain whale-flow signals from Etherscan and append them
-        to the microstructure block. Best-effort — silently degrade when
-        the source is unconfigured or fails.
-
-        The watched ERC-20s (USDT, USDC, DAI, WETH) are universe-wide
-        signals: their flows apply to every pair regardless of which
-        symbols the bot is currently trading.
-        """
-        if self._whale_flow_source is None:
-            return microstructure_text
-        try:
-            from halal_trader.crypto.onchain import (
-                TOKENS,
-                format_whale_flows_for_prompt,
-            )
-
-            prices: dict[str, float] = {}
-            eth_klines = klines_by_symbol.get("ETHUSDT") or []
-            if eth_klines:
-                prices["WETH"] = float(eth_klines[-1].close)
-
-            symbols_to_watch = list(TOKENS.keys())
-            signals = await self._whale_flow_source.fetch(symbols_to_watch, prices=prices)
-            self._hub.whale_flows = signals
-            block = format_whale_flows_for_prompt(signals)
-            if not block:
-                return microstructure_text
-            return microstructure_text + "\n\n" + block if microstructure_text else block
-        except Exception as exc:  # noqa: BLE001
-            logger.debug("whale-flow augmentation failed: %s", exc)
-            return microstructure_text
-
-    async def _augment_with_basis(
-        self,
-        microstructure_text: str,
-        halal_pairs,
-        klines_by_symbol,
-    ) -> str:
-        """Compute spot-perp basis features and append them to the
-        microstructure block. Best-effort — skip silently if the broker
-        doesn't expose ``get_funding_signal`` or any pair query fails.
-        """
-        if not halal_pairs:
-            return microstructure_text
-        if not hasattr(self._broker, "get_funding_signal"):
-            return microstructure_text
-        try:
-            from halal_trader.crypto.basis import format_basis_for_prompt
-        except Exception:  # noqa: BLE001
-            return microstructure_text
-
-        features = {}
-        for pair in halal_pairs:
-            try:
-                sig = await self._broker.get_funding_signal(pair)
-            except Exception:  # noqa: BLE001
-                continue
-            if not sig:
-                continue
-            try:
-                spot_klines = klines_by_symbol.get(pair) or []
-                spot_price = (
-                    spot_klines[-1].close if spot_klines else self._broker.get_cached_price(pair)
-                )
-                if not spot_price:
-                    continue
-                features[pair] = self._hub.basis.observe(
-                    pair=pair,
-                    spot_price=float(spot_price),
-                    perp_price=float(sig.get("mark_price", spot_price)),
-                    funding_rate_pct=float(sig.get("funding_rate", 0.0)),
-                )
-            except Exception as exc:  # noqa: BLE001
-                logger.debug("basis observe failed for %s: %s", pair, exc)
-
-        if not features:
-            return microstructure_text
-        basis_text = format_basis_for_prompt(features)
-        if not basis_text:
-            return microstructure_text
-        return microstructure_text + "\n\n" + basis_text if microstructure_text else basis_text
-
     def _build_regime_features(self, *, indicators_cache: dict, today_pnl: float, equity: float):
-        """Aggregate per-pair indicators into a daily ``RegimeFeatures``."""
-        from halal_trader.ml.regime_memory import RegimeFeatures
+        """Thin wrapper over :func:`ml.regime_memory.build_regime_features`."""
+        from halal_trader.ml.regime_memory import build_regime_features
 
-        if not indicators_cache:
-            return None
-        atrs: list[float] = []
-        rsis: list[float] = []
-        for inds in indicators_cache.values():
-            if not inds or "error" in inds:
-                continue
-            price = inds.get("current_price") or 0
-            atr = inds.get("atr_14") or 0
-            if price > 0 and atr > 0:
-                atrs.append(atr / price)
-            rsi = inds.get("rsi_14")
-            if rsi is not None:
-                rsis.append(rsi)
-        if not atrs and not rsis:
-            return None
-        avg_atr = sum(atrs) / len(atrs) if atrs else 0.0
-        avg_rsi = sum(rsis) / len(rsis) if rsis else 50.0
-        # Conservative defaults for fields we don't track day-of-cycle yet.
-        return RegimeFeatures(
-            volatility=avg_atr,
-            trend=0.0,
-            breadth=0.0,
-            sentiment=0.0,
-            drawdown=0.0,
-            volume_ratio=1.0,
-            correlation=0.0,
-            realized_return_1d=(today_pnl / equity) if equity else 0.0,
-            rsi=avg_rsi,
-            spread_bps=0.0,
+        return build_regime_features(
+            indicators_cache=indicators_cache,
+            today_pnl=today_pnl,
+            equity=equity,
         )
 
     def _log_treasury_plan(self, *, account) -> None:
@@ -999,7 +629,7 @@ class CryptoCycleService(BaseCycleService):
         # Pull paused pairs once per cycle.
         paused: set[str] = set()
         try:
-            paused = await self._portfolio._repo.get_paused_pairs()
+            paused = await self._portfolio.get_paused_pairs()
         except Exception as e:
             logger.debug("Could not fetch paused pairs: %s", e)
 
@@ -1085,37 +715,7 @@ class CryptoCycleService(BaseCycleService):
             orderbooks[pair] = book
         return orderbooks
 
-    def _build_microstructure_text(self, orderbooks: dict[str, dict[str, Any]]) -> str:
-        """Format depth-imbalance / spread features per pair for the LLM.
-
-        Funding signal needs an extra REST call (perp endpoint) and we
-        already throttle aggressively per-cycle, so we lean on the
-        already-fetched spot orderbook here. A future task can fan
-        funding fetches alongside orderbook fetches if signal value
-        justifies the cost.
-        """
-        from halal_trader.crypto.microstructure import (
-            format_microstructure_for_prompt,
-            orderbook_features,
-        )
-
-        lines: list[str] = []
-        for pair, book in sorted(orderbooks.items()):
-            feats = orderbook_features(book)
-            line = format_microstructure_for_prompt(pair=pair, book=feats)
-            if line:
-                lines.append(line)
-        return "\n".join(lines)
-
-    def _build_news_text(self, halal_pairs: list[str]) -> str:
-        """Pull a snapshot from the bounded RecentNewsFeed, if one is wired."""
-        if self._news_feed is None:
-            return ""
-        try:
-            from halal_trader.sentiment.feed import format_news_for_prompt
-
-            events = self._news_feed.snapshot()
-            return format_news_for_prompt(events, pair_filter=halal_pairs)
-        except Exception as e:
-            logger.debug("News feed unavailable: %s", e)
-            return ""
+    # Microstructure + news are now driven by ``BuildMicrostructureStage``
+    # and ``BuildNewsStage`` from :mod:`core.cycle_stages` (called via
+    # the secondary stage list in ``_run_cycle_impl``). The crypto-only
+    # microstructure augmentations (basis + whale flows) chain after.

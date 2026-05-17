@@ -147,6 +147,56 @@ class TestRunCycle:
         await svc.run_cycle()
         executor.execute_plan.assert_awaited_once()
 
+    @patch("halal_trader.crypto.cycle.get_settings")
+    async def test_records_indicator_snapshot_and_notifies_when_no_shadow_runner(
+        self, mock_get_settings
+    ):
+        """The default config has shadow_runner=None. After a buy fills,
+        the cycle must still record the indicator snapshot (ML loop) and
+        call the notifier (operator alerts) — those are independent of
+        the shadow ledger."""
+        from halal_trader.domain.models import CryptoTradeDecision, TradeAction
+
+        mock_get_settings.return_value = _mock_settings()
+        plan = CryptoTradingPlan(
+            decisions=[
+                CryptoTradeDecision(
+                    action=TradeAction.BUY,
+                    symbol="BTCUSDT",
+                    quantity=0.001,
+                    confidence=0.8,
+                    reasoning="test",
+                )
+            ],
+            market_outlook="Bullish",
+        )
+        svc, _, _, _, executor, portfolio = _make_cycle_service(plan=plan)
+        # Make the executor return a single filled-buy result so the
+        # snapshot + notify code paths fire.
+        executor.execute_plan.return_value = [
+            {
+                "status": "filled",
+                "action": "buy",
+                "symbol": "BTCUSDT",
+                "trade_id": 42,
+                "quantity": 0.001,
+                "price": 50_000.0,
+            }
+        ]
+        notifier = AsyncMock()
+        svc._notifier = notifier
+        svc._shadow_runner = None  # default — verifying the no-shadow path
+        await svc.run_cycle()
+        portfolio.record_indicator_snapshot.assert_awaited_once()
+        notifier.notify_trade.assert_awaited_once_with(
+            pair="BTCUSDT",
+            side="buy",
+            quantity=0.001,
+            price=50_000.0,
+            market="crypto",
+            order_id="",
+        )
+
 
 class TestShouldSkipLlm:
     @patch("halal_trader.crypto.cycle.get_settings")

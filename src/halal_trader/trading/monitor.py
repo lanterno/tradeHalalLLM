@@ -25,9 +25,10 @@ import asyncio
 import logging
 from typing import Any
 
-from halal_trader.db.repository import Repository
+from halal_trader.db.repos import TradeRepo
 from halal_trader.market_hours import is_market_open_local
 from halal_trader.mcp.client import AlpacaMCPClient
+from halal_trader.trading.bars import extract_last_price as _extract_last_price
 
 logger = logging.getLogger(__name__)
 
@@ -38,13 +39,14 @@ class StockPositionMonitor:
     def __init__(
         self,
         mcp: AlpacaMCPClient,
-        repo: Repository,
+        repo: TradeRepo,
         *,
         check_interval: float = 60.0,
         trailing_stop_activation_pct: float | None = None,
         trailing_stop_distance_pct: float = 0.005,
         retrainer: Any = None,
         close_recorders: object | None = None,
+        notifier: Any = None,
     ) -> None:
         self._mcp = mcp
         self._repo = repo
@@ -58,6 +60,9 @@ class StockPositionMonitor:
         # Optional post-close fan-out — drift / thesis / regret /
         # purification dispatch via core.post_close.record_close.
         self._close_recorders = close_recorders
+        # Optional Telegram notifier — fires `notify_sl_tp` on each
+        # SL/TP exit (parity with the crypto position monitor).
+        self._notifier = notifier
         self._running = False
         self._task: asyncio.Task[None] | None = None
         # Per-trade-id high water mark for trailing-stop ratchet.
@@ -174,6 +179,22 @@ class StockPositionMonitor:
         self._high_water.pop(trade.id, None)
         logger.info("Closed %s on %s at %.2f", trade.symbol, reason, price)
 
+        if self._notifier and getattr(self._notifier, "enabled", False):
+            try:
+                entry_price = trade.filled_price or trade.price or 0.0
+                pnl = (price - entry_price) * (trade.quantity or 0.0)
+                await self._notifier.notify_sl_tp(
+                    pair=trade.symbol,
+                    exit_reason=reason,
+                    entry_price=float(entry_price),
+                    exit_price=float(price),
+                    pnl=float(pnl),
+                    quantity=float(trade.quantity or 0.0),
+                    market="stocks",
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.debug("notify_sl_tp failed for %s: %s", trade.symbol, e)
+
         if self._retrainer is not None:
             entry = trade.filled_price or trade.price
             return_pct = (price - entry) / entry if entry else 0.0
@@ -225,37 +246,4 @@ class StockPositionMonitor:
                 logger.debug("stocks post-close recorder failed: %s", e)
 
 
-def _extract_last_price(snap: Any, symbol: str) -> float | None:
-    """Best-effort dig through Alpaca snapshot shapes for the latest price.
-
-    Alpaca returns either a flat dict or a nested ``{symbol: {...}}``
-    depending on whether one or many symbols were requested. Inside
-    each entry, the latest trade lives under ``latestTrade.p`` (or
-    ``latest_trade.price`` in some SDK versions).
-    """
-    if not isinstance(snap, dict):
-        return None
-    payload = snap.get(symbol) or snap.get(symbol.upper()) or snap
-    if not isinstance(payload, dict):
-        return None
-    for path in (
-        ("latestTrade", "p"),
-        ("latestTrade", "price"),
-        ("latest_trade", "p"),
-        ("latest_trade", "price"),
-        ("trade", "p"),
-        ("trade", "price"),
-    ):
-        node: Any = payload
-        ok = True
-        for key in path:
-            if not isinstance(node, dict) or key not in node:
-                ok = False
-                break
-            node = node[key]
-        if ok and node:
-            try:
-                return float(node)
-            except Exception:
-                continue
-    return None
+__all__ = ["StockPositionMonitor", "_extract_last_price"]

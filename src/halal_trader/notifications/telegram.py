@@ -75,12 +75,27 @@ class TelegramNotifier:
         quantity: float,
         price: float,
         reasoning: str = "",
+        *,
+        market: str = "",
+        order_id: str = "",
     ) -> None:
-        """Send a trade execution alert."""
+        """Send a trade execution alert.
+
+        ``market`` tags which bot fired ("crypto"/"stocks"); ``order_id``
+        is included tail-truncated for cross-referencing with the
+        exchange's order book.
+        """
         emoji = "\U0001f7e2" if side.lower() == "buy" else "\U0001f534"
-        msg = f"{emoji} <b>{side.upper()}</b> {pair}\nQty: {quantity:.6f}\nPrice: ${price:,.2f}\n"
+        notional = quantity * price
+        prefix = f"[{market}] " if market else ""
+        msg = (
+            f"{emoji} <b>{prefix}{side.upper()}</b> {pair}\n"
+            f"Qty: {quantity:.6f} @ ${price:,.2f}  (\u2248${notional:,.0f})\n"
+        )
+        if order_id:
+            msg += f"Order: \u2026{order_id[-8:]}\n"
         if reasoning:
-            msg += f"Reason: {reasoning[:200]}\n"
+            msg += f"<i>{reasoning[:200]}</i>\n"
         await self.send(msg)
 
     async def notify_sl_tp(
@@ -90,36 +105,106 @@ class TelegramNotifier:
         entry_price: float,
         exit_price: float,
         pnl: float,
+        *,
+        quantity: float = 0.0,
+        hold_minutes: float | None = None,
+        market: str = "",
     ) -> None:
         """Send a stop-loss or take-profit alert."""
         emoji = "\u2705" if pnl > 0 else "\u274c"
         label = "Take-Profit" if "take_profit" in exit_reason else "Stop-Loss"
+        pnl_pct = ((exit_price - entry_price) / entry_price) if entry_price else 0
+        prefix = f"[{market}] " if market else ""
         msg = (
-            f"{emoji} <b>{label}</b> {pair}\n"
-            f"Entry: ${entry_price:,.2f} \u2192 Exit: ${exit_price:,.2f}\n"
-            f"P&L: ${pnl:+,.2f}\n"
+            f"{emoji} <b>{prefix}{label}</b> {pair}\n"
+            f"${entry_price:,.2f} \u2192 ${exit_price:,.2f}  ({pnl_pct:+.2%})\n"
+            f"P&L: ${pnl:+,.2f}"
         )
+        if quantity:
+            msg += f" on {quantity:.6f}"
+        msg += "\n"
+        if hold_minutes is not None:
+            if hold_minutes < 60:
+                held = f"{hold_minutes:.0f}m"
+            elif hold_minutes < 60 * 24:
+                held = f"{hold_minutes / 60:.1f}h"
+            else:
+                held = f"{hold_minutes / (60 * 24):.1f}d"
+            msg += f"Held: {held}\n"
         await self.send(msg)
 
     async def notify_daily_summary(self, stats: dict[str, Any]) -> None:
-        """Send end-of-day performance summary."""
+        """Send end-of-day performance summary.
+
+        Recognised keys:
+          realized_pnl / total_pnl, trades_count, win_rate,
+          best_pair / best_pair_pnl, worst_pair / worst_pair_pnl,
+          llm_cost_usd, llm_calls, cycles_count, cycles_failed,
+          market (e.g. "crypto" / "stocks"), date (YYYY-MM-DD).
+        """
         pnl = stats.get("realized_pnl", stats.get("total_pnl", 0))
         emoji = "\U0001f4c8" if pnl >= 0 else "\U0001f4c9"
+        market = stats.get("market", "")
+        date = stats.get("date", "")
+        header = f"{market} {date}".strip()
+        title = f"Daily Summary \u2014 {header}" if header else "Daily Summary"
+
+        n_trades = stats.get("trades_count", 0)
+        wr = stats.get("win_rate", 0)
         msg = (
-            f"{emoji} <b>Daily Summary</b>\n"
-            f"P&L: ${pnl:+,.2f}\n"
-            f"Trades: {stats.get('trades_count', 0)}\n"
-            f"Win Rate: {stats.get('win_rate', 0):.0%}\n"
+            f"{emoji} <b>{title}</b>\n"
+            f"P&L: <b>${pnl:+,.2f}</b>  \u2022  Trades: {n_trades}  \u2022  Win: {wr:.0%}\n"
         )
+
         if stats.get("best_pair"):
-            msg += f"Best: {stats['best_pair']} (${stats.get('best_pair_pnl', 0):+,.2f})\n"
+            msg += f"\ud83c\udfc6 {stats['best_pair']}: ${stats.get('best_pair_pnl', 0):+,.2f}\n"
         if stats.get("worst_pair"):
-            msg += f"Worst: {stats['worst_pair']} (${stats.get('worst_pair_pnl', 0):+,.2f})\n"
+            msg += f"\ud83e\ude79 {stats['worst_pair']}: ${stats.get('worst_pair_pnl', 0):+,.2f}\n"
+
+        # LLM cost line \u2014 only printed when caller supplies the numbers.
+        # Surfaces ops/spend visibility next to PnL for at-a-glance health.
+        llm_cost = stats.get("llm_cost_usd")
+        llm_calls = stats.get("llm_calls")
+        if llm_cost is not None or llm_calls is not None:
+            cost_str = f"${llm_cost:,.2f}" if llm_cost is not None else "?"
+            calls_str = str(llm_calls) if llm_calls is not None else "?"
+            msg += f"\u2699 LLM: {cost_str}  \u2022  {calls_str} calls\n"
+
+        cycles = stats.get("cycles_count")
+        cycles_failed = stats.get("cycles_failed")
+        if cycles is not None:
+            line = f"\u267b Cycles: {cycles}"
+            if cycles_failed:
+                line += f" ({cycles_failed} failed)"
+            msg += line + "\n"
+
         await self.send(msg)
 
-    async def notify_error(self, error_type: str, details: str) -> None:
-        """Send a system error alert."""
-        msg = f"\u26a0\ufe0f <b>System Alert: {error_type}</b>\n{details[:500]}\n"
+    async def notify_error(
+        self,
+        error_type: str,
+        details: str,
+        *,
+        market: str = "",
+        severity: str = "warning",
+    ) -> None:
+        """Send a system error alert.
+
+        ``severity`` \u2208 {"warning","error","critical"} drives the
+        attention-grabbing emoji and label. "critical" should be
+        reserved for the operator-must-act cases (out of credits,
+        kill-switch engaged, broker connection lost).
+        """
+        sev = severity.lower()
+        emoji_map = {"critical": "\ud83d\udea8", "error": "\u26d4", "warning": "\u26a0"}
+        emoji = emoji_map.get(sev, "\u26a0")
+        label = sev.upper() if sev != "warning" else "Alert"
+        prefix = f"[{market}] " if market else ""
+        # Smart truncate \u2014 keep head + tail so the actual error code at
+        # the end of long stack traces survives the 500-char cap.
+        if len(details) > 500:
+            details = f"{details[:300]}\n\u2026(truncated)\u2026\n{details[-180:]}"
+        msg = f"{emoji} <b>{prefix}{label}: {error_type}</b>\n{details}\n"
         await self.send(msg)
 
     async def notify_buzz(self, pair: str, buzz_score: float, sentiment: float) -> None:
@@ -170,8 +255,20 @@ class AlertSink:
     def enabled(self) -> bool:
         return self._notifier is not None and self._notifier.enabled
 
-    async def notify(self, error_type: str, details: str) -> bool:
+    async def notify(
+        self,
+        error_type: str,
+        details: str,
+        *,
+        market: str = "",
+        severity: str = "warning",
+    ) -> bool:
         """Send a Telegram alert, deduped by ``error_type`` within the window.
+
+        ``market`` and ``severity`` are passed through to the notifier so
+        operators see ``[crypto] CRITICAL:`` style headers. ``severity``
+        ∈ {"warning","error","critical"}; use "critical" sparingly for
+        operator-must-act cases.
 
         Returns ``True`` if a message went out, ``False`` if it was suppressed
         (or the notifier is disabled).
@@ -196,6 +293,6 @@ class AlertSink:
             details = f"{details}\n\n(also suppressed {suppressed} similar alerts)"
 
         assert self._notifier is not None
-        await self._notifier.notify_error(error_type, details)
+        await self._notifier.notify_error(error_type, details, market=market, severity=severity)
         self._last_sent[error_type] = now
         return True
