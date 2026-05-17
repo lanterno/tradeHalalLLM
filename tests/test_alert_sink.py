@@ -40,7 +40,11 @@ async def test_first_alert_sends():
     sink = AlertSink(notifier=notifier)
     sent = await sink.notify("cycle.failed", "boom")
     assert sent is True
-    notifier.notify_error.assert_awaited_once_with("cycle.failed", "boom")
+    # AlertSink forwards optional market + severity kwargs to the
+    # underlying notifier (defaults: "" / "warning").
+    notifier.notify_error.assert_awaited_once_with(
+        "cycle.failed", "boom", market="", severity="warning"
+    )
 
 
 @pytest.mark.asyncio

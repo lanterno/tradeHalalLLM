@@ -369,6 +369,8 @@ class CryptoTradingBot(BaseTradingBot):
                     await self._alerts.notify(
                         "cycle.timeout",
                         f"Crypto trading cycle exceeded {cycle_timeout}s and was cancelled.",
+                        market="crypto",
+                        severity="error",
                     )
 
                 from datetime import datetime, timezone

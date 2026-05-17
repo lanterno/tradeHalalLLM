@@ -318,6 +318,8 @@ class TradingBot(BaseTradingBot):
                 await self._alerts.notify(
                     "stock.pre_market.failed",
                     f"{type(e).__name__}: {e}",
+                    market="stocks",
+                    severity="error",
                 )
 
     async def trading_cycle(self) -> None:
@@ -339,7 +341,44 @@ class TradingBot(BaseTradingBot):
 
             # Record daily P&L
             summary = await portfolio.record_day_end()
+
+            # Enrich with market tag + date + LLM cost/calls. Mirrors
+            # the crypto path in crypto/scheduler.py:_daily_end so the
+            # richer Telegram summary fields fire.
+            summary["market"] = "stocks"
+            from datetime import UTC, datetime
+
+            summary["date"] = datetime.now(UTC).date().isoformat()
+            if self._engine is not None:
+                try:
+                    from sqlalchemy import text
+                    from sqlalchemy.ext.asyncio import AsyncSession
+
+                    async with AsyncSession(self._engine) as session:
+                        row = (
+                            await session.execute(
+                                text(
+                                    "SELECT COUNT(*)::int, "
+                                    "COALESCE(SUM(cost_usd), 0)::float "
+                                    "FROM llm_decisions "
+                                    "WHERE timestamp::date = CURRENT_DATE"
+                                )
+                            )
+                        ).first()
+                        if row:
+                            summary["llm_calls"] = int(row[0] or 0)
+                            summary["llm_cost_usd"] = float(row[1] or 0.0)
+                except Exception as exc:
+                    logger.debug("Failed to enrich stocks daily summary with LLM cost: %s", exc)
+
             logger.info("Day summary: %s", summary)
+
+            # Send daily summary via Telegram — mirrors crypto/_daily_end.
+            if self._notifier and self._notifier.enabled:
+                try:
+                    await self._notifier.notify_daily_summary(summary or {})
+                except Exception as exc:
+                    logger.debug("Failed to send stocks daily summary: %s", exc)
 
         except Exception as e:
             logger.error("End of day routine failed: %s", e)
@@ -347,6 +386,8 @@ class TradingBot(BaseTradingBot):
                 await self._alerts.notify(
                     "stock.end_of_day.failed",
                     f"{type(e).__name__}: {e}",
+                    market="stocks",
+                    severity="error",
                 )
 
     async def _early_close_eod(self) -> None:
