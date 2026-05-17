@@ -391,7 +391,12 @@ class CryptoTradingBot(BaseTradingBot):
                         atr_baseline=self.settings.crypto.atr_baseline,
                     )
                     next_interval = decision.interval_seconds
-                    if decision.regime != "normal":
+                    # Log only on regime change. Volatility regimes tend
+                    # to persist for many cycles; the prior code fired the
+                    # same line every cycle and dominated the log output.
+                    if decision.regime != "normal" and decision.regime != getattr(
+                        self, "_last_cadence_regime", None
+                    ):
                         logger.info(
                             "Adaptive cadence: %s regime (median ATR %.4f, ratio %.2f) → %ds",
                             decision.regime,
@@ -399,6 +404,7 @@ class CryptoTradingBot(BaseTradingBot):
                             decision.ratio,
                             next_interval,
                         )
+                    self._last_cadence_regime = decision.regime  # type: ignore[attr-defined]
 
                 # Sleep for remaining interval time
                 elapsed = time.monotonic() - cycle_start
