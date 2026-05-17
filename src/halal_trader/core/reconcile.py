@@ -244,14 +244,25 @@ async def _persist_and_alert(
         return
 
     rows: list[ReconciliationLog] = []
+    untracked_count = 0
+    untracked_usd = 0.0
     for drift in report.drifts:
         # "Untracked broker balance" (bot has no record, exchange does)
         # is informational — the bot has no claim and nothing to reconcile.
         # Real drift on a tracked position (db_quantity > 0 with a mismatch)
         # is the one that needs operator attention.
         is_untracked_broker_balance = drift.db_quantity == 0.0 and drift.broker_quantity > 0.0
-        log_fn = logger.info if is_untracked_broker_balance else logger.warning
-        log_fn(
+        if is_untracked_broker_balance:
+            # Aggregate into a single summary line at the end of the pass
+            # instead of one INFO log per asset (testnet has 50+ faucet
+            # assets → 50 lines per reconcile pass → console spam).
+            untracked_count += 1
+            untracked_usd += drift.drift_usd or 0.0
+            continue
+
+        # Real drift — log per-symbol at WARNING (operator-actionable)
+        # and persist to reconciliation_log.
+        logger.warning(
             "Reconcile drift: %s/%s db=%.8f broker=%.8f drift=%.2f%%",
             drift.market,
             drift.symbol,
@@ -269,13 +280,6 @@ async def _persist_and_alert(
                 "notes": drift.notes,
             },
         )
-        # Skip persisting "untracked broker balance" rows — these fire
-        # every reconcile cycle for dust / testnet faucet balances we
-        # don't trade. With Binance testnet's ~50 pre-seeded assets,
-        # this was 48k rows/day. The runtime log still captures them
-        # at INFO if anyone needs to triage.
-        if is_untracked_broker_balance:
-            continue
         rows.append(
             ReconciliationLog(
                 timestamp=datetime.now(UTC),
@@ -287,6 +291,21 @@ async def _persist_and_alert(
                 drift_usd=drift.drift_usd,
                 notes=drift.notes,
             )
+        )
+
+    # Single summary line for untracked broker balances — replaces the
+    # per-asset INFO spam (was 50+ lines per pass on testnet).
+    if untracked_count:
+        logger.info(
+            "Reconcile: %d untracked broker balance(s) totaling ~$%.2f (informational)",
+            untracked_count,
+            untracked_usd,
+            extra={
+                "event": events.RECONCILE_DRIFT,
+                "market": report.market,
+                "untracked_count": untracked_count,
+                "untracked_usd": untracked_usd,
+            },
         )
 
     if rows:
