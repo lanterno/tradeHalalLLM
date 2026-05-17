@@ -223,3 +223,33 @@ def format_regime_for_prompt(
         lines.append(f"    Strategy: {instructions}")
 
     return "\n".join(lines)
+
+
+def build_regime_text(
+    detector: RegimeDetector | None,
+    indicators_by_symbol: dict[str, dict[str, Any]],
+) -> str:
+    """Run the detector over each symbol's indicator vector and format the result.
+
+    Shared between :class:`CryptoCycleService` and ``TradingCycleService``
+    so both bots produce identical regime blocks. Symbols whose
+    indicators carry an ``error`` key are skipped — their bars failed
+    parse / didn't have enough history.
+
+    Returns ``""`` when the detector is missing, raises silently on
+    detector errors (returns empty string), or formats the per-symbol
+    detection via :func:`format_regime_for_prompt`.
+    """
+    if detector is None or not indicators_by_symbol:
+        return ""
+    try:
+        regimes: dict[str, tuple[MarketRegime, float, str]] = {}
+        for symbol, indicators in indicators_by_symbol.items():
+            if not indicators or "error" in indicators:
+                continue
+            regimes[symbol] = detector.detect(indicators)
+        if regimes:
+            return format_regime_for_prompt(regimes)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("Regime detection failed: %s", exc)
+    return ""

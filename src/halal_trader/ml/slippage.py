@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from halal_trader.db.repository import Repository
+    from sqlalchemy.ext.asyncio import AsyncEngine
 
 logger = logging.getLogger(__name__)
 
@@ -195,22 +195,22 @@ def load_from_file(models_dir: Path | str) -> SlippageModel:
         return SlippageModel.identity()
 
 
-async def save_to_db(model: SlippageModel, repo: "Repository") -> None:
-    """Persist via the artefact repo (Wave K)."""
+async def save_to_db(model: SlippageModel, engine: "AsyncEngine") -> None:
+    """Persist via the artefact store (Wave K)."""
     from halal_trader.db.ml_artefacts import save_artefact
 
     await save_artefact(
-        repo=repo,
+        engine=engine,
         name=_DEFAULT_NAME,
         version=_MODEL_VERSION,
         payload_json=model.to_json(),
     )
 
 
-async def load_from_db(repo: "Repository") -> SlippageModel:
+async def load_from_db(engine: "AsyncEngine") -> SlippageModel:
     from halal_trader.db.ml_artefacts import load_artefact
 
-    payload = await load_artefact(repo=repo, name=_DEFAULT_NAME)
+    payload = await load_artefact(engine=engine, name=_DEFAULT_NAME)
     if payload is None:
         return SlippageModel.identity()
     return SlippageModel.from_json(payload)

@@ -55,3 +55,34 @@ def test_existing_strategy_prompts_expose_version_constants():
     ):
         assert len(pv.version_id) == 12
         int(pv.version_id, 16)
+
+
+def test_list_versions_returns_a_copy():
+    """Mutating the returned dict must not affect the registry."""
+    from halal_trader.core.llm.prompts import list_versions
+
+    _reset_for_tests()
+    register("test.x", "alpha")
+    snapshot = list_versions()
+    snapshot["bogus"] = "should not leak"
+    # Re-fetch — bogus key shouldn't have leaked into the registry.
+    assert "bogus" not in list_versions()
+
+
+def test_list_versions_includes_every_registered_prompt():
+    from halal_trader.core.llm.prompts import list_versions
+
+    _reset_for_tests()
+    register("test.a", "first")
+    register("test.b", "second")
+    snap = list_versions()
+    assert set(snap) == {"test.a", "test.b"}
+    assert snap["test.a"].template == "first"
+    assert snap["test.b"].template == "second"
+
+
+def test_get_version_raises_keyerror_when_unknown():
+    """The registry has no silent default — unknown names raise."""
+    _reset_for_tests()
+    with pytest.raises(KeyError):
+        get_version("never.registered")

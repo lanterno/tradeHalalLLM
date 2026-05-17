@@ -5,13 +5,15 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from halal_trader.core.llm.ensemble import EnsembleVariant, run_ensemble, wrap_existing
 from halal_trader.core.llm.prompts import register as _register_prompt
 from halal_trader.core.strategy import BaseStrategy
-from halal_trader.db.repository import Repository
+from halal_trader.db.repos import LlmDecisionRepo
 from halal_trader.domain.models import Account, Position, TradingPlan
 from halal_trader.domain.ports import LLMBackend
 
 logger = logging.getLogger(__name__)
+
 
 SYSTEM_PROMPT = """\
 You are an expert intraday stock trader AI. Your job is to analyze market data \
@@ -79,6 +81,15 @@ Today's P&L: ${today_pnl:+,.2f} ({today_pnl_pct:+.2%})
 
 === PORTFOLIO RISK ===
 {risk_text}
+
+=== MARKET REGIME ===
+{regime_text}
+
+=== ML SIGNALS ===
+{ml_signals_text}
+
+=== MULTI-TIMEFRAME ANALYSIS ===
+{timeframe_text}
 
 === RECENT CATALYSTS (news / earnings / insider) ===
 {catalysts_text}
@@ -155,7 +166,7 @@ class TradingStrategy(BaseStrategy):
     def __init__(
         self,
         llm: LLMBackend,
-        repo: Repository,
+        repo: LlmDecisionRepo,
         *,
         llm_provider_name: str,
         max_position_pct: float,
@@ -165,6 +176,9 @@ class TradingStrategy(BaseStrategy):
         attacker_llm: LLMBackend | None = None,
         adversarial_downsize_at: float = 0.45,
         adversarial_skip_at: float = 0.75,
+        ensemble_llms: list[LLMBackend] | None = None,
+        ensemble_quorum: int = 2,
+        ensemble_skip_at: float | None = None,
     ) -> None:
         super().__init__(
             llm,
@@ -181,6 +195,15 @@ class TradingStrategy(BaseStrategy):
         self._adv_skip_at = adversarial_skip_at
         self.last_adversarial_review = None
 
+        # Optional ensemble fan-out — mirrors crypto. Empty = disabled.
+        # When set, every analyze() call runs the primary + ensemble in
+        # parallel; consensus quantities replace the primary's. Adversarial
+        # review (if any) then runs on the consensus plan.
+        self._ensemble_llms = list(ensemble_llms or [])
+        self._ensemble_quorum = ensemble_quorum
+        self._ensemble_skip_at = ensemble_skip_at
+        self.last_ensemble_verdict = None
+
     async def analyze(
         self,
         account: Account,
@@ -192,6 +215,9 @@ class TradingStrategy(BaseStrategy):
         sentiment_text: str = "Sentiment data: not available",
         risk_text: str = "",
         catalysts_text: str = "",
+        regime_text: str = "",
+        ml_signals_text: str = "",
+        timeframe_text: str = "",
     ) -> TradingPlan:
         portfolio_value = account.portfolio_value or account.equity or 100000
         today_pnl_pct = today_pnl / portfolio_value if portfolio_value else 0
@@ -215,6 +241,9 @@ class TradingStrategy(BaseStrategy):
             bars_text=_format_bars(bars),
             sentiment_text=sentiment_text,
             risk_text=risk_text or "No portfolio risk data available.",
+            regime_text=regime_text or "No regime data available.",
+            ml_signals_text=ml_signals_text or "No ML signals available.",
+            timeframe_text=timeframe_text or "No multi-timeframe data available.",
             catalysts_text=catalysts_text or "No recent catalysts.",
         )
 
@@ -239,10 +268,73 @@ class TradingStrategy(BaseStrategy):
             prompt_version=PROMPT_VERSION.short,
         )
 
+        if self._ensemble_llms and plan.decisions:
+            plan = await self._apply_ensemble(plan, system, user_prompt)
+
         if self._attacker_llm is not None and plan.decisions:
             plan = await self._apply_adversarial_review(plan, user_prompt)
 
         return plan
+
+    async def _apply_ensemble(
+        self, primary_plan: TradingPlan, system: str, user_prompt: str
+    ) -> TradingPlan:
+        """Fan-out to ensemble LLMs and merge with the primary's plan.
+
+        On any error, returns the primary plan unchanged — the ensemble
+        is advisory and must never block trading.
+        """
+
+        async def _call_for(llm: LLMBackend) -> TradingPlan:
+            try:
+                raw = await llm.generate_json(user_prompt, system=system)
+                return TradingPlan.model_validate(raw)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("ensemble variant %s failed: %s", getattr(llm, "model", "?"), exc)
+                raise
+
+        variants = [
+            EnsembleVariant(
+                name=f"primary:{getattr(self._llm, 'model', 'primary')}",
+                call=lambda p=primary_plan: wrap_existing(p),
+            )
+        ]
+        for i, alt in enumerate(self._ensemble_llms):
+
+            async def _alt_call(alt: LLMBackend = alt) -> TradingPlan:
+                return await _call_for(alt)
+
+            variants.append(
+                EnsembleVariant(name=f"alt-{i}:{getattr(alt, 'model', 'alt')}", call=_alt_call)
+            )
+
+        try:
+            verdict = await run_ensemble(
+                variants,
+                quorum=self._ensemble_quorum,
+                skip_quorum_at=self._ensemble_skip_at,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("stocks ensemble run failed: %s — keeping primary plan", exc)
+            return primary_plan
+        self.last_ensemble_verdict = verdict
+        consensus = verdict.consensus_plan
+        if not isinstance(consensus, TradingPlan):
+            return primary_plan
+        if verdict.sizing_multiplier == 0.0:
+            return consensus.model_copy(update={"decisions": []})
+        if verdict.sizing_multiplier < 1.0 and consensus.decisions:
+            new_decisions = []
+            for d in consensus.decisions:
+                action = d.action.value if hasattr(d.action, "value") else str(d.action)
+                if action.lower() == "buy":
+                    new_decisions.append(
+                        d.model_copy(update={"quantity": d.quantity * verdict.sizing_multiplier})
+                    )
+                else:
+                    new_decisions.append(d)
+            consensus = consensus.model_copy(update={"decisions": new_decisions})
+        return consensus
 
     async def _apply_adversarial_review(self, plan: TradingPlan, user_prompt: str) -> TradingPlan:
         """Run the co-bot critic and shrink/skip buys when convincing."""

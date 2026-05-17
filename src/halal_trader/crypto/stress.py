@@ -242,6 +242,176 @@ def sustained_downtrend_klines(
     )
 
 
+# ── Round-4 wave 7.B additions ───────────────────────────────────
+#
+# Three more scenarios + a multi-symbol helper. Each maps to a
+# realistic failure mode the existing five didn't cover:
+#
+# * regime_shift_klines     — calm regime → suddenly turbulent.
+#   Catches strategies that keep their fixed sizing through a vol
+#   regime change instead of de-risking on the spike.
+# * volatility_explosion_klines — sustained high-vol burst with
+#   directionless chop. Catches strategies that interpret big
+#   price ranges as a tradable trend and over-trade.
+# * liquidity_crunch_klines — gappy bars on collapsing volume,
+#   wide H-L ranges. Approximates a wide-spread / illiquid market;
+#   strategy should size down or refuse to trade.
+# * correlated_pair_klines  — two synthetic kline streams with a
+#   user-controlled correlation. Lets stress tests check whether
+#   a multi-pair strategy responds to correlation breakdown
+#   (correlation drops mid-window) without needing real data.
+
+
+def regime_shift_klines(
+    *,
+    base_price: float = 100.0,
+    n_calm: int = 40,
+    n_turbulent: int = 30,
+    calm_sigma: float = 0.0008,
+    turbulent_sigma: float = 0.012,
+    seed: int = 5,
+    start_time_ms: int = 0,
+) -> list[Kline]:
+    """Calm → turbulent regime transition.
+
+    The first ``n_calm`` bars walk with low vol; then volatility
+    jumps ~15× to ``turbulent_sigma`` for the rest. Volume rises
+    over the transition (1.0 → 2.5×) so a vol-aware sizer should
+    visibly de-risk into the new regime.
+    """
+    rng = random.Random(seed)
+    calm = _drift_walk(rng, start_price=base_price, n=n_calm, sigma=calm_sigma)
+    last = calm[-1] if calm else base_price
+    turbulent = _drift_walk(rng, start_price=last, n=n_turbulent, sigma=turbulent_sigma)
+    closes = calm + turbulent
+    vols = [1.0] * n_calm + [2.5] * n_turbulent
+    return _build_klines(closes, start_time_ms=start_time_ms, volume_factor=vols, rng=rng)
+
+
+def volatility_explosion_klines(
+    *,
+    base_price: float = 100.0,
+    n_pre: int = 20,
+    n_burst: int = 40,
+    burst_sigma: float = 0.025,
+    seed: int = 6,
+    start_time_ms: int = 0,
+) -> list[Kline]:
+    """Sustained high-vol burst with no clear directional bias.
+
+    Built so the bar-to-bar moves are huge but the cumulative drift
+    is roughly zero — i.e. the price ends near where it started.
+    Tests strategies that confuse range for trend.
+    """
+    rng = random.Random(seed)
+    pre = _drift_walk(rng, start_price=base_price, n=n_pre, sigma=0.001)
+    last = pre[-1] if pre else base_price
+    # Zero-mean random walk at high vol; mean-revert gently to
+    # keep the close near the start so the scenario is "all noise".
+    burst: list[float] = []
+    p = last
+    for _ in range(n_burst):
+        # Mean-revert pull toward `last` plus a high-vol shock.
+        pull = (last - p) * 0.05
+        shock = rng.gauss(0.0, burst_sigma)
+        p = max(0.01, p * (1.0 + pull + shock))
+        burst.append(p)
+    closes = pre + burst
+    vols = [1.0] * n_pre + [3.0] * n_burst
+    return _build_klines(closes, start_time_ms=start_time_ms, volume_factor=vols, rng=rng)
+
+
+def liquidity_crunch_klines(
+    *,
+    base_price: float = 100.0,
+    n: int = 50,
+    seed: int = 7,
+    start_time_ms: int = 0,
+) -> list[Kline]:
+    """Gappy, low-volume bars approximating a wide-spread market.
+
+    Volume collapses to ~0.05× of normal. Each bar's H-L range is
+    inflated relative to its body so the bar looks "wide" — that's
+    the kline-level approximation of a wide bid-ask spread, since
+    Kline has no spread field of its own. A sane strategy should
+    refuse to trade or size dramatically down.
+    """
+    rng = random.Random(seed)
+    closes = _drift_walk(rng, start_price=base_price, n=n, sigma=0.005)
+    # Build manually so we can blow up the H-L range.
+    out: list[Kline] = []
+    prev = closes[0]
+    for i, close in enumerate(closes):
+        body = abs(close - prev)
+        # Wide-bar: H/L extend ~3× beyond body.
+        wide = body * 3.0 + abs(close) * 0.005
+        high = max(prev, close) + rng.uniform(0, wide)
+        low = max(0.01, min(prev, close) - rng.uniform(0, wide))
+        out.append(
+            _bar(
+                open_time=start_time_ms + i * 60_000,
+                open_price=prev,
+                close_price=close,
+                high=high,
+                low=low,
+                volume=100.0 * 0.05,  # 5% of normal volume
+                interval_ms=60_000,
+            )
+        )
+        prev = close
+    return out
+
+
+def correlated_pair_klines(
+    *,
+    base_price: float = 100.0,
+    n: int = 80,
+    n_breakdown_at: int = 40,
+    pre_correlation: float = 0.95,
+    post_correlation: float = 0.0,
+    sigma: float = 0.005,
+    seed: int = 8,
+    start_time_ms: int = 0,
+) -> tuple[list[Kline], list[Kline]]:
+    """Two synthetic streams whose correlation drops mid-window.
+
+    Returns ``(stream_a, stream_b)`` — same length, same timestamps.
+    Bars 0..``n_breakdown_at`` are co-driven (correlation
+    ``pre_correlation``); after the break point the streams move
+    independently (``post_correlation``). Tests strategies that rely
+    on a stable correlation matrix for risk allocation.
+    """
+    if not -1.0 <= pre_correlation <= 1.0 or not -1.0 <= post_correlation <= 1.0:
+        raise ValueError("correlations must be in [-1, 1]")
+    if n_breakdown_at < 0 or n_breakdown_at > n:
+        raise ValueError("n_breakdown_at must be in [0, n]")
+
+    rng = random.Random(seed)
+    closes_a: list[float] = []
+    closes_b: list[float] = []
+    pa = base_price
+    pb = base_price
+    import math
+
+    for i in range(n):
+        rho = pre_correlation if i < n_breakdown_at else post_correlation
+        common = rng.gauss(0.0, sigma)
+        idio_a = rng.gauss(0.0, sigma)
+        idio_b = rng.gauss(0.0, sigma)
+        # Build correlated shocks using the standard rho-mix.
+        shock_a = math.sqrt(abs(rho)) * (common if rho >= 0 else -common)
+        shock_a += math.sqrt(max(0.0, 1 - abs(rho))) * idio_a
+        shock_b = math.sqrt(abs(rho)) * common
+        shock_b += math.sqrt(max(0.0, 1 - abs(rho))) * idio_b
+        pa = max(0.01, pa * (1.0 + shock_a))
+        pb = max(0.01, pb * (1.0 + shock_b))
+        closes_a.append(pa)
+        closes_b.append(pb)
+    klines_a = _build_klines(closes_a, start_time_ms=start_time_ms, rng=rng)
+    klines_b = _build_klines(closes_b, start_time_ms=start_time_ms, rng=rng)
+    return klines_a, klines_b
+
+
 # ── Scenario container ─────────────────────────────────────────────
 
 
@@ -287,6 +457,24 @@ def standard_scenarios() -> list[StressScenario]:
             description="60 bars steadily declining ~20% with normal volume.",
             klines=sustained_downtrend_klines(),
             expected="No counter-trend buys; ride the trend short or wait.",
+        ),
+        StressScenario(
+            name="regime_shift",
+            description="40 calm bars then 30 bars at ~15× volatility.",
+            klines=regime_shift_klines(),
+            expected="De-risk after the vol jump; no high-confidence buys.",
+        ),
+        StressScenario(
+            name="volatility_explosion",
+            description="40 bars of high-vol directionless chop.",
+            klines=volatility_explosion_klines(),
+            expected="Mostly hold; don't mistake range for trend.",
+        ),
+        StressScenario(
+            name="liquidity_crunch",
+            description="50 wide-bar low-volume bars — illiquid regime.",
+            klines=liquidity_crunch_klines(),
+            expected="Refuse to trade or size dramatically down.",
         ),
     ]
 
@@ -369,12 +557,53 @@ def _grade_sustained_downtrend(plan: Any) -> tuple[float, list[str]]:
     return 0.4, ["counter-trend buy in a downtrend"]
 
 
+def _grade_regime_shift(plan: Any) -> tuple[float, list[str]]:
+    """Penalise sizing up *into* the new turbulent regime.
+
+    Default heuristic: a high-confidence (≥0.7) buy is the alarming
+    behaviour — calm-regime priors shouldn't carry over after a
+    visible vol jump.
+    """
+    buys = _filter_action(plan, "buy")
+    if not buys:
+        return 0.0, ["no buy through regime shift — sane"]
+    if any(getattr(b, "confidence", 0) >= 0.7 for b in buys):
+        return 0.7, ["high-confidence buy after vol regime jump"]
+    return 0.3, ["low-confidence buy after vol regime jump"]
+
+
+def _grade_volatility_explosion(plan: Any) -> tuple[float, list[str]]:
+    """Sustained high-vol with no clean direction. A sane bot
+    holds; high-confidence trades in either direction are bad."""
+    buys = _filter_action(plan, "buy")
+    sells = _filter_action(plan, "sell")
+    if not buys and not sells:
+        return 0.0, ["no entries during high-vol chop — sane"]
+    confident = [d for d in (buys + sells) if getattr(d, "confidence", 0) >= 0.7]
+    if confident:
+        return 0.75, [f"{len(confident)} high-confidence trades in directionless chop"]
+    return 0.4, [f"{len(buys + sells)} entries during high-vol chop"]
+
+
+def _grade_liquidity_crunch(plan: Any) -> tuple[float, list[str]]:
+    """Wide-bar, low-volume regime — strategy should mostly hold."""
+    buys = _filter_action(plan, "buy")
+    if not buys:
+        return 0.0, ["no entries in illiquid wide-bar regime — sane"]
+    if any(getattr(b, "confidence", 0) >= 0.7 for b in buys):
+        return 0.8, ["high-confidence buy in liquidity-crunch regime"]
+    return 0.5, ["entries in liquidity-crunch regime"]
+
+
 _GRADERS: dict[str, Callable[[Any], tuple[float, list[str]]]] = {
     "flash_crash": _grade_flash_crash,
     "blow_off_pump": _grade_blow_off_pump,
     "gap_down": _grade_gap_down,
     "illiquid_drift": _grade_illiquid_drift,
     "sustained_downtrend": _grade_sustained_downtrend,
+    "regime_shift": _grade_regime_shift,
+    "volatility_explosion": _grade_volatility_explosion,
+    "liquidity_crunch": _grade_liquidity_crunch,
 }
 
 

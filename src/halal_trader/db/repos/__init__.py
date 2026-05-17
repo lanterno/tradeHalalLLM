@@ -1,15 +1,17 @@
 """Per-table repositories.
 
-Wave D introduces a per-table split of the monolithic ``Repository``:
+Wave D split the monolithic ``Repository`` into per-table protocols:
 each subset of related methods lives behind a focused ``Protocol``,
-and ``RepoBundle`` is the composition root that hands them out.
+and :class:`RepoBundle` is the composition root that hands them out.
 
-For now the implementation continues to back onto the existing
-``Repository`` class — splitting the implementation across multiple
-files is the next mechanical pass once the Protocols stabilise. The
-key win today is that callers can now type-hint ``TradeRepo`` and
-``WebAuditRepo`` rather than the whole 956-line surface, so a test
-that needs only one helper can mock just that protocol.
+Every protocol field on :class:`RepoBundle` resolves to a dedicated
+implementation (each ≤90 lines, mypy strict clean) under
+``db/repos/<table>.py``. The bot's composition root and tests both
+build a bundle via :meth:`RepoBundle.from_engine`; consumers depend
+on the narrowest protocol they need rather than the full bundle.
+
+Round-4 wave 0.D dropped the now-unused ``RepoBundle.from_repository``
+shim — every call site builds from the engine directly.
 """
 
 from __future__ import annotations
@@ -18,6 +20,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from halal_trader.db.repos.protocols import (
+    CryptoTradeRepo,
     HalalCacheRepo,
     HalalScreeningRepo,
     IndicatorSnapshotRepo,
@@ -27,6 +30,9 @@ from halal_trader.db.repos.protocols import (
     PurificationRepo,
     ResearchJobRepo,
     RuntimeConfigRepo,
+    StockHalalCacheRepo,
+    StockPnlRepo,
+    StrategyAdjustmentRepo,
     TradeRepo,
     WebAuditRepo,
 )
@@ -34,22 +40,23 @@ from halal_trader.db.repos.protocols import (
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncEngine
 
-    from halal_trader.db.repository import Repository
-
 
 @dataclass(frozen=True, slots=True)
 class RepoBundle:
     """Typed bundle of per-table repos.
 
-    Today every field is the same ``Repository`` instance; the typed
-    fields exist so consumers depend on the narrower Protocol rather
-    than the full class. Splitting the implementation across files
-    is the natural next step once the Protocol shapes are settled.
+    Each field is a narrow Protocol satisfied by a dedicated
+    ``*RepoImpl`` class. Consumers should accept the field type they
+    actually use (e.g. ``ResearchJobRepo``) rather than the full
+    bundle.
     """
 
     trades: TradeRepo
+    crypto_trades: CryptoTradeRepo
     pnl: PnlRepo
+    stock_pnl: StockPnlRepo
     halal_cache: HalalCacheRepo
+    stock_halal_cache: StockHalalCacheRepo
     halal_screening: HalalScreeningRepo
     runtime_config: RuntimeConfigRepo
     research_jobs: ResearchJobRepo
@@ -58,33 +65,48 @@ class RepoBundle:
     llm_decisions: LlmDecisionRepo
     purification: PurificationRepo
     pair_pauses: PairPauseRepo
+    strategy_adjustments: StrategyAdjustmentRepo
 
     @classmethod
     def from_engine(cls, engine: "AsyncEngine") -> "RepoBundle":
-        """Build a bundle backed by one ``Repository`` instance."""
-        from halal_trader.db.repository import Repository
+        """Build a bundle directly from an engine (no Repository needed)."""
+        from halal_trader.db.repos.crypto_trades import CryptoTradeRepoImpl
+        from halal_trader.db.repos.halal_cache import HalalCacheRepoImpl
+        from halal_trader.db.repos.halal_screening import HalalScreeningRepoImpl
+        from halal_trader.db.repos.indicator_snapshots import IndicatorSnapshotRepoImpl
+        from halal_trader.db.repos.llm_decisions import LlmDecisionRepoImpl
+        from halal_trader.db.repos.pair_pause import PairPauseRepoImpl
+        from halal_trader.db.repos.pnl import PnlRepoImpl
+        from halal_trader.db.repos.purification import PurificationRepoImpl
+        from halal_trader.db.repos.research_jobs import ResearchJobRepoImpl
+        from halal_trader.db.repos.runtime_config import RuntimeConfigRepoImpl
+        from halal_trader.db.repos.stock_halal_cache import StockHalalCacheRepoImpl
+        from halal_trader.db.repos.stock_pnl import StockPnlRepoImpl
+        from halal_trader.db.repos.strategy_adjustments import StrategyAdjustmentRepoImpl
+        from halal_trader.db.repos.trades import TradeRepoImpl
+        from halal_trader.db.repos.web_audit import WebAuditRepoImpl
 
-        repo = Repository(engine)
-        return cls.from_repository(repo)
-
-    @classmethod
-    def from_repository(cls, repo: "Repository") -> "RepoBundle":
         return cls(
-            trades=repo,
-            pnl=repo,
-            halal_cache=repo,
-            halal_screening=repo,
-            runtime_config=repo,
-            research_jobs=repo,
-            web_audit=repo,
-            indicator_snapshots=repo,
-            llm_decisions=repo,
-            purification=repo,
-            pair_pauses=repo,
+            trades=TradeRepoImpl(engine),
+            crypto_trades=CryptoTradeRepoImpl(engine),
+            pnl=PnlRepoImpl(engine),
+            stock_pnl=StockPnlRepoImpl(engine),
+            halal_cache=HalalCacheRepoImpl(engine),
+            stock_halal_cache=StockHalalCacheRepoImpl(engine),
+            halal_screening=HalalScreeningRepoImpl(engine),
+            runtime_config=RuntimeConfigRepoImpl(engine),
+            research_jobs=ResearchJobRepoImpl(engine),
+            web_audit=WebAuditRepoImpl(engine),
+            indicator_snapshots=IndicatorSnapshotRepoImpl(engine),
+            llm_decisions=LlmDecisionRepoImpl(engine),
+            purification=PurificationRepoImpl(engine),
+            pair_pauses=PairPauseRepoImpl(engine),
+            strategy_adjustments=StrategyAdjustmentRepoImpl(engine),
         )
 
 
 __all__ = [
+    "CryptoTradeRepo",
     "HalalCacheRepo",
     "HalalScreeningRepo",
     "IndicatorSnapshotRepo",
@@ -95,6 +117,9 @@ __all__ = [
     "RepoBundle",
     "ResearchJobRepo",
     "RuntimeConfigRepo",
+    "StockHalalCacheRepo",
+    "StockPnlRepo",
+    "StrategyAdjustmentRepo",
     "TradeRepo",
     "WebAuditRepo",
 ]

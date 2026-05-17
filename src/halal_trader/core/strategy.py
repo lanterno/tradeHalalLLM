@@ -12,7 +12,7 @@ from pydantic import ValidationError
 
 from halal_trader.core.llm.budget import LLMBudget
 from halal_trader.core.tracing import tracer
-from halal_trader.db.repository import Repository
+from halal_trader.db.repos import LlmDecisionRepo
 from halal_trader.domain.ports import LLMBackend
 
 logger = logging.getLogger(__name__)
@@ -42,7 +42,7 @@ class BaseStrategy(ABC):
     def __init__(
         self,
         llm: LLMBackend,
-        repo: Repository,
+        repo: LlmDecisionRepo,
         *,
         llm_provider_name: str,
         max_position_pct: float,

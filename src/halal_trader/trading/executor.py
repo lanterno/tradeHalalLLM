@@ -7,7 +7,7 @@ from typing import Any
 from halal_trader.core import events
 from halal_trader.core.executor import BaseExecutor
 from halal_trader.core.fills import confirm_alpaca
-from halal_trader.db.repository import Repository
+from halal_trader.db.repos import TradeRepo
 from halal_trader.domain.models import TradingPlan
 from halal_trader.domain.ports import Broker
 
@@ -23,17 +23,17 @@ class TradeExecutor(BaseExecutor):
     def __init__(
         self,
         broker: Broker,
-        repo: Repository,
+        repo: TradeRepo,
         *,
         max_position_pct: float,
         max_simultaneous_positions: int,
         max_sector_pct: float = 0.40,
     ) -> None:
         super().__init__(
-            repo,
             max_position_pct=max_position_pct,
             max_simultaneous_positions=max_simultaneous_positions,
         )
+        self._repo = repo
         self._broker = broker
         # 0 disables the sector check; keep the default at 40% so even
         # an operator who hasn't tuned this gets a sane diversification

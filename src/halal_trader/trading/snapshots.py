@@ -17,9 +17,9 @@ import logging
 from typing import Any
 
 from halal_trader.crypto.indicators import compute_all
-from halal_trader.db.repository import Repository
+from halal_trader.db.repos import IndicatorSnapshotRepo
 from halal_trader.domain.models import Kline
-from halal_trader.trading.risk import _bars_to_klines
+from halal_trader.trading.bars import bars_to_klines
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +39,7 @@ _FEATURE_KEYS = (
 
 async def record_stock_snapshot(
     *,
-    repo: Repository,
+    repo: IndicatorSnapshotRepo,
     trade_id: int,
     symbol: str,
     bars: Any,
@@ -49,7 +49,7 @@ async def record_stock_snapshot(
     Returns the snapshot id on success, ``None`` on insufficient data or
     persistence failure (the cycle should not abort on a snapshot miss).
     """
-    klines: list[Kline] = _bars_to_klines(bars)
+    klines: list[Kline] = bars_to_klines(bars)
     if len(klines) < 30:
         logger.debug(
             "Skipping snapshot for %s #%d: only %d klines available",

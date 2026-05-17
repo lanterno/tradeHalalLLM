@@ -7,7 +7,7 @@ from typing import Any
 from halal_trader.core.portfolio import BasePortfolioTracker
 from halal_trader.crypto.exchange import BinanceClient
 from halal_trader.db.models import CryptoTrade
-from halal_trader.db.repository import Repository
+from halal_trader.db.repos import CryptoTradeRepo, PnlRepo
 from halal_trader.domain.models import CryptoBalance
 
 logger = logging.getLogger(__name__)
@@ -22,12 +22,18 @@ class CryptoPortfolioTracker(BasePortfolioTracker):
     def __init__(
         self,
         broker: BinanceClient,
-        repo: Repository,
+        repo: CryptoTradeRepo,
         *,
         daily_loss_limit: float,
+        pnl_repo: PnlRepo | None = None,
     ) -> None:
-        super().__init__(repo, daily_loss_limit=daily_loss_limit)
+        super().__init__(daily_loss_limit=daily_loss_limit)
         self._broker = broker
+        self._repo = repo
+        # When the caller passes a single shared Repository it satisfies
+        # both protocols structurally; ``pnl_repo`` only exists for
+        # callers that want to thread a narrower PnlRepo separately.
+        self._pnl: PnlRepo = pnl_repo if pnl_repo is not None else repo  # type: ignore[assignment]
 
     # ── Hook implementations ───────────────────────────────────
 
@@ -41,10 +47,10 @@ class CryptoPortfolioTracker(BasePortfolioTracker):
         return await self._repo.get_today_crypto_trades()
 
     async def _persist_day_start(self, equity: float) -> None:
-        await self._repo.start_crypto_day(equity)
+        await self._pnl.start_crypto_day(equity)
 
     async def _persist_day_end(self, equity: float, pnl: float, count: int) -> None:
-        await self._repo.end_crypto_day(
+        await self._pnl.end_crypto_day(
             ending_equity=equity,
             realized_pnl=pnl,
             trades_count=count,
@@ -59,6 +65,32 @@ class CryptoPortfolioTracker(BasePortfolioTracker):
     async def get_balances_summary(self) -> list[CryptoBalance]:
         """Get all current balances."""
         return await self._broker.get_balances()
+
+    async def get_paused_pairs(self) -> set[str]:
+        """Pairs the operator has paused via the dashboard.
+
+        Delegates to the underlying repo so cycle code doesn't have to
+        reach into ``self._portfolio._repo`` (the constructor's narrow
+        ``CryptoTradeRepo`` type is widened structurally at runtime by
+        the shared :class:`Repository` instance, which also satisfies
+        :class:`PairPauseRepo`).
+        """
+        return await self._repo.get_paused_pairs()  # type: ignore[attr-defined]
+
+    async def record_indicator_snapshot(
+        self, *, trade_id: int, pair: str, indicators: dict[str, Any]
+    ) -> None:
+        """Persist the indicator vector observed at buy time for this trade.
+
+        Used by the ML retraining loop: the snapshot is later labelled
+        with realized P&L when the trade closes. Same encapsulation
+        note as :meth:`get_paused_pairs`.
+        """
+        await self._repo.record_indicator_snapshot(  # type: ignore[attr-defined]
+            trade_id=trade_id,
+            pair=pair,
+            indicators=indicators,
+        )
 
     def format_positions_for_prompt(
         self,

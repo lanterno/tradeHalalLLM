@@ -76,3 +76,31 @@ def test_derive_sl_tp_rejects_short_side():
     """Shorts violate halal — keep the surface area visibly absent."""
     with pytest.raises(NotImplementedError, match="halal"):
         derive_sl_tp(entry_price=100.0, setup_type="momentum", side="sell")
+
+
+def test_reward_risk_zero_when_stop_loss_zero():
+    """Defensive: a zero SL would divide-by-zero — the property
+    returns 0.0 rather than raising. Keeps callers (logging, metrics)
+    safe to read it without guarding."""
+    from halal_trader.core.sl_tp import SLTPProfile
+
+    p = SLTPProfile(stop_loss_pct=0.0, take_profit_pct=0.02)
+    assert p.reward_risk == 0.0
+
+
+def test_reward_risk_zero_when_stop_loss_negative():
+    """Same defensive guard catches accidentally-negative SLs."""
+    from halal_trader.core.sl_tp import SLTPProfile
+
+    p = SLTPProfile(stop_loss_pct=-0.01, take_profit_pct=0.02)
+    assert p.reward_risk == 0.0
+
+
+def test_profile_for_none_falls_back_to_unknown():
+    """Explicit None → UNKNOWN profile (the shared "no thesis" fallback)."""
+    assert profile_for(None) is profile_for(SetupType.UNKNOWN)
+
+
+def test_profile_for_accepts_string_and_enum_interchangeably():
+    """Both enum and raw string round-trip to the same profile."""
+    assert profile_for(SetupType.BREAKOUT) is profile_for("breakout")

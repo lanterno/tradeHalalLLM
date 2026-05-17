@@ -163,7 +163,7 @@ async def promote_genome(*, engine: "AsyncEngine", genome_id: int) -> bool:
     from sqlmodel.ext.asyncio.session import AsyncSession
 
     from halal_trader.db.models import PromptGenome as PromptGenomeRow
-    from halal_trader.db.repository import Repository
+    from halal_trader.db.repos.runtime_config import RuntimeConfigRepoImpl
 
     async with AsyncSession(engine, expire_on_commit=False) as session:
         row = await session.get(PromptGenomeRow, genome_id)
@@ -174,7 +174,7 @@ async def promote_genome(*, engine: "AsyncEngine", genome_id: int) -> bool:
         await session.commit()
         await session.refresh(row)
 
-    repo = Repository(engine)
+    repo = RuntimeConfigRepoImpl(engine)
     await repo.set_runtime_config(
         "ACTIVE_PROMPT_VERSION",
         f"{row.name}@genome-{row.id}",

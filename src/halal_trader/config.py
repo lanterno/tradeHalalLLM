@@ -178,6 +178,30 @@ class StockSettings(BaseSettings):
     daily_loss_limit: float = Field(default=0.02, ge=0, le=0.5)
     max_simultaneous_positions: int = Field(default=5, ge=1)
 
+    # Round-4 wave 1.A: pluggable broker adapter selector. Default
+    # remains ``alpaca`` so existing operator workflows are unchanged.
+    # Set to a registered name (e.g. ``ibkr``, ``tradier``) to switch
+    # adapter at startup.
+    broker: str = Field(default="alpaca")
+
+    # Position monitor — polls open trades against SL/TP between LLM
+    # cycles (cycle is 15min; the monitor fills the gap). Mirrors the
+    # crypto-side knobs but at coarser cadence: stocks aren't 24/7 and
+    # spreads are tighter, so a 30s loop is plenty.
+    monitor_interval_seconds: float = Field(default=30.0, gt=0)
+    trailing_stop_activation_pct: float | None = Field(default=None)
+    trailing_stop_distance_pct: float = Field(default=0.005, gt=0)
+
+    # Portfolio-risk knobs (used by ``trading/risk.py``). Default values
+    # are tuned for daily equity bars; the operator can override per
+    # deployment. Round-4 wave 0.C moved these from CryptoSettings so
+    # stocks + crypto have independent volatility regimes.
+    max_portfolio_heat_pct: float = Field(default=0.05, ge=0.01, le=0.5)
+    max_drawdown_pct: float = Field(default=0.08, ge=0.01, le=0.5)
+    high_correlation_threshold: float = Field(default=0.7, ge=0.0, le=1.0)
+    correlation_reduction_factor: float = Field(default=0.5, ge=0.1, le=1.0)
+    atr_baseline: float = Field(default=0.02, gt=0)
+
 
 class CryptoSettings(BaseSettings):
     model_config = SettingsConfigDict(**_BASE_CONFIG, env_prefix="CRYPTO_")
@@ -189,6 +213,11 @@ class CryptoSettings(BaseSettings):
     max_simultaneous_positions: int = Field(default=4, ge=1)
     min_market_cap: float = Field(default=1_000_000_000, ge=0)
     max_pairs_per_cycle: int = Field(default=10, ge=1)
+
+    # Round-4 wave 1.A: pluggable broker adapter selector. Default
+    # remains ``binance`` so existing operator workflows are unchanged.
+    # Set to a registered name (e.g. ``coinbase``) to switch.
+    broker: str = Field(default="binance")
 
     # Portfolio risk
     max_portfolio_heat_pct: float = Field(default=0.05, ge=0.01, le=0.5)
@@ -263,6 +292,22 @@ class TelegramSettings(BaseSettings):
     chat_id: str = Field(default="")
 
 
+class SlackSettings(BaseSettings):
+    """Round-4 wave 5.G — Slack webhook notifier."""
+
+    model_config = SettingsConfigDict(**_BASE_CONFIG, env_prefix="SLACK_")
+    webhook_url: str = Field(default="")
+    channel: str = Field(default="")
+
+
+class DiscordSettings(BaseSettings):
+    """Round-4 wave 5.G — Discord webhook notifier."""
+
+    model_config = SettingsConfigDict(**_BASE_CONFIG, env_prefix="DISCORD_")
+    webhook_url: str = Field(default="")
+    username: str = Field(default="halal-trader")
+
+
 class LiveModeSettings(BaseSettings):
     """Live-mode safeguards — all knobs use the ``LIVE_MODE_`` prefix."""
 
@@ -333,6 +378,8 @@ class Settings(BaseSettings):
     sentiment: SentimentSettings = Field(default_factory=SentimentSettings)
     ml: MLSettings = Field(default_factory=MLSettings)
     telegram: TelegramSettings = Field(default_factory=TelegramSettings)
+    slack: SlackSettings = Field(default_factory=SlackSettings)
+    discord: DiscordSettings = Field(default_factory=DiscordSettings)
     live_mode: LiveModeSettings = Field(default_factory=LiveModeSettings)
     log: LogSettings = Field(default_factory=LogSettings)
 

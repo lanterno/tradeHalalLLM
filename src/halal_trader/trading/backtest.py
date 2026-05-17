@@ -26,7 +26,7 @@ import numpy as np
 from halal_trader.crypto.backtest import BacktestResult, SimulatedExecutor
 from halal_trader.crypto.indicators import compute_all
 from halal_trader.domain.models import Kline
-from halal_trader.trading.risk import _bars_to_klines
+from halal_trader.trading.bars import bars_to_klines
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +69,7 @@ class StockBacktestEngine:
         ``bars`` is whatever ``AlpacaMCPClient.get_stock_bars`` returned —
         the helper handles both flat-list and ``{"bars": [...]}`` shapes.
         """
-        klines = _bars_to_klines(bars)
+        klines = bars_to_klines(bars)
         if len(klines) <= window_size:
             logger.warning(
                 "Not enough bars for backtest (%d <= window=%d) — returning empty result",
