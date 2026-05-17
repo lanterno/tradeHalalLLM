@@ -126,7 +126,7 @@ Open Positions: {open_position_count}/{max_positions}
 === RECENT BREAKING NEWS ===
 {news_text}
 
-=== YOUR RECENT PERFORMANCE (last 7 days) ===
+=== YOUR RECENT PERFORMANCE (last 24h) ===
 {performance_text}
 
 === TASK ===

@@ -257,7 +257,13 @@ class CryptoCycleService(BaseCycleService):
         await run_stages(
             state,
             [
-                BuildPerformanceStage(self._analytics),
+                # Use a 24h lookback so the LLM evaluates the *current*
+                # strategy on its own merits — a 7-day window can include
+                # a now-resolved era of buggy prompts / wrong models that
+                # bias the LLM into permanent risk-off mode ("I see 8%
+                # win rate, no edge → hold forever"). One day is enough
+                # signal for a 24/7 scalper.
+                BuildPerformanceStage(self._analytics, lookback_days=1),
                 BuildSentimentStage(
                     sentiment_manager=self._sentiment,
                     reddit_fetcher=self._reddit_fetcher,
