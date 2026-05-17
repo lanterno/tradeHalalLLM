@@ -161,7 +161,6 @@ module = [
     "halal_trader.core.committee",
     "halal_trader.core.cross_asset_signal",
     "halal_trader.core.cycle_stages",
-    "halal_trader.core.cycle_timeline",
     "halal_trader.core.scenario_sim",
     "halal_trader.domain.policies",
 ]
