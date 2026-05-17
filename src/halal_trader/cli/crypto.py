@@ -330,3 +330,101 @@ def crypto_screen() -> None:
         await engine.dispose()
 
     asyncio.run(_screen())
+
+
+@crypto.command("cleanup-orphans")
+@click.option(
+    "--apply",
+    is_flag=True,
+    default=False,
+    help="Actually close the rows. Without this flag, dry-run only.",
+)
+def crypto_cleanup_orphans(apply: bool) -> None:
+    """Close open BUY rows where the broker reports zero balance.
+
+    Surfaces "ghost positions" — open buy rows whose underlying balance
+    has been liquidated outside the bot's accounting (e.g. before a fix
+    landed, manual sale on the exchange, testnet reset). Without
+    ``--apply`` this is a read-only audit. With ``--apply`` it closes
+    the rows with ``exit_reason='cleanup_no_broker_balance'``.
+    """
+
+    async def _cleanup() -> None:
+        from datetime import UTC, datetime
+
+        from sqlalchemy.ext.asyncio import AsyncSession
+
+        from halal_trader.config import get_settings
+        from halal_trader.crypto.exchange import BinanceClient
+        from halal_trader.db.models import CryptoTrade, init_db
+        from halal_trader.db.repos.crypto_trades import CryptoTradeRepoImpl
+
+        settings = get_settings()
+        engine = await init_db(settings.database_url)
+        client = BinanceClient(
+            api_key=settings.binance.api_key,
+            secret_key=settings.binance.secret_key,
+            testnet=settings.binance.testnet,
+            configured_pairs=settings.crypto.pairs,
+        )
+        try:
+            await client.connect()
+            balances = await client.get_balances()
+            broker_by_asset = {b.asset.upper(): float(b.free) + float(b.locked) for b in balances}
+
+            repo = CryptoTradeRepoImpl(engine)
+            open_buys = [t for t in await repo.get_open_crypto_trades() if t.side == "buy"]
+
+            orphans = []
+            for trade in open_buys:
+                base = (trade.pair or "").upper().removesuffix("USDT").removesuffix("BUSD")
+                if not base:
+                    continue
+                if broker_by_asset.get(base, 0.0) <= 0.0:
+                    orphans.append(trade)
+
+            if not orphans:
+                console.print("[green]No orphan buy rows — DB and broker match.[/green]")
+                return
+
+            table = Table(title="Orphan open buys", show_header=True, header_style="bold yellow")
+            table.add_column("id", style="dim", justify="right")
+            table.add_column("pair")
+            table.add_column("quantity", justify="right")
+            table.add_column("entry_price", justify="right")
+            table.add_column("opened")
+            for t in orphans:
+                table.add_row(
+                    str(t.id),
+                    t.pair,
+                    f"{t.quantity}",
+                    f"${(t.filled_price or t.price or 0):.4f}",
+                    str(t.timestamp).split(".")[0] if t.timestamp else "",
+                )
+            console.print(table)
+
+            if not apply:
+                console.print(
+                    f"\n[yellow]{len(orphans)} orphan(s) detected. Re-run with --apply "
+                    f"to close them.[/yellow]"
+                )
+                return
+
+            async with AsyncSession(engine) as session:
+                now = datetime.now(UTC)
+                for t in orphans:
+                    row = await session.get(CryptoTrade, t.id)
+                    if row is None:
+                        continue
+                    row.closed_at = now
+                    row.status = "closed"
+                    row.exit_reason = "cleanup_no_broker_balance"
+                    row.exit_price = row.filled_price or row.price
+                    session.add(row)
+                await session.commit()
+            console.print(f"[green]Closed {len(orphans)} orphan row(s).[/green]")
+        finally:
+            await client.disconnect()
+            await engine.dispose()
+
+    asyncio.run(_cleanup())
