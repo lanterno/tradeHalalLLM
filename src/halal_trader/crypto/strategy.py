@@ -7,7 +7,7 @@ import time
 from typing import Any
 
 from halal_trader.core.llm.adversarial import apply_review_to_buys, critique_plan
-from halal_trader.core.llm.ensemble import EnsembleVariant, run_ensemble
+from halal_trader.core.llm.ensemble import EnsembleVariant, run_ensemble, wrap_existing
 from halal_trader.core.strategy import BaseStrategy
 from halal_trader.crypto.prompts import (
     PROMPT_VERSION as _CRYPTO_PROMPT_VERSION,
@@ -17,7 +17,7 @@ from halal_trader.crypto.prompts import (
     StrategyParams,
     build_prompts,
 )
-from halal_trader.db.repository import Repository
+from halal_trader.db.repos import LlmDecisionRepo
 from halal_trader.domain.models import (
     CryptoAccount,
     CryptoTradingPlan,
@@ -28,20 +28,13 @@ from halal_trader.domain.ports import LLMBackend
 logger = logging.getLogger(__name__)
 
 
-async def _wrap_existing(plan: Any) -> Any:
-    """Trivial awaitable that returns ``plan`` — feeds the primary into
-    :func:`run_ensemble` as one of the variants without re-calling the LLM.
-    """
-    return plan
-
-
 class CryptoTradingStrategy(BaseStrategy):
     """Crypto scalping strategy with LLM circuit breaker."""
 
     def __init__(
         self,
         llm: LLMBackend,
-        repo: Repository,
+        repo: LlmDecisionRepo,
         *,
         llm_provider_name: str,
         max_position_pct: float,
@@ -103,6 +96,24 @@ class CryptoTradingStrategy(BaseStrategy):
             self._consecutive_llm_failures,
             error,
         )
+
+        # `insufficient_quota` (out of OpenAI/Anthropic credits) is non-
+        # transient — every retry fails with the same error and burns
+        # API attempts. Trip cooldown immediately + log loudly so the
+        # operator can top up. Match by error-message substring because
+        # the SDK exception class isn't always surfaced through our
+        # wrapper layers.
+        err_text = str(error)
+        if "insufficient_quota" in err_text or "exceeded your current quota" in err_text:
+            self._llm_cooldown_until = time.monotonic() + self._llm_cooldown_seconds
+            logger.critical(
+                "LLM provider account out of credits — top up to resume trading "
+                "(cooldown engaged for %ds)",
+                self._llm_cooldown_seconds,
+                extra={"event": "llm.insufficient_quota"},
+            )
+            return
+
         if self._consecutive_llm_failures >= self._llm_failure_threshold:
             self._llm_cooldown_until = time.monotonic() + self._llm_cooldown_seconds
             logger.warning(
@@ -231,7 +242,7 @@ class CryptoTradingStrategy(BaseStrategy):
         variants = [
             EnsembleVariant(
                 name=f"primary:{getattr(self._llm, 'model', 'primary')}",
-                call=lambda p=primary_plan: _wrap_existing(p),
+                call=lambda p=primary_plan: wrap_existing(p),
             )
         ]
         for i, alt in enumerate(self._ensemble_llms):
