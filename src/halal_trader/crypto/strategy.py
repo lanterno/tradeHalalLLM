@@ -146,7 +146,11 @@ class CryptoTradingStrategy(BaseStrategy):
         now = time.monotonic()
         if now < self._llm_cooldown_until:
             remaining = int(self._llm_cooldown_until - now)
-            logger.warning("LLM in cooldown (%ds remaining) — holding positions", remaining)
+            # Demoted from WARNING — cooldown is the bot's *correct*
+            # response to repeated failures and fires every 30s while
+            # active. The CRITICAL log on the original failure is the
+            # operator-actionable signal; subsequent skips are routine.
+            logger.info("LLM in cooldown (%ds remaining) — holding positions", remaining)
             return CryptoTradingPlan(
                 market_outlook="LLM cooldown active — holding",
                 risk_notes=(
