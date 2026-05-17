@@ -314,8 +314,21 @@ async def _persist_and_alert(
             await session.commit()
 
     if alerts is not None:
-        summary = _summarize_drifts(report.drifts)
-        await alerts.notify(events.RECONCILE_DRIFT, summary)
+        # Only alert on real drift — untracked broker balances are
+        # informational and not operator-actionable. Without this filter,
+        # every reconcile pass on testnet (~50 faucet assets) would fire
+        # a Telegram alert burning the rate limit on noise.
+        actionable = [
+            d for d in report.drifts if not (d.db_quantity == 0.0 and d.broker_quantity > 0.0)
+        ]
+        if actionable:
+            summary = _summarize_drifts(actionable)
+            await alerts.notify(
+                events.RECONCILE_DRIFT,
+                summary,
+                market=report.market,
+                severity="warning",
+            )
 
 
 def _summarize_drifts(drifts: Iterable[Drift]) -> str:
