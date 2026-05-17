@@ -4,20 +4,21 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from binance import BinanceAPIException
 
 from halal_trader.core import events
+from halal_trader.core.fills import confirm_binance
 from halal_trader.core.observability import monitor_context
 from halal_trader.crypto.exchange import (
     DUST_NOTIONAL_USD,
     BinanceClient,
-    extract_fill_price,
 )
 from halal_trader.crypto.websocket import BinanceWSManager
 from halal_trader.db.models import CryptoTrade
-from halal_trader.db.repository import Repository
+from halal_trader.db.repos import CryptoTradeRepo
 
 if TYPE_CHECKING:
     from halal_trader.ml.retrainer import RetrainingScheduler
@@ -40,7 +41,7 @@ class PositionMonitor:
     def __init__(
         self,
         broker: BinanceClient,
-        repo: Repository,
+        repo: CryptoTradeRepo,
         ws_manager: BinanceWSManager,
         *,
         check_interval: float = 2.0,
@@ -232,24 +233,33 @@ class PositionMonitor:
             return
 
         try:
+            submitted_at = datetime.now(UTC)
             order_result = await self._broker.place_order(
                 symbol=trade.pair,
                 side="SELL",
                 quantity=quantity,
                 order_type="MARKET",
             )
-            fill_price = extract_fill_price(order_result) or current_price
-            order_status = order_result.get("status", "")
-            db_status = "filled" if order_status == "FILLED" else "submitted"
+            # Route through confirm_binance so submitted_at/filled_at and
+            # fill_price/fill_quantity match the executor's accounting —
+            # otherwise monitor-driven exits land in crypto_trades with
+            # NULL timestamps and downstream reconciliation under-counts.
+            fill = confirm_binance(order_result, submitted_at)
+            fill_price = fill.filled_price or current_price
+            db_status = fill.status
 
             await self._repo.record_crypto_trade(
                 pair=trade.pair,
                 side="sell",
                 quantity=quantity,
                 price=fill_price,
-                order_id=str(order_result.get("orderId", "")),
+                order_id=fill.order_id,
                 status=db_status,
                 llm_reasoning=f"Auto {reason}: price ${current_price:.2f}",
+                submitted_at=fill.submitted_at,
+                filled_at=fill.filled_at,
+                filled_price=fill.filled_price,
+                filled_quantity=fill.filled_quantity,
             )
 
             await self._repo.close_crypto_trade(trade_id, fill_price, reason)
@@ -297,10 +307,7 @@ class PositionMonitor:
 
                     hold_seconds = 0
                     if trade.timestamp:
-                        from datetime import UTC
-                        from datetime import datetime as _dt
-
-                        now_ts = _dt.now(UTC)
+                        now_ts = datetime.now(UTC)
                         if trade.timestamp.tzinfo is None:
                             trade_ts = trade.timestamp.replace(tzinfo=UTC)
                         else:
