@@ -245,7 +245,13 @@ async def _persist_and_alert(
 
     rows: list[ReconciliationLog] = []
     for drift in report.drifts:
-        logger.warning(
+        # "Untracked broker balance" (bot has no record, exchange does)
+        # is informational — the bot has no claim and nothing to reconcile.
+        # Real drift on a tracked position (db_quantity > 0 with a mismatch)
+        # is the one that needs operator attention.
+        is_untracked_broker_balance = drift.db_quantity == 0.0 and drift.broker_quantity > 0.0
+        log_fn = logger.info if is_untracked_broker_balance else logger.warning
+        log_fn(
             "Reconcile drift: %s/%s db=%.8f broker=%.8f drift=%.2f%%",
             drift.market,
             drift.symbol,
