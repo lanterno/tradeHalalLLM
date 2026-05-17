@@ -207,12 +207,20 @@ class TelegramNotifier:
         msg = f"{emoji} <b>{prefix}{label}: {error_type}</b>\n{details}\n"
         await self.send(msg)
 
-    async def notify_buzz(self, pair: str, buzz_score: float, sentiment: float) -> None:
+    async def notify_buzz(
+        self,
+        pair: str,
+        buzz_score: float,
+        sentiment: float,
+        *,
+        market: str = "",
+    ) -> None:
         """Send a high buzz alert for a pair."""
         direction = "bullish" if sentiment > 0 else ("bearish" if sentiment < 0 else "neutral")
+        prefix = f"[{market}] " if market else ""
         msg = (
-            f"\U0001f525 <b>High Buzz Alert</b> {pair}\n"
-            f"Buzz: {buzz_score:.1f}x normal\n"
+            f"\U0001f525 <b>{prefix}High Buzz Alert</b> {pair}\n"
+            f"Buzz: {buzz_score:.1f}\u00d7 normal\n"
             f"Sentiment: {sentiment:+.2f} ({direction})\n"
             f"Reddit is talking about this coin \u2014 check for opportunities."
         )

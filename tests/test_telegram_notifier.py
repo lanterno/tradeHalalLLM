@@ -177,7 +177,21 @@ async def test_notify_buzz_renders_direction_label():
         msg = mock_send.await_args.args[0]
     assert "DOGEUSDT" in msg
     assert "bullish" in msg
-    assert "4.2x" in msg
+    # "4.2× normal" — multiplication sign is the polished unicode form.
+    assert "4.2" in msg
+    assert "normal" in msg
+
+
+@pytest.mark.asyncio
+async def test_notify_buzz_includes_market_prefix():
+    """For consistency with notify_trade / notify_sl_tp / notify_error,
+    a market= kwarg renders as the [market] prefix."""
+    n = _notifier()
+    with patch.object(n, "send", new=AsyncMock()) as mock_send:
+        await n.notify_buzz(pair="DOGEUSDT", buzz_score=3.5, sentiment=0.2, market="crypto")
+        msg = mock_send.await_args.args[0]
+    assert "[crypto]" in msg
+    assert "High Buzz Alert" in msg
 
 
 @pytest.mark.asyncio
