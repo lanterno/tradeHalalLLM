@@ -269,6 +269,13 @@ async def _persist_and_alert(
                 "notes": drift.notes,
             },
         )
+        # Skip persisting "untracked broker balance" rows — these fire
+        # every reconcile cycle for dust / testnet faucet balances we
+        # don't trade. With Binance testnet's ~50 pre-seeded assets,
+        # this was 48k rows/day. The runtime log still captures them
+        # at INFO if anyone needs to triage.
+        if is_untracked_broker_balance:
+            continue
         rows.append(
             ReconciliationLog(
                 timestamp=datetime.now(UTC),
@@ -282,9 +289,10 @@ async def _persist_and_alert(
             )
         )
 
-    async with AsyncSession(engine) as session:
-        session.add_all(rows)
-        await session.commit()
+    if rows:
+        async with AsyncSession(engine) as session:
+            session.add_all(rows)
+            await session.commit()
 
     if alerts is not None:
         summary = _summarize_drifts(report.drifts)
