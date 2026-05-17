@@ -165,6 +165,36 @@ class TestExecuteSell:
         assert results[0]["status"] == "rejected"
         assert "No" in results[0]["reason"]
 
+    async def test_filled_sell_consolidates_open_buy_rows(self):
+        """Pin: an LLM-driven sell that fills must close any open buy rows
+        for the same pair via close_open_crypto_trades_for_pair. Without
+        this, the bot's DB keeps "open" buys after liquidation and the
+        reconciler fires WARNING drift on every cycle.
+        """
+        executor, broker, repo = _make_executor(balances=[CryptoBalance(asset="BTC", free=0.01)])
+        # Default order_result has status FILLED → triggers the consolidate path.
+        plan = _make_plan([_make_sell()])
+        await executor.execute_plan(plan, account=_make_account())
+
+        repo.close_open_crypto_trades_for_pair.assert_awaited_once()
+        called_args = repo.close_open_crypto_trades_for_pair.call_args
+        assert called_args.args[0] == "BTCUSDT"
+        assert called_args.args[2] == "llm_sell"
+
+    async def test_rejected_sell_does_not_consolidate(self):
+        """Pin: if the exchange rejects the order, leave the open buy
+        rows alone — otherwise a rejected order would falsely close out
+        positions the bot still legitimately holds.
+        """
+        executor, broker, repo = _make_executor(
+            balances=[CryptoBalance(asset="BTC", free=0.01)],
+            order_result={"orderId": "x", "status": "REJECTED", "fills": []},
+        )
+        plan = _make_plan([_make_sell()])
+        await executor.execute_plan(plan, account=_make_account())
+
+        repo.close_open_crypto_trades_for_pair.assert_not_awaited()
+
 
 class TestValidateOrder:
     def test_validates_min_notional(self):
