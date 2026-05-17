@@ -154,7 +154,16 @@ def llm_metrics(
         if record.get("event") != events.LLM_CALL_COMPLETE:
             continue
         provider = str(record.get("provider") or "unknown")
-        tokens = record.get("tokens")
+        # Providers emit input_tokens + output_tokens separately (see
+        # openai.py / anthropic.py); a generic "tokens" field is a
+        # legacy shape some adapters still produce. Sum the parts when
+        # present; otherwise fall back to "tokens".
+        input_t = record.get("input_tokens")
+        output_t = record.get("output_tokens")
+        if isinstance(input_t, (int, float)) or isinstance(output_t, (int, float)):
+            tokens = int(input_t or 0) + int(output_t or 0)
+        else:
+            tokens = record.get("tokens")
         ms = record.get("elapsed_ms")
 
         bucket = by_provider.setdefault(
