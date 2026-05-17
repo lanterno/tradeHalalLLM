@@ -133,7 +133,11 @@ class CryptoTradeDecision(BaseModel):
     symbol: str = Field(description="Trading pair, e.g. BTCUSDT")
     quantity: float = Field(ge=0.0, description="Fractional quantity to trade")
     confidence: float = Field(ge=0.0, le=1.0, description="0-1 confidence score")
-    reasoning: str = Field(description="Brief explanation of the decision")
+    # Per-decision reasoning was dropped from the slim output schema (the
+    # plan-level CryptoTradingPlan.reasoning carries it now). Kept here
+    # as an optional pass-through for any future per-decision override
+    # or legacy backtest fixtures.
+    reasoning: str = Field(default="", description="Optional per-decision rationale")
     entry_price: float | None = Field(default=None, description="Suggested entry price")
     target_price: float | None = Field(default=None, description="Expected target price")
     stop_loss: float | None = Field(default=None, description="Suggested stop-loss price")
@@ -149,6 +153,10 @@ class CryptoTradingPlan(BaseModel):
     """The complete crypto trading plan returned by the LLM for one cycle."""
 
     decisions: list[CryptoTradeDecision] = Field(default_factory=list)
+    # Plan-level reasoning — one rationale for the whole plan instead of
+    # N per-decision strings. Replaces the per-decision ``reasoning`` in
+    # the slim output schema (kept that field optional for back-compat).
+    reasoning: str = Field(default="", description="Plan-level rationale")
     market_outlook: str = Field(default="", description="Overall crypto market assessment")
     risk_notes: str = Field(default="", description="Risk factors identified")
 

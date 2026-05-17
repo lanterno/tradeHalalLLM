@@ -268,6 +268,10 @@ async def build_components(
         circuit_breaker_window=settings.crypto.circuit_breaker_window,
         circuit_breaker_cooldown=settings.crypto.circuit_breaker_cooldown,
         exiting_pairs=exiting_pairs,
+        # SL/TP fallbacks for when the LLM omits them under the slim
+        # output schema. Keep in sync with TradingStrategy's defaults.
+        stop_loss_pct=0.01,
+        take_profit_pct=0.02,
     )
 
     portfolio = CryptoPortfolioTracker(
@@ -290,7 +294,12 @@ async def build_components(
     regime_detector = RegimeDetector(models_dir=settings.ml.models_dir)
     ml_forecaster, ml_anomaly, ml_signal = _build_ml(settings)
 
-    self_review = TradeSelfReview(llm, repo, strategy=strategy)
+    self_review = TradeSelfReview(
+        llm,
+        strategy_adjustments=repo,
+        crypto_trades=repo,
+        strategy=strategy,
+    )
     await self_review.load_from_db()
 
     risk_engine = PortfolioRiskEngine(

@@ -40,6 +40,8 @@ class CryptoExecutor(BaseExecutor):
         circuit_breaker_window: int = 600,
         circuit_breaker_cooldown: int = 1800,
         exiting_pairs: set[str] | None = None,
+        stop_loss_pct: float = 0.01,
+        take_profit_pct: float = 0.02,
     ) -> None:
         super().__init__(
             max_position_pct=max_position_pct,
@@ -58,6 +60,11 @@ class CryptoExecutor(BaseExecutor):
         self._cb_window = circuit_breaker_window
         self._cb_cooldown = circuit_breaker_cooldown
         self._exiting_pairs: set[str] = exiting_pairs if exiting_pairs is not None else set()
+        # Default SL/TP percentages — used when the LLM omits them from a
+        # decision (the slim output schema makes them optional). The
+        # position monitor needs concrete prices to enforce exits.
+        self._stop_loss_pct = stop_loss_pct
+        self._take_profit_pct = take_profit_pct
 
     def is_pair_blocked(self, symbol: str) -> bool:
         """Check if a pair is temporarily blocked due to repeated errors."""
@@ -317,6 +324,17 @@ class CryptoExecutor(BaseExecutor):
                     slippage * 100,
                 )
 
+            # Compute SL/TP defaults when the LLM omitted them in the
+            # slim output schema. The monitor needs concrete prices, so
+            # never persist None — fall back to configured percentages
+            # off the actual fill price.
+            sl_price = decision.stop_loss
+            if sl_price is None:
+                sl_price = fill_price * (1.0 - self._stop_loss_pct)
+            tp_price = decision.target_price
+            if tp_price is None:
+                tp_price = fill_price * (1.0 + self._take_profit_pct)
+
             trade_id = await self._repo.record_crypto_trade(
                 pair=decision.symbol,
                 side="buy",
@@ -326,8 +344,8 @@ class CryptoExecutor(BaseExecutor):
                 status=db_status,
                 llm_reasoning=decision.reasoning,
                 entry_price=fill_price,
-                stop_loss=decision.stop_loss,
-                target_price=decision.target_price,
+                stop_loss=sl_price,
+                target_price=tp_price,
                 submitted_at=fill.submitted_at,
                 filled_at=fill.filled_at,
                 filled_price=fill.filled_price,
