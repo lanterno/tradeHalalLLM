@@ -47,18 +47,34 @@ class LlmMetrics:
 
 
 def _tail(path: Path, max_lines: int) -> Iterator[str]:
-    """Yield up to ``max_lines`` lines from the END of ``path`` newest-first.
+    """Yield up to ``max_lines`` lines newest-first from ``path`` plus
+    its most-recent rotated sibling.
 
-    For a typical 10MB rotating log the file is small enough to read in
-    one pass; we don't bother seeking. If the file grows past the
-    rotation cap something else is wrong.
+    A 10MB rotating log can flip over in minutes when the bot is busy;
+    reading only ``halal_trader.log`` after rotation gives a near-empty
+    file, so the metrics endpoints report 0 cycles / 0 LLM calls until
+    new events accumulate. Including ``.log.1`` keeps the window
+    continuous across rotation boundaries.
     """
-    if not path.exists():
-        return
-    with path.open("r", encoding="utf-8", errors="replace") as f:
-        # `deque(..., maxlen=N)` keeps the last N lines in O(1) memory.
-        for line in deque(f, maxlen=max_lines):
-            yield line.rstrip("\n")
+    # Read newest-first to keep the deque bounded: current file's tail
+    # first, then top up from the rotated file if we still have room.
+    if path.exists():
+        with path.open("r", encoding="utf-8", errors="replace") as f:
+            lines = deque(f, maxlen=max_lines)
+    else:
+        lines = deque(maxlen=max_lines)
+
+    remaining = max_lines - len(lines)
+    rotated = path.with_suffix(path.suffix + ".1")
+    if remaining > 0 and rotated.exists():
+        with rotated.open("r", encoding="utf-8", errors="replace") as f:
+            # Prepend the *end* of the rotated file (chronologically just
+            # before the current file's beginning).
+            tail_of_rotated = deque(f, maxlen=remaining)
+            lines.extendleft(reversed(tail_of_rotated))
+
+    for line in lines:
+        yield line.rstrip("\n")
 
 
 def _percentile(values: list[float], p: float) -> float | None:
