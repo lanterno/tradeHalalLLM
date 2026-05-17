@@ -361,6 +361,26 @@ class TradingBot(BaseTradingBot):
         logger.info("=== EARLY CLOSE END OF DAY ROUTINE === (market closes at 1:00 PM ET)")
         await self.end_of_day()
 
+    async def _heartbeat(self) -> None:
+        """Hourly idle-time heartbeat — proves the bot is alive between
+        market sessions. Stays silent during trading hours when cycle
+        logs already serve as the heartbeat."""
+        from halal_trader.market_hours import is_market_open_local
+
+        if is_market_open_local():
+            return
+        now = now_eastern()
+        try:
+            clock = await self.broker.get_clock()
+            next_open = clock.next_open
+        except Exception:
+            next_open = None
+        logger.info(
+            "Stocks bot heartbeat — market closed, next open: %s (now: %s ET)",
+            next_open or "unknown",
+            now.strftime("%Y-%m-%d %H:%M"),
+        )
+
     # ── Main Loop ───────────────────────────────────────────────
 
     async def run(self) -> None:
@@ -430,6 +450,18 @@ class TradingBot(BaseTradingBot):
                 self._early_close_eod,
                 CronTrigger(day_of_week="mon-fri", hour=12, minute=50, timezone=MARKET_TZ),
                 id="early_close_eod",
+                replace_existing=True,
+            )
+
+            # Idle-period heartbeat — proves the bot is alive on
+            # weekends, holidays, and outside trading hours. Without
+            # this, the stocks-bot container is silent for ~63h from
+            # Friday 4pm ET to Monday 9am ET — indistinguishable from
+            # a hung process.
+            self.scheduler.add_job(
+                self._heartbeat,
+                CronTrigger(minute=0, timezone=MARKET_TZ),  # top of every hour
+                id="heartbeat",
                 replace_existing=True,
             )
 
