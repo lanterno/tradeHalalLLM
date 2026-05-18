@@ -1,7 +1,17 @@
-"""Data access layer using SQLModel."""
+"""Data access layer using SQLModel.
+
+Wave D split this monolithic class into per-table mini-repos under
+``db/repos/``. The :class:`Repository` here is now a thin delegator
+that keeps the legacy flat method surface working — every method
+forwards to the mini-repo that owns its table. New code should depend
+on the narrowest protocol it needs (``TradeRepo``,
+``CryptoTradeRepo``, ``LlmDecisionRepo``, …) and pull the impl from
+:class:`RepoBundle` via :meth:`Repository.bundle` or
+``RepoBundle.from_engine(engine)``.
+"""
 
 from datetime import datetime, timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy.ext.asyncio import AsyncEngine
 
@@ -10,9 +20,12 @@ from halal_trader.db.models import (
     Trade,
 )
 
+if TYPE_CHECKING:
+    from halal_trader.db.repos import RepoBundle
+
 
 class Repository:
-    """SQLModel-based repository for trade/PnL/halal operations."""
+    """Legacy facade — see module docstring; prefer ``RepoBundle``."""
 
     def __init__(self, engine: AsyncEngine) -> None:
         from halal_trader.db.repos.crypto_trades import CryptoTradeRepoImpl
@@ -50,6 +63,36 @@ class Repository:
         self._strategy_adjustments = StrategyAdjustmentRepoImpl(engine)
         self._stock_halal_cache = StockHalalCacheRepoImpl(engine)
         self._stock_pnl = StockPnlRepoImpl(engine)
+
+    @property
+    def bundle(self) -> "RepoBundle":
+        """Expose the mini-repos as a typed ``RepoBundle``.
+
+        Migration aid: code that wants the narrower per-table
+        protocols can take ``repo.bundle.crypto_trades`` instead of
+        the full ``Repository`` flat surface. The exposed instances
+        are the *same* objects this Repository delegates to, so there
+        is no double-construction cost.
+        """
+        from halal_trader.db.repos import RepoBundle
+
+        return RepoBundle(
+            trades=self._trades,
+            crypto_trades=self._crypto_trades,
+            pnl=self._pnl,
+            stock_pnl=self._stock_pnl,
+            halal_cache=self._halal_cache,
+            stock_halal_cache=self._stock_halal_cache,
+            halal_screening=self._halal_screening,
+            runtime_config=self._runtime_config,
+            research_jobs=self._research_jobs,
+            web_audit=self._web_audit,
+            indicator_snapshots=self._indicator_snapshots,
+            llm_decisions=self._llm_decisions,
+            purification=self._purification,
+            pair_pauses=self._pair_pause,
+            strategy_adjustments=self._strategy_adjustments,
+        )
 
     # ── Stock Trades (delegated to TradeRepoImpl) ──────────────────
 

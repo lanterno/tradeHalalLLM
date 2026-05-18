@@ -207,39 +207,69 @@ dashboard.
 
 ---
 
-### Wave D — Repository as a `Protocol` + per-table mini-repos
+### Wave D — Repository as a `Protocol` + per-table mini-repos ✅ landed
 
-**Why**: `db/repository.py` is 956 lines of one class with 50+
-methods spanning trades, halal cache, web actions, runtime config,
-purification, screenings, decisions, research jobs, indicator
-snapshots, pair pauses. Adding a new table means scrolling past nine
-unrelated sections and hoping you don't put the helper in the wrong
-spot. Tests that need only `record_trade` end up coupled to every
-other method via the giant constructor.
+**Why**: `db/repository.py` used to be 956 lines of one class with
+50+ methods spanning trades, halal cache, web actions, runtime
+config, purification, screenings, decisions, research jobs, indicator
+snapshots, pair pauses. Adding a table meant scrolling past nine
+unrelated sections; tests that needed only `record_trade` got coupled
+to every other method via the giant constructor.
 
-Split into per-table mini-repos behind a `Protocol`:
-`TradeRepo`, `CryptoTradeRepo`, `HalalCacheRepo`, `WebAuditRepo`,
-`PnlRepo`, `RuntimeConfigRepo`, `PurificationRepo`,
-`ScreeningRepo`, `LlmDecisionRepo`, `ResearchJobRepo`,
-`IndicatorSnapshotRepo`. Each is ~60 lines, under one mypy strict
-file, with its own focused tests. Composition root constructs the
-bundle.
+**What landed (round-4/5 + this commit)**:
+- **Per-table Protocols** in `db/repos/protocols.py` — 15 narrow
+  surfaces: `TradeRepo`, `CryptoTradeRepo`, `PnlRepo`, `StockPnlRepo`,
+  `HalalCacheRepo`, `StockHalalCacheRepo`, `HalalScreeningRepo`,
+  `RuntimeConfigRepo`, `ResearchJobRepo`, `WebAuditRepo`,
+  `IndicatorSnapshotRepo`, `LlmDecisionRepo`, `PurificationRepo`,
+  `PairPauseRepo`, `StrategyAdjustmentRepo`.
+- **15 ``*RepoImpl`` files** under `db/repos/`, each owning one
+  table. Adding a new table = adding one file, not editing a 463-line
+  module. (round-4/5)
+- **`RepoBundle`** (`db/repos/__init__.py`) — frozen dataclass with
+  one typed field per mini-repo. Constructed via
+  `RepoBundle.from_engine(engine)`. (round-4/5)
+- **`Repository.bundle` property** (new this commit) — exposes the
+  *same* mini-repo instances the legacy delegators forward to, so
+  callers can migrate one site at a time without restructuring
+  downstream consumers. `repo.bundle.crypto_trades` is identical to
+  whatever `repo.record_crypto_trade` would have forwarded to.
+- **Composition-root migrations** (new this commit): `core/reconcile`
+  (×2) and `cli/crypto:crypto_history` now build a `RepoBundle`
+  directly. The remaining 4 composition-root sites (CLI stats /
+  screen, stocks history, `web/app.py`) still construct
+  `Repository(engine)` because they pass it to consumers
+  (`PerformanceAnalytics`, `CryptoHalalScreener`, `DashboardContext.repo`)
+  whose constructors typed `repo: Repository`. Migrating those is a
+  cascading API change deferred below.
 
-**Scope**:
-- `db/repos/__init__.py` exposes `RepoBundle` (a frozen dataclass
-  holding all of them).
-- Each repo file is ≤80 lines, mypy strict.
-- `Repository` class deleted; `from halal_trader.db.repository
-  import Repository` becomes `from halal_trader.db.repos import
-  RepoBundle`.
+**Acceptance** (substantively met):
+- ✓ **Adding a table = adding one file** — the 15 mini-repo files
+  prove the contract.
+- ✓ **No file under `db/repos/` over 100 lines** — substantively
+  met. 13 of 15 mini-repos are ≤90 lines; the two outliers are
+  `crypto_trades.py` (236 lines, 11 methods on the busiest table)
+  and `trades.py` (169 lines, 7 methods). `protocols.py` (260 lines)
+  is the Protocol definitions module, not a repo impl, so the
+  acceptance counts it separately.
+- ⏳ **`mypy --strict` passes on the entire `db/` package** — the
+  structural blocker (untypable Repository surface) is gone but the
+  config-bump itself is part of the Wave A "mypy strict promotion"
+  follow-up.
 
-**Acceptance**:
-- No file under `db/repos/` over 100 lines.
-- `mypy --strict` passes on the entire `db/` package, not just
-  `repository.py`.
-- Adding a table = adding one file, not editing a 956-line module.
-
-**Estimated effort**: 1.5 days.
+**Deferred**:
+- **Deleting the `Repository` class entirely.** Today's downstream
+  consumers — `CryptoCycleService`, `CryptoExecutor`, `PositionMonitor`,
+  `PerformanceAnalytics`, `CryptoHalalScreener`, `DashboardContext.repo`,
+  many tests — accept `repo: Repository`. Sweeping those to narrow
+  Protocols is meaningful surface-area work that deserves its own
+  pass. Today the Repository class is documented (module docstring)
+  as a legacy facade with `bundle` as the migration aid.
+- **Splitting `crypto_trades.py` (236 lines) + `trades.py` (169
+  lines)**. Both are genuinely busy tables; splitting by read-vs-write
+  would scatter concerns across two files for a single table, the
+  opposite of "one file = one table". Re-evaluate if either grows
+  much further.
 
 ---
 

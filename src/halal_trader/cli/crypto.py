@@ -94,14 +94,14 @@ def crypto_history(limit: int) -> None:
     async def _history() -> None:
         from halal_trader.config import get_settings
         from halal_trader.db.models import init_db
-        from halal_trader.db.repository import Repository
+        from halal_trader.db.repos import RepoBundle
 
         settings = get_settings()
         engine = await init_db(settings.database_url)
-        repo = Repository(engine)
+        repos = RepoBundle.from_engine(engine)
         try:
-            print_crypto_trades(await repo.get_recent_crypto_trades(limit))
-            print_crypto_pnl(await repo.get_crypto_pnl_history(limit=14))
+            print_crypto_trades(await repos.crypto_trades.get_recent_crypto_trades(limit))
+            print_crypto_pnl(await repos.pnl.get_crypto_pnl_history(limit=14))
         finally:
             await engine.dispose()
 

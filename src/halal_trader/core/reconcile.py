@@ -75,10 +75,10 @@ async def reconcile_crypto(
     rows). We sum open BUY trades by base asset (e.g. ``BTC``) and compare
     against the corresponding ``free + locked`` balance the exchange reports.
     """
-    from halal_trader.db.repository import Repository
+    from halal_trader.db.repos import RepoBundle
 
-    repo = Repository(engine)
-    open_trades = await repo.get_open_crypto_trades()
+    repos = RepoBundle.from_engine(engine)
+    open_trades = await repos.crypto_trades.get_open_crypto_trades()
 
     db_by_asset: dict[str, float] = {}
     for trade in open_trades:
@@ -170,10 +170,10 @@ async def reconcile_stocks(
     For stocks we sum signed quantities (buys positive, sells negative) per
     symbol and compare to ``Position.qty`` from Alpaca.
     """
-    from halal_trader.db.repository import Repository
+    from halal_trader.db.repos import RepoBundle
 
-    repo = Repository(engine)
-    recent = await repo.get_recent_trades(limit=500)
+    repos = RepoBundle.from_engine(engine)
+    recent = await repos.trades.get_recent_trades(limit=500)
 
     db_by_symbol: dict[str, float] = {}
     for row in recent:
