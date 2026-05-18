@@ -50,6 +50,10 @@ class TradingBot(BaseTradingBot):
         self._lock_file: int | None = None
         # Lazy-built in ``_create_components``; closed in ``shutdown``.
         self._stocks_news: Any | None = None
+        # Stocks-side self-review — wired in ``_create_components`` and
+        # called from ``end_of_day``. ``Any`` because the bot's typed
+        # ``self_review`` slot on ``TradingCycleService`` is also ``Any``.
+        self._self_review: Any | None = None
 
     async def _create_components(self) -> None:
         """Create stock-specific trading components."""
@@ -169,14 +173,32 @@ class TradingBot(BaseTradingBot):
         # on each pass without a per-cycle constructor.
         from halal_trader.core.analytics import CrossAssetAnalytics
         from halal_trader.sentiment.stocks_news import StockNewsCollector
+        from halal_trader.trading.self_improve import StockTradeSelfReview
 
         repo = self._repo
         assert repo is not None  # populated by BaseTradingBot.initialize()
+        bundle = self._bundle
+        assert bundle is not None  # built alongside repo by initialize()
         stocks_analytics = CrossAssetAnalytics(repo, asset_class="stock")
         # Yahoo Finance — no API key, 15-min cache inside the collector.
         # Closed in :meth:`shutdown` so the underlying ``httpx`` client
         # doesn't leak past process exit.
         self._stocks_news = StockNewsCollector()
+
+        # Stocks-side self-review — reviews closed Trade round-trips and
+        # suggests bounded knob overrides (``max_position_pct``,
+        # ``daily_loss_limit``). Mirrors crypto's wiring but with a
+        # smaller knob menu because ``TradingStrategy`` doesn't carry
+        # global SL/TP fallbacks. ``load_from_db`` restores any prior
+        # adjustments so they survive a process restart.
+        stocks_self_review = StockTradeSelfReview(
+            llm,
+            strategy_adjustments=bundle.strategy_adjustments,
+            trades=bundle.trades,
+            strategy=strategy,
+        )
+        await stocks_self_review.load_from_db()
+        self._self_review = stocks_self_review
 
         # Cycle service — owns the intraday trading logic
         self.cycle_service = TradingCycleService(
@@ -190,10 +212,7 @@ class TradingBot(BaseTradingBot):
             live_mode_checker=self._live_mode_checker,
             catalyst_feed=catalyst_feed,
             analytics=stocks_analytics,
-            # ``self_review=None`` — stocks-side ``TradeSelfReview``
-            # equivalent is a separate build; the stage emits an empty
-            # block until one ships.
-            self_review=None,
+            self_review=stocks_self_review,
             news_collector=self._stocks_news,
         )
 
@@ -411,6 +430,22 @@ class TradingBot(BaseTradingBot):
                     logger.debug("Failed to enrich stocks daily summary with LLM cost: %s", exc)
 
             logger.info("Day summary: %s", summary)
+
+            # End-of-day self-review — mirrors crypto/_daily_end. Pulls
+            # the day's closed round-trips, asks the LLM what patterns
+            # to learn, persists bounded knob overrides. Failures
+            # (network, LLM down, no trades) degrade silently — the
+            # rest of the daily-end routine must still run.
+            if self._self_review:
+                try:
+                    review = await self._self_review.review(lookback_days=1)
+                    if review.observations:
+                        logger.info(
+                            "Stocks self-review observations: %s",
+                            "; ".join(review.observations[:3]),
+                        )
+                except Exception as exc:
+                    logger.debug("Stocks self-review failed: %s", exc)
 
             # Send daily summary via Telegram — mirrors crypto/_daily_end.
             if self._notifier and self._notifier.enabled:
