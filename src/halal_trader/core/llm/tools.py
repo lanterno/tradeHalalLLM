@@ -201,3 +201,90 @@ CRYPTO_AGENTIC_TOOLS: list[Tool] = [
     COMPUTE_VAR_TOOL,
     SUBMIT_PLAN_TOOL,
 ]
+
+
+# ── Strategy-shaped tool: legacy decisions[] schema ──────────────
+# Mirrors the JSON shape today's prompt asks for, so
+# ``CryptoTradingPlan.model_validate(tool_call.args)`` works without a
+# translation layer. The richer :data:`SUBMIT_PLAN_TOOL` (above) is
+# kept for the agentic surface in Wave H, where the model emits a
+# more abstract plan and the strategy materialises it into decisions.
+
+_DECISION_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "action": {
+            "type": "string",
+            "enum": ["buy", "sell", "hold"],
+            "description": "Trade direction.",
+        },
+        "symbol": {"type": "string", "description": "Trading pair, e.g. 'BTCUSDT'"},
+        "quantity": {
+            "type": "number",
+            "description": "Absolute order quantity in base-asset units (e.g. BTC, not USDT).",
+            "minimum": 0,
+        },
+        "confidence": {
+            "type": "number",
+            "description": "Model's confidence in the decision (0..1).",
+            "minimum": 0,
+            "maximum": 1,
+        },
+        "reasoning": {
+            "type": "string",
+            "description": "One-line rationale for this specific decision.",
+        },
+        "stop_loss": {
+            "type": "number",
+            "description": (
+                "Optional per-decision stop-loss price (USDT, absolute). "
+                "Override the default — omit to use the configured percentage."
+            ),
+        },
+        "target_price": {
+            "type": "number",
+            "description": (
+                "Optional per-decision take-profit price (USDT, absolute). "
+                "Override the default — omit to use the configured percentage."
+            ),
+        },
+        "thesis_tag": {
+            "type": "string",
+            "description": (
+                "Optional setup classifier: breakout / mean_revert / momentum / "
+                "trend_follow / scalp / news_catalyst."
+            ),
+        },
+    },
+    "required": ["action", "symbol", "quantity", "confidence"],
+    "additionalProperties": False,
+}
+
+
+SUBMIT_DECISIONS_TOOL = Tool(
+    name="submit_decisions",
+    description=(
+        "Submit the final list of trading decisions for this cycle. Call exactly "
+        "once. Empty decisions list = explicit HOLD on every position."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "decisions": {
+                "type": "array",
+                "items": _DECISION_SCHEMA,
+                "description": "Buy/sell/hold actions to take this cycle.",
+            },
+            "reasoning": {
+                "type": "string",
+                "description": "One concise sentence — the rationale for the plan as a whole.",
+            },
+            "market_outlook": {
+                "type": "string",
+                "description": "Brief high-level read of the current setup.",
+            },
+        },
+        "required": ["decisions", "market_outlook"],
+        "additionalProperties": False,
+    },
+)

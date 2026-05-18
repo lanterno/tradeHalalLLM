@@ -17,6 +17,10 @@ logger = logging.getLogger(__name__)
 class AnthropicLLM(BaseLLM):
     """Cloud LLM via Anthropic API."""
 
+    # Wave E: Anthropic Messages speaks native tool use via the
+    # ``tools=[...]`` + ``tool_choice`` params.
+    supports_tool_use = True
+
     _TIMEOUT_SECONDS = 30
 
     def __init__(self, model: str, api_key: str, *, enable_prompt_cache: bool = True) -> None:

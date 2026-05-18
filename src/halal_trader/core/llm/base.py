@@ -71,6 +71,13 @@ def _clean_json_body(raw: str) -> str:
 class BaseLLM(ABC):
     """Abstract base for all LLM providers."""
 
+    # Wave E: provider declares whether it speaks the SDK's native
+    # tool-use API. When True, the strategy uses
+    # ``generate_tool_call(tool)`` and the SDK validates the schema for
+    # us. When False (Ollama today), the strategy falls back to the
+    # ``generate_json`` path with the schema-repair retry.
+    supports_tool_use: bool = False
+
     def __init__(self, model: str) -> None:
         self.model = model
         self.last_thinking: str = ""

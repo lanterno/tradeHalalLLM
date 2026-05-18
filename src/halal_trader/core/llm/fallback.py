@@ -136,3 +136,53 @@ class FallbackLLM(BaseLLM):
                 self._on_provider_failure(provider, e)
         self._arm_chain_backoff()
         raise last_error or RuntimeError("No LLM providers available")
+
+    @property
+    def supports_tool_use(self) -> bool:  # type: ignore[override]
+        """Tool-use capability of whichever inner provider is eligible.
+
+        Returns True if *any* eligible provider supports native tool use —
+        the strategy uses this to decide whether to take the
+        ``generate_tool_call`` path. Generators that don't support it
+        still get tried via the JSON fallback inside
+        :meth:`generate_tool_call`.
+        """
+        for provider in self._eligible_providers():
+            if getattr(provider, "supports_tool_use", False):
+                return True
+        return False
+
+    async def generate_tool_call(
+        self,
+        prompt: str,
+        *,
+        tools: "list[Any]",
+        system: str | None = None,
+        force_tool: str | None = None,
+    ) -> "list[Any]":
+        """Delegate to each provider's generate_tool_call.
+
+        Providers without native tool-use (e.g. Ollama) inherit the
+        default ``BaseLLM.generate_tool_call`` implementation that
+        materialises a single tool call from ``generate_json``. The
+        Fallback layer doesn't care which path produced the call —
+        downstream consumers see a uniform list of
+        :class:`ToolCall` instances.
+        """
+        self._check_chain_backoff()
+        last_error: Exception | None = None
+        for provider in self._eligible_providers():
+            try:
+                result = await provider.generate_tool_call(
+                    prompt,
+                    tools=tools,
+                    system=system,
+                    force_tool=force_tool,
+                )
+                self._on_provider_success(provider)
+                return result
+            except Exception as e:
+                last_error = e
+                self._on_provider_failure(provider, e)
+        self._arm_chain_backoff()
+        raise last_error or RuntimeError("No LLM providers available")

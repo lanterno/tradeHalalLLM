@@ -72,6 +72,7 @@ class BaseStrategy(ABC):
         count_actions: Any,
         log_prefix: str = "LLM",
         prompt_version: str | None = None,
+        tool: Any = None,
     ) -> Any:
         """Core analysis loop shared by all strategy subclasses.
 
@@ -82,8 +83,15 @@ class BaseStrategy(ABC):
         *prompt_version*: ``"name@hash"`` short form from the prompt registry,
             persisted on the LlmDecision row so each decision is replayable
             against the exact template that produced it.
+        *tool* (Wave E): when provided AND ``llm.supports_tool_use`` is
+            True, take the native tool-use path: the provider validates
+            the schema before returning, schema-repair becomes a no-op,
+            and output-token cost drops because the model doesn't emit
+            JSON syntax characters. When omitted (or the LLM is Ollama),
+            falls back to the legacy ``generate_json`` + repair path.
         """
         t0 = time.monotonic()
+        use_tool = tool is not None and getattr(self._llm, "supports_tool_use", False)
         try:
             async with tracer.aspan(
                 "strategy.llm_call",
@@ -91,7 +99,14 @@ class BaseStrategy(ABC):
                 model=getattr(self._llm, "model", ""),
                 prompt_version=prompt_version or "",
             ):
-                initial_raw = await self._llm.generate_json(user_prompt, system=system_prompt)
+                if use_tool:
+                    initial_raw = await self._call_tool(
+                        user_prompt=user_prompt,
+                        system_prompt=system_prompt,
+                        tool=tool,
+                    )
+                else:
+                    initial_raw = await self._llm.generate_json(user_prompt, system=system_prompt)
             async with tracer.aspan("strategy.validate", log_prefix=log_prefix):
                 plan, raw, repair_used = await self._validate_with_repair(
                     raw=initial_raw,
@@ -191,6 +206,35 @@ class BaseStrategy(ABC):
             # Re-validate the repaired blob; bubble up the new error if
             # it still fails so the caller's ``except`` records it.
             return validate(repaired), repaired, True
+
+    async def _call_tool(
+        self,
+        *,
+        user_prompt: str,
+        system_prompt: str,
+        tool: Any,
+    ) -> dict[str, Any]:
+        """Wave E tool-use call: invoke ``tool`` and return its args dict.
+
+        The provider enforces the JSONSchema before returning, so the
+        result is structurally valid (Pydantic validation still runs
+        downstream — semantic checks like halal-pair gating happen
+        post-parse). ``force_tool`` is passed so the model can't reply
+        with prose; it must call the tool.
+        """
+        calls = await self._llm.generate_tool_call(
+            user_prompt,
+            tools=[tool],
+            system=system_prompt,
+            force_tool=tool.name,
+        )
+        if not calls:
+            raise ValueError(f"LLM returned no tool calls (expected {tool.name!r})")
+        # Prefer the matching tool call if multiple are returned; otherwise
+        # take the first. The strategy schema requires exactly one
+        # ``submit_*`` call per cycle so this is a defensive guard.
+        match = next((c for c in calls if c.name == tool.name), calls[0])
+        return dict(match.args or {})
 
     def _on_llm_success(self) -> None:
         """Hook for subclasses to react to a successful LLM call (e.g. reset counters)."""

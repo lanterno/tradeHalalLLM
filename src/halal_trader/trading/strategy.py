@@ -247,6 +247,8 @@ class TradingStrategy(BaseStrategy):
             catalysts_text=catalysts_text or "No recent catalysts.",
         )
 
+        from halal_trader.core.llm.tools import SUBMIT_DECISIONS_TOOL
+
         plan = await self._run_llm_analysis(
             system,
             user_prompt,
@@ -266,6 +268,7 @@ class TradingStrategy(BaseStrategy):
                 "holds": len(p.holds),
             },
             prompt_version=PROMPT_VERSION.short,
+            tool=SUBMIT_DECISIONS_TOOL,
         )
 
         if self._ensemble_llms and plan.decisions:

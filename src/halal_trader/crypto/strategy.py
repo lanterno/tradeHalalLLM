@@ -191,6 +191,8 @@ class CryptoTradingStrategy(BaseStrategy):
         )
         system, user_prompt = build_prompts(ctx, params)
 
+        from halal_trader.core.llm.tools import SUBMIT_DECISIONS_TOOL
+
         plan = await self._run_llm_analysis(
             system,
             user_prompt,
@@ -211,6 +213,12 @@ class CryptoTradingStrategy(BaseStrategy):
             },
             log_prefix="Crypto",
             prompt_version=_CRYPTO_PROMPT_VERSION.short,
+            # Wave E: use native tool-use when the provider supports it
+            # (Anthropic / OpenAI); falls back to generate_json for
+            # Ollama. SUBMIT_DECISIONS_TOOL mirrors the legacy JSON
+            # schema, so CryptoTradingPlan validates either path's
+            # output without translation.
+            tool=SUBMIT_DECISIONS_TOOL,
         )
 
         if self._ensemble_llms and plan.decisions:

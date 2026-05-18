@@ -218,45 +218,75 @@ bundle.
 
 ## Decision quality
 
-### Wave E — Tool-use LLM calls instead of JSON-blob parsing
+### Wave E — Tool-use LLM calls instead of JSON-blob parsing ✅ landed
 
-**Why**: today every LLM strategy call asks for a JSON blob, parses
-it, and runs schema-repair on retry. Anthropic and OpenAI both ship
+**Why**: every LLM strategy call asked for a JSON blob, parsed it,
+and ran schema-repair on retry. Anthropic and OpenAI both ship
 **typed tool use** — the model emits a structured call against a
 JSON Schema you declared, the SDK validates it, and you get a Python
 dict back. Schema-repair retries vanish. Token cost drops because the
-model doesn't waste output tokens emitting JSON syntax. And we get to
-expose the same tool to a future agentic mode (Wave H).
+model doesn't waste output tokens emitting JSON syntax.
 
-Trading-plan-shaped tools:
-- `submit_plan(buys: list[BuyDecision], sells: list[SellDecision],
-  market_outlook: str)` — returns a structured plan.
-- `analyze_pair(symbol: str)` — optional second-call deep-dive
-  triggered when the model wants more info on one pair (ties into
-  the agentic mode in Wave H).
-- `request_indicator(symbol: str, indicator: str)` — same idea, but
-  for one indicator on one pair, in case the model wants to ask
-  "what's the 4h MACD on ETHUSDT?" before deciding.
+**What landed**:
+- `core/llm/tools.py:SUBMIT_DECISIONS_TOOL` — new tool whose schema
+  mirrors today's JSON-asked output (`decisions[]` with
+  action/symbol/quantity/confidence/reasoning + optional
+  stop_loss/target_price/thesis_tag, plus `reasoning` and
+  `market_outlook` top-level). `CryptoTradingPlan.model_validate`
+  consumes the tool args directly — no translation layer needed.
+  The richer `SUBMIT_PLAN_TOOL` stays around for the agentic surface
+  in Wave H.
+- `core/llm/base.py:BaseLLM.supports_tool_use` — new class-level flag
+  defaulting to `False`. Anthropic and OpenAI providers set it to
+  `True`; Ollama inherits `False`. The strategy uses this to pick a
+  path.
+- `core/llm/openai.py:OpenAILLM.generate_tool_call` — native override
+  using `chat.completions` with `tools=[...]` + `tool_choice`. Same
+  usage-tracking + metrics emission path as `generate`.
+  (`AnthropicLLM.generate_tool_call` was already shipped in
+  round-4/5.)
+- `core/llm/fallback.py` — `FallbackLLM.supports_tool_use` is a
+  computed property (True if any eligible inner provider supports
+  it). `FallbackLLM.generate_tool_call` walks the chain just like
+  `generate_json` — primary first, fall-through on failure, raise the
+  last error when the chain exhausts so the strategy's empty-plan
+  path fires.
+- `core/strategy.py:BaseStrategy._run_llm_analysis` takes a new
+  optional `tool` kwarg. When the LLM supports tool-use and a tool
+  was passed, calls `_call_tool(...)` to drive
+  `generate_tool_call(tools=[tool], force_tool=tool.name)` and
+  returns the args dict as `raw`. Otherwise falls back to
+  `generate_json`. The schema-repair path is a no-op for the
+  tool-use branch (the SDK already enforced the schema), but stays
+  in place for the Ollama fallback.
+- Both `CryptoTradingStrategy.analyze` and stocks-side
+  `TradingStrategy.analyze` pass `SUBMIT_DECISIONS_TOOL`.
+  Backwards-compatible: callers that don't pass a tool (or LLMs that
+  don't support tool-use) keep the legacy behaviour.
 
-**Scope**:
-- `core/llm/tools.py` — typed JSONSchema definitions for each tool,
-  derived from the existing Pydantic decision dataclasses.
-- `AnthropicLLM.generate_tool_call(prompt, system, tools)` returns a
-  typed `(tool_name, args)`.
-- `CryptoTradingStrategy.analyze` switches from
-  `await self._llm.generate_json(...)` to
-  `await self._llm.generate_tool_call(submit_plan_tool, ...)`.
-- Schema-repair path becomes a no-op (still kept as a code path for
-  Ollama, which doesn't support native tool use).
+**Trade-offs documented**:
+- The tool schema duplicates the legacy JSON shape rather than the
+  cleaner `SUBMIT_PLAN_TOOL` (which uses `size_pct` etc). A future
+  pass can replace `SUBMIT_DECISIONS_TOOL` with the richer
+  abstraction once we have a translator from
+  `(size_pct, stop_loss_pct, take_profit_pct)` →
+  `(quantity, stop_loss, target_price)`.
+- Ollama still goes through the `generate_json` + schema-repair
+  path; gains the same reliability win only when an Ollama build
+  ships native tool-use (not in the current release).
 
 **Acceptance**:
-- LLM decision rows for Anthropic / OpenAI runs have
-  `parsed_action != None` 100% of the time (today it's lower because
-  the JSON-repair fallback occasionally fails).
-- Output token counts on the same prompt drop ≥10% (less JSON
-  syntax to emit).
-
-**Estimated effort**: 2 days.
+- For Anthropic/OpenAI runs, `parsed_action` is non-null when the
+  tool-use path succeeds — verified by the contract that
+  `_call_tool` raises on `[]` returns (so the strategy's empty-plan
+  recording path fires) and otherwise returns a structurally-valid
+  dict. Empirical "100% non-null on a one-day sample" needs a live
+  paper-trading run to validate.
+- Output-token reduction ≥10% — qualitative: the model no longer
+  emits JSON syntax bytes (`{`, `"action":`, etc.). Per-prompt
+  measurement needs live A/B logs; the Wave J `llm_call_ms_bucket`
+  histogram + the per-decision usage rows on `llm_decisions` make
+  this verifiable post-shipping without code changes.
 
 ---
 
