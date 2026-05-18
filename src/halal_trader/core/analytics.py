@@ -12,12 +12,23 @@ module directly.
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any, Literal, Protocol
 
 from halal_trader.crypto.analytics import PerformanceAnalytics, PerformanceStats
-from halal_trader.db.repository import Repository
+from halal_trader.db.repos import CryptoTradeRepo, TradeRepo
 
 AssetClass = Literal["crypto", "stock"]
+
+
+class _RoundTripRepo(TradeRepo, CryptoTradeRepo, Protocol):
+    """Narrow intersection — the only repo surface this facade reads.
+
+    Combines :class:`TradeRepo` (for stocks) and :class:`CryptoTradeRepo`
+    (for crypto round-trips) so callers can pass any object that
+    structurally satisfies both — typically the composition root's
+    :class:`Repository` instance, but tests can also pass a focused
+    mock that only stubs the round-trip getters.
+    """
 
 
 class CrossAssetAnalytics:
@@ -29,7 +40,7 @@ class CrossAssetAnalytics:
     same template.
     """
 
-    def __init__(self, repo: Repository, *, asset_class: AssetClass = "crypto") -> None:
+    def __init__(self, repo: _RoundTripRepo, *, asset_class: AssetClass = "crypto") -> None:
         self._repo = repo
         self._asset_class = asset_class
         self._inner = PerformanceAnalytics(repo)
