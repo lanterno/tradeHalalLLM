@@ -16,12 +16,13 @@ Design:
 * Returns :class:`NewsEvent` (the same shape the crypto pipeline
   feeds into :class:`RecentNewsFeed`) so :class:`BuildNewsStage`
   consumes either path identically.
-* Sentiment is left at ``"neutral"`` — Yahoo's response has no
-  per-item polarity field. The downstream :func:`format_news_for_prompt`
-  renders the headline with a neutral glyph; the LLM does its own
-  sentiment read on the raw text. (Adding a polarity classifier per
-  item is a follow-up that doesn't block the prompt-context block
-  from filling.)
+* Sentiment is classified per-headline via
+  :func:`sentiment.headline_polarity.classify_headline` — a small
+  curated lexicon (same pattern as ``trading/fed_speak.py``'s
+  hawkish/dovish scorer). Yahoo's response has no polarity field;
+  the classifier reads the headline string and emits
+  ``"positive"`` / ``"negative"`` / ``"neutral"`` (the same
+  literals the CryptoPanic path uses).
 * 15-minute per-symbol cache — same TTL the options IV adapter uses,
   matching the 15-minute stocks cycle so each pass hits the cache
   once and the network once.
@@ -36,6 +37,7 @@ from typing import Any
 import httpx
 
 from halal_trader.sentiment.events import NewsEvent
+from halal_trader.sentiment.headline_polarity import classify_headline
 
 logger = logging.getLogger(__name__)
 
@@ -157,13 +159,14 @@ def _parse_news_payload(symbol: str, payload: dict[str, Any]) -> list[NewsEvent]
         # downstream lexical-sort + formatter work the same as the
         # CryptoPanic path (which already emits ISO strings).
         published = _epoch_to_iso(ts) if isinstance(ts, (int, float)) else ""
+        clean_title = title.strip()
         out.append(
             NewsEvent(
-                title=title.strip(),
+                title=clean_title,
                 source=publisher,
                 url=link,
                 published_at=published,
-                sentiment="neutral",
+                sentiment=classify_headline(clean_title),
                 affected_pairs=[symbol],
                 importance="normal",
             )

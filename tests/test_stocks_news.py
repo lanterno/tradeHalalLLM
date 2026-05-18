@@ -38,7 +38,9 @@ def test_parse_news_payload_maps_yahoo_shape_to_news_event():
     assert ev.source == "Reuters"
     assert ev.url == "https://news.example/aapl-q4"
     assert ev.affected_pairs == ["AAPL"]
-    assert ev.sentiment == "neutral"  # Yahoo doesn't tag polarity
+    # "beats" is in the positive lexicon — the per-headline classifier
+    # picks it up and overrides the legacy hardcoded "neutral".
+    assert ev.sentiment == "positive"
     assert ev.importance == "normal"
     # ISO 8601 UTC.
     assert ev.published_at.startswith("2024-05-06T")
