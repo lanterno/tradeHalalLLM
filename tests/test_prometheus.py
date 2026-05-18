@@ -108,9 +108,16 @@ def test_collector_falls_back_to_unknown_market_label():
 
 
 @pytest.fixture
-def client(tmp_path, monkeypatch):
+def client(tmp_path, monkeypatch, database_url):
+    """Test client backed by a fresh migrated test DB.
+
+    Depending on ``database_url`` (provided by ``tests/conftest.py``)
+    ensures the test DB is created + migrated before
+    ``web_app.create_app()`` runs its lifespan, which calls
+    ``init_db()`` and validates the schema is at head. The Wave A
+    ``app_state`` shim is gone, so no clear() is needed.
+    """
     monkeypatch.setenv("LOG_DIR", str(tmp_path / "logs"))
-    web_app.app_state.clear()
     app = web_app.create_app()
 
     with TestClient(app) as c:
