@@ -30,10 +30,10 @@ The roadmap proper lives in `~/.claude/plans/i-want-you-to-swift-pine.md`.
 
 | Item | Status | Notes |
 |---|---|---|
-| 3.1 On-chain flows | 🔴 blocked | external API key + integration |
-| 3.2 SEC EDGAR 8-K | 🔴 blocked | external API key + integration |
-| 3.3 FOMC sentiment | 🔴 blocked | external API key |
-| 3.4 Options IV surface | 🔴 blocked | external data feed |
+| 3.1 On-chain flows | 🟡 ready, needs operator config | `crypto/onchain.py:EtherscanWhaleFlow` shipped; `crypto/components.py:build_components` wires it when `ETHERSCAN_API_KEY` is set in env. Etherscan offers a free tier — operator just needs to register and paste the key. The cycle threads the signal into `hub.whale_flows` and the prompt's microstructure block. |
+| 3.2 SEC EDGAR 8-K | 🟡 ready, needs operator config | `trading/edgar_catalysts.py:EDGAREightKSource` shipped; `trading/scheduler.py` wires it when `EDGAR_USER_AGENT` is set. EDGAR is unauthenticated — the user-agent is a free identification string ("Name <email>") per SEC's automated-access ToS. |
+| 3.3 FOMC sentiment | ✅ landed | `trading/fed_speak.py:FedSpeakFetcher` + `FedSpeakCatalystSource` (`trading/fed_speak_adapter.py`) wired unconditionally in `trading/scheduler.py`. Source is the public Fed RSS feed (no key needed); a lexicon-based hawkish/dovish scorer produces a per-cycle drift signal. |
+| 3.4 Options IV surface | ✅ landed | `trading/options_iv.py:OptionsIVFetcher` + `OptionsIVCatalystSource` (`trading/options_catalyst_adapter.py`) wired unconditionally in `trading/scheduler.py`. Source is Yahoo Finance's public options chain endpoint — no key needed; cached 15 min per symbol. |
 | 3.5 Spot-perp basis | ✅ landed | `ad5f157` + cycle wiring via `BasisTracker` in hub |
 | 3.6 Mention velocity | ✅ landed | `7255706` (module) + `RedditPublicFetcher` (public JSON, no OAuth) wired in `crypto/components.py` + cycle calls `compute_velocity` and stuffs surge block into the prompt |
 
