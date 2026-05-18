@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from halal_trader.config import Settings
 from halal_trader.domain.models import Position
-from halal_trader.trading.risk import _bars_to_klines, evaluate_stock_risk
+from halal_trader.trading.bars import bars_to_klines
+from halal_trader.trading.risk import evaluate_stock_risk
 
 
 def _bar(o: float, h: float, low: float, c: float, v: float = 1_000.0) -> dict:
@@ -21,39 +22,50 @@ def _series(start: float, n: int, step: float) -> list[dict]:
 
 
 def _settings() -> Settings:
+    """Settings stub for the stocks-side risk adapter.
+
+    Round-4 wave 0.C moved the risk knobs from CryptoSettings to
+    StockSettings — pydantic's `extra="ignore"` swallowed the legacy
+    `crypto_*` kwargs silently before, so the test was using defaults
+    by accident. Now we construct StockSettings explicitly with the
+    intended values."""
+    from halal_trader.config import StockSettings
+
     return Settings(
-        max_position_pct=0.20,
-        crypto_max_portfolio_heat_pct=0.05,
-        crypto_max_drawdown_pct=0.08,
-        crypto_high_correlation_threshold=0.7,
-        crypto_correlation_reduction_factor=0.5,
-        crypto_atr_baseline=0.02,
+        stocks=StockSettings(
+            max_position_pct=0.20,
+            max_portfolio_heat_pct=0.05,
+            max_drawdown_pct=0.08,
+            high_correlation_threshold=0.7,
+            correlation_reduction_factor=0.5,
+            atr_baseline=0.02,
+        ),
     )
 
 
 def test_bars_to_klines_handles_list_form():
     raw = [_bar(100, 101, 99, 100.5) for _ in range(5)]
-    klines = _bars_to_klines(raw)
+    klines = bars_to_klines(raw)
     assert len(klines) == 5
     assert klines[0].close == 100.5
 
 
 def test_bars_to_klines_handles_alpaca_dict_form():
     raw = {"bars": [_bar(50, 51, 49, 50.5) for _ in range(3)]}
-    klines = _bars_to_klines(raw)
+    klines = bars_to_klines(raw)
     assert len(klines) == 3
     assert klines[-1].close == 50.5
 
 
 def test_bars_to_klines_skips_garbage_entries():
     raw = [_bar(1, 2, 0.5, 1.5), "not a dict", {}, _bar(2, 3, 1, 2.5)]
-    klines = _bars_to_klines(raw)
+    klines = bars_to_klines(raw)
     assert len(klines) == 2  # garbage rows filtered
 
 
 def test_bars_to_klines_skips_zero_close():
     raw = [_bar(1, 2, 0.5, 0)]
-    assert _bars_to_klines(raw) == []
+    assert bars_to_klines(raw) == []
 
 
 def test_evaluate_stock_risk_clean_portfolio():

@@ -201,6 +201,52 @@ async def test_exit_swallows_retrainer_exception(engine):
     await mon._exit(_trade(id_=tid), price=185.0, reason="stop_loss")  # must not raise
 
 
+async def test_exit_calls_notifier_when_wired(engine):
+    """An SL/TP exit fires `notify_sl_tp` so the operator gets the same
+    Telegram alert the crypto monitor already sends."""
+    repo = Repository(engine)
+    try:
+        tid = await repo.record_trade(
+            symbol="AAPL",
+            side="buy",
+            quantity=10,
+            price=200.0,
+            stop_loss=190.0,
+            target_price=220.0,
+        )
+        notifier = MagicMock()
+        notifier.enabled = True
+        notifier.notify_sl_tp = AsyncMock()
+        mon = _monitor(repo)
+        mon._notifier = notifier
+        await mon._exit(_trade(id_=tid, entry=200.0), price=185.0, reason="stop_loss")
+
+        notifier.notify_sl_tp.assert_awaited_once()
+        kwargs = notifier.notify_sl_tp.await_args.kwargs
+        assert kwargs["pair"] == "AAPL"
+        assert kwargs["exit_reason"] == "stop_loss"
+        assert kwargs["entry_price"] == 200.0
+        assert kwargs["exit_price"] == 185.0
+        # 10 shares × ($185 − $200) = −$150
+        assert abs(kwargs["pnl"] - (-150.0)) < 1e-6
+    finally:
+        await engine.dispose()
+
+
+async def test_exit_swallows_notifier_exception(engine):
+    """A blowing-up notifier must not abort the close path."""
+    repo = Repository(engine)
+    tid = await repo.record_trade(
+        symbol="AAPL", side="buy", quantity=10, price=200.0, stop_loss=190.0, target_price=220.0
+    )
+    notifier = MagicMock()
+    notifier.enabled = True
+    notifier.notify_sl_tp = AsyncMock(side_effect=RuntimeError("telegram down"))
+    mon = _monitor(repo)
+    mon._notifier = notifier
+    await mon._exit(_trade(id_=tid), price=185.0, reason="stop_loss")  # must not raise
+
+
 async def test_get_open_trades_returns_only_unclosed_buys(engine):
     repo = Repository(engine)
     try:
