@@ -48,6 +48,7 @@ class CryptoTradeRepoImpl:
         filled_price: float | None = None,
         filled_quantity: float | None = None,
         halal_screening_id: int | None = None,
+        predicted_slippage_pct: float | None = None,
     ) -> int:
         trade = CryptoTrade(
             pair=pair,
@@ -66,6 +67,7 @@ class CryptoTradeRepoImpl:
             filled_price=filled_price,
             filled_quantity=filled_quantity,
             halal_screening_id=halal_screening_id,
+            predicted_slippage_pct=predicted_slippage_pct,
         )
         async with AsyncSession(self._engine) as session:
             session.add(trade)
@@ -170,6 +172,24 @@ class CryptoTradeRepoImpl:
     async def get_recent_crypto_trades(self, limit: int = 50) -> list[dict[str, Any]]:
         async with AsyncSession(self._engine) as session:
             statement = select(CryptoTrade).order_by(col(CryptoTrade.timestamp).desc()).limit(limit)
+            results = await session.exec(statement)
+            return [r.model_dump() for r in results.all()]
+
+    async def get_filled_trades(self, limit: int = 200) -> list[dict[str, Any]]:
+        """Recent trades with a recorded fill — feeds the Wave G slippage refit.
+
+        Only returns rows where both ``price`` (intent) and
+        ``filled_price`` are non-null, since the slippage target is
+        ``(filled - intent) / intent``.
+        """
+        async with AsyncSession(self._engine) as session:
+            statement = (
+                select(CryptoTrade)
+                .where(col(CryptoTrade.price).is_not(None))
+                .where(col(CryptoTrade.filled_price).is_not(None))
+                .order_by(col(CryptoTrade.timestamp).desc())
+                .limit(limit)
+            )
             results = await session.exec(statement)
             return [r.model_dump() for r in results.all()]
 

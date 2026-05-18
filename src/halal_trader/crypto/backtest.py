@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 import numpy as np
 
 from halal_trader.crypto.indicators import compute_all
 from halal_trader.domain.models import Kline
+
+if TYPE_CHECKING:
+    from halal_trader.ml.slippage import SlippageModel
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +78,7 @@ class SimulatedExecutor:
         fee_pct: float = 0.001,
         max_position_pct: float = 0.25,
         atr_baseline: float = 0.02,
+        slippage_model: "SlippageModel | None" = None,
     ) -> None:
         self.balance = initial_balance
         self.initial_balance = initial_balance
@@ -81,9 +86,40 @@ class SimulatedExecutor:
         self._fee_pct = fee_pct
         self._max_position_pct = max_position_pct
         self._atr_baseline = atr_baseline
+        # Wave G: optional replay-fitted predictor — when provided, the
+        # baseline slippage per fill comes from ``model.predict(features)``
+        # so the backtester matches what the executor recorded for the
+        # equivalent live trade.
+        self._slippage_model = slippage_model
         self.position: SimulatedTrade | None = None
         self.closed_trades: list[SimulatedTrade] = []
         self.equity_curve: list[float] = [initial_balance]
+
+    def _baseline_slippage_for(
+        self,
+        *,
+        notional_usd: float,
+        atr_pct: float,
+        price: float,
+    ) -> float:
+        """Per-fill baseline: model prediction when wired, constant otherwise."""
+        if self._slippage_model is None:
+            return self._slippage_pct
+        from datetime import UTC
+        from datetime import datetime as _dt
+
+        features = {
+            "size_usd": float(notional_usd),
+            "spread_bps": 0.0,
+            "atr_pct": float(atr_pct),
+            "rsi_14": 50.0,  # neutral; backtester doesn't track per-bar RSI here
+            "kline_volatility_pct": 0.0,
+            "hour_of_day": float(_dt.now(UTC).hour),
+        }
+        try:
+            return abs(float(self._slippage_model.predict(features).pct))
+        except Exception:  # noqa: BLE001
+            return self._slippage_pct
 
     def _fill_price(
         self,
@@ -95,6 +131,9 @@ class SimulatedExecutor:
     ) -> float:
         from halal_trader.crypto.slippage import SlippageInputs, estimate_fill
 
+        baseline = self._baseline_slippage_for(
+            notional_usd=notional_usd, atr_pct=atr_pct, price=price
+        )
         result = estimate_fill(
             price=price,
             inputs=SlippageInputs(
@@ -102,7 +141,7 @@ class SimulatedExecutor:
                 notional_usd=notional_usd,
                 atr_pct=atr_pct,
                 atr_baseline=self._atr_baseline,
-                baseline_slippage_pct=self._slippage_pct,
+                baseline_slippage_pct=baseline,
             ),
         )
         return result.fill_price

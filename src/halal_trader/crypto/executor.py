@@ -17,6 +17,7 @@ from halal_trader.domain.models import (
     CryptoAccount,
     CryptoTradingPlan,
 )
+from halal_trader.ml.slippage import SlippageModel, features_from_live_order
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +44,7 @@ class CryptoExecutor(BaseExecutor):
         stop_loss_pct: float = 0.01,
         take_profit_pct: float = 0.02,
         min_hold_seconds: int = 600,
+        slippage_model: SlippageModel | None = None,
     ) -> None:
         super().__init__(
             max_position_pct=max_position_pct,
@@ -70,6 +72,11 @@ class CryptoExecutor(BaseExecutor):
         # Prevents the LLM from panic-selling positions within the first
         # N seconds on noise-level adverse moves.
         self._min_hold_seconds = min_hold_seconds
+        # Wave G: replay-fitted slippage predictor. Stamps every trade
+        # row with its predicted slippage so backtest calibration can be
+        # scored later. ``None`` = no model wired → no prediction
+        # recorded; existing rows stay backwards-compatible.
+        self._slippage_model = slippage_model
 
     def is_pair_blocked(self, symbol: str) -> bool:
         """Check if a pair is temporarily blocked due to repeated errors."""
@@ -113,11 +120,57 @@ class CryptoExecutor(BaseExecutor):
         self,
         plan: CryptoTradingPlan,
         account: CryptoAccount | None = None,
+        *,
+        indicators_cache: dict[str, dict[str, Any]] | None = None,
+        orderbooks: dict[str, dict[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
-        """Execute all decisions in a CryptoTradingPlan."""
+        """Execute all decisions in a CryptoTradingPlan.
+
+        ``indicators_cache`` and ``orderbooks`` are forwarded to per-order
+        slippage prediction (Wave G). Both are optional — when omitted,
+        the executor records ``predicted_slippage_pct=None``.
+        """
         if account is None:
             account = await self._broker.get_account()
-        return await self._execute_plan_common(plan, account=account)
+        return await self._execute_plan_common(
+            plan,
+            account=account,
+            indicators_cache=indicators_cache or {},
+            orderbooks=orderbooks or {},
+        )
+
+    def _predict_slippage(
+        self,
+        *,
+        symbol: str,
+        price: float,
+        quantity: float,
+        indicators_cache: dict[str, dict[str, Any]],
+        orderbooks: dict[str, dict[str, Any]],
+    ) -> float | None:
+        """Predict slippage for a pending order via the replay-fitted model.
+
+        Returns ``None`` when the model isn't wired or features can't be
+        derived. The return is signed (positive = adverse) and recorded
+        as-is on the trade row so post-fill calibration can compare
+        against ``live_slippage_pct``.
+        """
+        if self._slippage_model is None or price <= 0 or quantity <= 0:
+            return None
+        indicators = indicators_cache.get(symbol) or {}
+        if not indicators:
+            return None
+        try:
+            features = features_from_live_order(
+                size_usd=quantity * price,
+                indicators=indicators,
+                price=price,
+                orderbook=orderbooks.get(symbol),
+            )
+            return float(self._slippage_model.predict(features).pct)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("slippage prediction failed for %s: %s", symbol, exc)
+            return None
 
     def _get_sells(self, plan: Any) -> list[Any]:
         return plan.sells
@@ -340,6 +393,13 @@ class CryptoExecutor(BaseExecutor):
             if tp_price is None:
                 tp_price = fill_price * (1.0 + self._take_profit_pct)
 
+            predicted = self._predict_slippage(
+                symbol=decision.symbol,
+                price=fill_price,
+                quantity=quantity,
+                indicators_cache=kwargs.get("indicators_cache") or {},
+                orderbooks=kwargs.get("orderbooks") or {},
+            )
             trade_id = await self._repo.record_crypto_trade(
                 pair=decision.symbol,
                 side="buy",
@@ -355,6 +415,7 @@ class CryptoExecutor(BaseExecutor):
                 filled_at=fill.filled_at,
                 filled_price=fill.filled_price,
                 filled_quantity=fill.filled_quantity,
+                predicted_slippage_pct=predicted,
             )
 
             return {
@@ -393,7 +454,7 @@ class CryptoExecutor(BaseExecutor):
                 "reason": str(e),
             }
 
-    async def _execute_sell(self, decision: Any, **_kwargs: Any) -> dict[str, Any]:
+    async def _execute_sell(self, decision: Any, **kwargs: Any) -> dict[str, Any]:
         """Execute a crypto sell order, clamping quantity to actual holdings."""
         if self.is_pair_blocked(decision.symbol):
             logger.info("Skipping SELL %s — pair temporarily blocked", decision.symbol)
@@ -540,6 +601,13 @@ class CryptoExecutor(BaseExecutor):
                         slippage * 100,
                     )
 
+            predicted = self._predict_slippage(
+                symbol=decision.symbol,
+                price=fill_price or price,
+                quantity=quantity,
+                indicators_cache=kwargs.get("indicators_cache") or {},
+                orderbooks=kwargs.get("orderbooks") or {},
+            )
             await self._repo.record_crypto_trade(
                 pair=decision.symbol,
                 side="sell",
@@ -552,6 +620,7 @@ class CryptoExecutor(BaseExecutor):
                 filled_at=fill.filled_at,
                 filled_price=fill.filled_price,
                 filled_quantity=fill.filled_quantity,
+                predicted_slippage_pct=predicted,
             )
 
             # Close all open BUY rows for this pair — without this, the

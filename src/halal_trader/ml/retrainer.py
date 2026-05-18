@@ -4,10 +4,15 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from halal_trader.db.repos import IndicatorSnapshotRepo
 from halal_trader.ml.features import FEATURE_KEYS
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncEngine
+
+    from halal_trader.db.repos import CryptoTradeRepo
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +29,10 @@ class RetrainingScheduler:
     (``models/<namespace>/``) so a crypto retrain never clobbers a stock
     model trained on different feature distributions, even though both
     share the same ``IndicatorSnapshot`` table for label storage.
+
+    Pass ``crypto_trade_repo`` + ``engine`` to also refit the Wave G
+    slippage model alongside the anomaly + signal classifiers — both
+    optional, so the stocks-namespace retrainer can omit them.
     """
 
     def __init__(
@@ -34,6 +43,8 @@ class RetrainingScheduler:
         min_samples: int = 50,
         retrain_every_n_trades: int = 20,
         namespace: str = "crypto",
+        crypto_trade_repo: "CryptoTradeRepo | None" = None,
+        engine: "AsyncEngine | None" = None,
     ) -> None:
         self._repo = repo
         # Models live under models/<namespace>/ so two retrainers don't fight
@@ -43,6 +54,8 @@ class RetrainingScheduler:
         self._min_samples = min_samples
         self._retrain_threshold = retrain_every_n_trades
         self._trades_since_retrain = 0
+        self._crypto_trade_repo = crypto_trade_repo
+        self._engine = engine
 
     @property
     def namespace(self) -> str:
@@ -69,7 +82,12 @@ class RetrainingScheduler:
 
     async def retrain(self) -> dict[str, Any]:
         """Pull labeled snapshots and retrain all ML models."""
-        results: dict[str, Any] = {"anomaly": False, "classifier": False, "samples": 0}
+        results: dict[str, Any] = {
+            "anomaly": False,
+            "classifier": False,
+            "slippage": False,
+            "samples": 0,
+        }
 
         try:
             snapshots = await self._repo.get_labeled_snapshots(min_samples=self._min_samples)
@@ -140,10 +158,83 @@ class RetrainingScheduler:
         except Exception as e:
             logger.warning("Signal classifier retraining failed: %s", e)
 
+        # Wave G: slippage refit — separate sample set (closed trades
+        # with both intent + filled prices), so it doesn't gate on the
+        # anomaly/classifier sample minimum.
+        try:
+            results["slippage"] = await self._retrain_slippage()
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("slippage retrain failed: %s", exc)
+
         logger.info(
-            "Retraining complete: %d samples, anomaly=%s, classifier=%s",
+            "Retraining complete: %d samples, anomaly=%s, classifier=%s, slippage=%s",
             len(features),
             results["anomaly"],
             results["classifier"],
+            results["slippage"],
         )
         return results
+
+    async def _retrain_slippage(self) -> bool:
+        """Fit + persist the Wave G slippage model from recent filled trades.
+
+        Returns True when a fresh model was saved, False when the refit
+        was skipped (no trade repo, no rows, too few valid samples, etc).
+        Each step is best-effort; failures are debug-logged.
+        """
+        if self._crypto_trade_repo is None:
+            return False
+        from halal_trader.ml.slippage import (
+            fit_from_trades,
+            save_to_file,
+            trade_to_sample,
+        )
+
+        try:
+            trades = await self._crypto_trade_repo.get_filled_trades(limit=500)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("slippage retrain: trade fetch failed: %s", exc)
+            return False
+        if not trades:
+            return False
+        try:
+            snapshots = await self._repo.get_labeled_snapshots(min_samples=0)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("slippage retrain: snapshot fetch failed: %s", exc)
+            snapshots = []
+        # Index snapshots by trade_id so we can join in O(n+m).
+        snap_by_trade: dict[int, dict[str, Any]] = {}
+        for s in snapshots:
+            tid = s.get("trade_id")
+            if tid is not None:
+                snap_by_trade[int(tid)] = s
+
+        samples: list[dict[str, Any]] = []
+        for trade in trades:
+            tid = trade.get("id")
+            if tid is None:
+                continue
+            indicators = snap_by_trade.get(int(tid), {})
+            sample = trade_to_sample(trade, indicators)
+            if sample is not None:
+                samples.append(sample)
+
+        if not samples:
+            return False
+        model = fit_from_trades(samples)
+        if model.n_samples == 0:
+            return False
+        self._models_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            save_to_file(model, self._models_dir)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("slippage refit: file save failed: %s", exc)
+        if self._engine is not None:
+            try:
+                from halal_trader.ml.slippage import save_to_db
+
+                await save_to_db(model, self._engine)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("slippage refit: DB save failed: %s", exc)
+        logger.info("Slippage model refit on %d samples", model.n_samples)
+        return True

@@ -126,6 +126,9 @@ Open Positions: {open_position_count}/{max_positions}
 === RECENT BREAKING NEWS ===
 {news_text}
 
+=== EXPECTED EXECUTION COST (predicted slippage) ===
+{slippage_text}
+
 === YOUR RECENT PERFORMANCE (last 24h) ===
 {performance_text}
 
@@ -177,6 +180,7 @@ class PromptContext:
     risk_text: str = ""
     microstructure_text: str = ""
     news_text: str = ""
+    slippage_text: str = ""
 
 
 # ── Builders ───────────────────────────────────────────────────
@@ -315,6 +319,7 @@ def build_prompts(ctx: PromptContext, params: StrategyParams) -> tuple[str, str]
         risk_text=ctx.risk_text or "No portfolio risk data available.",
         microstructure_text=ctx.microstructure_text or "No microstructure data available.",
         news_text=ctx.news_text or "No recent breaking news.",
+        slippage_text=ctx.slippage_text or "No slippage prediction available.",
         performance_text=ctx.performance_text or "No completed trades yet.",
         daily_return_target=params.daily_return_target,
     )
@@ -335,6 +340,11 @@ def build_prompts(ctx: PromptContext, params: StrategyParams) -> tuple[str, str]
             "No microstructure data available.",
         ),
         ("=== RECENT BREAKING NEWS ===", ctx.news_text, "No recent breaking news."),
+        (
+            "=== EXPECTED EXECUTION COST (predicted slippage) ===",
+            ctx.slippage_text,
+            "No slippage prediction available.",
+        ),
     ]
     for header, value, placeholder in optional_sections:
         if not value:

@@ -62,6 +62,9 @@ class Trade(SQLModel, table=True):
     # the backtester's assumptions against live fills.
     paper_slippage_pct: float | None = None
     live_slippage_pct: float | None = None
+    # Wave G: replay-fitted slippage prediction stamped at fill time.
+    # See CryptoTrade.predicted_slippage_pct.
+    predicted_slippage_pct: float | None = None
 
 
 class DailyPnl(SQLModel, table=True):
@@ -169,6 +172,11 @@ class CryptoTrade(SQLModel, table=True):
     # Paper-vs-live divergence — same fields as Trade.
     paper_slippage_pct: float | None = None
     live_slippage_pct: float | None = None
+    # Wave G: replay-fitted slippage prediction stamped at fill time.
+    # The backtester reads the same model so backtest and live converge;
+    # this column lets us score the model's calibration after the fact
+    # (predicted vs realised live_slippage_pct).
+    predicted_slippage_pct: float | None = None
 
 
 class CryptoDailyPnl(SQLModel, table=True):

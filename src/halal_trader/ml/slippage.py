@@ -248,6 +248,48 @@ def trade_to_sample(trade: dict[str, Any], indicators: dict[str, Any]) -> dict[s
     }
 
 
+def features_from_live_order(
+    *,
+    size_usd: float,
+    indicators: dict[str, Any],
+    price: float,
+    orderbook: dict[str, Any] | None = None,
+) -> dict[str, float]:
+    """Build a feature dict for a pending order — counterpart to ``trade_to_sample``.
+
+    Pulled out so the executor and the prompt stage build the same vector
+    using the same code path. ``spread_bps`` is computed from the
+    orderbook's top-of-book bid/ask if available; otherwise it falls
+    through to whatever ``indicators`` provides (commonly nothing, in
+    which case the model's ``feature_means`` fills in).
+    """
+    from datetime import UTC
+    from datetime import datetime as _dt
+
+    spread_bps = float(indicators.get("spread_bps") or 0.0)
+    if not spread_bps and orderbook:
+        bids = orderbook.get("bids") or []
+        asks = orderbook.get("asks") or []
+        if bids and asks:
+            try:
+                best_bid = float(bids[0][0])
+                best_ask = float(asks[0][0])
+                mid = (best_bid + best_ask) / 2.0
+                if mid > 0:
+                    spread_bps = ((best_ask - best_bid) / mid) * 10_000.0
+            except TypeError, ValueError, IndexError:
+                pass
+
+    return {
+        "size_usd": float(size_usd),
+        "spread_bps": spread_bps,
+        "atr_pct": float(indicators.get("atr_14") or 0.0) / max(1e-9, float(price)),
+        "rsi_14": float(indicators.get("rsi_14") or 0.0),
+        "kline_volatility_pct": float(indicators.get("kline_volatility_pct") or 0.0),
+        "hour_of_day": float(_dt.now(UTC).hour),
+    }
+
+
 def _hour_from_timestamp(raw: Any) -> float:
     """Parse hour-of-day (0..23) from a timestamp; falls back to 12."""
     if raw is None:

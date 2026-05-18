@@ -809,6 +809,72 @@ class BuildNewsStage:
         return state
 
 
+# ── Slippage-prediction prompt stage (Wave G) ────────────────────
+
+
+class BuildSlippageTextStage:
+    """Format predicted slippage per pair → ``state.slippage_text``.
+
+    Reads ``state.indicators_cache`` + ``state.orderbooks`` and runs them
+    through the same ``SlippageModel`` the executor uses. The block goes
+    into the LLM prompt so the strategy can downgrade a low-edge buy
+    when slippage is expected to be high (e.g. wide spread + low
+    volume), matching what backtests just simulated.
+
+    The size estimate is the per-cycle account-fraction floor —
+    ``max_position_pct * total_balance_usdt`` — so the prediction is
+    "what an average-sized buy would look like" rather than a guess at
+    decision sizing the LLM hasn't done yet.
+    """
+
+    name = "build_slippage_text"
+
+    def __init__(
+        self,
+        slippage_model: Any | None,
+        *,
+        max_position_pct: float,
+    ) -> None:
+        self._model = slippage_model
+        self._max_position_pct = max_position_pct
+
+    async def run(self, state: CycleState) -> CycleState:
+        if self._model is None or not state.halal_pairs:
+            return state
+        try:
+            from halal_trader.ml.slippage import features_from_live_order
+        except Exception:  # noqa: BLE001
+            return state
+        total = float(getattr(state.account, "total_balance_usdt", 0.0) or 0.0)
+        size_usd = max(50.0, total * self._max_position_pct)
+        lines: list[str] = []
+        for pair in state.halal_pairs:
+            indicators = state.indicators_cache.get(pair) or {}
+            if not indicators:
+                continue
+            klines = state.klines_by_symbol.get(pair) or []
+            if not klines:
+                continue
+            price = klines[-1].close
+            try:
+                features = features_from_live_order(
+                    size_usd=size_usd,
+                    indicators=indicators,
+                    price=price,
+                    orderbook=state.orderbooks.get(pair),
+                )
+                pred = self._model.predict(features)
+                lines.append(
+                    f"  {pair}: predicted slippage {pred.pct * 10_000:+.1f} bps "
+                    f"(confidence {pred.confidence:.0%})"
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("slippage prediction failed for %s: %s", pair, exc)
+        if lines:
+            state.slippage_text = "Predicted slippage (current cycle):\n" + "\n".join(lines)
+        return state
+
+
 # ── Pre-LLM data-gathering stages (crypto) ───────────────────────
 # These replace the procedural helpers that used to live on
 # ``CryptoCycleService`` (`_get_tradeable_pairs`, `_fetch_klines`,
@@ -1189,7 +1255,12 @@ class ExecuteAndNotifyStage:
         results: list[dict[str, Any]] = []
         if plan is not None and getattr(plan, "decisions", None):
             async with tracer.aspan("cycle.execute_plan", decision_count=len(plan.decisions)):
-                results = await self._executor.execute_plan(plan, account=state.account)
+                results = await self._executor.execute_plan(
+                    plan,
+                    account=state.account,
+                    indicators_cache=state.indicators_cache,
+                    orderbooks=state.orderbooks,
+                )
         else:
             logger.info("No crypto trades to execute this cycle")
 

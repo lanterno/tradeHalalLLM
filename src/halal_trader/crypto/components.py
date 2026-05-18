@@ -126,6 +126,39 @@ def _build_ml(settings: Settings) -> tuple[Any, Any, Any]:
         return None, None, None
 
 
+async def _load_slippage_model(settings: Settings, engine: AsyncEngine) -> Any:
+    """Load the Wave G slippage model: DB → file → identity fallback.
+
+    DB-first (via the ml_artefacts table) so the nightly retrain shows
+    up on the next bot restart; file fallback for environments that
+    don't have the artefact row yet. The identity model predicts a
+    flat 5 bps so the executor + backtester never read ``None`` from
+    the predictor and can't accidentally branch on missing data.
+    """
+    from halal_trader.ml.slippage import (
+        SlippageModel,
+        load_from_db,
+        load_from_file,
+    )
+
+    try:
+        model = await load_from_db(engine)
+        if model.n_samples > 0:
+            logger.info("slippage model loaded from DB (n=%d)", model.n_samples)
+            return model
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("slippage model DB load failed: %s", exc)
+    try:
+        model = load_from_file(settings.ml.models_dir)
+        if model.n_samples > 0:
+            logger.info("slippage model loaded from file (n=%d)", model.n_samples)
+            return model
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("slippage model file load failed: %s", exc)
+    logger.info("slippage model: no fitted artefact found, using identity predictor")
+    return SlippageModel.identity()
+
+
 def _build_news_reactor(settings: Settings) -> NewsEventReactor:
     return NewsEventReactor(
         api_key=settings.sentiment.cryptopanic.api_key,
@@ -258,6 +291,11 @@ async def build_components(
         ensemble_llms=ensemble_llms,
     )
 
+    # Wave G: load the replay-fitted slippage model (DB-first, then file,
+    # then identity). Best-effort — failing to load just leaves the
+    # executor without a predictor (predicted_slippage_pct=None on rows).
+    slippage_model = await _load_slippage_model(settings, engine)
+
     executor = CryptoExecutor(
         binance,
         repo,
@@ -272,6 +310,7 @@ async def build_components(
         # output schema. Keep in sync with TradingStrategy's defaults.
         stop_loss_pct=0.01,
         take_profit_pct=0.02,
+        slippage_model=slippage_model,
     )
 
     portfolio = CryptoPortfolioTracker(
@@ -311,7 +350,15 @@ async def build_components(
         atr_baseline=settings.crypto.atr_baseline,
     )
 
-    retrainer = RetrainingScheduler(repo, models_dir=settings.ml.models_dir)
+    retrainer = RetrainingScheduler(
+        repo,
+        models_dir=settings.ml.models_dir,
+        # Wave G: enable slippage refit by passing the same Repository
+        # (it satisfies both IndicatorSnapshotRepo + CryptoTradeRepo
+        # protocols) and the engine for DB-backed model persistence.
+        crypto_trade_repo=repo,
+        engine=engine,
+    )
 
     monitor = PositionMonitor(
         broker=binance,

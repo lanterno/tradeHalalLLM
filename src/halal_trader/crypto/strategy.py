@@ -142,6 +142,7 @@ class CryptoTradingStrategy(BaseStrategy):
         risk_text: str = "",
         microstructure_text: str = "",
         news_text: str = "",
+        slippage_text: str = "",
     ) -> CryptoTradingPlan:
         now = time.monotonic()
         if now < self._llm_cooldown_until:
@@ -178,6 +179,7 @@ class CryptoTradingStrategy(BaseStrategy):
             risk_text=risk_text,
             microstructure_text=microstructure_text,
             news_text=news_text,
+            slippage_text=slippage_text,
         )
         params = StrategyParams(
             max_position_pct=self._max_position_pct,

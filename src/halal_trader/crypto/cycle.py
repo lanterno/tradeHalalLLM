@@ -34,6 +34,7 @@ from halal_trader.core.cycle_stages import (
     BuildPerformanceStage,
     BuildRegimeStage,
     BuildSentimentStage,
+    BuildSlippageTextStage,
     BuildTimeframeStage,
     ComputeIndicatorsStage,
     ExecuteAndNotifyStage,
@@ -275,6 +276,10 @@ class CryptoCycleService(BaseCycleService):
                     hub=self._hub,
                 ),
                 BuildNewsStage(self._news_feed),
+                BuildSlippageTextStage(
+                    slippage_model=getattr(self._executor, "_slippage_model", None),
+                    max_position_pct=self._settings.crypto.max_position_pct,
+                ),
                 AugmentRegimeWithRagStage(getattr(self._hub, "rag", None)),
                 AugmentRegimeWithMemoryStage(getattr(self._hub, "regime", None)),
             ],
@@ -311,6 +316,7 @@ class CryptoCycleService(BaseCycleService):
             risk_text=state.risk_text,
             microstructure_text=state.microstructure_text,
             news_text=state.news_text,
+            slippage_text=state.slippage_text,
         )
         async with stage(
             self._bus,

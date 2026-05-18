@@ -283,42 +283,72 @@ up.
 
 ---
 
-### Wave G — Replay-fitted slippage + execution model
+### Wave G — Replay-fitted slippage + execution model ✅ landed
 
-**Why**: today the executor records `paper_slippage_pct` and
+**Why**: the executor records `paper_slippage_pct` and
 `live_slippage_pct` but nothing closes the loop. Backtests assume a
 fixed slippage. Live runs occasionally hit unexpected fills the
-strategy didn't budget for. We have months of paired
-(intended-price, filled-price, kline-context) data sitting in
-`crypto_trades` — a regression model can learn the slippage function
-and feed it back into the *backtester*, which currently lies about
-what live execution will do.
+strategy didn't budget for. The data was sitting in `crypto_trades`
+— this wave closes the loop.
 
-Train a tiny gradient-boost model:
-- features: order size relative to 1m volume, spread bps, ATR,
-  RSI, kline volatility, hour of day.
-- target: `(filled_price - intent_price) / intent_price`.
-
-Save it to `models/slippage_v1.json` (XGBoost JSON format — small,
-versioned, deployable). Backtester reads it; the executor optionally
-*displays* the predicted slippage in the prompt so the LLM knows the
-expected execution cost.
-
-**Scope**:
-- `ml/slippage.py` — train + predict.
-- `crypto/backtest.py` — replace the constant `_SLIPPAGE_BPS` with
-  the model's prediction.
-- `crypto/executor.py` — add `predicted_slippage_pct` to the
-  `crypto_trades` row when filling.
-- A nightly retrain job (uses `RetrainingScheduler` already in the
-  bot).
+**What landed**:
+- `ml/slippage.py` — `SlippageModel` (ridge-regularised linear over 6
+  features: size_usd, spread_bps, atr_pct, rsi_14,
+  kline_volatility_pct, hour_of_day), `fit_from_trades`,
+  `trade_to_sample`, and a new `features_from_live_order` helper that
+  builds the same feature vector at fill time (derives spread_bps
+  from orderbook top-of-book when not in the indicators dict).
+  Persistence: DB-first via the Wave-K `ml_artefacts` table, JSON
+  file fallback under `settings.ml.models_dir`.
+- `crypto/executor.py` — new `slippage_model` ctor arg + a
+  `_predict_slippage(symbol, price, quantity, indicators_cache,
+  orderbooks)` helper called from both BUY and SELL fill paths.
+  Result is stamped onto the `crypto_trades.predicted_slippage_pct`
+  column (added by migration `552a7d6e5862`). Same column added to
+  the stocks `trades` table for parity.
+- `crypto/backtest.py:SimulatedExecutor` — new `slippage_model` ctor
+  arg. When provided, `_baseline_slippage_for(...)` reads the model's
+  prediction instead of the constant `slippage_pct`; on a prediction
+  failure the simulator falls back to the constant so a broken model
+  can't block a backtest.
+- `core/cycle_stages.py:BuildSlippageTextStage` — formats one
+  `pair: predicted slippage ±N.N bps (confidence X%)` line per halal
+  pair into `state.slippage_text`. Threaded through
+  `analyze_kwargs` and rendered as a new
+  `=== EXPECTED EXECUTION COST (predicted slippage) ===` block in
+  the prompt template (optional — collapses when empty).
+- `ml/retrainer.py:RetrainingScheduler._retrain_slippage` — new
+  per-retrain step. Pulls recent filled trades (≤500) +
+  labeled-indicator snapshots, joins them on `trade_id`, builds
+  samples via `trade_to_sample`, calls `fit_from_trades`, saves
+  file + DB. Optional: the stocks-namespace retrainer can omit the
+  `crypto_trade_repo` + `engine` args and skip the slippage step.
+- `crypto/components.py` — new `_load_slippage_model` loader (DB →
+  file → identity) wired through to both `CryptoExecutor` and the
+  `BuildSlippageTextStage` via the cycle service.
 
 **Acceptance**:
-- Backtest Sharpe and live Sharpe converge within ±0.3 over a
-  one-month sample (today they often diverge by 0.6-1.0).
-- Predicted slippage shows up in the prompt context block.
+- Backtest Sharpe vs live Sharpe convergence requires a one-month
+  sample to validate empirically; the *plumbing* that closes the
+  loop is in place — `SimulatedExecutor` and `CryptoExecutor` now
+  read predictions from the same `SlippageModel` instance, so any
+  divergence remaining is from the model, not from the backtester
+  lying about slippage.
+- Predicted-slippage block renders in the LLM prompt when the
+  model is wired (`BuildSlippageTextStage` + new prompt section).
 
-**Estimated effort**: 1 day for the model, 1 for the wiring.
+**Trade-offs**:
+- `kline_volatility_pct` and `spread_bps` aren't yet populated by
+  `crypto.indicators.compute_all` — the model treats them as zero
+  for training samples that pre-date those features being captured.
+  Adding them is a small follow-up that doesn't block the closed
+  loop.
+- The cycle's `BuildSlippageTextStage` uses
+  `max_position_pct * total_balance_usdt` as the size estimate
+  (since the LLM hasn't sized yet); per-decision sizing would
+  require a second pass through the model after the analyze block.
+  Current design is fine — the prompt block is *guidance* for the
+  LLM, not a per-trade cost.
 
 ---
 

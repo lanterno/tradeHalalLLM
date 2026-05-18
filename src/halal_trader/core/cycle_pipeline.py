@@ -96,6 +96,10 @@ class CycleState:
     performance_text: str = ""
     exchange_rules_text: str = ""
     active_adjustments: str = ""
+    # Wave G: predicted slippage per halal pair surfaced to the LLM so
+    # the strategy can reason about expected execution cost (e.g.
+    # downgrade a low-edge buy when slippage is high).
+    slippage_text: str = ""
 
     # ── Outputs ────────────────────────────────────────────────
     plan: Any = None
