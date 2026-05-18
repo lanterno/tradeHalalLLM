@@ -77,13 +77,18 @@ class PositionMonitor:
         self._close_recorders = close_recorders
 
     async def start(self) -> None:
-        """Start the monitor as a background task."""
+        """Start the monitor as a background task.
+
+        Legacy entry point — kept so non-supervised callers (tests,
+        ad-hoc CLI scripts) still work. Wave C's bot wires
+        :meth:`run` directly into a ``TaskSupervisor`` instead.
+        """
         self._running = True
         self._task = asyncio.create_task(self._run_loop(), name="position-monitor")
         logger.info("Position monitor started (check every %.1fs)", self._check_interval)
 
     async def stop(self) -> None:
-        """Stop the monitor gracefully."""
+        """Stop the monitor gracefully (legacy companion to ``start()``)."""
         self._running = False
         if self._task:
             self._task.cancel()
@@ -93,6 +98,19 @@ class PositionMonitor:
                 pass
             self._task = None
         logger.info("Position monitor stopped")
+
+    async def run(self) -> None:
+        """Run the monitor loop until cancelled.
+
+        Entry point for ``TaskSupervisor.start(...)``. Sets the running
+        flag, runs the loop, clears the flag on exit so the legacy
+        ``stop()`` no-ops cleanly if a caller mixes the two APIs.
+        """
+        self._running = True
+        try:
+            await self._run_loop()
+        finally:
+            self._running = False
 
     async def _run_loop(self) -> None:
         """Main loop: poll open trades and check prices against SL/TP."""

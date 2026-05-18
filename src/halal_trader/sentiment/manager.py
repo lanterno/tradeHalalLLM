@@ -58,13 +58,28 @@ class SentimentManager:
         return self._latest_signals
 
     async def start(self) -> None:
-        """Start background sentiment collection."""
+        """Legacy entry point — kept for tests. Bot prefers :meth:`run`."""
         if not self.enabled:
             logger.info("No sentiment sources configured — sentiment manager disabled")
             return
 
         self._running = True
         self._task = asyncio.create_task(self._run_loop(), name="sentiment-manager")
+        self._log_sources_started()
+
+    async def run(self) -> None:
+        """Supervisor entry point — runs the collection loop until cancelled."""
+        if not self.enabled:
+            logger.info("No sentiment sources configured — sentiment manager disabled")
+            return
+        self._running = True
+        self._log_sources_started()
+        try:
+            await self._run_loop()
+        finally:
+            self._running = False
+
+    def _log_sources_started(self) -> None:
         sources = []
         if self._reddit:
             sources.append("Reddit")

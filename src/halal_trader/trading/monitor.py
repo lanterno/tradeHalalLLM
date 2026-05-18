@@ -69,9 +69,19 @@ class StockPositionMonitor:
         self._high_water: dict[int, float] = {}
 
     async def start(self) -> None:
+        """Legacy entry point — kept for tests. Bot prefers :meth:`run`."""
         self._running = True
         self._task = asyncio.create_task(self._run_loop(), name="stock-position-monitor")
         logger.info("Stock position monitor started (check every %.0fs)", self._check_interval)
+
+    async def run(self) -> None:
+        """Supervisor entry point — runs the SL/TP loop until cancelled."""
+        self._running = True
+        logger.info("Stock position monitor started (check every %.0fs)", self._check_interval)
+        try:
+            await self._run_loop()
+        finally:
+            self._running = False
 
     async def stop(self) -> None:
         self._running = False

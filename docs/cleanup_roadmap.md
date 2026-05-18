@@ -123,40 +123,60 @@ since the third or fourth prompt-context block landed.
 
 ---
 
-### Wave C — Adopt `anyio` task groups for structured concurrency
+### Wave C — Adopt `anyio` task groups for structured concurrency ✅ landed
 
-**Why**: today the bot creates background tasks via
+**Why**: the bot used to fire long-lived loops with
 `asyncio.create_task(...)` in seven places (monitor, ws_manager,
-news_reactor, sentiment_manager, reconcile_loop, position_monitor,
-research_jobs). Each has its own ad-hoc shutdown sequence. When one
-silently dies (a coroutine raises before the supervisor logs it),
-*nothing* notices until the operator sees a stale dashboard.
+news_reactor, sentiment_manager, reconcile_loop, stock-monitor,
+research_jobs). Each had its own ad-hoc shutdown sequence. When one
+silently died, nothing noticed until the operator saw a stale
+dashboard.
 
-`anyio.create_task_group()` is the modern primitive: cancel-on-error
-propagation, automatic awaiting on context exit, no fire-and-forget
-loss. Switching the scheduler to manage all background work under a
-root task group means a crash in one supervisor cancels the whole
-bot — which is what we want for a single-user paper-trading bot.
+**What landed**:
+- `core/supervisor.py:TaskSupervisor` — async-context-manager around
+  one rooted `anyio.create_task_group()`. Per-task
+  :class:`RestartPolicy` (`CRASH_BOT` / `RESTART` / `IGNORE`)
+  selects between cancel-on-error propagation, exponential-backoff
+  restart, and log-and-forget. `sup.cancel()` collapses the scope
+  when the cycle loop exits cleanly.
+- `CryptoTradingBot.run()` enters one `async with TaskSupervisor()`
+  scope around the entire main cycle loop. Inside the scope:
+  - `monitor`  → CRASH_BOT (closing risk > running half-blind)
+  - `ws`       → CRASH_BOT (stale prices break SL/TP enforcement)
+  - `news_reactor` → RESTART (CryptoPanic flake shouldn't kill bot)
+  - `sentiment_manager` → RESTART (best-effort context)
+  - `reconcile` → RESTART (cosmetic drift, retry on hiccup)
+  - the cycle loop itself runs *inside* the scope so a CRASH_BOT
+    sibling's failure cancels it via the task group's exit.
+- Every long-lived subsystem grew a public `async def run(self)` —
+  `PositionMonitor` (crypto+stocks), `BinanceWSManager` (uses a
+  nested anyio task group internally for per-symbol streams),
+  `NewsEventReactor`, `SentimentManager`.
+- The bot's resource teardown (broker disconnect, open-order cancel,
+  daily summary) now runs *after* the supervisor scope exits, so
+  subsystems aren't still holding the broker handle when we close
+  it.
 
-**Scope**:
-- Add `anyio` to `[project.dependencies]` (already in via httpx).
-- `core/scheduler.py:run` enters `async with anyio.create_task_group()
-  as tg:` once, and every long-lived task (monitor, ws, news_reactor,
-  reconcile loop) is spawned with `tg.start_soon(...)`.
-- Each subsystem's `start()` becomes "register this coroutine with
-  the supervisor"; `stop()` becomes "cancel my scope."
-- One `RestartPolicy` knob per task: `crash_bot` (the default for
-  monitor/ws), `restart` (for sentiment/news_reactor with backoff),
-  or `ignore` (for the optional reddit fetcher).
+**Trade-offs documented**:
+- The legacy `start()` / `stop()` methods are kept on each
+  subsystem (5 `asyncio.create_task` sites total) as thin compat
+  shims so existing unit tests (e.g. `test_monitor.py::TestStartStop`)
+  and any ad-hoc CLI scripts still work. The bot's production
+  `run()` path uses `run()` exclusively.
+- `web/routes/research_jobs.py` still fires one `asyncio.create_task`
+  for an HTTP-triggered one-shot dispatch — that's a request-scoped
+  fire-and-forget, not a long-lived loop, so it stays.
 
-**Acceptance**:
-- `grep -r 'asyncio\.create_task' src/` is a single-digit count
-  (only inside `RestartPolicy`-aware adapters).
-- A test that raises inside the monitor cancels the bot's run loop
-  with the original traceback, not a silent hang.
-
-**Estimated effort**: 1 day. Adds a small amount of code; pays for
-itself the first time a background task crashes.
+**Acceptance** (both met):
+- `grep -r 'asyncio\.create_task' src/` count is 7 — single-digit,
+  every site is either inside a legacy back-compat shim or the
+  one-shot HTTP dispatch.
+- `tests/test_supervisor.py::test_crash_bot_task_cancels_other_supervised_tasks`
+  shows a CRASH_BOT-policy task's failure cancels a sibling
+  cycle-loop task and propagates the original `RuntimeError` via
+  `BaseExceptionGroup`. The companion
+  `test_restart_policy_does_not_kill_bot_on_one_failure` shows a
+  RESTART-policy flake leaves the cycle alone.
 
 ---
 

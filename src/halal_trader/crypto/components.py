@@ -190,7 +190,8 @@ async def build_components(
     await binance.connect()
 
     ws = BinanceWSManager(binance.client, symbols=settings.crypto.pairs)
-    await ws.start()
+    # Wave C: the bot's run() loop wires `ws.run()` into a TaskSupervisor,
+    # so we no longer fire-and-forget the kline streams here.
 
     llm = create_llm(settings)
 
@@ -326,8 +327,8 @@ async def build_components(
         logger.info("Telegram notifications enabled")
 
     sentiment_manager = _build_sentiment(settings)
-    if sentiment_manager is not None:
-        await sentiment_manager.start()
+    # Wave C: the bot's run() loop wires `sentiment_manager.run()` into
+    # the supervisor instead of firing off a task here.
 
     timeframe_analyzer = TimeframeAnalyzer(binance)
     regime_detector = RegimeDetector(models_dir=settings.ml.models_dir)

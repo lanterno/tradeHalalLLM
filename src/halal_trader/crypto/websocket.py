@@ -38,7 +38,11 @@ class BinanceWSManager:
         self._running = False
 
     async def start(self) -> None:
-        """Start WebSocket streams for all configured symbols."""
+        """Start WebSocket streams for all configured symbols.
+
+        Legacy entry point — kept for tests and ad-hoc scripts. Wave C
+        prefers :meth:`run` under a ``TaskSupervisor``.
+        """
         self._bsm = BinanceSocketManager(self._client)
         self._running = True
 
@@ -57,7 +61,7 @@ class BinanceWSManager:
         )
 
     async def stop(self) -> None:
-        """Stop all WebSocket streams."""
+        """Stop all WebSocket streams (legacy companion to ``start()``)."""
         self._running = False
 
         for task in self._tasks:
@@ -68,6 +72,33 @@ class BinanceWSManager:
 
         self._tasks.clear()
         logger.info("WebSocket streams stopped")
+
+    async def run(self) -> None:
+        """Supervisor entry point — fan out per-symbol streams via anyio.
+
+        Uses a nested ``anyio.create_task_group`` so a crash in one
+        stream cancels its siblings inside the WS scope; the outer
+        ``TaskSupervisor`` then sees the bubbled exception and applies
+        its own restart policy.
+        """
+        import anyio
+
+        self._bsm = BinanceSocketManager(self._client)
+        self._running = True
+        try:
+            async with anyio.create_task_group() as tg:
+                if len(self._symbols) > 1:
+                    tg.start_soon(self._combined_kline_stream)
+                else:
+                    for symbol in self._symbols:
+                        tg.start_soon(self._kline_stream, symbol)
+                logger.info(
+                    "WebSocket streams started for %d symbols: %s",
+                    len(self._symbols),
+                    ", ".join(s.upper() for s in self._symbols),
+                )
+        finally:
+            self._running = False
 
     def get_klines(self, symbol: str, limit: int = 100) -> list[Kline]:
         """Get the latest klines from the buffer for a symbol."""

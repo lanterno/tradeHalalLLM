@@ -83,6 +83,7 @@ class NewsEventReactor:
         self._callbacks.append(callback)
 
     async def start(self) -> None:
+        """Legacy entry point — kept for tests. Bot prefers :meth:`run` via the supervisor."""
         if not self.enabled:
             logger.info("News reactor disabled — no CryptoPanic API key")
             return
@@ -93,6 +94,20 @@ class NewsEventReactor:
             self._poll_interval,
             self._importance_filter,
         )
+
+    async def run(self) -> None:
+        """Supervisor entry point — runs the poll loop until cancelled."""
+        if not self.enabled:
+            logger.info("News reactor disabled — no CryptoPanic API key")
+            return
+        self._running = True
+        try:
+            await self._poll_loop()
+        finally:
+            self._running = False
+            if self._client and not self._client.is_closed:
+                await self._client.aclose()
+                self._client = None
 
     async def stop(self) -> None:
         self._running = False

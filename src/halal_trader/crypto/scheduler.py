@@ -102,12 +102,12 @@ class CryptoTradingBot(BaseTradingBot):
             bus=comps.bus,
         )
 
-        # Start background tasks the scheduler owns.
-        await self._monitor.start()
+        # Wave C: the bot's run() loop wires every long-lived task into
+        # a single TaskSupervisor scope. Wire only the news-event
+        # callback here; the actual poll loop registration happens in
+        # run() so a supervisor crash propagates as expected.
         if self._news_reactor.enabled:
             self._news_reactor.on_event(self._on_news_event)
-            await self._news_reactor.start()
-        self._reconcile_task = asyncio.create_task(self._reconcile_loop(), name="crypto-reconcile")
 
         # Expose live components to the dashboard.
         from halal_trader.web.app import app_state as _web_state
@@ -315,7 +315,16 @@ class CryptoTradingBot(BaseTradingBot):
     # ── Main Loop ──────────────────────────────────────────────
 
     async def run(self) -> None:
-        """Start the crypto trading bot with continuous 1-minute cycles."""
+        """Start the crypto trading bot with continuous 1-minute cycles.
+
+        Wave C: every long-lived task (monitor, ws, news_reactor,
+        sentiment_manager, reconcile loop) is registered with a single
+        :class:`TaskSupervisor`. A crash in any ``CRASH_BOT``-policy
+        task propagates back here with the original traceback rather
+        than silently leaving a stale subsystem behind.
+        """
+        from halal_trader.core.supervisor import RestartPolicy, TaskSupervisor
+
         await self.initialize()
         self._running = True
 
@@ -324,6 +333,51 @@ class CryptoTradingBot(BaseTradingBot):
         for sig in (signal.SIGTERM, signal.SIGINT):
             loop.add_signal_handler(sig, self._handle_signal)
 
+        try:
+            async with TaskSupervisor() as sup:
+                self._supervisor = sup
+                # Long-lived tasks, restart policies tuned per subsystem:
+                #   monitor     — CRASH_BOT (closing risk > running half-blind)
+                #   ws          — CRASH_BOT (stale prices break SL/TP enforcement)
+                #   news_reactor — RESTART  (external API flake shouldn't kill bot)
+                #   sentiment   — RESTART  (best-effort context)
+                #   reconcile   — RESTART  (cosmetic drift, retry on hiccup)
+                if self._monitor is not None:
+                    sup.start("monitor", self._monitor.run, policy=RestartPolicy.CRASH_BOT)
+                if self._ws is not None:
+                    sup.start("ws", self._ws.run, policy=RestartPolicy.CRASH_BOT)
+                if self._news_reactor is not None and self._news_reactor.enabled:
+                    sup.start("news_reactor", self._news_reactor.run, policy=RestartPolicy.RESTART)
+                if self._sentiment_manager is not None and getattr(
+                    self._sentiment_manager, "enabled", False
+                ):
+                    sup.start(
+                        "sentiment_manager",
+                        self._sentiment_manager.run,
+                        policy=RestartPolicy.RESTART,
+                    )
+                sup.start("reconcile", self._reconcile_loop, policy=RestartPolicy.RESTART)
+
+                await self._run_cycle_loop()
+                # Cycle loop returned cleanly (running=False). Cancel
+                # the supervised tasks so the ``async with`` exit isn't
+                # blocked by long-running loops still running off the
+                # ``_running`` flag.
+                sup.cancel()
+        finally:
+            # Resource teardown (broker disconnect, open-order cancel,
+            # daily-end summary) runs *after* the supervisor scope exits
+            # so subsystems aren't still holding the broker handle when
+            # we close it.
+            try:
+                await self._daily_end()
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("daily_end failed during shutdown: %s", exc)
+            await self.shutdown()
+
+    async def _run_cycle_loop(self) -> None:
+        """The main cycle loop — extracted so ``run()`` can wrap it in
+        a supervisor scope without changing the inner logic."""
         # Initial daily start
         await self._daily_start()
 
@@ -425,9 +479,9 @@ class CryptoTradingBot(BaseTradingBot):
 
         except KeyboardInterrupt, asyncio.CancelledError:
             logger.info("Crypto bot interrupted")
-        finally:
-            await self._daily_end()
-            await self.shutdown()
+            # daily_end + shutdown are owned by ``run()``'s outer
+            # ``finally`` block (Wave C) so subsystems aren't still
+            # running off the broker handle when we close it.
 
     def _handle_signal(self) -> None:
         """Signal handler: set running flag to false for clean shutdown."""
