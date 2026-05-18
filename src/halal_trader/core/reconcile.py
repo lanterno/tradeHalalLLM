@@ -314,13 +314,18 @@ async def _persist_and_alert(
             await session.commit()
 
     if alerts is not None:
-        # Only alert on real drift — untracked broker balances are
-        # informational and not operator-actionable. Without this filter,
-        # every reconcile pass on testnet (~50 faucet assets) would fire
-        # a Telegram alert burning the rate limit on noise.
-        actionable = [
-            d for d in report.drifts if not (d.db_quantity == 0.0 and d.broker_quantity > 0.0)
-        ]
+        # Crypto: untracked broker balances are informational, not
+        # operator-actionable — Binance testnet has ~50 faucet assets,
+        # alerting on each one burns the rate limit. Stocks: any
+        # broker position with no DB row IS actionable (the equities
+        # universe is small enough that an untracked AAPL position is
+        # signal, not noise).
+        if report.market == "crypto":
+            actionable = [
+                d for d in report.drifts if not (d.db_quantity == 0.0 and d.broker_quantity > 0.0)
+            ]
+        else:
+            actionable = list(report.drifts)
         if actionable:
             summary = _summarize_drifts(actionable)
             await alerts.notify(
