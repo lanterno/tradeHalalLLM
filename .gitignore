@@ -18,6 +18,9 @@ build/
 .idea/
 *.swp
 
+# Claude Code runtime state (session locks, scheduled-task metadata)
+.claude/
+
 # OS
 .DS_Store
 Thumbs.db
