@@ -15,6 +15,7 @@ from halal_trader.cli import db as db_cmd
 from halal_trader.cli import halt as halt_cmd
 from halal_trader.cli import insights as insights_cmd
 from halal_trader.cli import llm_decisions as llm_decisions_cmd
+from halal_trader.cli import ml as ml_cmd
 from halal_trader.cli import prompts as prompts_cmd
 from halal_trader.cli import reconcile as reconcile_cmd
 from halal_trader.cli import stocks as stocks_cmd
@@ -66,6 +67,9 @@ cli.add_command(insights_cmd.insights)
 
 # ── Prompt evolution (Wave F) ──────────────────────────────────
 cli.add_command(prompts_cmd.prompts_group)
+
+# ── ML model artefacts (Wave K) ────────────────────────────────
+cli.add_command(ml_cmd.ml_group)
 
 
 __all__ = ["cli"]

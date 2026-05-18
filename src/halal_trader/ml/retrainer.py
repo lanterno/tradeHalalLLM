@@ -137,10 +137,15 @@ class RetrainingScheduler:
 
             from halal_trader.ml.anomaly import MarketAnomalyDetector
 
-            detector = MarketAnomalyDetector(hub, min_samples=self._min_samples)
+            detector = MarketAnomalyDetector(
+                hub, min_samples=self._min_samples, engine=self._engine
+            )
             for feat in features:
                 detector._samples.append(feat)
             if detector.train():
+                # Wave K: persist DB-first when engine is set; the
+                # legacy disk pickle fallback runs when no engine.
+                await detector.persist_model()
                 results["anomaly"] = True
                 logger.info("Anomaly detector retrained on %d samples", len(features))
         except Exception as e:
@@ -151,8 +156,9 @@ class RetrainingScheduler:
             from halal_trader.ml.hub import ModelHub
 
             hub = ModelHub(models_dir=self._models_dir)
-            classifier = MLSignalClassifier(hub)
+            classifier = MLSignalClassifier(hub, engine=self._engine)
             if classifier.train(features, labels):
+                await classifier.persist_model()
                 results["classifier"] = True
                 logger.info("Signal classifier retrained on %d samples", len(features))
         except Exception as e:

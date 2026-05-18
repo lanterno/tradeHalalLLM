@@ -103,6 +103,28 @@ async def load_artefact(*, engine: AsyncEngine, name: str) -> dict[str, Any] | N
         return None
 
 
+async def load_artefact_bytes(*, engine: AsyncEngine, name: str) -> bytes | None:
+    """Return the *latest* pickle payload for ``name`` as raw bytes.
+
+    Sklearn / xgboost models live as pickle BYTEA — the caller does
+    its own ``pickle.loads`` (and version validation). Returns None
+    when no row exists, when the latest row is JSON-shaped instead of
+    pickle, or when the bytes column is empty.
+    """
+    async with AsyncSession(engine) as s:
+        stmt = (
+            select(MlArtefact)
+            .where(MlArtefact.name == name)
+            .order_by(col(MlArtefact.version).desc())
+            .limit(1)
+        )
+        result = await s.exec(stmt)
+        row = result.first()
+        if row is None or row.payload_format != "pickle":
+            return None
+        return row.payload_bytes
+
+
 async def list_versions(*, engine: AsyncEngine, name: str | None = None) -> list[dict[str, Any]]:
     """All versions of ``name`` (newest first), or every artefact when None."""
     async with AsyncSession(engine) as s:

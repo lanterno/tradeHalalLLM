@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import logging
 import pickle
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
 from halal_trader.ml.features import FEATURE_KEYS
 from halal_trader.ml.hub import ModelHub
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncEngine
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +23,13 @@ _FEATURES = list(FEATURE_KEYS)
 # a different version are discarded on load so retraining picks up the
 # new shape automatically.
 _MODEL_VERSION = 2
+
+# Wave K — artefact names that key into the ``ml_artefacts`` table.
+# Bump these only when you intentionally orphan all prior DB rows
+# (rare). The ``_MODEL_VERSION`` above orphans pickles on a feature
+# change; the artefact name is the DB-side equivalent.
+_ANOMALY_ARTEFACT_NAME = "anomaly_detector"
+_SIGNAL_ARTEFACT_NAME = "signal_classifier"
 
 # Pickled payload format (both detector + classifier):
 #   {"version": int, "features": list[str], "model": <sklearn / xgb model>}
@@ -33,7 +43,13 @@ class MarketAnomalyDetector:
     _PERSIST_EVERY_N = 25
     _MAX_BUFFER_SIZE = 5000
 
-    def __init__(self, hub: ModelHub, *, min_samples: int = 100) -> None:
+    def __init__(
+        self,
+        hub: ModelHub,
+        *,
+        min_samples: int = 100,
+        engine: "AsyncEngine | None" = None,
+    ) -> None:
         self._hub = hub
         self._min_samples = min_samples
         self._model = None
@@ -42,6 +58,10 @@ class MarketAnomalyDetector:
         self._adds_since_persist = 0
         self._model_path = hub.models_dir / "anomaly_detector.pkl"
         self._state_path = hub.models_dir / "anomaly_state.pkl"
+        # Wave K: when an engine is set, save/load goes through the
+        # ``ml_artefacts`` table instead of the disk pickle. The disk
+        # path stays as a one-shot fallback for in-flight installs.
+        self._engine = engine
         self._load_model()
         self._load_state()
 
@@ -129,7 +149,13 @@ class MarketAnomalyDetector:
             self._adds_since_persist = 0
 
     def train(self) -> bool:
-        """Train the IsolationForest on collected samples."""
+        """Train the IsolationForest on collected samples.
+
+        Wave K: training only updates the in-memory model; durable
+        persistence lives in :meth:`persist_model` (called by the
+        retrainer after a successful train). When no engine is wired,
+        ``persist_model`` falls back to the legacy disk path.
+        """
         if len(self._samples) < self._min_samples:
             return False
 
@@ -143,10 +169,6 @@ class MarketAnomalyDetector:
                 random_state=42,
             )
             self._model.fit(X)
-
-            with open(self._model_path, "wb") as f:
-                pickle.dump(_versioned_payload(self._model), f)
-
             import time as _time
 
             self._last_trained_at = _time.time()
@@ -159,6 +181,67 @@ class MarketAnomalyDetector:
         except Exception as e:
             logger.warning("Anomaly detector training failed: %s", e)
             return False
+
+    async def persist_model(self) -> bool:
+        """Durable model write — DB-first when ``engine`` is set,
+        legacy disk pickle otherwise.
+
+        Called by the retrainer after a successful :meth:`train`.
+        Returns True when the persist succeeded by either path.
+        """
+        if self._model is None:
+            return False
+        if self._engine is not None:
+            try:
+                from halal_trader.db.ml_artefacts import (
+                    pickle_dumps,
+                    save_artefact,
+                )
+
+                await save_artefact(
+                    engine=self._engine,
+                    name=_ANOMALY_ARTEFACT_NAME,
+                    payload_bytes=pickle_dumps(_versioned_payload(self._model)),
+                    feature_hash=str(_MODEL_VERSION),
+                )
+                return True
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("anomaly DB persist failed (falling back to file): %s", exc)
+        try:
+            with open(self._model_path, "wb") as f:
+                pickle.dump(_versioned_payload(self._model), f)
+            return True
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("anomaly file persist failed: %s", exc)
+            return False
+
+    async def load_latest(self) -> bool:
+        """DB-first refresh — replaces whatever ``__init__`` loaded from disk.
+
+        Returns True when a DB row was found and loaded. When no engine
+        is wired, returns False without touching the disk model — that
+        load already ran in ``__init__``.
+        """
+        if self._engine is None:
+            return False
+        try:
+            from halal_trader.db.ml_artefacts import load_artefact_bytes
+
+            payload_bytes = await load_artefact_bytes(
+                engine=self._engine, name=_ANOMALY_ARTEFACT_NAME
+            )
+            if payload_bytes is None:
+                return False
+            payload = pickle.loads(payload_bytes)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("anomaly DB load failed: %s", exc)
+            return False
+        if not _is_current_payload(payload):
+            logger.info("Discarding stale anomaly DB row (version mismatch)")
+            return False
+        self._model = payload["model"]
+        logger.info("Anomaly detector loaded from ml_artefacts DB row")
+        return True
 
     def auto_train(self) -> bool:
         """Train if enough samples have accumulated since the last training.
@@ -205,12 +288,13 @@ class MarketAnomalyDetector:
 class MLSignalClassifier:
     """XGBoost classifier trained on our own trade history."""
 
-    def __init__(self, hub: ModelHub) -> None:
+    def __init__(self, hub: ModelHub, *, engine: "AsyncEngine | None" = None) -> None:
         self._hub = hub
         self._model = None
         self._model_path = hub.models_dir / "signal_classifier.pkl"
         self._samples: list[list[float]] = []
         self._labels: list[int] = []
+        self._engine = engine
         self._load_model()
 
     def add_sample(self, indicators: dict, label: int) -> None:
@@ -254,6 +338,9 @@ class MLSignalClassifier:
 
         features: indicator values at entry time
         labels: 1 = profitable, 0 = unprofitable
+
+        Wave K: only updates the in-memory model; durable persistence
+        lives in :meth:`persist_model` (called by the retrainer).
         """
         if len(features) < 50:
             return False
@@ -270,10 +357,6 @@ class MLSignalClassifier:
                 random_state=42,
             )
             self._model.fit(X, y)
-
-            with open(self._model_path, "wb") as f:
-                pickle.dump(_versioned_payload(self._model), f)
-
             logger.info("Signal classifier trained on %d samples", len(features))
             return True
         except ImportError:
@@ -282,6 +365,57 @@ class MLSignalClassifier:
         except Exception as e:
             logger.warning("Signal classifier training failed: %s", e)
             return False
+
+    async def persist_model(self) -> bool:
+        """Durable model write — DB-first when ``engine`` is set, file fallback."""
+        if self._model is None:
+            return False
+        if self._engine is not None:
+            try:
+                from halal_trader.db.ml_artefacts import (
+                    pickle_dumps,
+                    save_artefact,
+                )
+
+                await save_artefact(
+                    engine=self._engine,
+                    name=_SIGNAL_ARTEFACT_NAME,
+                    payload_bytes=pickle_dumps(_versioned_payload(self._model)),
+                    feature_hash=str(_MODEL_VERSION),
+                )
+                return True
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("signal classifier DB persist failed: %s", exc)
+        try:
+            with open(self._model_path, "wb") as f:
+                pickle.dump(_versioned_payload(self._model), f)
+            return True
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("signal classifier file persist failed: %s", exc)
+            return False
+
+    async def load_latest(self) -> bool:
+        """DB-first refresh — replaces whatever ``__init__`` loaded from disk."""
+        if self._engine is None:
+            return False
+        try:
+            from halal_trader.db.ml_artefacts import load_artefact_bytes
+
+            payload_bytes = await load_artefact_bytes(
+                engine=self._engine, name=_SIGNAL_ARTEFACT_NAME
+            )
+            if payload_bytes is None:
+                return False
+            payload = pickle.loads(payload_bytes)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("signal classifier DB load failed: %s", exc)
+            return False
+        if not _is_current_payload(payload):
+            logger.info("Discarding stale signal classifier DB row (version mismatch)")
+            return False
+        self._model = payload["model"]
+        logger.info("Signal classifier loaded from ml_artefacts DB row")
+        return True
 
     def predict_confidence(self, indicators: dict) -> float | None:
         """Predict the probability that a trade with these indicators will be profitable."""

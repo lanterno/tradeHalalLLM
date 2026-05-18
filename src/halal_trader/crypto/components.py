@@ -109,7 +109,7 @@ def _build_sentiment(settings: Settings) -> Any:
     )
 
 
-def _build_ml(settings: Settings) -> tuple[Any, Any, Any]:
+def _build_ml(settings: Settings, *, engine: AsyncEngine | None = None) -> tuple[Any, Any, Any]:
     """Return (forecaster, anomaly_detector, signal_classifier) or all-None."""
     if not settings.ml.enabled:
         return None, None, None
@@ -120,7 +120,15 @@ def _build_ml(settings: Settings) -> tuple[Any, Any, Any]:
 
         hub = ModelHub(device=settings.ml.device, models_dir=settings.ml.models_dir)
         logger.info("ML models enabled (device: %s)", settings.ml.device)
-        return PriceForecaster(hub), MarketAnomalyDetector(hub), MLSignalClassifier(hub)
+        # Wave K: pass the engine so save/load goes through ``ml_artefacts``
+        # when the bot has DB access; otherwise the legacy file pickle
+        # path stays intact (CLI / tests / dev installs without
+        # Postgres).
+        return (
+            PriceForecaster(hub),
+            MarketAnomalyDetector(hub, engine=engine),
+            MLSignalClassifier(hub, engine=engine),
+        )
     except Exception as e:
         logger.warning("ML models initialization failed: %s", e)
         return None, None, None
@@ -341,8 +349,16 @@ async def build_components(
     # Wave C: the bot's run() loop wires `sentiment_manager.run()` into
     # the supervisor instead of firing off a task here.
 
-    regime_detector = RegimeDetector(models_dir=settings.ml.models_dir)
-    ml_forecaster, ml_anomaly, ml_signal = _build_ml(settings)
+    regime_detector = RegimeDetector(models_dir=settings.ml.models_dir, engine=engine)
+    ml_forecaster, ml_anomaly, ml_signal = _build_ml(settings, engine=engine)
+    # Wave K: prefer the DB-stored artefact over whatever the file-
+    # based ``__init__`` loaded. Best-effort: a missing row is fine.
+    for ml_obj in (regime_detector, ml_anomaly, ml_signal):
+        if ml_obj is not None and hasattr(ml_obj, "load_latest"):
+            try:
+                await ml_obj.load_latest()
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("ml load_latest failed for %s: %s", type(ml_obj).__name__, exc)
 
     self_review = TradeSelfReview(
         llm,

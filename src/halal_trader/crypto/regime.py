@@ -6,11 +6,17 @@ import logging
 import pickle
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncEngine
+
 logger = logging.getLogger(__name__)
+
+# Wave K — artefact name in the ``ml_artefacts`` table.
+_REGIME_ARTEFACT_NAME = "regime_classifier"
 
 
 class MarketRegime(str, Enum):
@@ -43,10 +49,19 @@ _REGIME_INSTRUCTIONS = {
 class RegimeDetector:
     """Classifies market regime using rules and optional ML."""
 
-    def __init__(self, *, models_dir: Path | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        models_dir: Path | None = None,
+        engine: "AsyncEngine | None" = None,
+    ) -> None:
         self._models_dir = models_dir or Path("models")
         self._ml_model = None
         self._ml_path = self._models_dir / "regime_classifier.pkl"
+        # Wave K: when an engine is set, save/load goes through the
+        # ``ml_artefacts`` table. The disk-pickle path stays as a
+        # one-shot fallback for in-flight installs.
+        self._engine = engine
         self._load_ml_model()
 
     def _load_ml_model(self) -> None:
@@ -170,10 +185,8 @@ class RegimeDetector:
             model = RandomForestClassifier(n_estimators=100, random_state=42)
             model.fit(np.array(X), y)
 
-            self._models_dir.mkdir(parents=True, exist_ok=True)
-            with open(self._ml_path, "wb") as f:
-                pickle.dump(model, f)
-
+            # Wave K: train() only updates the in-memory model;
+            # ``persist_model()`` handles the durable write.
             self._ml_model = model
             logger.info("Regime classifier trained on %d samples", len(X))
             return True
@@ -182,6 +195,57 @@ class RegimeDetector:
             return False
         except Exception as e:
             logger.warning("Regime classifier training failed: %s", e)
+            return False
+
+    async def persist_model(self) -> bool:
+        """Durable model write — DB-first when ``engine`` is set, file fallback.
+
+        Called by the retrainer after a successful :meth:`train`.
+        Returns True when the persist succeeded by either path.
+        """
+        if self._ml_model is None:
+            return False
+        if self._engine is not None:
+            try:
+                from halal_trader.db.ml_artefacts import (
+                    pickle_dumps,
+                    save_artefact,
+                )
+
+                await save_artefact(
+                    engine=self._engine,
+                    name=_REGIME_ARTEFACT_NAME,
+                    payload_bytes=pickle_dumps(self._ml_model),
+                )
+                return True
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("regime DB persist failed: %s", exc)
+        try:
+            self._models_dir.mkdir(parents=True, exist_ok=True)
+            with open(self._ml_path, "wb") as f:
+                pickle.dump(self._ml_model, f)
+            return True
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("regime file persist failed: %s", exc)
+            return False
+
+    async def load_latest(self) -> bool:
+        """DB-first refresh — replaces whatever ``__init__`` loaded from disk."""
+        if self._engine is None:
+            return False
+        try:
+            from halal_trader.db.ml_artefacts import load_artefact_bytes
+
+            payload_bytes = await load_artefact_bytes(
+                engine=self._engine, name=_REGIME_ARTEFACT_NAME
+            )
+            if payload_bytes is None:
+                return False
+            self._ml_model = pickle.loads(payload_bytes)
+            logger.info("Regime classifier loaded from ml_artefacts DB row")
+            return True
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("regime DB load failed: %s", exc)
             return False
 
     def _compute_bb_width(self, indicators: dict[str, Any]) -> float | None:
