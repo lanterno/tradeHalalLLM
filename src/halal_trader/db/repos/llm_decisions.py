@@ -38,6 +38,7 @@ class LlmDecisionRepoImpl:
         cache_read_tokens: int | None = None,
         cache_write_tokens: int | None = None,
         cost_usd: float | None = None,
+        tool_transcript: list[dict[str, Any]] | None = None,
     ) -> int:
         decision = LlmDecision(
             provider=provider,
@@ -54,6 +55,7 @@ class LlmDecisionRepoImpl:
             cache_read_tokens=cache_read_tokens,
             cache_write_tokens=cache_write_tokens,
             cost_usd=cost_usd,
+            tool_transcript=tool_transcript,
         )
         async with AsyncSession(self._engine) as session:
             session.add(decision)

@@ -6,6 +6,7 @@ import json
 import logging
 import time
 from abc import ABC
+from dataclasses import dataclass, field
 from typing import Any
 
 from pydantic import ValidationError
@@ -16,6 +17,24 @@ from halal_trader.db.repos import LlmDecisionRepo
 from halal_trader.domain.ports import LLMBackend
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class AgentConfig:
+    """Wave H — knobs for the agentic tool-calling loop.
+
+    Pass to ``_run_llm_analysis(agent=...)`` to drive the LLM through
+    a bounded multi-turn conversation that ends with a terminal tool
+    call. ``tools`` includes both the data-fetching tools (e.g.
+    ``analyze_pair``, ``query_rag``) and the terminal one whose args
+    become the raw dict the strategy's ``validate`` callback parses.
+    """
+
+    tools: list[Any] = field(default_factory=list)
+    handlers: dict[str, Any] = field(default_factory=dict)
+    terminal_tool: str = "submit_decisions"
+    max_turns: int = 5
+    max_seconds: float = 30.0
 
 
 # When the LLM returns JSON that fails our schema validation we get one
@@ -73,6 +92,7 @@ class BaseStrategy(ABC):
         log_prefix: str = "LLM",
         prompt_version: str | None = None,
         tool: Any = None,
+        agent: "AgentConfig | None" = None,
     ) -> Any:
         """Core analysis loop shared by all strategy subclasses.
 
@@ -89,9 +109,18 @@ class BaseStrategy(ABC):
             and output-token cost drops because the model doesn't emit
             JSON syntax characters. When omitted (or the LLM is Ollama),
             falls back to the legacy ``generate_json`` + repair path.
+        *agent* (Wave H): when provided AND ``llm.supports_tool_use``,
+            drive the model through a bounded tool-calling loop
+            instead of a single call. ``agent.terminal_tool``'s args
+            become the raw dict ``validate`` consumes; the full
+            transcript lands on the LlmDecision row for replay.
         """
         t0 = time.monotonic()
-        use_tool = tool is not None and getattr(self._llm, "supports_tool_use", False)
+        use_agent = agent is not None and getattr(self._llm, "supports_tool_use", False)
+        use_tool = (
+            not use_agent and tool is not None and getattr(self._llm, "supports_tool_use", False)
+        )
+        transcript_dicts: list[dict[str, Any]] | None = None
         try:
             async with tracer.aspan(
                 "strategy.llm_call",
@@ -99,7 +128,14 @@ class BaseStrategy(ABC):
                 model=getattr(self._llm, "model", ""),
                 prompt_version=prompt_version or "",
             ):
-                if use_tool:
+                if use_agent:
+                    assert agent is not None  # narrow for the type checker
+                    initial_raw, transcript_dicts = await self._run_agentic(
+                        user_prompt=user_prompt,
+                        system_prompt=system_prompt,
+                        agent=agent,
+                    )
+                elif use_tool:
                     initial_raw = await self._call_tool(
                         user_prompt=user_prompt,
                         system_prompt=system_prompt,
@@ -139,6 +175,7 @@ class BaseStrategy(ABC):
                 cache_read_tokens=getattr(usage, "cache_read_tokens", None) if usage else None,
                 cache_write_tokens=getattr(usage, "cache_write_tokens", None) if usage else None,
                 cost_usd=float(usage.cost_usd) if usage and usage.cost_usd else None,
+                tool_transcript=transcript_dicts,
             )
 
             logger.info(
@@ -206,6 +243,53 @@ class BaseStrategy(ABC):
             # Re-validate the repaired blob; bubble up the new error if
             # it still fails so the caller's ``except`` records it.
             return validate(repaired), repaired, True
+
+    async def _run_agentic(
+        self,
+        *,
+        user_prompt: str,
+        system_prompt: str,
+        agent: "AgentConfig",
+    ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        """Drive the bounded tool-calling loop; return (terminal-args, transcript).
+
+        Surfaces ``run_agent``'s transcript as a list of dicts ready to
+        land on ``LlmDecision.tool_transcript`` (JSONB column). When
+        the loop is forced to finalise on a budget exhaustion *and*
+        the model refuses to submit, the returned dict is empty and
+        the strategy's downstream validate path will fail-then-empty
+        through ``make_empty`` — matching the single-call empty-plan
+        contract.
+        """
+        from dataclasses import asdict
+
+        from halal_trader.core.llm.agent import run_agent
+
+        result = await run_agent(
+            self._llm,
+            system=system_prompt,
+            user=user_prompt,
+            tools=list(agent.tools),
+            handlers=dict(agent.handlers),
+            terminal_tool=agent.terminal_tool,
+            max_turns=agent.max_turns,
+            max_seconds=agent.max_seconds,
+        )
+        transcript_dicts: list[dict[str, Any]] = [asdict(t) for t in result.transcript]
+        # Annotate the transcript so the dashboard can render whether
+        # the loop completed normally or was force-finalised.
+        if result.budget_exhausted:
+            transcript_dicts.append(
+                {
+                    "turn": len(transcript_dicts) + 1,
+                    "tool_name": "_budget_exhausted",
+                    "args": {},
+                    "result_text": None,
+                    "elapsed_ms": result.elapsed_ms,
+                    "error": "max_turns or wall-clock budget hit",
+                }
+            )
+        return dict(result.final_call.args or {}), transcript_dicts
 
     async def _call_tool(
         self,

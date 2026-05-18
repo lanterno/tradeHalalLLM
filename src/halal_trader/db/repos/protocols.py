@@ -213,6 +213,7 @@ class LlmDecisionRepo(Protocol):
         cache_read_tokens: int | None = ...,
         cache_write_tokens: int | None = ...,
         cost_usd: float | None = ...,
+        tool_transcript: list[dict[str, Any]] | None = ...,
     ) -> int: ...
 
     async def get_recent_decisions(self, limit: int = ...) -> list[dict[str, Any]]: ...

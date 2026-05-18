@@ -317,6 +317,7 @@ class Repository:
         cache_read_tokens: int | None = None,
         cache_write_tokens: int | None = None,
         cost_usd: float | None = None,
+        tool_transcript: list[dict[str, Any]] | None = None,
     ) -> int:
         return await self._llm_decisions.record_decision(
             provider,
@@ -333,6 +334,7 @@ class Repository:
             cache_read_tokens=cache_read_tokens,
             cache_write_tokens=cache_write_tokens,
             cost_usd=cost_usd,
+            tool_transcript=tool_transcript,
         )
 
     async def get_recent_decisions(self, limit: int = 50) -> list[dict[str, Any]]:

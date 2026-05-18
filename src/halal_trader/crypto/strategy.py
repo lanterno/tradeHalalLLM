@@ -8,7 +8,7 @@ from typing import Any
 
 from halal_trader.core.llm.adversarial import apply_review_to_buys, critique_plan
 from halal_trader.core.llm.ensemble import EnsembleVariant, run_ensemble, wrap_existing
-from halal_trader.core.strategy import BaseStrategy
+from halal_trader.core.strategy import AgentConfig, BaseStrategy
 from halal_trader.crypto.prompts import (
     PROMPT_VERSION as _CRYPTO_PROMPT_VERSION,
 )
@@ -51,6 +51,11 @@ class CryptoTradingStrategy(BaseStrategy):
         ensemble_llms: list[LLMBackend] | None = None,
         ensemble_quorum: int = 2,
         ensemble_skip_at: float | None = None,
+        agentic_enabled: bool = False,
+        agentic_max_turns: int = 5,
+        agentic_max_seconds: float = 30.0,
+        agentic_hub: Any | None = None,
+        agentic_timeframes: Any | None = None,
     ) -> None:
         super().__init__(
             llm,
@@ -84,6 +89,22 @@ class CryptoTradingStrategy(BaseStrategy):
         self._ensemble_quorum = ensemble_quorum
         self._ensemble_skip_at = ensemble_skip_at
         self.last_ensemble_verdict = None
+
+        # Wave H — agentic mode. When ``agentic_enabled`` is on AND the
+        # LLM supports native tool use, ``analyze()`` drives the LLM
+        # through a bounded tool-calling loop (``analyze_pair``,
+        # ``query_rag``, ``compute_var_95``) before the model commits
+        # via ``submit_decisions``. ``agentic_hub`` is the
+        # :class:`InsightsHub` (for RAG lookups) and
+        # ``agentic_timeframes`` is the multi-timeframe analyzer.
+        # Both are optional — handlers degrade gracefully when missing.
+        self._agentic_enabled = agentic_enabled
+        self._agentic_max_turns = agentic_max_turns
+        self._agentic_max_seconds = agentic_max_seconds
+        self._agentic_hub = agentic_hub
+        self._agentic_timeframes = agentic_timeframes
+        # Exposed for the dashboard / tests — the most recent transcript.
+        self.last_agent_transcript: list[dict[str, Any]] | None = None
 
     def _on_llm_success(self) -> None:
         self._consecutive_llm_failures = 0
@@ -191,7 +212,38 @@ class CryptoTradingStrategy(BaseStrategy):
         )
         system, user_prompt = build_prompts(ctx, params)
 
-        from halal_trader.core.llm.tools import SUBMIT_DECISIONS_TOOL
+        from halal_trader.core.llm.tools import (
+            ANALYZE_PAIR_TOOL,
+            COMPUTE_VAR_TOOL,
+            QUERY_RAG_TOOL,
+            SUBMIT_DECISIONS_TOOL,
+        )
+
+        # Wave H: agentic multi-turn mode — when enabled, the LLM gets
+        # a toolbelt and can fetch deeper context before submitting a
+        # plan. Disabled by default; opt in via
+        # ``CRYPTO_AGENTIC_ENABLED=true``.
+        agent_cfg: AgentConfig | None = None
+        if self._agentic_enabled:
+            from halal_trader.crypto.agent_tools import build_agent_handlers
+
+            handlers = build_agent_handlers(
+                ctx=ctx,
+                hub=self._agentic_hub,
+                timeframes=self._agentic_timeframes,
+            )
+            agent_cfg = AgentConfig(
+                tools=[
+                    ANALYZE_PAIR_TOOL,
+                    QUERY_RAG_TOOL,
+                    COMPUTE_VAR_TOOL,
+                    SUBMIT_DECISIONS_TOOL,
+                ],
+                handlers=handlers,
+                terminal_tool="submit_decisions",
+                max_turns=self._agentic_max_turns,
+                max_seconds=self._agentic_max_seconds,
+            )
 
         plan = await self._run_llm_analysis(
             system,
@@ -219,6 +271,10 @@ class CryptoTradingStrategy(BaseStrategy):
             # schema, so CryptoTradingPlan validates either path's
             # output without translation.
             tool=SUBMIT_DECISIONS_TOOL,
+            # Wave H — when set, drives the agent loop instead of a
+            # single call. The terminal tool's args still match
+            # CryptoTradingPlan's schema.
+            agent=agent_cfg,
         )
 
         if self._ensemble_llms and plan.decisions:

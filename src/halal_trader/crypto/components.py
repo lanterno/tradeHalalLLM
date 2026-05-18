@@ -278,6 +278,11 @@ async def build_components(
         rag_store=rag_store,
     )
 
+    # Multi-timeframe analyzer is needed by the agentic mode's
+    # ``analyze_pair`` handler — construct early so the strategy can
+    # capture a reference at build time.
+    timeframe_analyzer = TimeframeAnalyzer(binance)
+
     strategy = CryptoTradingStrategy(
         llm,
         repo,
@@ -290,6 +295,12 @@ async def build_components(
         llm_cooldown_seconds=settings.crypto.llm_cooldown_seconds,
         attacker_llm=attacker_llm,
         ensemble_llms=ensemble_llms,
+        # Wave H: agentic multi-turn knobs.
+        agentic_enabled=settings.crypto.agentic_enabled,
+        agentic_max_turns=settings.crypto.agentic_max_turns,
+        agentic_max_seconds=settings.crypto.agentic_max_seconds,
+        agentic_hub=insights_hub,
+        agentic_timeframes=timeframe_analyzer,
     )
 
     # Wave G: load the replay-fitted slippage model (DB-first, then file,
@@ -330,7 +341,6 @@ async def build_components(
     # Wave C: the bot's run() loop wires `sentiment_manager.run()` into
     # the supervisor instead of firing off a task here.
 
-    timeframe_analyzer = TimeframeAnalyzer(binance)
     regime_detector = RegimeDetector(models_dir=settings.ml.models_dir)
     ml_forecaster, ml_anomaly, ml_signal = _build_ml(settings)
 
