@@ -100,8 +100,7 @@ class OpenAILLM(BaseLLM):
                 cache_read_tokens=usage.cache_read_tokens,
                 cache_write_tokens=usage.cache_write_tokens,
             )
-            self._track_usage(usage.total_tokens)
-        self.last_usage = usage
+        self._record_usage(usage)
 
         logger.info(
             "openai call complete in %.1fs (tokens=%d, cache_read=%d, cost=$%s)",

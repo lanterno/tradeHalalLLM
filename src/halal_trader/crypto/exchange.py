@@ -9,6 +9,7 @@ from typing import Any
 
 from binance import AsyncClient, BinanceAPIException
 
+from halal_trader.core.metrics import timed_broker_call
 from halal_trader.domain.models import CryptoAccount, CryptoBalance, Kline
 
 logger = logging.getLogger(__name__)
@@ -209,6 +210,7 @@ class BinanceClient:
         """Force the next get_account() to make a fresh API call."""
         self._account_cache = None
 
+    @timed_broker_call("binance", "get_account")
     async def get_account(self) -> CryptoAccount:
         """Get account snapshot with USDT-equivalent balances.
 
@@ -277,6 +279,7 @@ class BinanceClient:
         self._account_cache = (time.monotonic(), account)
         return account
 
+    @timed_broker_call("binance", "get_balances")
     async def get_balances(self) -> list[CryptoBalance]:
         """Get all non-zero balances."""
         info = await self.client.get_account()
@@ -288,12 +291,14 @@ class BinanceClient:
                 balances.append(CryptoBalance(asset=b["asset"], free=free, locked=lock))
         return balances
 
+    @timed_broker_call("binance", "get_open_orders")
     async def get_open_orders(self, symbol: str | None = None) -> list[dict[str, Any]]:
         """Get open orders, optionally filtered by symbol."""
         if symbol:
             return await self.client.get_open_orders(symbol=symbol)
         return await self.client.get_open_orders()
 
+    @timed_broker_call("binance", "get_klines")
     async def get_klines(self, symbol: str, interval: str = "1m", limit: int = 100) -> list[Kline]:
         """Fetch historical klines (candlesticks)."""
         async with self._semaphore:
@@ -313,6 +318,7 @@ class BinanceClient:
             )
         return klines
 
+    @timed_broker_call("binance", "get_order_book")
     async def get_order_book(self, symbol: str, limit: int = 10) -> dict[str, Any]:
         """Get order book depth."""
         async with self._semaphore:
@@ -349,6 +355,7 @@ class BinanceClient:
         except Exception:
             return None
 
+    @timed_broker_call("binance", "place_order")
     async def place_order(
         self,
         symbol: str,
@@ -396,6 +403,7 @@ class BinanceClient:
         )
         return result
 
+    @timed_broker_call("binance", "cancel_order")
     async def cancel_order(self, symbol: str, order_id: str) -> dict[str, Any]:
         """Cancel an open order."""
         result = await self.client.cancel_order(symbol=symbol, orderId=order_id)

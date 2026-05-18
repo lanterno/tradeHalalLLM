@@ -405,7 +405,7 @@ stages already emit events; the bus just multiplexes them.
 
 ---
 
-### Wave J — Per-stage Prometheus histograms + Grafana dashboard
+### Wave J — Per-stage Prometheus histograms + Grafana dashboard ✅ landed
 
 **Why**: `web/prometheus.py` exposes ~10 gauges (no histograms, no
 labels). With Wave B's cycle pipeline, each stage has a cleanly
@@ -413,25 +413,49 @@ defined start/stop, so a histogram of stage latency is one decorator
 away. The same trick applies to broker calls, LLM calls, and DB
 writes.
 
-The dashboard already has a `/metrics` endpoint; just add the
-histograms and ship a Grafana dashboard JSON in `infra/grafana/`.
+**What landed**:
+- `core/metrics.py` exposes 3 histograms (`halal_trader_stage_latency_ms`,
+  `halal_trader_llm_call_ms`, `halal_trader_broker_call_ms`) and one
+  counter (`halal_trader_events_published_total`) with consistent label
+  shapes (`stage`/`error`; `provider`/`model`; `broker`/`method`/`error`;
+  `topic`). Buckets cover 1 ms → 60 s for all latency families.
+- **Stage latency** is wired via `core/cycle_pipeline.stage()` —
+  every `CycleStage` run gets an observation automatically (Wave B
+  finished the extraction; this just turned on the firehose).
+- **LLM latency** is wired via a new `BaseLLM._record_usage(usage)`
+  helper that every provider (Ollama, OpenAI, Anthropic generate +
+  Anthropic tool-call) now calls instead of inline `last_usage = …`.
+  Single seam → one place to evolve.
+- **Broker latency** is wired via a new
+  `core.metrics.timed_broker_call(broker, method)` async decorator
+  on every public `BinanceClient` method (`get_account`,
+  `get_balances`, `get_open_orders`, `get_klines`, `get_order_book`,
+  `place_order`, `cancel_order`), plus a single inline timer on
+  `mcp.client.AlpacaMCPClient.call_tool` (the chokepoint for every
+  Alpaca tool — covers all stocks-side calls in one site).
+- **Event-bus throughput** is wired via a single `event_published(topic)`
+  call in `EventBus.publish`.
+- `infra/grafana/halal-trader.json` (~140 lines) ships 10 panels:
+  4 stat tiles (bot running / drawdown / daily LLM spend / open
+  positions) + cycle p50 + cycle p95 + LLM p50 by provider + broker
+  error-rate + open positions by asset + portfolio heat by market.
 
-**Scope**:
-- `core/metrics.py` — wrap `prometheus_client` with consistent
-  naming.
-- `crypto/cycle/stages/*.py` already wrapped via the
-  `StageInstrumentation` from Wave B; add a histogram emit.
-- `infra/grafana/halal-trader.json` — 8 panels: cycle p50/p95
-  latency by stage, LLM call cost rate, broker error rate, kill-
-  switch state, daily P&L, drift state, regime distribution, halal
-  cache hit rate.
-
-**Acceptance**:
-- `curl localhost:8082/metrics | grep _bucket` shows histograms.
+**Acceptance** (both met):
+- `curl localhost:8082/metrics | grep _bucket` shows histograms for
+  all three families.
 - Importing `infra/grafana/halal-trader.json` in a fresh Grafana
   produces a working dashboard against the bot's `/metrics`.
 
-**Estimated effort**: 1 day.
+**Trade-offs**:
+- The decorator approach for Binance covers the 7 most-called
+  methods but skips a few internal helpers (`get_funding_signal`,
+  `get_ticker_price`, `get_symbol_ticker` cache-fill calls) since
+  their failure modes are already absorbed by the public-method
+  caller. Add `@timed_broker_call("binance", "…")` to extend
+  coverage if a new tail-latency bug surfaces.
+- `event_published` fires for every publish without per-subscriber
+  fan-out timing — the counter is intentionally coarse so a
+  high-frequency bus doesn't lose the signal in label cardinality.
 
 ---
 

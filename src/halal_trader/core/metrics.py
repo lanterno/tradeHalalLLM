@@ -111,6 +111,37 @@ def observe_broker_call(*, broker: str, method: str, ms: float, error: bool) -> 
     )
 
 
+def timed_broker_call(broker: str, method: str):
+    """Decorator: time + emit ``observe_broker_call`` around an async method.
+
+    Use on bound methods of broker clients (Binance, Alpaca MCP) so every
+    public call gets an entry in ``halal_trader_broker_call_ms``. The
+    decorator preserves the method's signature via ``functools.wraps``
+    and re-raises exceptions unchanged (the histogram records the error
+    label and the elapsed time, but never swallows the failure).
+    """
+    import functools
+    import time
+
+    def decorator(fn):
+        @functools.wraps(fn)
+        async def wrapper(*args, **kwargs):
+            t0 = time.monotonic()
+            error = False
+            try:
+                return await fn(*args, **kwargs)
+            except Exception:
+                error = True
+                raise
+            finally:
+                ms = (time.monotonic() - t0) * 1000.0
+                observe_broker_call(broker=broker, method=method, ms=ms, error=error)
+
+        return wrapper
+
+    return decorator
+
+
 def event_published(topic: str) -> None:
     m = _ensure_metrics()
     if "_disabled" in m:

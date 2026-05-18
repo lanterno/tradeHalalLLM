@@ -100,6 +100,28 @@ class BaseLLM(ABC):
                 )
                 break
 
+    def _record_usage(self, usage: CallUsage) -> None:
+        """Stamp ``last_usage``, roll up daily tokens, emit Prometheus.
+
+        Every provider's ``generate()`` should call this exactly once
+        per successful call so the per-call latency histogram in
+        ``core/metrics.halal_trader_llm_call_ms`` matches what the LLM
+        cost-roll-up sees. Providers that report 0 tokens still get the
+        latency observation (a stuck Ollama call should show up in p95
+        even if it returned nothing).
+        """
+        from halal_trader.core.metrics import observe_llm_call
+
+        self.last_usage = usage
+        if usage.total_tokens:
+            self._track_usage(usage.total_tokens)
+        if usage.elapsed_ms and usage.provider and usage.model:
+            observe_llm_call(
+                provider=usage.provider,
+                model=usage.model,
+                ms=float(usage.elapsed_ms),
+            )
+
     @abstractmethod
     async def generate(self, prompt: str, system: str | None = None) -> str:
         """Send a prompt and return the raw text response."""

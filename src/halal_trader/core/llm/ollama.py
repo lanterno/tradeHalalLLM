@@ -70,9 +70,7 @@ class OllamaLLM(BaseLLM):
             input_tokens=usage.input_tokens,
             output_tokens=usage.output_tokens,
         )
-        if usage.total_tokens:
-            self._track_usage(usage.total_tokens)
-        self.last_usage = usage
+        self._record_usage(usage)
 
         logger.info(
             "ollama call complete in %.1fs (tokens=%d)",

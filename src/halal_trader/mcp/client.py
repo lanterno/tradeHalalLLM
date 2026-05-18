@@ -86,14 +86,37 @@ class AlpacaMCPClient:
     # ── Tool execution ──────────────────────────────────────────
 
     async def call_tool(self, name: str, arguments: dict[str, Any] | None = None) -> Any:
-        """Execute a tool on the Alpaca MCP server and return the result."""
+        """Execute a tool on the Alpaca MCP server and return the result.
+
+        Times every call and emits the ``halal_trader_broker_call_ms``
+        histogram with ``broker="alpaca"`` + the tool name as ``method``,
+        so the Grafana dashboard shows per-tool p50/p95 latency and the
+        broker-error-rate panel covers MCP exceptions too.
+        """
         if self.session is None:
             raise RuntimeError("Not connected to Alpaca MCP server. Call connect() first.")
         if name not in self._tools:
             raise ValueError(f"Unknown tool: {name}. Available: {list(self._tools.keys())}")
 
+        import time as _time
+
+        from halal_trader.core.metrics import observe_broker_call
+
         logger.debug("Calling MCP tool: %s(%s)", name, arguments or {})
-        result = await self.session.call_tool(name, arguments or {})
+        t0 = _time.monotonic()
+        error = False
+        try:
+            result = await self.session.call_tool(name, arguments or {})
+        except Exception:
+            error = True
+            raise
+        finally:
+            observe_broker_call(
+                broker="alpaca",
+                method=name,
+                ms=(_time.monotonic() - t0) * 1000.0,
+                error=error,
+            )
 
         # Extract text content from the result
         contents = []

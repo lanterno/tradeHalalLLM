@@ -84,6 +84,8 @@ class EventBus:
         self._lock = asyncio.Lock()
 
     async def publish(self, topic: str, payload: dict[str, Any] | None = None) -> None:
+        from halal_trader.core.metrics import event_published
+
         event = Event(topic=topic, payload=payload or {})
         # Snapshot under the lock; ``offer`` is non-blocking so the
         # outer publish never awaits user-supplied work.
@@ -91,6 +93,7 @@ class EventBus:
             subs = list(self._subs)
         for sub in subs:
             sub.offer(event)
+        event_published(topic)
 
     async def subscribe(
         self, pattern: str = "*", *, queue_size: int | None = None
