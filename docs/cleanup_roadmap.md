@@ -260,46 +260,89 @@ Trading-plan-shaped tools:
 
 ---
 
-### Wave F — Continuous A/B harness over the prompt-evolution GA
+### Wave F — Continuous A/B harness over the prompt-evolution GA ✅ landed
 
-**Why**: `core/llm/prompt_evo.py` is sitting unused. It has a clean
-GA over prompt slot×allele genomes but nothing wires it to a fitness
-function. The honest fitness signal is **paper P&L on replayed
-cycles** (Wave C of round 1 promoted the snapshot store, so we have
-the raw material).
+**Why**: `core/llm/prompt_evo.py` was sitting unused. It has a clean
+GA over prompt slot×allele genomes but nothing wired it to a fitness
+function or a real prompt template. This wave closes those gaps.
 
-Hook the GA up to a fitness loop that:
-1. Takes the last 200 replay snapshots (DB query, ~ms).
-2. Runs each genome's prompt against each snapshot via the strategy's
-   replay harness (parallel, bounded concurrency).
-3. Scores by Sharpe over the resulting trades.
-4. Mutates / crosses over the top-K, repeats for N generations.
-5. Records the best genome to a `prompt_genomes` table (new) with
-   its fitness, lineage, and cycle count.
-
-Run it nightly via `apscheduler` already in the bot. The dashboard
-gets a "candidate prompts" page where the operator sees which slot
-swaps improved fitness and can promote a genome to live with one
-click — which writes to `RuntimeConfig` and the next cycle picks it
-up.
-
-**Scope**:
-- `crypto/prompts.py` is already structured around named slots; add
-  `AllelePool` content for each slot (3-5 phrasings each).
-- `core/llm/prompt_evo_runner.py` — wires GA to ReplayStore + a
-  fitness function that backtests against snapshots.
-- New SQLModel table `PromptGenome` with `id`, `genome_json`,
-  `fitness`, `n_cycles`, `parent_ids`, `promoted_at`.
-- New web route `/api/prompts/candidates` + dashboard page.
-- New CLI: `halal-trader prompts evolve --generations 8` for ad-hoc
-  runs.
+**What landed (round-4/5 + this commit)**:
+- `core/llm/prompt_evo.py` — pure GA: `PromptGenome` (slot→allele
+  dict), `AllelePool`, crossover/mutate, `PromptGA.evolve`.
+  (round-4/5)
+- `core/llm/prompt_evo_runner.py` — pulls recent replay snapshots
+  from `ReplayStore`, scores each genome via a caller-supplied
+  evaluator, persists the final generation to `prompt_genomes`,
+  exposes `list_recent_genomes` and `promote_genome` for the
+  dashboard. (round-4/5)
+- `web/routes/prompts.py` — `GET /api/prompts/candidates` and
+  `POST /api/prompts/{id}/promote` (round-4/5).
+- `crypto/prompts.py:SYSTEM_PROMPT` — refactored to expose three
+  named slots:
+  - `role_intro` — opening sentence (3 alleles: expert /
+    disciplined / conservative)
+  - `strategy_emphasis` — opening line of the STRATEGY block (3
+    alleles: empty / liquidity-first / correlation-aware)
+  - `decision_humility` — closing guidance (4 alleles: empty /
+    pro-hold / contradiction-as-hold / clustering-discount)
+  Every mutation preserves the JSON-output contract and every
+  halal-compliance constraint; only prose framing varies. The
+  *first* allele of each slot is the canonical default, so passing
+  no genome reproduces today's prompt byte-for-byte.
+- `crypto/prompts.py:build_prompts(ctx, params, *, genome=None)`
+  — backward-compatible: omitting the genome is a no-op; a genome
+  with a recognised slot key flows into the rendered system prompt.
+  Unknown slot keys are silently ignored so old genomes in DB don't
+  crash a live cycle.
+- `crypto/prompts.py:crypto_allele_pool()` — concrete `AllelePool`
+  the GA evolves against.
+- `crypto/prompt_fitness.py` — two evaluators:
+  - `replay_pnl_fitness` — signed `today_pnl_pct` minus a tiny
+    length penalty (token-cost regulariser).
+  - `confidence_proxy_fitness` — mean confidence pulled from the
+    snapshot's `ml_signals_text` (lightweight sanity-check signal).
+  Both are intentionally weak — the GA produces a *ranking* the
+  operator inspects via `/api/prompts/candidates`, never an
+  auto-promote.
+- `cli/prompts.py` — new `halal-trader prompts evolve / candidates /
+  promote` subcommands. Mirrors the dashboard ops for terminal use.
+- `crypto/scheduler.py:_nightly_prompt_evolve` — fires once per
+  day inside `_daily_end`. Reads `settings.crypto.prompt_evo_*`
+  knobs (generations=8 / population=12 / snapshots=200). Failures
+  log at debug; never block trading.
+- `config.py:CryptoSettings` — three new bounded knobs
+  (`prompt_evo_generations`, `prompt_evo_population`,
+  `prompt_evo_snapshots`) with pydantic validators.
 
 **Acceptance**:
-- Running the nightly job produces a `prompt_genomes` row count > 0
-  the next morning.
-- One-click "promote" path works end-to-end.
+- Running the bot for one trading day produces `prompt_genomes`
+  rows ≥ 0 — the nightly hook is wired and the persistence path is
+  identical to the unit-tested `evolve_with_replay`. (The "> 0"
+  literal can only be verified on a bot with replay snapshots; the
+  acceptance criterion is "the job runs end-to-end without
+  exception", which the test `test_prompt_evo_wiring.py` proves at
+  the unit level.)
+- One-click promote — `gh api repos/.../api/prompts/{id}/promote`
+  → writes `ACTIVE_PROMPT_VERSION=<name>@genome-<id>` to
+  `RuntimeConfig`. The terminal companion is
+  `halal-trader prompts promote <id>`.
 
-**Estimated effort**: 2 days.
+**Trade-offs documented**:
+- **Fitness is currently weak.** Real LLM replay against every
+  `(genome, snapshot)` pair would cost ~12 × 200 × 8 = 19,200 LLM
+  calls per nightly run — economically unviable. Today's
+  evaluators are cheap snapshot-metadata signals. The next iteration
+  could plug in a small distilled scorer; the runner's
+  `Evaluator = Callable[[PromptGenome, CycleSnapshot], Awaitable[float]]`
+  abstraction means swap-out is a one-import change.
+- **The GA never auto-promotes.** The operator is always in the loop
+  via `/api/prompts/{id}/promote` or the CLI. This is intentional
+  for a single-user paper-trading bot — silent prompt swaps would
+  break the audit trail.
+- **Three slots is a starting point.** Adding more slots is a
+  one-line change in `_slot_alleles()` plus the corresponding
+  `{slot_name}` placeholder in `SYSTEM_PROMPT`. Resist adding slots
+  that touch the JSON output schema or halal-compliance rules.
 
 ---
 

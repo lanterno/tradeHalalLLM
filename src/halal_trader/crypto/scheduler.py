@@ -248,6 +248,38 @@ class CryptoTradingBot(BaseTradingBot):
             logger.error("Crypto daily end failed: %s", e)
 
         await self._prune_audit_log()
+        await self._nightly_prompt_evolve()
+
+    async def _nightly_prompt_evolve(self) -> None:
+        """Wave F: run one GA sweep over recent replay snapshots.
+
+        Best-effort. Failures (no engine, no snapshots, GA crash) log at
+        debug and never block the daily-end routine. Operator can also
+        trigger this manually via ``halal-trader prompts evolve``.
+        """
+        if self._engine is None:
+            return
+        try:
+            from halal_trader.core.llm.prompt_evo_runner import evolve_with_replay
+            from halal_trader.crypto.prompt_fitness import replay_pnl_fitness
+            from halal_trader.crypto.prompts import crypto_allele_pool
+
+            result = await evolve_with_replay(
+                engine=self._engine,
+                name="crypto.strategy.system",
+                pool=crypto_allele_pool(),
+                evaluator=replay_pnl_fitness,
+                generations=self.settings.crypto.prompt_evo_generations,
+                population_size=self.settings.crypto.prompt_evo_population,
+                snapshot_limit=self.settings.crypto.prompt_evo_snapshots,
+            )
+            logger.info(
+                "Nightly prompt-evolve: best fitness %+.4f over %d snapshots",
+                result.best.fitness,
+                result.n_snapshots,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("nightly prompt-evolve failed: %s", exc)
 
     async def _check_day_rollover(self) -> None:
         """Check if we've crossed into a new Eastern day and handle rollover."""

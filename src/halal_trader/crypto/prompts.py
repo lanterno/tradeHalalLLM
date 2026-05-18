@@ -11,16 +11,19 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from halal_trader.core.llm.prompts import register as _register_prompt
 from halal_trader.crypto.indicators import format_indicators_for_prompt
 from halal_trader.domain.models import CryptoAccount, Kline
 
+if TYPE_CHECKING:
+    from halal_trader.core.llm.prompt_evo import AllelePool, PromptGenome
+
 # ── Templates ──────────────────────────────────────────────────
 
 SYSTEM_PROMPT = """\
-You are an expert crypto scalping AI. Analyze technical indicators and real-time \
+{role_intro} Analyze technical indicators and real-time \
 market data for the provided pairs and emit precise buy/sell/hold decisions on a \
 1-minute timeframe to achieve at least {daily_return_target:.0%} daily return.
 
@@ -36,6 +39,7 @@ and notional (quantity × price) ≥ min_notional.
 6. Output ONLY a single JSON object — no prose, no markdown.
 
 STRATEGY:
+{strategy_emphasis}\
 - Vol ratios >1.2× confirm moves; VWAP is intraday S/R; order-book imbalance signals \
 short-term pressure.
 - Default exits are {stop_loss_pct:.1%} SL / {take_profit_pct:.1%} TP (executor applies \
@@ -85,7 +89,92 @@ trade pays fees (~0.2% per leg).
 lean toward "hold" unless price action breaks the deadlock.
 - After a stop-loss hit on a pair, give it 1-2 cycles before re-entering — \
 mean-reversion is rarely instant.
-"""
+{decision_humility}"""
+
+
+# ── Wave F: prompt-evolution slots ───────────────────────────────
+# Three named slots in ``SYSTEM_PROMPT`` are evolvable by the
+# :class:`PromptGA`. The first allele of each slot is the canonical
+# default — passing no genome to ``build_prompts`` reproduces today's
+# prompt exactly. Alleles preserve every JSON-output constraint and
+# every halal-compliance rule; they only vary prose framing.
+
+_SLOT_ROLE_INTRO = "role_intro"
+_SLOT_STRATEGY_EMPHASIS = "strategy_emphasis"
+_SLOT_DECISION_HUMILITY = "decision_humility"
+
+_ROLE_INTRO_ALLELES = [
+    # Canonical: emphasises expertise + speed.
+    "You are an expert crypto scalping AI.",
+    # Discipline-leaning framing: encourages patience over expertise theater.
+    "You are a disciplined crypto-momentum trader.",
+    # Capital-preservation framing: nudges risk-aversion in chop regimes.
+    "You are a conservative crypto scalper focused on capital preservation.",
+]
+_STRATEGY_EMPHASIS_ALLELES = [
+    # Canonical: no extra emphasis (today's behaviour).
+    "",
+    # Liquidity-first emphasis.
+    (
+        "- Prioritise liquidity and tight spreads over high-confidence "
+        "sentiment alone; a wide spread eats the edge.\n"
+    ),
+    # Correlation-aware emphasis — pairs with the risk engine's heat metric.
+    (
+        "- Aggressively reduce position size when correlated assets are "
+        "moving in the same direction; covariance compounds drawdown.\n"
+    ),
+]
+_DECISION_HUMILITY_ALLELES = [
+    # Canonical: no extra closing guidance.
+    "",
+    # Pro-hold framing: optimises for not-losing over winning.
+    ("- When in doubt, hold. Avoiding a 1% loss matters more than catching a 1% gain.\n"),
+    # Contradiction-aware framing: a sharper rule than the existing
+    # "lean toward hold" line in DECISION QUALITY HEURISTICS.
+    (
+        "- When two indicators contradict each other, treat that as a "
+        "hold signal, not a slow-trade signal.\n"
+    ),
+    # Clustering-aware framing: a hedge against the LLM repeatedly
+    # opening positions in the same name within a short window.
+    (
+        "- Reduce size by half when this would be your 3rd buy of the "
+        "same pair within 30 minutes — clustering is rarely accidental.\n"
+    ),
+]
+
+
+def _slot_alleles() -> dict[str, list[str]]:
+    """Return the curated per-slot allele pool.
+
+    Pulled out as a function (not a module-level dict) so tests and the
+    GA wire the same canonical defaults without anyone accidentally
+    mutating shared state.
+    """
+    return {
+        _SLOT_ROLE_INTRO: list(_ROLE_INTRO_ALLELES),
+        _SLOT_STRATEGY_EMPHASIS: list(_STRATEGY_EMPHASIS_ALLELES),
+        _SLOT_DECISION_HUMILITY: list(_DECISION_HUMILITY_ALLELES),
+    }
+
+
+def crypto_allele_pool() -> "AllelePool":
+    """Build the AllelePool for the crypto system prompt.
+
+    Three evolvable slots, 3–4 alleles each. The base genome reproduces
+    today's prompt byte-for-byte; mutations only swap prose framing
+    while preserving every JSON-output and halal-compliance constraint.
+    """
+    from halal_trader.core.llm.prompt_evo import AllelePool
+
+    return AllelePool(slots=_slot_alleles())
+
+
+def _base_slot_text() -> dict[str, str]:
+    """Default slot values — the canonical (first) allele for each slot."""
+    return {k: v[0] for k, v in _slot_alleles().items()}
+
 
 USER_PROMPT_TEMPLATE = """\
 === PORTFOLIO STATUS ===
@@ -224,11 +313,21 @@ def build_orderbook_text(orderbooks: dict[str, dict[str, Any]]) -> str:
     return "\n".join(lines) if lines else "No order book data available."
 
 
-def build_prompts(ctx: PromptContext, params: StrategyParams) -> tuple[str, str]:
+def build_prompts(
+    ctx: PromptContext,
+    params: StrategyParams,
+    *,
+    genome: "PromptGenome | None" = None,
+) -> tuple[str, str]:
     """Render the (system, user) prompt pair from a ``PromptContext``.
 
     Pure function; no IO, no LLM calls.  Both live ``analyze`` and the
     backtest engine use this so prompt edits transfer between them.
+
+    ``genome`` (Wave F) optionally overrides one or more of the
+    evolvable slots (``role_intro``, ``strategy_emphasis``,
+    ``decision_humility``). When omitted, the canonical (first) allele
+    fills each slot, reproducing today's prompt byte-for-byte.
     """
     portfolio_value = ctx.account.total_balance_usdt or 1000
     today_pnl_pct = ctx.today_pnl / portfolio_value if portfolio_value else 0
@@ -245,6 +344,12 @@ def build_prompts(ctx: PromptContext, params: StrategyParams) -> tuple[str, str]
 
     at_max = ctx.open_position_count >= params.max_positions
 
+    slot_values = _base_slot_text()
+    if genome is not None:
+        for slot, allele in genome.slots.items():
+            if slot in slot_values:
+                slot_values[slot] = allele
+
     system = SYSTEM_PROMPT.format(
         max_position_pct=params.max_position_pct,
         daily_loss_limit=params.daily_loss_limit,
@@ -253,6 +358,7 @@ def build_prompts(ctx: PromptContext, params: StrategyParams) -> tuple[str, str]
         active_adjustments=adjustments_block,
         stop_loss_pct=params.stop_loss_pct,
         take_profit_pct=params.take_profit_pct,
+        **slot_values,
     )
 
     # Append the stable HALAL PAIRS + EXCHANGE TRADING RULES to the

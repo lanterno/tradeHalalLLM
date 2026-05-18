@@ -254,6 +254,14 @@ class CryptoSettings(BaseSettings):
     agentic_max_turns: int = Field(default=5, ge=1, le=20)
     agentic_max_seconds: float = Field(default=30.0, gt=0, le=120.0)
 
+    # Prompt evolution (Wave F) — once-per-day GA sweep that scores
+    # candidate prompts against recent replay snapshots and persists
+    # them to ``prompt_genomes`` for one-click promotion. The bot
+    # never auto-promotes; the operator is always in the loop.
+    prompt_evo_generations: int = Field(default=8, ge=1, le=50)
+    prompt_evo_population: int = Field(default=12, ge=4, le=64)
+    prompt_evo_snapshots: int = Field(default=200, ge=20, le=1000)
+
 
 # ── Sentiment ──────────────────────────────────────────────────
 
