@@ -12,6 +12,7 @@ import click
 from halal_trader.cli import crypto as crypto_cmd
 from halal_trader.cli import dashboard as dashboard_cmd
 from halal_trader.cli import db as db_cmd
+from halal_trader.cli import halal as halal_cmd
 from halal_trader.cli import halt as halt_cmd
 from halal_trader.cli import insights as insights_cmd
 from halal_trader.cli import llm_decisions as llm_decisions_cmd
@@ -70,6 +71,9 @@ cli.add_command(prompts_cmd.prompts_group)
 
 # ── ML model artefacts (Wave K) ────────────────────────────────
 cli.add_command(ml_cmd.ml_group)
+
+# ── Halal compliance explainer (Wave L) ────────────────────────
+cli.add_command(halal_cmd.halal_group)
 
 
 __all__ = ["cli"]

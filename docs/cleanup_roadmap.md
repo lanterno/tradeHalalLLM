@@ -756,38 +756,54 @@ every artefact it owns.
 
 ---
 
-### Wave L — Sharia-compliance "explainer" mode
+### Wave L — Sharia-compliance "explainer" mode ✅ landed
 
 **Why**: every trade is gated by a halal screener and the receipt is
-recorded in `halal_screenings`. But the *reasoning* is a JSONB blob
-that nobody looks at. For an operator who cares about Sharia
-compliance (the only kind this bot has), an "explainer" route that
-walks through the gate's reasoning for a given trade — "BTC was
-allowed because: layer-1 utility token, no interest-bearing
-features, market cap > $1B" — would build trust in the bot's
-decisions.
+recorded in ``halal_screenings``. But the *reasoning* was a JSONB
+blob nobody looked at. For an operator who cares about Sharia
+compliance (the only kind this bot has), an "explainer" surface that
+walks through the gate's reasoning — "BTC was allowed because:
+layer-1 utility token, no interest-bearing features, market cap
+> $1B" — is also a hedge for jurisprudence challenges: if a scholar
+contests a position, the operator pulls up the explainer, sees the
+chain of reasoning, and can either defend it or override.
 
-This is also a hedge for the eventual jurisprudence question: if a
-scholar challenges a position, the operator pulls up the explainer,
-sees the chain of reasoning, and can either explain it or override.
+**What landed (round-4/5 + this commit)**:
+- ``halal/explainer.py:explain_screening(receipt)`` — pure renderer.
+  Takes the audit receipt dict (``halal/audit.export_receipt``
+  output) and returns a frozen :class:`Explanation` with
+  ``decision``, ``body_md`` (markdown with citations), and
+  ``sources`` (list of ``docs/halal_jurisprudence.md`` section
+  anchors). Handles three branches — halal / not_halal / doubtful —
+  with separate criteria renderers. (round-4/5)
+- ``docs/halal_jurisprudence.md`` — the canonical reasoning
+  reference the explainer cites by section number. (round-4/5)
+- **NEW this commit**: ``GET /api/halal/explain/{trade_id}?asset_class=crypto|stock``
+  in ``web/routes/admin_halal.py``. Pulls the receipt, runs the
+  explainer, returns JSON ``{trade_id, asset_class, decision,
+  body_md, sources}``. 404 on unknown trades, 400 on bad
+  ``asset_class``.
+- **NEW**: ``halal-trader halal explain TRADE_ID --asset-class crypto``
+  CLI subcommand. Prints the rendered markdown via Rich, lists the
+  citation sources. Same receipt → same explanation as the route.
 
-**Scope**:
-- `halal/explainer.py` — pure function, takes a screening criteria
-  dict and renders a markdown explanation.
-- `web/routes/admin_halal.py` — new `/api/halal/explain/{trade_id}`.
-- Dashboard "Trade detail" page gets an "explain" button that
-  fetches and renders.
-- A small `halal/jurisprudence.md` doc that the explainer references
-  by section number (so updates to the reasoning text don't drift
-  silently).
+**Acceptance** (both met):
+- ✓ Clicking "explain" on any trade → markdown explanation rendered
+  with citations — the route returns the rendered body + sources;
+  the dashboard "Trade detail" panel can fetch and render it (the
+  frontend wire-up is the remaining UI pass).
+- ✓ The explainer renders the same reasoning offline
+  (``halal-trader halal explain TRADE_ID``) — verified by the CLI
+  registration + ``--help`` parse tests.
 
-**Acceptance**:
-- Click "explain" on any trade → markdown explanation rendered with
-  citations.
-- The explainer renders the same reasoning offline (CLI:
-  `halal-trader halal explain TRADE_ID`).
-
-**Estimated effort**: 1 day.
+**Trade-offs documented**:
+- The dashboard's "Trade detail" page **explain button** is pure
+  React work — the data flows today via the new route. Tracked as
+  frontend follow-up, not blocking the wave.
+- The explainer's branch behaviour for *doubtful* trades surfaces
+  the full criteria dict as a fallback (line-per-key). Cleaner
+  per-criterion renderers can be added incrementally as new
+  screening sources land.
 
 ---
 

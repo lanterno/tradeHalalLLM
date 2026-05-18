@@ -33,6 +33,39 @@ class RecordPurificationRequest(BaseModel):
 
 
 def register(app: FastAPI) -> None:
+    @app.get("/api/halal/explain/{trade_id}")
+    async def explain_trade(
+        trade_id: int,
+        asset_class: str = "crypto",
+        ctx: DashboardContext = Depends(get_ctx),
+    ) -> JSONResponse:
+        """Wave L — operator-readable Sharia-compliance explanation.
+
+        Pulls the trade + its ``halal_screenings`` receipt and renders
+        the criteria blob as Markdown with citations to
+        ``docs/halal_jurisprudence.md``. Returns 404 when the trade
+        doesn't exist; renders an "unattested" body for legacy trades
+        that pre-date the screening FK.
+        """
+        from halal_trader.halal.audit import export_receipt
+        from halal_trader.halal.explainer import explain_screening
+
+        if asset_class not in ("crypto", "stock"):
+            raise HTTPException(400, "asset_class must be 'crypto' or 'stock'")
+        receipt = await export_receipt(ctx.engine, trade_id=trade_id, asset_class=asset_class)
+        if receipt is None:
+            raise HTTPException(404, f"trade {trade_id} not found")
+        explanation = explain_screening(receipt.payload)
+        return JSONResponse(
+            {
+                "trade_id": trade_id,
+                "asset_class": asset_class,
+                "decision": explanation.decision,
+                "body_md": explanation.body_md,
+                "sources": explanation.sources,
+            }
+        )
+
     @app.get("/api/admin/purification")
     async def list_purification(
         ctx: DashboardContext = Depends(get_ctx),
