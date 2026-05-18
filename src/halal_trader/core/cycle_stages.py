@@ -809,6 +809,40 @@ class BuildNewsStage:
         return state
 
 
+# ── Fetch-stock-news stage ──────────────────────────────────────
+
+
+class FetchStockNewsStage:
+    """Stocks-side equivalent of :class:`BuildNewsStage` — fetches per-cycle.
+
+    Crypto runs a long-lived :class:`NewsEventReactor` that pushes into a
+    :class:`RecentNewsFeed` between cycles. Stocks fetch on demand from
+    Yahoo Finance (15-min cadence is slow enough that per-cycle pulls are
+    cheap, and there's no equivalent of CryptoPanic's high-impact event
+    stream for equities). When ``news_collector`` is None the stage is a
+    no-op so the cycle still runs without network access.
+    """
+
+    name = "fetch_stock_news_text"
+
+    def __init__(self, news_collector: Any | None) -> None:
+        self._news_collector = news_collector
+
+    async def run(self, state: CycleState) -> CycleState:
+        if self._news_collector is None or not state.halal_pairs:
+            state.news_text = ""
+            return state
+        try:
+            from halal_trader.sentiment.feed import format_news_for_prompt
+
+            events = await self._news_collector.fetch_for_symbols(list(state.halal_pairs))
+            state.news_text = format_news_for_prompt(events, pair_filter=state.halal_pairs)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Stock news fetch failed: %s", exc)
+            state.news_text = ""
+        return state
+
+
 # ── Slippage-prediction prompt stage (Wave G) ────────────────────
 
 

@@ -44,6 +44,7 @@ class TradingCycleService(BaseCycleService):
         notifier: Any = None,
         analytics: Any = None,
         self_review: Any = None,
+        news_collector: Any = None,
     ) -> None:
         super().__init__(alerts=alerts, engine=engine)
         self._live_mode_checker = live_mode_checker
@@ -92,6 +93,11 @@ class TradingCycleService(BaseCycleService):
         # Both default to None — stage emits an empty block.
         self._analytics = analytics
         self._self_review = self_review
+        # Stocks-side equities news source — Yahoo Finance search
+        # endpoint (see :mod:`sentiment.stocks_news`). When None the
+        # ``FetchStockNewsStage`` is a no-op and ``state.news_text``
+        # stays empty.
+        self._news_collector = news_collector
 
     async def _pre_cycle_checks(self) -> bool:
         now = now_eastern()
@@ -173,6 +179,7 @@ class TradingCycleService(BaseCycleService):
             BuildRegimeStage,
             BuildStockRiskStage,
             BuildTimeframeStage,
+            FetchStockNewsStage,
         )
 
         state = CycleState(
@@ -199,6 +206,10 @@ class TradingCycleService(BaseCycleService):
                 # window in spirit (one trading day's worth of round-trips).
                 BuildPerformanceStage(self._analytics, lookback_days=7),
                 BuildActiveAdjustmentsStage(self._self_review),
+                # Equities news pull (Yahoo Finance) — 15-min cadence
+                # absorbs the per-symbol HTTP latency. Cached for the
+                # same TTL inside the collector.
+                FetchStockNewsStage(self._news_collector),
             ],
             stop_on_halt=True,
         )
@@ -243,6 +254,7 @@ class TradingCycleService(BaseCycleService):
             catalysts_text=state.catalysts_text,
             performance_text=state.performance_text,
             active_adjustments=state.active_adjustments,
+            news_text=state.news_text,
         )
         plan = await self._strategy.analyze(**analyze_kwargs)
 

@@ -150,6 +150,15 @@ def test_user_prompt_template_renders_active_adjustments_block():
     assert "{active_adjustments}" in USER_PROMPT_TEMPLATE
 
 
+def test_user_prompt_template_renders_news_block():
+    """Stocks-side equities news block — populated by FetchStockNewsStage
+    from Yahoo Finance per cycle."""
+    from halal_trader.trading.strategy import USER_PROMPT_TEMPLATE
+
+    assert "=== RECENT NEWS HEADLINES" in USER_PROMPT_TEMPLATE
+    assert "{news_text}" in USER_PROMPT_TEMPLATE
+
+
 def test_user_prompt_template_falls_back_to_friendly_defaults():
     """The strategy passes ``performance_text or "No completed trades yet."``
     so a fresh bot with no analytics wired still renders a clean prompt."""
@@ -173,12 +182,14 @@ def test_user_prompt_template_falls_back_to_friendly_defaults():
         catalysts_text="(none)",
         performance_text="No completed trades yet.",
         active_adjustments="None.",
+        news_text="No recent news.",
     )
     # The blocks render in the canonical order — bars before performance
-    # before active_adjustments before sentiment — so the LLM sees
-    # context in a stable layout.
+    # before active_adjustments before news before sentiment — so the
+    # LLM sees context in a stable layout.
     bars_pos = rendered.index("RECENT PRICE BARS")
     perf_pos = rendered.index("RECENT PERFORMANCE")
     adj_pos = rendered.index("ACTIVE STRATEGY ADJUSTMENTS")
+    news_pos = rendered.index("RECENT NEWS HEADLINES")
     sentiment_pos = rendered.index("SENTIMENT ANALYSIS")
-    assert bars_pos < perf_pos < adj_pos < sentiment_pos
+    assert bars_pos < perf_pos < adj_pos < news_pos < sentiment_pos

@@ -48,6 +48,8 @@ class TradingBot(BaseTradingBot):
         self.cycle_service: TradingCycleService | None = None
         self.scheduler = AsyncIOScheduler()
         self._lock_file: int | None = None
+        # Lazy-built in ``_create_components``; closed in ``shutdown``.
+        self._stocks_news: Any | None = None
 
     async def _create_components(self) -> None:
         """Create stock-specific trading components."""
@@ -166,10 +168,15 @@ class TradingBot(BaseTradingBot):
         # the cycle's stage list can stamp ``state.performance_text``
         # on each pass without a per-cycle constructor.
         from halal_trader.core.analytics import CrossAssetAnalytics
+        from halal_trader.sentiment.stocks_news import StockNewsCollector
 
         repo = self._repo
         assert repo is not None  # populated by BaseTradingBot.initialize()
         stocks_analytics = CrossAssetAnalytics(repo, asset_class="stock")
+        # Yahoo Finance — no API key, 15-min cache inside the collector.
+        # Closed in :meth:`shutdown` so the underlying ``httpx`` client
+        # doesn't leak past process exit.
+        self._stocks_news = StockNewsCollector()
 
         # Cycle service — owns the intraday trading logic
         self.cycle_service = TradingCycleService(
@@ -187,6 +194,7 @@ class TradingBot(BaseTradingBot):
             # equivalent is a separate build; the stage emits an empty
             # block until one ships.
             self_review=None,
+            news_collector=self._stocks_news,
         )
 
         logger.info("Trading bot initialized successfully")
@@ -245,6 +253,11 @@ class TradingBot(BaseTradingBot):
         logger.info("Shutting down trading bot...")
         if self.scheduler.running:
             self.scheduler.shutdown(wait=False)
+        if self._stocks_news is not None:
+            try:
+                await self._stocks_news.close()
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("Stock news collector close failed: %s", exc)
         await self._mcp_client.disconnect()
         self._release_lock()
         await super().shutdown()
