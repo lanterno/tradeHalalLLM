@@ -11,17 +11,44 @@ LLM-powered halal trading bot for **stocks** (Alpaca) and **crypto** (Binance). 
 - **Halal stock filtering** -- screens stocks via Zoya API before trading
 - **Day trading strategy** -- targets 1%+ daily returns, closes all positions by market close
 - **Alpaca MCP integration** -- executes trades via Alpaca's official MCP server
+- **Multi-stage prompt context** -- regime detection, multi-timeframe alignment (1h/1d/1w), ML anomaly + signal classifier, portfolio risk, scheduled-release catalysts (FRED/EDGAR/Fed-speak/options-IV), and Alpaca news all flow into the LLM
+- **Position monitor** -- 30-second SL/TP enforcement between 15-min cycles; trailing-stop ratchet and post-close fan-out (drift / thesis / regret / RAG / purification)
+- **Shadow runner** -- optional frozen-prompt parallel strategy that observes each cycle and writes a divergence ledger
+- **Ensemble + adversarial** -- optional fan-out to N additional LLMs voting on each plan, plus an attacker LLM that critiques and downsizes weak buys
 
 ### Crypto Trading
-- **1-minute scalping cycles** -- 24/7 LLM-driven crypto trading on Binance
+- **24/7 LLM-driven cycles** -- configurable cadence (default 60s) on Binance
 - **Binance testnet support** -- develop and test risk-free, flip one flag to go live
 - **Technical indicators** -- RSI, MACD, Bollinger Bands, EMA, VWAP, ATR computed per cycle and fed to the LLM
 - **Real-time WebSocket data** -- streams 1-minute klines for low-latency market reads
 - **Dynamic halal screening** -- CoinGecko-based rule engine inspired by Mufti Faraz Adam's Crypto Shariah Screening Framework (category, token type, legitimacy, utility filters)
+- **Agentic mode** -- bounded-budget tool-calling loop where the LLM can fetch deeper analysis (RAG over past trades, regime memory, VaR) before submitting a plan
+- **ML stack** -- IsolationForest anomaly detection, signal classifier, Chronos-T5 price forecaster, plus a retraining loop labeled by closed-trade outcomes
+- **Sentiment + news** -- CryptoPanic feed with emergency mini-cycles on high-impact events; Reddit mention velocity for surge detection
+- **Portfolio risk engine** -- correlation, heat, drawdown, ATR-baselined sizing
 
 ### Shared
-- **Full audit trail** -- logs every LLM decision and trade execution to SQLite
-- **Configurable LLM backend** -- Ollama, OpenAI, or Anthropic for both stock and crypto
+- **Full audit trail** -- every LLM decision (with prompt version, token counts, cost) and trade execution lands in Postgres
+- **Configurable LLM backend** -- Ollama, OpenAI, or Anthropic for both stock and crypto, with provider fallback chains
+- **Halal exception queue** -- operator-managed override workflow for borderline assets, persisted to the same database
+- **Live dashboard + WebSocket stream** -- React SPA on `:8082` plus a `/ws/cycle` event stream for real-time cycle observability
+
+## In a hurry?
+
+Read [`docs/QUICKSTART.md`](docs/QUICKSTART.md) — it gets you from a
+fresh clone to a paper-money trade running on Binance testnet in
+about 10 minutes, with no real funds at risk.
+
+Writing a custom strategy? Read
+[`docs/STRATEGY_AUTHORING.md`](docs/STRATEGY_AUTHORING.md) — it
+walks through the `BaseStrategy` contract, the prompt-version
+registry, the four test harnesses (unit / stress / scenario /
+A/B comparator), and ships a fully-worked RSI mean-reversion
+example.
+
+Reporting a security issue? See [`SECURITY.md`](SECURITY.md) for
+the threat model, secure defaults, and the disclosure address.
+Please don't file public issues for vulnerabilities.
 
 ## Prerequisites
 
@@ -117,12 +144,14 @@ halal-trader crypto screen
                                │                        │
                                └────────────┬───────────┘
                                             │
-                                 ┌──────────▼──────────┐
-                                 │   SQLite Database    │
-                                 │   (trades, P&L,      │
-                                 │    halal cache, LLM   │
-                                 │    audit log)         │
-                                 └─────────────────────┘
+                                 ┌──────────▼──────────────┐
+                                 │   Postgres + pgvector    │
+                                 │   (trades, P&L, halal    │
+                                 │    cache, LLM audit log, │
+                                 │    RAG over rationales,  │
+                                 │    ML artefacts, regime  │
+                                 │    memory, drift state)  │
+                                 └──────────────────────────┘
 ```
 
 ## Configuration
@@ -135,7 +164,7 @@ All settings are managed via `.env` file or environment variables. See `.env.exa
 |---|---|---|
 | `LLM_PROVIDER` | LLM backend: `ollama`, `openai`, `anthropic` | `ollama` |
 | `LLM_MODEL` | Model name | `qwen2.5:32b` |
-| `DB_PATH` | SQLite database path | `halal_trader.db` |
+| `DATABASE_URL` | Postgres async DSN (asyncpg) | `postgresql+asyncpg://halal:halal@localhost:5433/halal_trader` |
 | `LOG_LEVEL` | Logging level | `INFO` |
 
 ### Stock Trading

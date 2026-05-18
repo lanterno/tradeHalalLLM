@@ -20,6 +20,7 @@ flowchart TD
         StockSched["TradingBot (APScheduler)"]
         StockCycle["TradingCycleService"]
         StockExec["TradeExecutor"]
+        StockMonitor["StockPositionMonitor"]
         AlpacaMCP["AlpacaMCPClient"]
     end
 
@@ -41,7 +42,7 @@ flowchart TD
 
     subgraph SharedSvcs["Shared Services"]
         LLM["LLM Provider (+ FallbackLLM)"]
-        DB["SQLite + Repository"]
+        DB["Postgres + pgvector + RepoBundle"]
         Analytics["PerformanceAnalytics"]
     end
 
@@ -61,9 +62,12 @@ flowchart TD
     Backtest --> LLM
 
     StockSched --> StockCycle
+    StockSched --> StockMonitor
     StockCycle --> LLM
     StockCycle --> StockExec
     StockExec --> AlpacaMCP
+    StockMonitor --> AlpacaMCP
+    StockMonitor --> Retrainer
     AlpacaMCP --> Alpaca
 
     CryptoSched --> CryptoCycle
@@ -107,12 +111,32 @@ src/halal_trader/
 │
 ├── db/
 │   ├── models.py             # SQLModel tables + init_db()
-│   └── repository.py         # Async CRUD for trades, P&L, halal cache, decisions
+│   ├── repository.py         # Legacy facade — thin delegators over RepoBundle
+│   └── repos/                # Per-table mini-repos (Wave D)
+│       ├── protocols.py      # 15 narrow Protocols (TradeRepo, …)
+│       ├── trades.py / crypto_trades.py
+│       ├── pnl.py / stock_pnl.py
+│       ├── halal_cache.py / stock_halal_cache.py / halal_screening.py
+│       ├── runtime_config.py / pair_pause.py / web_audit.py
+│       ├── purification.py / strategy_adjustments.py
+│       ├── indicator_snapshots.py / llm_decisions.py / research_jobs.py
+│       └── __init__.py        # RepoBundle.from_engine(engine)
 │
-├── agent/
-│   ├── llm.py                # LLM abstraction: Ollama, OpenAI, Anthropic
-│   ├── strategy.py           # Stock LLM strategy (prompts + TradingPlan)
-│   └── sentiment.py          # FinGPT/FinBERT sentiment analysis (optional)
+├── core/                     # Cross-asset shared services
+│   ├── llm/                  # LLM abstraction (Ollama / OpenAI / Anthropic),
+│   │                         # ensemble + adversarial + agentic tool-use,
+│   │                         # Platt calibration, RAG over rationales,
+│   │                         # prompt registry + evolution GA
+│   ├── cycle.py              # Base cycle service (shared lifecycle)
+│   ├── cycle_pipeline.py     # CycleState dataclass + run_stages driver
+│   ├── cycle_stages.py       # 18 stage classes (BuildXStage / Augment*Stage / ApplyRegimeGateStage)
+│   ├── event_bus.py          # In-process pub/sub (live-cycle WebSocket)
+│   ├── insights_hub.py       # Shadow ledger / regime memory / RAG / etc.
+│   ├── post_close.py         # Close-event fan-out (drift / thesis / regret / RAG / purification)
+│   ├── shadow_runner.py      # Frozen-prompt parallel strategy
+│   ├── supervisor.py         # anyio task supervisor (structured concurrency)
+│   ├── tracing.py            # OpenTelemetry spans
+│   └── reconcile.py          # Daily DB↔broker drift check
 │
 ├── halal/
 │   ├── zoya.py               # Zoya GraphQL API for stock Shariah screening
@@ -124,16 +148,39 @@ src/halal_trader/
 ├── trading/                  # ── Stock trading ──
 │   ├── scheduler.py          # APScheduler cron jobs (pre-market, intraday, EOD)
 │   ├── cycle.py              # Single intraday cycle (gather, analyze, execute)
+│   ├── strategy.py           # Stock LLM strategy (prompts + TradingPlan)
 │   ├── executor.py           # Order placement via Alpaca MCP
-│   └── portfolio.py          # Daily equity tracking, loss limit
+│   ├── monitor.py            # Intra-cycle SL/TP enforcement + trailing stops
+│   ├── portfolio.py          # Daily equity tracking, loss limit
+│   ├── risk.py               # Stock portfolio-risk adapter (uses crypto.risk engine)
+│   ├── bars.py               # Alpaca bars → Kline coercion + indicator helper
+│   ├── timeframes.py         # Multi-timeframe analyzer (1Hour/1Day/1Week)
+│   ├── snapshots.py          # Indicator-snapshot recorder for ML labelling
+│   ├── catalysts.py          # News/earnings/insider catalyst feed
+│   ├── fred_catalysts.py     # Macro release calendar (CPI/FOMC/NFP/GDP)
+│   ├── edgar_catalysts.py    # SEC 8-K material-event stream
+│   ├── fed_speak.py          # Federal Reserve speeches scraper
+│   ├── options_iv.py         # Options IV-skew catalyst
+│   └── backtest.py           # Stock backtester
 │
 ├── sentiment/
-│   ├── cryptopanic.py        # CryptoPanic v2 sentiment collector (exponential backoff)
-│   └── events.py             # Event-driven news reactor (polls CryptoPanic, triggers mini-cycles)
+│   ├── manager.py            # Orchestrates Reddit + CryptoPanic on a schedule
+│   ├── cryptopanic.py        # CryptoPanic v2 collector (exponential backoff)
+│   ├── reddit.py             # PRAW-based Reddit collector (when keys configured)
+│   ├── reddit_public.py      # OAuth-free public-JSON fallback for mention velocity
+│   ├── velocity.py           # Mention rate-of-change + novelty scoring
+│   ├── scoring.py            # Composite sentiment signals
+│   ├── feed.py               # Shared types
+│   └── events.py             # News reactor (high-impact → emergency mini-cycle)
 │
 ├── ml/
-│   ├── anomaly.py            # Market anomaly detector (IsolationForest, incremental training)
-│   └── retrainer.py          # Automated ML retraining on closed trades
+│   ├── anomaly.py            # IsolationForest anomaly detector + signal classifier
+│   ├── retrainer.py          # Automated retraining on labeled snapshots
+│   ├── forecaster.py         # Chronos-T5 price forecaster (optional [ml] extra)
+│   ├── calibration.py        # Platt + isotonic LLM-confidence calibrator
+│   ├── drift.py              # Online concept-drift monitor
+│   ├── slippage.py           # Replay-fitted slippage regression
+│   └── regime_memory.py      # Embedding-based regime memory (pgvector)
 │
 └── crypto/                   # ── Crypto trading ──
     ├── scheduler.py          # 24/7 asyncio loop (composition root)
@@ -221,7 +268,9 @@ sequenceDiagram
 
 ### What the LLM Receives
 
-Each cycle, the LLM prompt includes:
+Each cycle, the LLM prompt is built from the helpers under
+`crypto/cycle.py:_build_*_text` plus shared cross-asset helpers in
+`crypto.regime`, `ml.anomaly`, and `crypto.timeframes`.
 
 | Section | Content |
 |---------|---------|
@@ -230,11 +279,22 @@ Each cycle, the LLM prompt includes:
 | **Current Positions** | Balances for configured trading pairs only |
 | **Halal Pairs** | Filtered list of tradeable pairs |
 | **Technical Indicators** | Per-pair: price changes, RSI(14), MACD(12/26/9), Bollinger(20,2), EMA(9/21/50), ATR(14), VWAP, volume ratio |
-| **Order Book** | Best bid/ask, spread, imbalance direction |
+| **Order Book / Microstructure** | Best bid/ask, spread, imbalance direction; depth + orderbook stats |
 | **Recent Performance** | Win rate, avg win/loss, profit factor, drawdown, best/worst pair, streak |
 | **Portfolio Risk** | Avg correlation, portfolio heat %, drawdown %, risk-adjusted position limits per symbol |
+| **Sentiment** | CryptoPanic news scores + Reddit mention buzz, plus a "mention velocity" surge block from `RedditPublicFetcher` |
+| **Multi-timeframe** | 5m / 15m / 1h / 4h / 1d trend-alignment score per pair via `TimeframeAnalyzer` |
+| **Regime** | `RegimeDetector` per-pair classification (trending up/down, ranging, high-vol) with tactical instructions |
+| **ML signals** | IsolationForest anomalies, signal-classifier confidence, and Chronos-T5 price forecasts |
+| **News reactor** | Recent high-impact events from CryptoPanic that haven't yet triggered a mini-cycle |
+| **Whale flows** | On-chain ERC-20 transfer signals from Etherscan (when keyed) |
+| **Spot-perp basis** | Funding-rate / basis spread (`BasisTracker`) |
+| **RAG hits** | Top-k analogous past-trade rationales pulled from `DBRationaleStore` (pgvector) |
+| **Catalyst calendar** | Macro-release windows (CPI / FOMC / NFP / GDP) — only when a release is imminent |
+| **Active adjustments** | Self-improvement knob overrides currently in effect (`max_position_pct`, `stop_loss_pct`, etc.) |
+| **Exchange rules** | Min-notional, lot-size, and tick-size constraints from Binance's exchangeInfo |
 
-The prompt also includes dynamic guidance for position sizing (min $50 notional, confidence-based scaling) and configurable SL/TP percentages. When open positions reach the max, the strategy switches to **sell-only mode**, forbidding new buys.
+The prompt also includes dynamic guidance for position sizing (min $50 notional, confidence-based scaling) and configurable SL/TP percentages. When open positions reach the max, the strategy switches to **sell-only mode**, forbidding new buys. Optional layers on top: ensemble fan-out (median quantity / agreement-scaled sizing), adversarial review (downsize / skip on strong counter-thesis), and agentic mode (`CRYPTO_AGENTIC_ENABLED`) where the LLM can call `analyze_pair` / `query_rag` / `compute_var_95` tools before submitting a plan.
 
 ### What the LLM Returns
 
@@ -272,11 +332,36 @@ The stock bot uses APScheduler with cron triggers aligned to NYSE market hours.
 
 Uses the Alpaca MCP server (spawned as subprocess via stdio transport) for all broker operations.
 
+Per-cycle the LLM receives the same prompt-context surface the crypto bot uses, adapted to stock data:
+
+* **Risk** — `evaluate_stock_risk` runs the shared `PortfolioRiskEngine` over Alpaca bars (correlation, heat, drawdown, ATR-baselined sizing).
+* **Regime** — `RegimeDetector.detect(indicators)` per halal symbol via the shared `build_regime_text` helper. Rule-based, no key/cost.
+* **ML signals** — IsolationForest anomaly + signal classifier inference (gated on `ML_ENABLED`); models load from `models/stocks/` so stocks and crypto don't share weights.
+* **Multi-timeframe** — `StockTimeframeAnalyzer` pulls 1Hour/1Day/1Week bars and computes a trend-alignment score per symbol.
+* **Catalysts** — FRED macro releases, SEC EDGAR 8-K events, Fed-speak, options-IV skew, and Alpaca news (when the MCP server exposes `get_stock_news`) flow into a single `=== RECENT CATALYSTS ===` block.
+
+After execution the cycle hands the same `analyze_kwargs` to an optional `ShadowRunner` (frozen-prompt parallel strategy) which writes a divergence row to `InsightsHub.shadow`. The cycle also pushes its `state.risk_state` into `hub.runtime.risk_state` (with a `market="stocks"` discriminator + `pushed_at` timestamp) so the dashboard's `/api/risk/state`, `/api/mobile/summary`, and Prometheus `halal_trader_drawdown_pct{market="stocks"}` all render the stocks bot's heat/drawdown alongside crypto's. On each filled / submitted execution result, the cycle calls `notifier.notify_trade(...)` for an operator Telegram alert (parity with crypto). A separate background `StockPositionMonitor` enforces SL/TP between cycles (see below), fires `notifier.notify_sl_tp(...)` on each close, and routes the event through the shared `CloseRecorders` bundle (drift / thesis / regret / RAG / purification ledger) plus a stocks-namespaced `RetrainingScheduler` which labels the buy-time indicator snapshot. The end-of-day job sends `notify_daily_summary(...)` after recording P&L.
+
 ---
 
 ## Position Monitor (SL/TP Enforcement)
 
-Runs as a background async task alongside the trading cycle.
+Two monitor implementations — one per asset class, with the same role:
+enforce stop-loss / take-profit between LLM cycles.
+
+* **`crypto/monitor.py:PositionMonitor`** — fast loop (default 2s) over
+  WebSocket prices, with the dust/balance/ghost-trade semantics
+  described below.
+* **`trading/monitor.py:StockPositionMonitor`** — slower loop (default
+  30s, configurable via `MONITOR_INTERVAL_SECONDS`) over Alpaca
+  snapshots; same SL/TP + trailing-stop logic but no dust / balance /
+  ghost-trade complexity (Alpaca won't fill below min-notional, so
+  there's nothing to clean up). Both monitors run the same
+  `retrainer.on_trade_closed(trade_id, return_pct)` and
+  `record_close(...)` post-close fan-out.
+
+The state diagram below describes the crypto path; the stocks path is
+the same minus the `BalanceExhausted` and `MaxRetries` branches.
 
 ```mermaid
 stateDiagram-v2
@@ -396,107 +481,29 @@ The anomaly detector supports incremental training via `add_sample()` and `auto_
 
 ## Database Schema
 
-```mermaid
-erDiagram
-    crypto_trades {
-        int id PK
-        datetime timestamp
-        string pair
-        string side
-        float quantity
-        float price
-        string order_id
-        string exchange
-        string status
-        string llm_reasoning
-        float entry_price
-        float stop_loss
-        float target_price
-        float exit_price
-        string exit_reason
-        datetime closed_at
-    }
+The authoritative source is `src/halal_trader/db/models.py` (every
+table is a SQLModel). Alembic migrations live under `alembic/versions/`.
+The summary below groups the ~25 tables by purpose.
 
-    crypto_daily_pnl {
-        int id PK
-        string date UK
-        float starting_equity
-        float ending_equity
-        float realized_pnl
-        float return_pct
-        int trades_count
-    }
+| Group | Tables | Owner |
+|---|---|---|
+| **Trades + fills** | `trades`, `crypto_trades` (with `submitted_at`, `filled_at`, `filled_price`, `filled_quantity`, `halal_screening_id`, `stop_loss`, `target_price`, `exit_price`, `exit_reason`, `closed_at`) | `TradeRepoImpl`, `CryptoTradeRepoImpl` |
+| **Daily P&L** | `daily_pnl`, `crypto_daily_pnl` | `StockPnlRepoImpl`, `PnlRepoImpl` |
+| **Halal screening** | `halal_cache`, `crypto_halal_cache`, `halal_screenings` (full audit trail per screening decision) | `StockHalalCacheRepoImpl`, `HalalCacheRepoImpl`, `HalalScreeningRepoImpl` |
+| **Sharia compliance** | `sharia_exceptions` (operator override queue), `purification_entries` (purification ledger + paid-at) | `ExceptionQueue`, `PurificationRepoImpl` |
+| **LLM audit** | `llm_decisions` (provider, model, raw response, parsed action, prompt-version hash, token counts, cost) | `LlmDecisionRepoImpl` |
+| **ML training** | `indicator_snapshots` (label + return_pct stamped on close), `ml_artefacts` (pickled / JSON model versions), `strategy_adjustments` (LLM-tuned knobs) | `IndicatorSnapshotRepoImpl`, `db/ml_artefacts.py`, `StrategyAdjustmentRepoImpl` |
+| **Operator state** | `runtime_config` (JSONB overlays), `pair_pauses`, `web_actions` (mutation audit) | `RuntimeConfigRepoImpl`, `PairPauseRepoImpl`, `WebAuditRepoImpl` |
+| **Research jobs** | `research_jobs` (backtest + walk-forward queue) | `ResearchJobRepoImpl` |
+| **Analytics state** | `regime_memory` (pgvector), `rationales` (pgvector RAG over closed trades), `shadow_ledger`, `thesis_tags`, `regret_records`, `drift_observations`, `replay_snapshots`, `prompt_genomes` (evolution GA) | `core/insights_hub.py` + per-table modules under `core/`, `core/llm/rag_db.py` |
 
-    crypto_halal_cache {
-        string symbol PK
-        string compliance
-        string category
-        float market_cap
-        string screening_criteria
-        datetime updated_at
-    }
+Foreign keys: `indicator_snapshots.trade_id → crypto_trades.id`,
+`trades.halal_screening_id → halal_screenings.id`,
+`crypto_trades.halal_screening_id → halal_screenings.id`.
 
-    indicator_snapshots {
-        int id PK
-        int trade_id FK
-        string pair
-        datetime timestamp
-        float rsi_14
-        float macd_histogram
-        float volume_ratio
-        float atr_14
-        float bb_position
-        float price_change_5m
-        float ema_9
-        float ema_21
-        float vwap
-        int label "1=profitable 0=unprofitable"
-        float return_pct
-    }
-
-    llm_decisions {
-        int id PK
-        datetime timestamp
-        string provider
-        string model
-        string prompt_summary
-        string raw_response
-        string parsed_action
-        string symbols
-        int execution_ms
-    }
-
-    crypto_trades ||--o{ indicator_snapshots : "has snapshot"
-
-    trades {
-        int id PK
-        datetime timestamp
-        string symbol
-        string side
-        float quantity
-        float price
-        string order_id
-        string status
-        string llm_reasoning
-    }
-
-    daily_pnl {
-        int id PK
-        string date UK
-        float starting_equity
-        float ending_equity
-        float realized_pnl
-        float return_pct
-        int trades_count
-    }
-
-    halal_cache {
-        string symbol PK
-        string compliance
-        string detail
-        datetime updated_at
-    }
-```
+The bot refuses to start if the database revision != Alembic head;
+use `halal-trader db migrate` (or `db stamp head` for an existing
+schema) to bring it in line.
 
 ---
 
@@ -622,7 +629,9 @@ CRYPTO_ATR_BASELINE=0.02             # ATR baseline for volatility-based sizing
 
 ## Self-Improvement
 
-After each trading cycle, the LLM reviews its own recent performance and can adjust strategy parameters:
+After each crypto trading cycle, `crypto/self_improve.py:TradeSelfReview`
+asks the LLM to review recent performance and propose strategy
+parameter adjustments within bounded ranges:
 
 | Parameter | Range | Description |
 |-----------|-------|-------------|
@@ -630,13 +639,28 @@ After each trading cycle, the LLM reviews its own recent performance and can adj
 | `stop_loss_pct` | 0.005 – 0.05 | Stop-loss distance from entry |
 | `take_profit_pct` | 0.005 – 0.10 | Take-profit distance from entry |
 
-Changes below a no-op threshold (`1e-6`) are silently discarded to avoid recording meaningless adjustments. Each accepted adjustment is logged as a `StrategyAdjustment` record.
+Changes below a no-op threshold (`1e-6`) are silently discarded to avoid
+recording meaningless adjustments. Each accepted adjustment is logged
+as a `StrategyAdjustment` record (now persisted via
+`StrategyAdjustmentRepoImpl`) and re-applied to the strategy on the
+next cycle. The reviewer reads `get_completed_round_trips` for the
+last lookback window and feeds losing-trade summaries + execution
+failures into the prompt.
+
+Separately, the `RetrainingScheduler` is now per-asset-class:
+`models/crypto/` and `models/stocks/` hold separate IsolationForest +
+signal-classifier weights so the two bots' feature distributions never
+collide. The retrainer is wired to both monitors via the
+`on_trade_closed(trade_id, return_pct)` hook.
 
 ---
 
 ## Execution Safeguards
 
-The executor enforces several safety checks before placing orders:
+Both executors share the sells-first-then-buys orchestration in
+``BaseExecutor`` and a max-positions cap. Per-asset specifics:
+
+### Crypto (`CryptoExecutor`)
 
 - **Minimum buy notional**: $50 minimum to avoid dust orders
 - **Exit-in-progress protection**: `exiting_pairs` set prevents concurrent buy/sell on the same pair
@@ -646,6 +670,21 @@ The executor enforces several safety checks before placing orders:
 - **Symbol filter refresh**: exchange filters are reloaded hourly to pick up lot-size changes
 - **Binance error handling**: `-1013` (invalid quantity) and `-2010` (insufficient balance) are treated as rejections, not circuit-breaker errors
 - **Rate-limit handling**: Binance `-1003` errors trigger ~30s backoff; kline and orderbook fetches are throttled to 5 concurrent requests via semaphore
+- **Per-pair circuit breaker**: N consecutive *unexpected* errors in a window opens the breaker for a cooldown period (`CRYPTO_CIRCUIT_BREAKER_*` knobs)
+- **Flat-market skip**: if every halal pair is sub-threshold on RSI / price-change / volume, the cycle skips placing any order (prevents thrashing in chop)
+
+### Stocks (`TradeExecutor` + `StockPositionMonitor`)
+
+- **Live-mode token check**: bot refuses to start unless a daily confirmation token is present (`safeguards.LiveModeChecker.assert_safe`)
+- **Per-sector allocation cap**: configurable max % of portfolio in any one sector (default 40%); checked per candidate buy
+- **Halal screening FK**: every fill carries `halal_screening_id` so the trade is provably linked to the compliance call that gated it
+- **Reconciliation pass**: `core/reconcile.py:reconcile_stocks` runs after each cycle (cheap; cycle is 15-min), flagging position-vs-trade-row drift via the alert sink
+
+### Cross-asset
+
+- **Kill switch**: `core/halt.is_halted(engine)` is the first check in every cycle. Toggle with `halal-trader halt --reason "..."` / `halal-trader resume`
+- **LLM cost cap**: `LLM_DAILY_USD_CAP` halts trading once the day's spend exceeds the budget
+- **LLM circuit breaker**: N consecutive failures triggers a cooldown so a flaky provider can't burn the entire cycle budget
 
 ---
 
@@ -655,6 +694,6 @@ The executor enforces several safety checks before placing orders:
 - **Core**: `mcp`, `ollama`, `httpx`, `pydantic-settings`, `click`, `rich`
 - **Data**: `sqlmodel`, `asyncpg`, `psycopg`, `alembic`, `pgvector`
 - **Trading**: `python-binance`, `numpy`, `apscheduler`
-- **ML**: `scikit-learn` (IsolationForest for anomaly detection, classifiers for signal prediction)
+- **ML**: `scikit-learn` (IsolationForest for anomaly detection, classifiers for signal prediction); `chronos-forecasting` + `torch` (price forecaster, optional via `[ml]` extra)
 - **LLM**: `openai`, `anthropic`
-- **Optional**: `transformers`, `peft`, `torch` (for FinGPT sentiment)
+- **Sentiment**: `praw` / `httpx` (Reddit + CryptoPanic feeds, optional via `[sentiment]` extra)
