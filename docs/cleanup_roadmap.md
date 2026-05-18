@@ -73,9 +73,13 @@ non-`db/repository.py` surface impossible.
   - cycle loop → `last_cycle = {"completed_at", "market"}` after each
     successful cycle.
 - `web/app.py` — the legacy `app_state: dict[str, Any] = {}` declaration
-  is **deleted**. The lifespan still creates a per-process
-  DashboardContext with its own RuntimeView (co-host case below is
-  deferred).
+  is **deleted**. The lifespan is now "build if missing": a co-hosted
+  bot calls `BaseTradingBot.attach_to_app(app)` after `initialize()` to
+  install its `BotContext.to_dashboard_context()` on `app.state.ctx`,
+  and the lifespan detects the pre-installed ctx and yields without
+  rebuilding a parallel engine / hub / event bus. Pinned by 3 tests
+  in `test_bot_context_wiring.py` (attach raises pre-init, projection
+  shares RuntimeView ref, lifespan skips rebuild when ctx is present).
 - `core/insights_hub.py:to_app_state` renamed to `snapshot()` — same
   shape, no lingering name reference.
 
@@ -240,8 +244,15 @@ to every other method via the giant constructor.
   screen, stocks history, `web/app.py`) still construct
   `Repository(engine)` because they pass it to consumers
   (`PerformanceAnalytics`, `CryptoHalalScreener`, `DashboardContext.repo`)
-  whose constructors typed `repo: Repository`. Migrating those is a
-  cascading API change deferred below.
+  whose constructors typed `repo: Repository`. **Update**: every
+  *domain* consumer now takes a narrow Protocol (`PerformanceAnalytics`
+  → `CryptoTradeRepo`, `CryptoHalalScreener` → `HalalCacheRepo`,
+  `CrossAssetAnalytics` → `_RoundTripRepo(TradeRepo, CryptoTradeRepo,
+  Protocol)` intersection). The wide `Repository` annotation now
+  appears only at the three legitimate composition-seam slots
+  (`BaseTradingBot._repo`, `build_components(repo=...)`, and the
+  `BotContext/DashboardContext.repo` fields) where the holder fans
+  the handle out to many narrow consumers.
 
 **Acceptance** (substantively met):
 - ✓ **Adding a table = adding one file** — the 15 mini-repo files
@@ -743,14 +754,15 @@ every artefact it owns.
 - ✓ `halal-trader ml versions` lists model history — verified by the
   CLI registration tests + `--help` parse check.
 
-**Deferred**:
-- **`anomaly_state.pkl`** (the IsolationForest's incremental
-  sample-buffer warm-up cache) stays on disk for now. It's not a
-  versioned model artefact — it's a transient cache that resets when
-  the feature set changes. Migrating it to the DB adds noisy
-  per-25-sample write traffic for marginal value. The Wave K
-  acceptance bar is satisfied by the *model* artefacts being DB-first;
-  the state cache is a separate concern.
+**Deferred → resolved**:
+- ~~**`anomaly_state.pkl`**~~ — closed. The warm-up cache now writes
+  to `ml_artefacts` as a JSON row (artefact name `anomaly_state`)
+  via fire-and-forget `_save_state_to_db`, with the disk pickle
+  retained only as a no-engine fallback. `load_state_from_db()` is
+  awaited from the composition root alongside `load_latest()`. Pinned
+  by 5 tests in `test_ml_db_persistence.py` + a tightened acceptance
+  test that asserts zero `.pkl` files on the production path when an
+  engine is wired.
 - **Dashboard "model versions" page** is frontend work; the data is
   already on the table and accessible via the CLI today.
 
