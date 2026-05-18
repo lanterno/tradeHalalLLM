@@ -304,22 +304,145 @@ def test_cli_ml_versions_help_parses() -> None:
 
 
 async def test_train_with_engine_does_not_write_pkl(engine, tmp_path) -> None:
-    """Wave K acceptance: ``find data models -name '*.pkl'`` returns
-    no results in production. With an engine wired, neither train()
-    nor persist_model() touches the legacy disk path."""
+    """Wave K + item-4 acceptance: ``find data models -name '*.pkl'``
+    returns NO results when an engine is wired. Both the versioned
+    model artefact AND the warm-up state buffer flow through the
+    ``ml_artefacts`` table; nothing lands on disk."""
     pytest.importorskip("sklearn")
+    import asyncio
+
     from halal_trader.ml.anomaly import MarketAnomalyDetector
     from halal_trader.ml.hub import ModelHub
 
     hub = ModelHub(models_dir=tmp_path)
     det = MarketAnomalyDetector(hub, min_samples=10, engine=engine)
-    for i in range(20):
-        det._samples.append([float(j + i) for j in range(7)])
+    # Add enough samples to trip the _PERSIST_EVERY_N=25 threshold —
+    # _save_state schedules a DB task on the running loop.
+    for i in range(30):
+        det.add_sample({k: float(i + j) for j, k in enumerate(_FEATURES_KEYS)})
+    # Yield once so the scheduled save_artefact tasks run before we
+    # check the disk.
+    await asyncio.sleep(0.05)
     det.train()
     await det.persist_model()
-    # Acceptance: no MODEL pkl on disk when DB wired. The trainer's
-    # sample-buffer warm-up cache (``anomaly_state.pkl``) is *not* a
-    # versioned model artefact — it's a transient incremental-training
-    # cache and stays on disk for now (deferred in cleanup_roadmap.md).
-    model_pkls = [p for p in Path(tmp_path).glob("*.pkl") if not p.name.endswith("_state.pkl")]
-    assert model_pkls == [], f"Wave K leaked model pickle files: {model_pkls}"
+    # Strict acceptance: NO pkls on disk when DB wired (was relaxed
+    # before; item-4 follow-up tightens it).
+    leftovers = list(Path(tmp_path).glob("*.pkl"))
+    assert leftovers == [], f"item-4 leaked pickle files: {leftovers}"
+
+
+_FEATURES_KEYS = [
+    "rsi_14",
+    "macd_histogram",
+    "volume_ratio",
+    "atr_14",
+    "bb_position",
+    "ema_9",
+    "ema_21",
+    "vwap",
+    "price_change_5m",
+]
+
+
+# ── item-4: anomaly_state roundtrip via ml_artefacts JSON ───────
+
+
+async def test_anomaly_state_persists_to_db(engine, tmp_path) -> None:
+    """The warm-up buffer (samples + last_trained_at) lands in
+    ``ml_artefacts`` under name=anomaly_state when an engine is wired."""
+    pytest.importorskip("sklearn")
+    import asyncio
+
+    from halal_trader.db.ml_artefacts import load_artefact
+    from halal_trader.ml.anomaly import MarketAnomalyDetector
+    from halal_trader.ml.hub import ModelHub
+
+    det = MarketAnomalyDetector(ModelHub(models_dir=tmp_path), engine=engine)
+    # Add 30 samples to exceed the _PERSIST_EVERY_N=25 threshold so
+    # _save_state fires once.
+    for i in range(30):
+        det.add_sample({k: float(i + j) for j, k in enumerate(_FEATURES_KEYS)})
+    await asyncio.sleep(0.05)  # let the fire-and-forget save run
+
+    row = await load_artefact(engine=engine, name="anomaly_state")
+    assert row is not None
+    assert row["version"] == 2  # _MODEL_VERSION
+    assert len(row["samples"]) > 0
+    assert row["features"] == _FEATURES_KEYS
+
+
+async def test_anomaly_state_load_from_db_restores_buffer(engine, tmp_path) -> None:
+    """``load_state_from_db`` reads the latest row and replays the
+    sample buffer into a fresh detector — what a restart sees."""
+    pytest.importorskip("sklearn")
+    from halal_trader.db.ml_artefacts import save_artefact
+    from halal_trader.ml.anomaly import MarketAnomalyDetector
+    from halal_trader.ml.hub import ModelHub
+
+    # Pre-seed a DB row that a "previous run" left behind.
+    seeded_samples = [[float(i + j) for j in range(7)] for i in range(15)]
+    await save_artefact(
+        engine=engine,
+        name="anomaly_state",
+        payload_json={
+            "version": 2,
+            "features": _FEATURES_KEYS,
+            "samples": seeded_samples,
+            "last_trained_at": 1_700_000_000.0,
+        },
+    )
+
+    det = MarketAnomalyDetector(ModelHub(models_dir=tmp_path), engine=engine)
+    # __init__ skips _load_state when engine is set; load_state_from_db
+    # is the explicit restore call.
+    assert det._samples == []
+    assert await det.load_state_from_db() is True
+    assert len(det._samples) == 15
+    assert det._last_trained_at == 1_700_000_000.0
+
+
+async def test_anomaly_state_load_from_db_skips_version_mismatch(engine, tmp_path) -> None:
+    """A row tagged with a different feature-set version is silently
+    discarded so retraining picks up the new shape from scratch."""
+    pytest.importorskip("sklearn")
+    from halal_trader.db.ml_artefacts import save_artefact
+    from halal_trader.ml.anomaly import MarketAnomalyDetector
+    from halal_trader.ml.hub import ModelHub
+
+    await save_artefact(
+        engine=engine,
+        name="anomaly_state",
+        payload_json={
+            "version": 999,
+            "features": ["legacy_key"],
+            "samples": [[0.0] * 7],
+            "last_trained_at": 1.0,
+        },
+    )
+
+    det = MarketAnomalyDetector(ModelHub(models_dir=tmp_path), engine=engine)
+    assert await det.load_state_from_db() is False
+    assert det._samples == []
+
+
+async def test_anomaly_state_load_returns_false_without_engine(tmp_path) -> None:
+    from halal_trader.ml.anomaly import MarketAnomalyDetector
+    from halal_trader.ml.hub import ModelHub
+
+    det = MarketAnomalyDetector(ModelHub(models_dir=tmp_path), engine=None)
+    assert await det.load_state_from_db() is False
+
+
+async def test_anomaly_state_no_engine_still_writes_disk_pickle(tmp_path) -> None:
+    """Without an engine, _save_state falls back to the legacy pickle
+    path (dev / tests without Postgres)."""
+    pytest.importorskip("sklearn")
+    from halal_trader.ml.anomaly import MarketAnomalyDetector
+    from halal_trader.ml.hub import ModelHub
+
+    det = MarketAnomalyDetector(ModelHub(models_dir=tmp_path), engine=None)
+    for i in range(30):
+        det.add_sample({k: float(i + j) for j, k in enumerate(_FEATURES_KEYS)})
+    # _save_state fires on the 25th sample synchronously when no
+    # engine; pickle should be on disk.
+    assert (tmp_path / "anomaly_state.pkl").exists()

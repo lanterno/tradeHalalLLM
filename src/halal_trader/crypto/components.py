@@ -370,6 +370,14 @@ async def build_components(
                 await ml_obj.load_latest()
             except Exception as exc:  # noqa: BLE001
                 logger.debug("ml load_latest failed for %s: %s", type(ml_obj).__name__, exc)
+    # Item-4 follow-up: anomaly detector's warm-up buffer also lives
+    # in the DB now (was the only remaining .pkl on disk). Load it
+    # alongside the model so a restart resumes warm.
+    if ml_anomaly is not None and hasattr(ml_anomaly, "load_state_from_db"):
+        try:
+            await ml_anomaly.load_state_from_db()
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("anomaly load_state_from_db failed: %s", exc)
 
     self_review = TradeSelfReview(
         llm,

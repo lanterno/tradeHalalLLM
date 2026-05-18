@@ -29,6 +29,7 @@ _MODEL_VERSION = 2
 # (rare). The ``_MODEL_VERSION`` above orphans pickles on a feature
 # change; the artefact name is the DB-side equivalent.
 _ANOMALY_ARTEFACT_NAME = "anomaly_detector"
+_ANOMALY_STATE_ARTEFACT_NAME = "anomaly_state"
 _SIGNAL_ARTEFACT_NAME = "signal_classifier"
 
 # Pickled payload format (both detector + classifier):
@@ -61,9 +62,13 @@ class MarketAnomalyDetector:
         # Wave K: when an engine is set, save/load goes through the
         # ``ml_artefacts`` table instead of the disk pickle. The disk
         # path stays as a one-shot fallback for in-flight installs.
+        # The buffer-state cache (samples + last_trained_at) also moves
+        # to the DB when wired; ``load_state_from_db`` is called from
+        # the composition root alongside ``load_latest``.
         self._engine = engine
         self._load_model()
-        self._load_state()
+        if engine is None:
+            self._load_state()
 
     def _load_model(self) -> None:
         """Load a previously trained model from disk."""
@@ -120,19 +125,91 @@ class MarketAnomalyDetector:
         )
 
     def _save_state(self) -> None:
-        """Persist the sample buffer + metadata so a restart resumes warm."""
+        """Persist the sample buffer + metadata so a restart resumes warm.
+
+        DB-first when ``engine`` is wired: schedules an async write to
+        the ``ml_artefacts`` table as a JSON payload (the samples are
+        list-of-float, JSON-serialises cleanly). Falls back to the
+        legacy disk pickle when no engine — keeps dev / test contexts
+        without Postgres working.
+        """
+        payload = {
+            "version": _MODEL_VERSION,
+            "features": list(_FEATURES),
+            "samples": self._samples,
+            "last_trained_at": self._last_trained_at,
+        }
+        if self._engine is not None:
+            # Fire-and-forget — _save_state is sync (called from
+            # add_sample, sync path). add_sample runs inside the
+            # cycle's async stage, so a running loop is available.
+            import asyncio
+
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(self._save_state_to_db(payload))
+                return
+            except RuntimeError:
+                # No running loop — fall through to disk path.
+                logger.debug("anomaly _save_state: no running loop, using disk")
         try:
             self._state_path.parent.mkdir(parents=True, exist_ok=True)
-            payload = {
-                "version": _MODEL_VERSION,
-                "features": list(_FEATURES),
-                "samples": self._samples,
-                "last_trained_at": self._last_trained_at,
-            }
             with open(self._state_path, "wb") as f:
                 pickle.dump(payload, f)
         except Exception as e:
             logger.debug("Could not persist anomaly state: %s", e)
+
+    async def _save_state_to_db(self, payload: dict[str, Any]) -> None:
+        """Async tail of :meth:`_save_state` — writes the JSON artefact row."""
+        if self._engine is None:
+            return
+        try:
+            from halal_trader.db.ml_artefacts import save_artefact
+
+            await save_artefact(
+                engine=self._engine,
+                name=_ANOMALY_STATE_ARTEFACT_NAME,
+                payload_json=payload,
+                feature_hash=str(_MODEL_VERSION),
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("anomaly state DB save failed: %s", exc)
+
+    async def load_state_from_db(self) -> bool:
+        """Restore the buffer from the latest ``anomaly_state`` DB row.
+
+        Mirrors :meth:`load_latest` for the warm-up cache. Called from
+        the composition root after constructing the detector. Returns
+        True when a row was found + loaded.
+        """
+        if self._engine is None:
+            return False
+        try:
+            from halal_trader.db.ml_artefacts import load_artefact
+
+            state = await load_artefact(engine=self._engine, name=_ANOMALY_STATE_ARTEFACT_NAME)
+            if state is None or not isinstance(state, dict):
+                return False
+            if state.get("version") != _MODEL_VERSION:
+                logger.info("Discarding stale anomaly state DB row (version mismatch)")
+                return False
+            if list(state.get("features") or []) != list(_FEATURES):
+                return False
+            samples = state.get("samples")
+            if isinstance(samples, list):
+                self._samples = [list(s) for s in samples][-self._MAX_BUFFER_SIZE :]
+            last_trained = state.get("last_trained_at")
+            if isinstance(last_trained, (int, float)):
+                self._last_trained_at = float(last_trained)
+            logger.info(
+                "Anomaly state restored from DB: %d samples buffered, last_trained_at=%s",
+                len(self._samples),
+                self._last_trained_at,
+            )
+            return True
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("anomaly state DB load failed: %s", exc)
+            return False
 
     def add_sample(self, indicators: dict) -> None:
         """Add an indicator snapshot as a training sample."""
