@@ -21,7 +21,16 @@ _TIMEFRAMES = [
 
 
 class TimeframeAnalyzer:
-    """Fetches and analyzes multiple timeframes for trend alignment."""
+    """Fetches and analyzes multiple timeframes for trend alignment.
+
+    Subclasses can override :meth:`_fetch_klines` to swap the broker
+    (Alpaca for stocks, Binance for crypto) without touching the
+    alignment / support-resistance math, which is broker-agnostic.
+    """
+
+    # Per-timeframe (interval, cache_ttl_seconds) pairs. Subclasses
+    # override this to point at a broker-appropriate set.
+    _timeframes: list[tuple[str, int]] = _TIMEFRAMES
 
     def __init__(self, broker: BinanceClient) -> None:
         self._broker = broker
@@ -54,7 +63,7 @@ class TimeframeAnalyzer:
         """Fetch klines and compute indicators for each higher timeframe."""
         tf_indicators: dict[str, dict[str, Any]] = {}
 
-        for interval, ttl in _TIMEFRAMES:
+        for interval, ttl in self._timeframes:
             cache_key = f"{pair}:{interval}"
             now = time.monotonic()
 
@@ -64,7 +73,7 @@ class TimeframeAnalyzer:
                 continue
 
             try:
-                klines = await self._broker.get_klines(pair, interval=interval, limit=100)
+                klines = await self._fetch_klines(pair, interval, limit=100)
                 if len(klines) >= 20:
                     indicators = compute_all(klines)
                     tf_indicators[interval] = indicators
@@ -73,6 +82,14 @@ class TimeframeAnalyzer:
                 logger.debug("Failed to get %s klines for %s: %s", interval, pair, e)
 
         return tf_indicators
+
+    async def _fetch_klines(self, pair: str, interval: str, *, limit: int) -> list[Any]:
+        """Hook — return ``Kline``-shaped objects for the given timeframe.
+
+        Default delegates to a Binance-style ``get_klines``; subclasses
+        override for other brokers.
+        """
+        return await self._broker.get_klines(pair, interval=interval, limit=limit)
 
     def _compute_alignment(self, tf_data: dict[str, dict[str, Any]]) -> float:
         """Compute trend alignment score from -1 (all bearish) to +1 (all bullish)."""
@@ -174,6 +191,26 @@ class TimeframeAnalyzer:
             parts.append("EMA=" + ("bull cross" if ema9 > ema21 else "bear cross"))
 
         return ", ".join(parts) if parts else "N/A"
+
+
+async def build_timeframe_text(analyzer: TimeframeAnalyzer | None, symbols: list[str]) -> str:
+    """Run the analyzer and render its block for the prompt.
+
+    Shared between :class:`CryptoCycleService` and ``TradingCycleService``
+    so both bots produce identical multi-timeframe blocks. Returns
+    ``""`` when no analyzer is wired or the symbol list is empty;
+    swallows analyzer errors and returns ``""`` so the cycle never
+    aborts on a transient broker hiccup.
+    """
+    if analyzer is None or not symbols:
+        return ""
+    try:
+        tf_results = await analyzer.analyze(symbols)
+        if tf_results:
+            return format_timeframes_for_prompt(tf_results)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("Multi-timeframe analysis unavailable: %s", exc)
+    return ""
 
 
 def format_timeframes_for_prompt(tf_results: dict[str, dict[str, Any]]) -> str:

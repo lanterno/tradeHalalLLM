@@ -16,7 +16,7 @@ from typing import Any
 
 import httpx
 
-from halal_trader.db.repository import Repository
+from halal_trader.db.repos import HalalCacheRepo
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +78,7 @@ class CryptoHalalScreener:
 
     def __init__(
         self,
-        repo: Repository,
+        repo: HalalCacheRepo,
         *,
         coingecko_api_key: str = "",
         min_market_cap: float = 1_000_000_000,

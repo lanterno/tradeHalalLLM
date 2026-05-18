@@ -3,7 +3,7 @@
 import logging
 
 from halal_trader.config import HalalSettings, get_settings
-from halal_trader.db.repository import Repository
+from halal_trader.db.repos import StockHalalCacheRepo
 from halal_trader.halal.zoya import ZoyaClient
 
 logger = logging.getLogger(__name__)
@@ -39,7 +39,7 @@ class HalalScreener:
 
     def __init__(
         self,
-        repo: Repository,
+        repo: StockHalalCacheRepo,
         zoya: ZoyaClient | None = None,
         *,
         halal_settings: HalalSettings | None = None,

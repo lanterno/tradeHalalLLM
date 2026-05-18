@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import pickle
+from typing import Any
 
 import numpy as np
 
@@ -349,3 +350,48 @@ def format_ml_signals_for_prompt(
             lines.extend(conf_lines)
 
     return "\n".join(lines) if lines else "No ML model data available."
+
+
+def build_ml_signals_text(
+    *,
+    indicators_by_symbol: dict[str, dict[str, Any]],
+    anomaly_detector: Any | None = None,
+    signal_classifier: Any | None = None,
+    forecasts_text: str = "",
+) -> str:
+    """Run anomaly + signal classifier over the per-symbol indicators.
+
+    Shared between :class:`CryptoCycleService` and ``TradingCycleService``
+    so both bots produce identical ML-signal blocks. Symbols whose
+    indicators carry an ``error`` key are skipped — their bars failed
+    parse / didn't have enough history.
+
+    ``forecasts_text`` is an optional pre-computed forecasts block (the
+    crypto cycle runs Chronos before this; stocks doesn't have enough
+    daily-bar history for the forecaster). When all three signals are
+    absent, returns ``forecasts_text`` so any pre-computed forecast
+    survives.
+    """
+    if not anomaly_detector and not signal_classifier:
+        return forecasts_text
+    if not indicators_by_symbol:
+        return forecasts_text
+    try:
+        anomalies: dict[str, tuple[bool, float]] = {}
+        ml_confidence: dict[str, float] = {}
+        for symbol, indicators in indicators_by_symbol.items():
+            if not indicators or "error" in indicators:
+                continue
+            if anomaly_detector:
+                anomaly_detector.add_sample(indicators)
+                anomalies[symbol] = anomaly_detector.detect(indicators)
+            if signal_classifier:
+                conf = signal_classifier.predict_confidence(indicators)
+                if conf is not None:
+                    ml_confidence[symbol] = conf
+        return format_ml_signals_for_prompt(
+            forecasts_text, anomalies or None, ml_confidence or None
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("ML signals unavailable: %s", exc)
+        return forecasts_text

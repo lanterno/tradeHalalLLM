@@ -82,10 +82,19 @@ async def export_receipt(
     *,
     trade_id: int,
     asset_class: str,
-) -> Receipt | None:
+    sign: bool = False,
+    data_dir: Any = None,
+) -> Receipt | Any:
     """Fetch a trade by id (and its screening, if any) and build the receipt.
 
     Returns ``None`` when no trade with that id exists.
+
+    Round-4 wave 2.A: when ``sign=True``, the receipt is signed with
+    the operator's Ed25519 keypair (loaded / generated under
+    ``data_dir``) and a :class:`halal.signing.SignedReceipt` is
+    returned instead. The signature lets a scholar / auditor verify
+    the receipt without trusting our codebase. Defaults to off so
+    existing CLI / web callers see no behaviour change.
     """
     if asset_class not in ("stock", "crypto"):
         raise ValueError(f"asset_class must be 'stock' or 'crypto'; got {asset_class!r}")
@@ -98,7 +107,17 @@ async def export_receipt(
         screening: HalalScreening | None = None
         if trade.halal_screening_id is not None:
             screening = await session.get(HalalScreening, trade.halal_screening_id)
-    return build_receipt(trade, screening)
+    receipt = build_receipt(trade, screening)
+    if sign:
+        from pathlib import Path
+
+        from halal_trader.halal.signing import get_or_create_signer
+
+        if data_dir is None:
+            raise ValueError("sign=True requires a data_dir for the operator's keypair")
+        signer = get_or_create_signer(Path(data_dir))
+        return signer.sign(receipt)
+    return receipt
 
 
 async def export_for_symbol(

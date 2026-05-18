@@ -15,22 +15,20 @@ from __future__ import annotations
 
 import logging
 import pickle
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
+from sqlalchemy.ext.asyncio import AsyncEngine
 from sqlmodel import col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from halal_trader.db.models import MlArtefact
 
-if TYPE_CHECKING:
-    from halal_trader.db.repository import Repository
-
 logger = logging.getLogger(__name__)
 
 
-async def _next_version(*, repo: "Repository", name: str) -> int:
+async def _next_version(*, engine: AsyncEngine, name: str) -> int:
     """Return the next version number for ``name`` (1 for first row)."""
-    async with AsyncSession(repo._engine) as s:
+    async with AsyncSession(engine) as s:
         stmt = (
             select(MlArtefact.version)
             .where(MlArtefact.name == name)
@@ -44,7 +42,7 @@ async def _next_version(*, repo: "Repository", name: str) -> int:
 
 async def save_artefact(
     *,
-    repo: "Repository",
+    engine: AsyncEngine,
     name: str,
     payload_json: dict[str, Any] | None = None,
     payload_bytes: bytes | None = None,
@@ -60,10 +58,10 @@ async def save_artefact(
         raise ValueError("must pass exactly one of payload_json / payload_bytes")
 
     if version is None:
-        version = await _next_version(repo=repo, name=name)
+        version = await _next_version(engine=engine, name=name)
 
     fmt = "json" if payload_json is not None else "pickle"
-    async with AsyncSession(repo._engine, expire_on_commit=False) as s:
+    async with AsyncSession(engine, expire_on_commit=False) as s:
         row = MlArtefact(
             name=name,
             version=version,
@@ -80,9 +78,9 @@ async def save_artefact(
         return row.id
 
 
-async def load_artefact(*, repo: "Repository", name: str) -> dict[str, Any] | None:
+async def load_artefact(*, engine: AsyncEngine, name: str) -> dict[str, Any] | None:
     """Return the *latest* version of ``name`` as a JSON dict, or None."""
-    async with AsyncSession(repo._engine) as s:
+    async with AsyncSession(engine) as s:
         stmt = (
             select(MlArtefact)
             .where(MlArtefact.name == name)
@@ -105,9 +103,9 @@ async def load_artefact(*, repo: "Repository", name: str) -> dict[str, Any] | No
         return None
 
 
-async def list_versions(*, repo: "Repository", name: str | None = None) -> list[dict[str, Any]]:
+async def list_versions(*, engine: AsyncEngine, name: str | None = None) -> list[dict[str, Any]]:
     """All versions of ``name`` (newest first), or every artefact when None."""
-    async with AsyncSession(repo._engine) as s:
+    async with AsyncSession(engine) as s:
         stmt = select(MlArtefact).order_by(col(MlArtefact.created_at).desc())
         if name is not None:
             stmt = stmt.where(MlArtefact.name == name)

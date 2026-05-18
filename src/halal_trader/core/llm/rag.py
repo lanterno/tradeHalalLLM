@@ -40,7 +40,7 @@ import math
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Any, Protocol
 
 logger = logging.getLogger(__name__)
 
@@ -127,6 +127,49 @@ class RationaleRow:
 
 
 # ── Prompt formatter ─────────────────────────────────────────────
+
+
+def build_rag_query(
+    *,
+    indicators_cache: dict[str, dict[str, Any]],
+    sentiment_text: str,
+    regime_text: str,
+) -> str:
+    """Render a short text query summarising the current setup.
+
+    The query is hashed by :class:`HashingEmbedder`, so we want token
+    overlap with what the LLM typically writes in its ``reasoning``
+    field — keep it terse, technical-language-flavoured. Returned text
+    is capped at 600 chars to bound retrieval-time cost.
+    """
+    parts: list[str] = []
+    for pair, inds in (indicators_cache or {}).items():
+        if not inds or "error" in inds:
+            continue
+        rsi = inds.get("rsi_14")
+        macd = inds.get("macd_histogram")
+        bb = inds.get("bb_position")
+        ev: list[str] = [pair]
+        if rsi is not None:
+            if rsi < 35:
+                ev.append("rsi oversold")
+            elif rsi > 65:
+                ev.append("rsi overbought")
+            else:
+                ev.append("rsi neutral")
+        if macd is not None:
+            ev.append("macd bullish" if macd > 0 else "macd bearish")
+        if bb is not None:
+            if bb < 0.2:
+                ev.append("bb lower")
+            elif bb > 0.8:
+                ev.append("bb upper")
+        parts.append(" ".join(ev))
+    if regime_text:
+        parts.append(regime_text[:80])
+    if sentiment_text:
+        parts.append(sentiment_text[:80])
+    return " | ".join(parts)[:600]
 
 
 def format_rag_for_prompt(hits: list[tuple[RationaleRow, float]], *, max_rows: int = 5) -> str:

@@ -280,6 +280,54 @@ class RegimeMemory:
         }
 
 
+# ── Feature aggregation ──────────────────────────────────────────
+
+
+def build_regime_features(
+    *,
+    indicators_cache: dict[str, dict[str, Any]],
+    today_pnl: float,
+    equity: float,
+) -> RegimeFeatures | None:
+    """Aggregate per-pair indicators into a daily :class:`RegimeFeatures`.
+
+    Returns ``None`` when no per-pair indicator dict has both ``atr_14``
+    and ``current_price``, or when none has an ``rsi_14`` — that's the
+    signal the regime memory should be skipped this cycle.
+    """
+    if not indicators_cache:
+        return None
+    atrs: list[float] = []
+    rsis: list[float] = []
+    for inds in indicators_cache.values():
+        if not inds or "error" in inds:
+            continue
+        price = inds.get("current_price") or 0
+        atr = inds.get("atr_14") or 0
+        if price > 0 and atr > 0:
+            atrs.append(atr / price)
+        rsi = inds.get("rsi_14")
+        if rsi is not None:
+            rsis.append(rsi)
+    if not atrs and not rsis:
+        return None
+    avg_atr = sum(atrs) / len(atrs) if atrs else 0.0
+    avg_rsi = sum(rsis) / len(rsis) if rsis else 50.0
+    # Conservative defaults for fields the cycle doesn't track day-of.
+    return RegimeFeatures(
+        volatility=avg_atr,
+        trend=0.0,
+        breadth=0.0,
+        sentiment=0.0,
+        drawdown=0.0,
+        volume_ratio=1.0,
+        correlation=0.0,
+        realized_return_1d=(today_pnl / equity) if equity else 0.0,
+        rsi=avg_rsi,
+        spread_bps=0.0,
+    )
+
+
 # ── Prompt rendering ──────────────────────────────────────────────
 
 

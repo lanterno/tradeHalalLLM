@@ -36,6 +36,16 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
+async def wrap_existing(plan: Any) -> Any:
+    """Trivial awaitable that returns ``plan`` — feeds the primary into
+    :func:`run_ensemble` as one of the variants without re-calling the LLM.
+
+    Shared by both ``crypto/strategy.py`` and ``trading/strategy.py``;
+    historically each module had its own private copy. Single home now.
+    """
+    return plan
+
+
 # ── Variant definition ───────────────────────────────────────────
 
 

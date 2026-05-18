@@ -4,8 +4,6 @@ import logging
 from abc import ABC, abstractmethod
 from typing import Any
 
-from halal_trader.db.repository import Repository
-
 logger = logging.getLogger(__name__)
 
 
@@ -14,17 +12,16 @@ class BaseExecutor(ABC):
 
     Subclasses provide broker-specific buy/sell logic; the base class
     handles the common sells-first-then-buys orchestration and
-    max-positions enforcement.
+    max-positions enforcement. Subclasses store their own narrow-typed
+    repo refs — the base never reaches the DB directly.
     """
 
     def __init__(
         self,
-        repo: Repository,
         *,
         max_position_pct: float,
         max_simultaneous_positions: int,
     ) -> None:
-        self._repo = repo
         self._max_position_pct = max_position_pct
         self._max_simultaneous_positions = max_simultaneous_positions
 

@@ -6,7 +6,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
-from halal_trader.db.repository import Repository
+from halal_trader.db.repos import CryptoTradeRepo
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +37,7 @@ class PerformanceStats:
 class PerformanceAnalytics:
     """Computes trading performance metrics from the database."""
 
-    def __init__(self, repo: Repository) -> None:
+    def __init__(self, repo: CryptoTradeRepo) -> None:
         self._repo = repo
 
     async def compute_stats(self, lookback_days: int = 7) -> PerformanceStats:

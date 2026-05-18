@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from halal_trader.config import get_settings
 from halal_trader.db.models import init_db
+from halal_trader.db.repos import RepoBundle
 from halal_trader.db.repository import Repository
 
 logger = logging.getLogger(__name__)
@@ -24,12 +25,16 @@ class BaseTradingBot(abc.ABC):
         self._running = False
         self._engine: AsyncEngine | None = None
         self._repo: Repository | None = None
+        self._bundle: RepoBundle | None = None
 
     async def initialize(self) -> None:
         """Set up the database and delegate component creation to the subclass."""
         engine = await init_db(self.settings.database_url)
         self._engine = engine
         self._repo = Repository(engine)
+        # Typed per-table bundle — subclasses can hand narrow protocols
+        # to components instead of the full ``Repository``.
+        self._bundle = RepoBundle.from_engine(engine)
         await self._create_components()
 
     @abc.abstractmethod
@@ -77,10 +82,12 @@ class BaseTradingBot(abc.ABC):
         retention of ``0`` disables the prune.
         """
         retention = int(getattr(self.settings.web, "audit_retention_days", 0) or 0)
-        if retention <= 0 or self._repo is None:
+        if retention <= 0 or self._bundle is None:
             return
         try:
-            deleted = await self._repo.delete_old_web_actions(older_than=timedelta(days=retention))
+            deleted = await self._bundle.web_audit.delete_old_web_actions(
+                older_than=timedelta(days=retention)
+            )
             if deleted:
                 logger.info("Pruned %d web_actions row(s) older than %d days", deleted, retention)
         except Exception as exc:  # noqa: BLE001
