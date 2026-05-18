@@ -381,8 +381,23 @@ class TradingBot(BaseTradingBot):
                 )
 
     async def trading_cycle(self) -> None:
-        """Intraday trading cycle — delegates to TradingCycleService."""
+        """Intraday trading cycle — delegates to TradingCycleService.
+
+        Before each cycle, check whether the self-review wants to fire
+        an emergency review (3 consecutive losses or 10 exec failures).
+        Mirrors ``crypto/scheduler.py:_run_cycle_loop`` lines 451-456.
+        Failures degrade silently — the cycle must run regardless.
+        """
         _, _, _, cycle_service = self._require_initialized()
+
+        if self._self_review is not None:
+            try:
+                if await self._self_review.should_trigger_review():
+                    logger.info("Consecutive stock losses detected — triggering self-review")
+                    await self._self_review.review(lookback_days=1)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("Stocks self-review trigger check failed: %s", exc)
+
         await cycle_service.run_cycle()
 
     async def end_of_day(self) -> None:

@@ -142,3 +142,99 @@ def test_require_initialized_does_not_mutate_state():
     assert bot.executor is None
     assert bot.portfolio is None
     assert bot.cycle_service is None
+
+
+# ── trading_cycle: mid-cycle self-review trigger ─────────────
+
+
+@pytest.mark.asyncio
+async def test_trading_cycle_triggers_self_review_on_consecutive_losses():
+    """When ``should_trigger_review()`` returns True, the cycle runs
+    an emergency review BEFORE calling ``cycle_service.run_cycle``.
+    Mirrors crypto's behavior at ``crypto/scheduler.py:451``."""
+    from unittest.mock import AsyncMock
+
+    bot = TradingBot()
+    bot.screener = MagicMock()
+    bot.executor = MagicMock()
+    bot.portfolio = MagicMock()
+    bot.cycle_service = MagicMock()
+    bot.cycle_service.run_cycle = AsyncMock()
+
+    self_review = MagicMock()
+    self_review.should_trigger_review = AsyncMock(return_value=True)
+    self_review.review = AsyncMock()
+    bot._self_review = self_review
+
+    await bot.trading_cycle()
+
+    self_review.should_trigger_review.assert_awaited_once()
+    self_review.review.assert_awaited_once_with(lookback_days=1)
+    bot.cycle_service.run_cycle.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_trading_cycle_skips_review_when_no_trigger():
+    """When ``should_trigger_review()`` returns False, NO review fires —
+    the cycle just runs. This is the common path (every 15min cycle,
+    most days)."""
+    from unittest.mock import AsyncMock
+
+    bot = TradingBot()
+    bot.screener = MagicMock()
+    bot.executor = MagicMock()
+    bot.portfolio = MagicMock()
+    bot.cycle_service = MagicMock()
+    bot.cycle_service.run_cycle = AsyncMock()
+
+    self_review = MagicMock()
+    self_review.should_trigger_review = AsyncMock(return_value=False)
+    self_review.review = AsyncMock()
+    bot._self_review = self_review
+
+    await bot.trading_cycle()
+
+    self_review.should_trigger_review.assert_awaited_once()
+    self_review.review.assert_not_awaited()
+    bot.cycle_service.run_cycle.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_trading_cycle_no_op_when_self_review_none():
+    """``_self_review=None`` is the unwired state (dev / first-run before
+    ``_create_components``). The cycle must still run."""
+    from unittest.mock import AsyncMock
+
+    bot = TradingBot()
+    bot.screener = MagicMock()
+    bot.executor = MagicMock()
+    bot.portfolio = MagicMock()
+    bot.cycle_service = MagicMock()
+    bot.cycle_service.run_cycle = AsyncMock()
+    assert bot._self_review is None  # default
+
+    await bot.trading_cycle()
+
+    bot.cycle_service.run_cycle.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_trading_cycle_swallows_review_trigger_failure():
+    """If ``should_trigger_review()`` blows up (e.g. DB hiccup), the
+    cycle MUST still run — the review check is best-effort."""
+    from unittest.mock import AsyncMock
+
+    bot = TradingBot()
+    bot.screener = MagicMock()
+    bot.executor = MagicMock()
+    bot.portfolio = MagicMock()
+    bot.cycle_service = MagicMock()
+    bot.cycle_service.run_cycle = AsyncMock()
+
+    self_review = MagicMock()
+    self_review.should_trigger_review = AsyncMock(side_effect=RuntimeError("DB locked"))
+    bot._self_review = self_review
+
+    await bot.trading_cycle()  # must NOT raise
+
+    bot.cycle_service.run_cycle.assert_awaited_once()
