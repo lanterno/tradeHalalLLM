@@ -32,6 +32,12 @@ def _make_account(balance=10000.0):
 
 def _make_strategy(llm_response=None, llm_error=None, **kwargs):
     llm = AsyncMock()
+    # Force the legacy ``generate_json`` path. Wave E added a native
+    # tool-use branch the strategy prefers when ``supports_tool_use``
+    # is truthy; AsyncMock returns a truthy MagicMock by default for
+    # any attribute access, which would silently route these tests
+    # through ``generate_tool_call`` instead.
+    llm.supports_tool_use = False
     if llm_error:
         llm.generate_json.side_effect = llm_error
     else:
