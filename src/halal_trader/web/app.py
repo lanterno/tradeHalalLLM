@@ -43,6 +43,15 @@ def create_app() -> Any:
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+        # Co-host pattern: when the bot ran ``attach_to_app`` before the
+        # dashboard's lifespan fired, ``_app.state.ctx`` is already set
+        # to the bot's projected DashboardContext. In that mode the bot
+        # owns the engine, hub, and event bus — the lifespan must NOT
+        # build a parallel set or dispose the engine on shutdown.
+        if getattr(_app.state, "ctx", None) is not None:
+            yield
+            return
+
         settings = get_settings()
         engine = await init_db(settings.database_url)
         repo = Repository(engine)

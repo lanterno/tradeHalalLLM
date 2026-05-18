@@ -86,6 +86,19 @@ class BaseTradingBot(abc.ABC):
     async def run(self) -> None:
         """Start the bot's main loop (subclass-specific)."""
 
+    def attach_to_app(self, app: Any) -> None:
+        """Co-host: project the bot's :class:`BotContext` onto a FastAPI
+        app's ``state.ctx`` so the dashboard sees live runtime values.
+
+        Call this AFTER :meth:`initialize` (which builds ``self._ctx``)
+        and BEFORE the dashboard's lifespan fires — the lifespan sees a
+        pre-installed ``ctx`` and skips its own standalone build path,
+        keeping the engine, event bus, and hub single-instanced.
+        """
+        if self._ctx is None:
+            raise RuntimeError("Bot must be initialized before attach_to_app()")
+        app.state.ctx = self._ctx.to_dashboard_context()
+
     async def _prune_audit_log(self) -> None:
         """Delete ``web_actions`` rows older than the retention window.
 

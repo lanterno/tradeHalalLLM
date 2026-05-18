@@ -196,3 +196,127 @@ async def test_get_ctx_raises_when_lifespan_didnt_attach() -> None:
     fake_request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace()))
     with pytest.raises(RuntimeError, match="DashboardContext not attached"):
         get_ctx(fake_request)  # type: ignore[arg-type]
+
+
+# ── Item 7: co-host runtime sync ────────────────────────────────
+
+
+def test_attach_to_app_raises_before_initialize() -> None:
+    """``attach_to_app`` is a post-initialize operation — calling it
+    before ``initialize()`` has built ``self._ctx`` is a programming
+    error that should surface loudly, not silently succeed."""
+    import os
+    from types import SimpleNamespace
+
+    from halal_trader.core.scheduler import BaseTradingBot
+
+    os.environ.setdefault("BINANCE_API_KEY", "test")
+    os.environ.setdefault("BINANCE_SECRET_KEY", "test")
+
+    class _DummyBot(BaseTradingBot):
+        async def _create_components(self) -> None: ...
+        async def _daily_start(self) -> None: ...
+        async def _daily_end(self) -> None: ...
+        def _get_cycle_service(self):
+            return None
+
+        async def run(self) -> None: ...
+
+    bot = _DummyBot()
+    fake_app = SimpleNamespace(state=SimpleNamespace())
+    with pytest.raises(RuntimeError, match="initialized"):
+        bot.attach_to_app(fake_app)
+
+
+def test_attach_to_app_projects_bot_ctx_onto_app_state() -> None:
+    """Happy path: after init, ``attach_to_app`` writes the bot's
+    DashboardContext projection onto the FastAPI app's state. The
+    projection MUST share the same RuntimeView so cycle writes are
+    visible via the dashboard's ctx.runtime reads."""
+    import os
+    from types import SimpleNamespace
+
+    from halal_trader.core.context import BotContext, RuntimeView
+    from halal_trader.core.scheduler import BaseTradingBot
+
+    os.environ.setdefault("BINANCE_API_KEY", "test")
+    os.environ.setdefault("BINANCE_SECRET_KEY", "test")
+
+    class _DummyBot(BaseTradingBot):
+        async def _create_components(self) -> None: ...
+        async def _daily_start(self) -> None: ...
+        async def _daily_end(self) -> None: ...
+        def _get_cycle_service(self):
+            return None
+
+        async def run(self) -> None: ...
+
+    bot = _DummyBot()
+    runtime = RuntimeView(bot_running=True)
+    # Simulate what _create_components would have produced.
+    bot._ctx = BotContext(
+        engine=MagicMock(),
+        repo=MagicMock(),
+        hub=MagicMock(),
+        analytics=MagicMock(),
+        settings=MagicMock(),
+        bus=MagicMock(),
+        runtime=runtime,
+    )
+
+    fake_app = SimpleNamespace(state=SimpleNamespace())
+    bot.attach_to_app(fake_app)
+
+    # The dashboard projection is on the app state.
+    dash = fake_app.state.ctx
+    assert dash.engine is bot._ctx.engine
+    assert dash.repo is bot._ctx.repo
+    assert dash.runtime is runtime  # shared ref, not a copy
+
+    # Cycle writes (simulated) are visible through the dashboard ctx.
+    runtime.last_cycle = {"market": "crypto"}
+    assert dash.runtime.last_cycle == {"market": "crypto"}
+
+
+def test_dashboard_lifespan_skips_build_when_ctx_preinstalled(monkeypatch, tmp_path) -> None:
+    """When the bot's ``attach_to_app`` runs BEFORE the dashboard
+    lifespan, the lifespan must NOT rebuild a parallel DashboardContext
+    — it sees the pre-installed ``app.state.ctx`` and yields straight
+    through. Pinning this so a co-hosted bot owns the engine."""
+    import os
+    from types import SimpleNamespace
+
+    from fastapi.testclient import TestClient
+
+    from halal_trader.core.context import DashboardContext, RuntimeView
+    from halal_trader.web import app as web_app
+
+    os.environ.setdefault("BINANCE_API_KEY", "test")
+    os.environ.setdefault("BINANCE_SECRET_KEY", "test")
+    monkeypatch.setenv("LOG_DIR", str(tmp_path / "logs"))
+
+    sentinel_engine = SimpleNamespace(name="bot_engine")
+    preinstalled = DashboardContext(
+        engine=sentinel_engine,  # type: ignore[arg-type]
+        repo=MagicMock(),
+        hub=MagicMock(),
+        analytics=MagicMock(),
+        settings=MagicMock(),
+        bus=MagicMock(),
+        runtime=RuntimeView(bot_running=True),
+    )
+
+    app = web_app.create_app()
+    app.state.ctx = preinstalled
+
+    # Patch init_db to fail loudly — if the lifespan tries to rebuild,
+    # the test catches it. The co-host path should never call init_db.
+    def _boom(*_a, **_k):
+        raise AssertionError("lifespan rebuilt despite pre-installed ctx")
+
+    monkeypatch.setattr("halal_trader.web.app.init_db", _boom)
+
+    with TestClient(app) as c:
+        # The pre-installed ctx survived lifespan.
+        assert c.app.state.ctx is preinstalled
+        assert c.app.state.ctx.engine is sentinel_engine
