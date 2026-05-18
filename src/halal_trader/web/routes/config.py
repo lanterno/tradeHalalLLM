@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Callable
+from typing import Any, cast
 
 from fastapi import Depends, FastAPI
 from fastapi.responses import JSONResponse
@@ -91,7 +92,11 @@ def _default_value(field: FieldInfo) -> Any:
     """
     if field.default_factory is not None:
         try:
-            raw = field.default_factory()
+            # pydantic v2.12 widened ``default_factory`` to optionally take
+            # validated data; the callable still works without args, but
+            # mypy types it as 1-arg.
+            factory = cast(Callable[[], Any], field.default_factory)
+            raw = factory()
         except TypeError:
             return None
     elif field.default is None or field.default is Ellipsis:

@@ -21,7 +21,7 @@ def get_ctx(request: Request) -> DashboardContext:
     on the app — a programming error we want to surface loudly rather
     than silently 500.
     """
-    ctx = getattr(request.app.state, "ctx", None)
+    ctx: DashboardContext | None = getattr(request.app.state, "ctx", None)
     if ctx is None:
         raise RuntimeError("DashboardContext not attached to FastAPI app — did the lifespan run?")
     return ctx

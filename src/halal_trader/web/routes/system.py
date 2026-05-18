@@ -61,7 +61,7 @@ def register(app: FastAPI) -> None:
 
     @app.post("/api/system/halt")
     async def api_set_halt(
-        body: dict | None = Body(default=None),
+        body: dict[str, Any] | None = Body(default=None),
         x_halt_confirm: str = Header(default=""),
         ctx: DashboardContext = Depends(get_ctx),
     ) -> JSONResponse:

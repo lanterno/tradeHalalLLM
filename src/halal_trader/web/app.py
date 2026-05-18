@@ -12,6 +12,7 @@ Each route takes its dependencies via ``Depends(get_ctx)`` (see
 from __future__ import annotations
 
 import logging
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -41,7 +42,7 @@ def create_app() -> Any:
     from halal_trader.core.observability import new_id, request_id_var
 
     @asynccontextmanager
-    async def lifespan(_app: FastAPI):
+    async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         settings = get_settings()
         engine = await init_db(settings.database_url)
         repo = Repository(engine)
@@ -77,7 +78,10 @@ def create_app() -> Any:
     )
 
     @app.middleware("http")
-    async def correlate_request(request: Request, call_next):
+    async def correlate_request(
+        request: Request,
+        call_next: Callable[[Request], Awaitable[Response]],
+    ) -> Response:
         rid = request.headers.get("X-Request-ID") or new_id("req")
         token = request_id_var.set(rid)
         try:
@@ -111,7 +115,7 @@ def create_app() -> Any:
         # forward ref doesn't crash pydantic's schema generation at
         # /openapi.json (and therefore /docs).
         @app.get("/{full_path:path}", include_in_schema=False)
-        async def spa_catch_all(full_path: str):
+        async def spa_catch_all(full_path: str) -> FileResponse:
             file = _DASHBOARD_DIST / full_path
             if file.exists() and file.is_file():
                 return FileResponse(str(file))

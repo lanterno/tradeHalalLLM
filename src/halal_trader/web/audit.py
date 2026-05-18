@@ -15,7 +15,7 @@ in headers, not in the audit table.
 from __future__ import annotations
 
 import logging
-from typing import Awaitable, Callable
+from typing import Any, Awaitable, Callable
 
 from fastapi import Request
 from fastapi.responses import Response
@@ -73,7 +73,7 @@ async def audit_middleware(
             logger.debug("audit begin_web_action failed: %s", e)
 
     # Re-inject the body so downstream handlers can still read it.
-    async def _receive():
+    async def _receive() -> dict[str, Any]:
         return {"type": "http.request", "body": body_bytes, "more_body": False}
 
     request._receive = _receive  # type: ignore[attr-defined]

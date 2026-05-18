@@ -6,6 +6,7 @@ import asyncio
 import logging
 import signal
 import time
+from typing import Any
 
 from halal_trader.core.scheduler import BaseTradingBot
 from halal_trader.crypto.cadence import select_interval
@@ -36,9 +37,10 @@ class CryptoTradingBot(BaseTradingBot):
         self._cycle_service: CryptoCycleService | None = None
         self._portfolio: CryptoPortfolioTracker | None = None
         self._monitor: PositionMonitor | None = None
-        self._sentiment_manager = None
-        self._self_review = None
-        self._notifier = None
+        self._sentiment_manager: Any = None
+        self._self_review: Any = None
+        self._notifier: Any = None
+        self._news_reactor: Any = None
         self._last_day: str | None = None
         self._exiting_pairs: set[str] = set()
         self._reconcile_task: asyncio.Task[None] | None = None
@@ -121,6 +123,7 @@ class CryptoTradingBot(BaseTradingBot):
         self._runtime.ws_manager = self._ws
         self._runtime.sentiment_manager = self._sentiment_manager
         self._runtime.crypto_broker = self._binance
+        assert self._engine is not None  # populated by BaseTradingBot.initialize()
         self._ctx = BotContext(
             engine=self._engine,
             repo=repo,
@@ -161,7 +164,7 @@ class CryptoTradingBot(BaseTradingBot):
             except asyncio.CancelledError:
                 break
 
-    async def _on_news_event(self, event) -> None:
+    async def _on_news_event(self, event: Any) -> None:
         """Handle a breaking news event by triggering an emergency mini-cycle."""
         logger.info(
             "News event trigger: %s (affects %s)",
@@ -197,6 +200,7 @@ class CryptoTradingBot(BaseTradingBot):
         """Daily start routine: refresh halal cache, record starting equity."""
         logger.info("=== CRYPTO DAILY START ===")
         try:
+            assert self._screener is not None and self._portfolio is not None
             await self._screener.refresh_screening()
             await self._portfolio.record_day_start()
             self._last_day = today_eastern().isoformat()
@@ -208,6 +212,7 @@ class CryptoTradingBot(BaseTradingBot):
         """Daily end routine: record P&L snapshot, run self-review, send summary."""
         logger.info("=== CRYPTO DAILY END ===")
         try:
+            assert self._portfolio is not None
             summary = await self._portfolio.record_day_end()
 
             # Enrich the summary with ops/spend stats from the DB so the
@@ -454,8 +459,9 @@ class CryptoTradingBot(BaseTradingBot):
                 # Run trading cycle with timeout (2x interval)
                 cycle_timeout = interval * 2
                 try:
+                    cycle_service = self._get_cycle_service()
                     await asyncio.wait_for(
-                        self._cycle_service.run_cycle(),
+                        cycle_service.run_cycle(),
                         timeout=cycle_timeout,
                     )
                 except asyncio.TimeoutError:
@@ -482,9 +488,9 @@ class CryptoTradingBot(BaseTradingBot):
                 # interval when no indicators are available yet (cold start
                 # or a cycle that returned early).
                 next_interval = interval
-                if self._cycle_service.last_indicators_cache:
+                if cycle_service.last_indicators_cache:
                     decision = select_interval(
-                        indicators_cache=self._cycle_service.last_indicators_cache,
+                        indicators_cache=cycle_service.last_indicators_cache,
                         base_interval=interval,
                         atr_baseline=self.settings.crypto.atr_baseline,
                     )

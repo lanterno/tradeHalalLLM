@@ -16,7 +16,6 @@ def client(database_url, tmp_path, monkeypatch):
     monkeypatch.setenv("WEB_API_TOKEN", "secret")
     # Disable confirmation in tests so we don't have to forge two headers per call.
     monkeypatch.setenv("WEB_REQUIRE_CONFIRMATION", "false")
-    web_app.app_state.clear()
     app = web_app.create_app()
 
     # Mock crypto broker for cancel/close tests.

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date
+from typing import Any
 
 from halal_trader.config import get_settings
 from halal_trader.core.cycle import BaseCycleService
@@ -74,22 +75,26 @@ class CryptoCycleService(BaseCycleService):
         ws_manager: BinanceWSManager | None = None,
         configured_pairs: list[str] | None = None,
         analytics: PerformanceAnalytics | None = None,
-        sentiment_manager=None,
-        timeframe_analyzer=None,
-        regime_detector=None,
-        ml_forecaster=None,
-        ml_anomaly_detector=None,
-        ml_signal_classifier=None,
-        self_review=None,
-        notifier=None,
+        # The following collaborators are duck-typed across the stage
+        # pipeline (sentiment/timeframe/regime managers etc.) — they're
+        # passed straight to stage constructors that accept ``Any``,
+        # so widening here would over-constrain rather than tighten.
+        sentiment_manager: Any = None,
+        timeframe_analyzer: Any = None,
+        regime_detector: Any = None,
+        ml_forecaster: Any = None,
+        ml_anomaly_detector: Any = None,
+        ml_signal_classifier: Any = None,
+        self_review: Any = None,
+        notifier: Any = None,
         risk_engine: PortfolioRiskEngine | None = None,
-        news_feed=None,
-        alerts=None,
-        engine=None,
-        live_mode_checker=None,
-        shadow_runner=None,
-        whale_flow_source=None,
-        reddit_fetcher=None,
+        news_feed: Any = None,
+        alerts: Any = None,
+        engine: Any = None,
+        live_mode_checker: Any = None,
+        shadow_runner: Any = None,
+        whale_flow_source: Any = None,
+        reddit_fetcher: Any = None,
         hub: InsightsHub | None = None,
         bus: "EventBus | None" = None,
     ) -> None:
@@ -130,7 +135,7 @@ class CryptoCycleService(BaseCycleService):
         # The scheduler reads this after each cycle to drive the
         # adaptive cadence selector. None until the first successful
         # cycle has populated the indicator cache.
-        self.last_indicators_cache: dict[str, dict] | None = None
+        self.last_indicators_cache: dict[str, dict[str, Any]] | None = None
         # First-cycle-of-the-day marker — kept on the service for
         # legacy test compatibility; the actual snapshot decision lives
         # on the analytics stage.
@@ -297,7 +302,7 @@ class CryptoCycleService(BaseCycleService):
             return
 
         # ── LLM analyze (swallow=False; must propagate) ───────────
-        analyze_kwargs = dict(
+        analyze_kwargs: dict[str, Any] = dict(
             account=account,
             positions_text=positions_text,
             halal_pairs=state.halal_pairs,
@@ -362,7 +367,7 @@ class CryptoCycleService(BaseCycleService):
 
     # ── Cycle-control helpers (state-on-self, not state-on-CycleState) ──
 
-    def _count_open_positions(self, balances) -> int:
+    def _count_open_positions(self, balances: list[Any]) -> int:
         """Count balances whose USDT value is ≥ $5 (dust-aware)."""
         tracked_bases = {
             p.upper().removesuffix("USDT").removesuffix("BUSD") for p in self._configured_pairs
@@ -376,7 +381,7 @@ class CryptoCycleService(BaseCycleService):
                 n += 1
         return n
 
-    def _has_enough_usdt(self, account, balances) -> bool:
+    def _has_enough_usdt(self, account: Any, balances: list[Any]) -> bool:
         """Skip the cycle when USDT < $5 AND no open positions remain."""
         usdt_free = account.usdt_free
         if usdt_free >= 5.0:
@@ -397,7 +402,7 @@ class CryptoCycleService(BaseCycleService):
         )
         return True
 
-    def _should_skip_llm(self, indicators_cache: dict[str, dict]) -> bool:
+    def _should_skip_llm(self, indicators_cache: dict[str, dict[str, Any]]) -> bool:
         """Skip LLM if all pairs are flat with no directional signal."""
         if not indicators_cache:
             return True

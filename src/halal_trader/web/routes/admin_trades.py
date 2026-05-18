@@ -14,6 +14,7 @@ above entry / TP below entry (long-only sanity), and write a
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import JSONResponse
@@ -57,7 +58,7 @@ def register(app: FastAPI) -> None:
         model = CryptoTrade if req.asset_class == "crypto" else Trade
 
         async with AsyncSession(ctx.engine) as session:
-            trade = await session.get(model, trade_id)
+            trade: Any = await session.get(model, trade_id)
             if trade is None:
                 raise HTTPException(404, f"trade {trade_id} not found")
             if trade.side != "buy":
@@ -141,7 +142,7 @@ def register(app: FastAPI) -> None:
 
         receipt = await export_receipt(ctx.engine, trade_id=trade_id, asset_class=asset_class)
 
-        snapshot: dict | None = None
+        snapshot: dict[str, Any] | None = None
         async with AsyncSession(ctx.engine) as session:
             from sqlmodel import select
 

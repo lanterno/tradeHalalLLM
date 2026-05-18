@@ -291,13 +291,19 @@ def register(app: FastAPI) -> None:
     ) -> JSONResponse:
         from halal_trader.halal.exception_queue import ExceptionQueue
 
+        if status not in ("pending", "approved", "rejected", "deferred"):
+            return JSONResponse(
+                {"error": f"invalid status: {status}"},
+                status_code=400,
+            )
+
         q = ExceptionQueue(engine=ctx.engine)
         try:
             ok = await q.decide(
                 entry_id,
-                status=status,
+                status=status,  # type: ignore[arg-type]
                 decided_by=decided_by,
-                operator_note=note,  # type: ignore[arg-type]
+                operator_note=note,
             )
         except ValueError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)

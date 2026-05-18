@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections.abc import AsyncIterator
 from datetime import datetime
 
 from fastapi import Depends, FastAPI, Query, WebSocket, WebSocketDisconnect
@@ -19,7 +20,7 @@ logger = logging.getLogger(__name__)
 def register(app: FastAPI) -> None:
     @app.get("/api/sse")
     async def sse(ctx: DashboardContext = Depends(get_ctx)) -> StreamingResponse:
-        async def event_stream():
+        async def event_stream() -> AsyncIterator[str]:
             while True:
                 trades = await ctx.repo.get_recent_crypto_trades(5)
                 data = json.dumps({"trades": trades}, default=str)

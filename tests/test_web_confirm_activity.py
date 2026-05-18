@@ -65,7 +65,6 @@ def test_confirm_header_case_insensitive(monkeypatch):
 def client(database_url, tmp_path, monkeypatch):
     monkeypatch.setenv("LOG_DIR", str(tmp_path / "logs"))
     monkeypatch.setenv("WEB_API_TOKEN", "secret")
-    web_app.app_state.clear()
     app = web_app.create_app()
 
     @app.post("/api/admin/echo")

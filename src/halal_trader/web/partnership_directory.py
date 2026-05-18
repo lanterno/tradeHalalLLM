@@ -254,9 +254,9 @@ def advance_stage(
         # PAUSED can be entered from anywhere
         pass
     elif partner.current_stage is IntegrationStage.PAUSED:
-        # Returning from PAUSED — operator picks any non-PAUSED stage
-        if to_stage is IntegrationStage.PAUSED:
-            raise ValueError("already paused")
+        # Returning from PAUSED — operator picks any non-PAUSED stage.
+        # ``to_stage is PAUSED`` would have been caught above.
+        pass
     else:
         # Forward funnel move — must be exactly the next canonical stage
         cur_idx = _canonical_index(partner.current_stage)

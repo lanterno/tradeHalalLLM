@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Sequence
 from typing import Any
 
 from halal_trader.core.llm.adversarial import apply_review_to_buys, critique_plan
@@ -48,7 +49,7 @@ class CryptoTradingStrategy(BaseStrategy):
         attacker_llm: LLMBackend | None = None,
         adversarial_downsize_at: float = 0.45,
         adversarial_skip_at: float = 0.75,
-        ensemble_llms: list[LLMBackend] | None = None,
+        ensemble_llms: Sequence[LLMBackend] | None = None,
         ensemble_quorum: int = 2,
         ensemble_skip_at: float | None = None,
         agentic_enabled: bool = False,

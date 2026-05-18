@@ -13,7 +13,6 @@ from halal_trader.web import app as web_app
 def client(database_url, tmp_path, monkeypatch):
     monkeypatch.setenv("LOG_DIR", str(tmp_path / "logs"))
     monkeypatch.setenv("WEB_API_TOKEN", "secret")
-    web_app.app_state.clear()
     app = web_app.create_app()
 
     # Add a fake admin endpoint so we can trigger an audit row.

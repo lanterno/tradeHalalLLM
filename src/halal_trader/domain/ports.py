@@ -75,6 +75,14 @@ class LLMBackend(Protocol):
 
     async def generate(self, prompt: str, system: str | None = None) -> str: ...
     async def generate_json(self, prompt: str, system: str | None = None) -> dict[str, Any]: ...
+    async def generate_tool_call(
+        self,
+        prompt: str,
+        *,
+        tools: list[Any],
+        system: str | None = None,
+        force_tool: str | None = None,
+    ) -> list[Any]: ...
 
 
 # ── Compliance Screener (Stocks) ────────────────────────────────

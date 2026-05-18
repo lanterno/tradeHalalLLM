@@ -55,6 +55,7 @@ Pinned semantics:
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import Enum
@@ -204,7 +205,7 @@ class SecretVault:
         master_kek: bytes,
         *,
         policy: VaultPolicy = DEFAULT_POLICY,
-        now_fn=lambda: datetime.now(UTC),
+        now_fn: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         if len(master_kek) < _MIN_KEK_BYTES:
             raise ValueError(f"master_kek must be at least {_MIN_KEK_BYTES} bytes")

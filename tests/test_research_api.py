@@ -12,7 +12,6 @@ from halal_trader.web import app as web_app
 @pytest.fixture
 def client(database_url, tmp_path, monkeypatch):
     monkeypatch.setenv("LOG_DIR", str(tmp_path / "logs"))
-    web_app.app_state.clear()
     app = web_app.create_app()
 
     with TestClient(app) as c:

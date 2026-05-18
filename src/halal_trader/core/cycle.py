@@ -11,6 +11,7 @@ from halal_trader.core.observability import cycle_context
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncEngine
 
+    from halal_trader.core.event_bus import EventBus
     from halal_trader.notifications.telegram import AlertSink
 
 logger = logging.getLogger(__name__)
@@ -34,7 +35,7 @@ class BaseCycleService(ABC):
         # exercise the cycle template can leave it None — the check skips.
         self._engine = engine
         # Subclasses may set ``self._bus`` to publish cycle / stage events.
-        self._bus: object | None = None
+        self._bus: "EventBus | None" = None
 
     async def run_cycle(self) -> None:
         """Execute one complete trading cycle (template method)."""
@@ -138,11 +139,10 @@ class BaseCycleService(ABC):
 
     async def _publish_event(self, topic: str, payload: "dict[str, object] | None" = None) -> None:
         """Best-effort publish to ``self._bus`` if a bus is wired."""
-        bus = getattr(self, "_bus", None)
-        if bus is None:
+        if self._bus is None:
             return
         try:
-            await bus.publish(topic, payload or {})
+            await self._bus.publish(topic, payload or {})
         except Exception:  # noqa: BLE001
             pass
 

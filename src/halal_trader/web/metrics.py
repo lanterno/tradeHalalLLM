@@ -17,6 +17,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 from halal_trader.core import events
 
@@ -43,7 +44,7 @@ class LlmMetrics:
     total_tokens: int
     p50_ms: float | None
     p95_ms: float | None
-    by_provider: dict[str, dict[str, float | int]]
+    by_provider: dict[str, dict[str, Any]]
 
 
 def _tail(path: Path, max_lines: int) -> Iterator[str]:
@@ -85,7 +86,7 @@ def _percentile(values: list[float], p: float) -> float | None:
     return s[k]
 
 
-def _within(record: dict, since: datetime) -> bool:
+def _within(record: dict[str, Any], since: datetime) -> bool:
     ts = record.get("timestamp")
     if not isinstance(ts, str):
         return False
@@ -102,7 +103,7 @@ def _within(record: dict, since: datetime) -> bool:
     return dt >= since
 
 
-def _iter_records(path: Path, max_lines: int) -> Iterator[dict]:
+def _iter_records(path: Path, max_lines: int) -> Iterator[dict[str, Any]]:
     for line in _tail(path, max_lines):
         try:
             yield json.loads(line)
@@ -160,7 +161,7 @@ def llm_metrics(
     since = now - timedelta(seconds=window_seconds)
 
     elapsed_all: list[float] = []
-    by_provider: dict[str, dict[str, float | int]] = {}
+    by_provider: dict[str, dict[str, Any]] = {}
     total_tokens = 0
     calls = 0
 
@@ -176,10 +177,12 @@ def llm_metrics(
         # present; otherwise fall back to "tokens".
         input_t = record.get("input_tokens")
         output_t = record.get("output_tokens")
+        tokens: int | None
         if isinstance(input_t, (int, float)) or isinstance(output_t, (int, float)):
             tokens = int(input_t or 0) + int(output_t or 0)
         else:
-            tokens = record.get("tokens")
+            raw_tokens = record.get("tokens")
+            tokens = int(raw_tokens) if isinstance(raw_tokens, (int, float)) else None
         ms = record.get("elapsed_ms")
 
         bucket = by_provider.setdefault(
@@ -187,9 +190,9 @@ def llm_metrics(
             {"calls": 0, "tokens": 0, "elapsed_ms_list": []},
         )
         bucket["calls"] = int(bucket["calls"]) + 1
-        if isinstance(tokens, (int, float)):
-            bucket["tokens"] = int(bucket["tokens"]) + int(tokens)
-            total_tokens += int(tokens)
+        if tokens is not None:
+            bucket["tokens"] = int(bucket["tokens"]) + tokens
+            total_tokens += tokens
         if isinstance(ms, (int, float)):
             bucket["elapsed_ms_list"].append(float(ms))
             elapsed_all.append(float(ms))
@@ -197,7 +200,7 @@ def llm_metrics(
 
     # Collapse the per-provider list into p50.
     for bucket in by_provider.values():
-        ms_list = bucket.pop("elapsed_ms_list", [])
+        ms_list: list[float] = bucket.pop("elapsed_ms_list", [])
         bucket["p50_ms"] = _percentile(ms_list, 0.50) or 0.0
 
     return LlmMetrics(

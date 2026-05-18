@@ -26,8 +26,8 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from halal_trader.core.llm.base import BaseLLM
 from halal_trader.core.llm.tools import Tool, ToolCall
+from halal_trader.domain.ports import LLMBackend
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +64,7 @@ _DEFAULT_MAX_SECONDS = 30.0
 
 
 async def run_agent(
-    llm: BaseLLM,
+    llm: LLMBackend,
     *,
     system: str,
     user: str,
@@ -219,7 +219,7 @@ def _flatten(history: list[dict[str, Any]]) -> str:
 
 
 def _force_finalise(
-    llm: BaseLLM,
+    llm: LLMBackend,
     *,
     system: str,
     history: list[dict[str, Any]],
@@ -240,7 +240,7 @@ def _force_finalise(
 
 
 async def _force_finalise_async(
-    llm: BaseLLM,
+    llm: LLMBackend,
     *,
     system: str,
     history: list[dict[str, Any]],

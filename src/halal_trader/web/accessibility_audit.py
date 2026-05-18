@@ -101,7 +101,7 @@ def _channel_luminance(channel_byte: int) -> float:
     c = channel_byte / 255.0
     if c <= 0.03928:
         return c / 12.92
-    return ((c + 0.055) / 1.055) ** 2.4
+    return float(((c + 0.055) / 1.055) ** 2.4)
 
 
 def relative_luminance(color: str) -> float:

@@ -20,7 +20,8 @@ Buckets are tuned for human-scale latencies (1ms – 60s).
 from __future__ import annotations
 
 import logging
-from typing import Any
+from collections.abc import Callable, Coroutine
+from typing import Any, ParamSpec, TypeVar
 
 logger = logging.getLogger(__name__)
 
@@ -111,7 +112,14 @@ def observe_broker_call(*, broker: str, method: str, ms: float, error: bool) -> 
     )
 
 
-def timed_broker_call(broker: str, method: str):
+_P = ParamSpec("_P")
+_R = TypeVar("_R")
+
+
+def timed_broker_call(
+    broker: str,
+    method: str,
+) -> "Callable[[Callable[_P, Coroutine[Any, Any, _R]]], Callable[_P, Coroutine[Any, Any, _R]]]":
     """Decorator: time + emit ``observe_broker_call`` around an async method.
 
     Use on bound methods of broker clients (Binance, Alpaca MCP) so every
@@ -123,9 +131,11 @@ def timed_broker_call(broker: str, method: str):
     import functools
     import time
 
-    def decorator(fn):
+    def decorator(
+        fn: "Callable[_P, Coroutine[Any, Any, _R]]",
+    ) -> "Callable[_P, Coroutine[Any, Any, _R]]":
         @functools.wraps(fn)
-        async def wrapper(*args, **kwargs):
+        async def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> _R:
             t0 = time.monotonic()
             error = False
             try:

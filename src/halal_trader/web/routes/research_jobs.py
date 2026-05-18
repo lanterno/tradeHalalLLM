@@ -162,7 +162,7 @@ async def _run_walk_forward(params: dict[str, Any]) -> dict[str, Any]:
 
     engine = BacktestEngine()
 
-    async def _bt(p, slice_):
+    async def _bt(p: str, slice_: list[Kline]) -> Any:
         return await engine.run(p, slice_)
 
     report = await run_walk_forward(
@@ -216,7 +216,8 @@ async def _run_monte_carlo(params: dict[str, Any]) -> dict[str, Any]:
 def _result_to_dict(result: Any) -> dict[str, Any]:
     """Reduce a BacktestResult dataclass to a JSON-friendly dict."""
     if hasattr(result, "model_dump"):
-        return result.model_dump()  # pydantic
+        dumped: dict[str, Any] = result.model_dump()  # pydantic
+        return dumped
     if hasattr(result, "__dict__"):
         out: dict[str, Any] = {}
         for k, v in vars(result).items():

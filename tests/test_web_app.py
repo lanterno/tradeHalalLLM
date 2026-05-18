@@ -25,7 +25,6 @@ def client(database_url, tmp_path, monkeypatch):
 
     # Bust the Settings singleton so the new env vars are picked up.
     # Apply migrations to the fresh tmp DB.
-    web_app.app_state.clear()
     app = web_app.create_app()
 
     with TestClient(app) as c:

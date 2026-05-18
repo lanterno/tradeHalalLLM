@@ -153,7 +153,7 @@ def register(app: FastAPI) -> None:
 
         positions_value = {
             getattr(p, "symbol", "?"): float(getattr(p, "qty", 0))
-            * float(getattr(p, "current_price", None) or getattr(p, "avg_entry_price", 0))
+            * float(getattr(p, "current_price", None) or getattr(p, "avg_entry_price", 0) or 0)
             for p in positions
         }
         alloc = compute_allocation(positions_value, total_equity=equity)

@@ -143,6 +143,11 @@ files = [
     "src/halal_trader/domain",
     "src/halal_trader/core",
     "src/halal_trader/db/repository.py",
+    # Item 5 follow-up promotion — strict-clean as of this commit.
+    "src/halal_trader/web",
+    "src/halal_trader/crypto/cycle.py",
+    "src/halal_trader/crypto/scheduler.py",
+    "src/halal_trader/crypto/components.py",
 ]
 ignore_missing_imports = true
 warn_redundant_casts = true
