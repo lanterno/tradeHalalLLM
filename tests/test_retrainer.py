@@ -62,7 +62,12 @@ async def test_retrain_aborts_when_too_few_snapshots():
     repo = _FakeRepo(labelled=[])  # zero rows from DB
     sched = RetrainingScheduler(repo, min_samples=50)
     result = await sched.retrain()
-    assert result == {"anomaly": False, "classifier": False, "samples": 0}
+    assert result == {
+        "anomaly": False,
+        "classifier": False,
+        "slippage": False,
+        "samples": 0,
+    }
 
 
 @pytest.mark.asyncio
@@ -97,6 +102,10 @@ async def test_retrain_skips_snapshots_with_missing_features(monkeypatch, tmp_pa
             captured["anomaly_samples"] = list(self._samples)
             return True
 
+        async def persist_model(self) -> None:
+            # Wave K: retrainer awaits this after a successful train().
+            captured["anomaly_persisted"] = True
+
     class _StubClassifier:
         def __init__(self, *_, **__):
             pass
@@ -105,6 +114,9 @@ async def test_retrain_skips_snapshots_with_missing_features(monkeypatch, tmp_pa
             captured["features"] = features
             captured["labels"] = labels
             return True
+
+        async def persist_model(self) -> None:
+            captured["classifier_persisted"] = True
 
     monkeypatch.setattr("halal_trader.ml.anomaly.MarketAnomalyDetector", _StubAnomaly)
     monkeypatch.setattr("halal_trader.ml.anomaly.MLSignalClassifier", _StubClassifier)
