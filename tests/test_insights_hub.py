@@ -19,7 +19,7 @@ def test_hub_default_attributes_present() -> None:
 
 def test_hub_state_snapshot_has_expected_keys() -> None:
     h = InsightsHub()
-    snap = h.to_app_state()
+    snap = h.snapshot()
     assert {
         "drift_monitor",
         "regime_memory",
@@ -41,6 +41,6 @@ def test_hub_modifications_persist_within_an_instance() -> None:
 def test_app_state_keys_match_web_route_lookup() -> None:
     """Sanity-check: hub keys align with what the insights routes read."""
     h = InsightsHub()
-    snap = h.to_app_state()
+    snap = h.snapshot()
     for key in ("drift_monitor", "shadow_ledger", "calibration_curve"):
         assert key in snap

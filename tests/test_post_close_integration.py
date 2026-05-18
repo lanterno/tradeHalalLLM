@@ -52,7 +52,7 @@ async def test_full_post_close_flow_to_dashboard_shape(engine) -> None:
     assert hub.drift.n == 1
     assert hub.drift.state in ("warming_up", "stable", "drift")
 
-    snap = hub.to_app_state()
+    snap = hub.snapshot()
     assert "drift_monitor" in snap
     assert "shadow_ledger" in snap
     assert "regime_memory" in snap

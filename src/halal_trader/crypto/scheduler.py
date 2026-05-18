@@ -109,13 +109,27 @@ class CryptoTradingBot(BaseTradingBot):
         if self._news_reactor.enabled:
             self._news_reactor.on_event(self._on_news_event)
 
-        # Expose live components to the dashboard.
-        from halal_trader.web.app import app_state as _web_state
+        # Wave A: build the bot's typed BotContext + populate the
+        # runtime view the dashboard polls. Replaces the previous
+        # write-to-app_state-dict pattern.
+        from datetime import UTC, datetime
 
-        _web_state["ws_manager"] = self._ws
-        _web_state["sentiment_manager"] = self._sentiment_manager
-        _web_state["exchange"] = self._binance
-        _web_state["bot_running"] = True
+        from halal_trader.core.context import BotContext
+
+        self._runtime.bot_running = True
+        self._runtime.started_at = datetime.now(UTC)
+        self._runtime.ws_manager = self._ws
+        self._runtime.sentiment_manager = self._sentiment_manager
+        self._runtime.crypto_broker = self._binance
+        self._ctx = BotContext(
+            engine=self._engine,
+            repo=repo,
+            hub=comps.hub,
+            analytics=comps.analytics,
+            settings=self.settings,
+            bus=comps.bus,
+            runtime=self._runtime,
+        )
 
         logger.info("Crypto trading bot initialized successfully")
 
@@ -294,10 +308,7 @@ class CryptoTradingBot(BaseTradingBot):
         """Clean up all resources."""
         logger.info("Shutting down crypto trading bot...")
         self._running = False
-
-        from halal_trader.web.app import app_state as _web_state
-
-        _web_state["bot_running"] = False
+        self._runtime.bot_running = False
 
         # Cancel the reconcile background task before disposing the engine.
         if self._reconcile_task is not None:
@@ -459,11 +470,12 @@ class CryptoTradingBot(BaseTradingBot):
                         severity="error",
                     )
 
-                from datetime import datetime, timezone
+                from datetime import UTC, datetime
 
-                from halal_trader.web.app import app_state as _web_state
-
-                _web_state["last_cycle"] = datetime.now(timezone.utc).isoformat()
+                self._runtime.last_cycle = {
+                    "completed_at": datetime.now(UTC).isoformat(),
+                    "market": "crypto",
+                }
 
                 # Adaptive cadence — high-vol regimes shorten the next
                 # cycle; chop lengthens it. Falls back to the configured

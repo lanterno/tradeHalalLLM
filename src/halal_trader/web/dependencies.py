@@ -1,12 +1,10 @@
 """FastAPI dependency-injection seam for the typed dashboard context.
 
-Routes used to read ``app_state["..."]`` directly. They now take a
-:class:`DashboardContext` via ``Depends(get_ctx)``; the context is
-attached to the FastAPI app at startup and pulled out on each request
-via ``request.app.state.ctx``.
-
-This is the only file in ``halal_trader.web`` that touches the global
-``app_state`` shim — everything else is strictly typed.
+Every route takes a :class:`DashboardContext` via ``Depends(get_ctx)``;
+the context is attached to the FastAPI app at startup (lifespan) and
+pulled out on each request via ``request.app.state.ctx``. The legacy
+global-dict shim was removed in Wave A — there is no
+app_state dict anywhere in the route layer.
 """
 
 from __future__ import annotations

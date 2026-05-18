@@ -5,14 +5,18 @@ from __future__ import annotations
 import abc
 import logging
 from datetime import timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from halal_trader.config import get_settings
+from halal_trader.core.context import RuntimeView
 from halal_trader.db.models import init_db
 from halal_trader.db.repos import RepoBundle
 from halal_trader.db.repository import Repository
+
+if TYPE_CHECKING:
+    from halal_trader.core.context import BotContext
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +30,14 @@ class BaseTradingBot(abc.ABC):
         self._engine: AsyncEngine | None = None
         self._repo: Repository | None = None
         self._bundle: RepoBundle | None = None
+        # Wave A: every long-lived dependency the bot needs flows
+        # through one frozen BotContext. The cycle / monitor / cli
+        # commands take ``self._ctx`` instead of reaching into a
+        # global ``app_state`` dict. The mutable RuntimeView inside
+        # ``_ctx.runtime`` is the bot's "what am I doing right now"
+        # view that the dashboard polls.
+        self._runtime: RuntimeView = RuntimeView()
+        self._ctx: "BotContext | None" = None
 
     async def initialize(self) -> None:
         """Set up the database and delegate component creation to the subclass."""

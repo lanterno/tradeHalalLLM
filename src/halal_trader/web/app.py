@@ -31,11 +31,6 @@ logger = logging.getLogger(__name__)
 _DASHBOARD_DIST = Path(__file__).resolve().parent.parent.parent.parent / "dashboard" / "dist"
 
 
-# Backwards-compat dict view — kept as an empty dict so legacy callers
-# don't ImportError. New code uses ``Depends(get_ctx)`` instead.
-app_state: dict[str, Any] = {}
-
-
 def create_app() -> Any:
     """Create and configure the FastAPI application."""
     from fastapi import FastAPI, Request

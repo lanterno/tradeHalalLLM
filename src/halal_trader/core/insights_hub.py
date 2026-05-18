@@ -51,8 +51,14 @@ class InsightsHub:
     # set. Empty when the source is disabled.
     whale_flows: dict[str, Any] = field(default_factory=dict)
 
-    def to_app_state(self) -> dict[str, Any]:
-        """Snapshot suitable for ``app_state["insights"]`` (web routes)."""
+    def snapshot(self) -> dict[str, Any]:
+        """Dict snapshot of every insights component the dashboard exposes.
+
+        Used by the ``/api/insights`` route (which now reads via
+        ``Depends(get_ctx)`` and serialises this dict back out) and by
+        the test suite. The shape is intentionally tolerant — None
+        values for optional components are fine.
+        """
         return {
             "drift_monitor": self.drift,
             "regime_memory": self.regime,

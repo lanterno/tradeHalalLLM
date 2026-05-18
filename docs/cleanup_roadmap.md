@@ -42,39 +42,66 @@ each ends with a one-line acceptance test you can run at the CLI.
 
 ## Architecture
 
-### Wave A — Replace `app_state: dict` + `getattr` chains with a typed `BotContext`
+### Wave A — Replace `app_state: dict` + `getattr` chains with a typed `BotContext` ✅ landed
 
-**Why**: today the dashboard, cycle, monitor, and CLI all reach into a
-`dict[str, Any]` (`app_state`) or pull soft-optional dependencies via
-`getattr(self, "_x", None)`. Round 2's Wave E showed how often that
-masks dead wiring; round 1's `_replay_store` was a real bug. Mypy
-strict is now clean only on `db/repository.py` because `app_state`
-makes the rest of the surface untypable.
+**Why**: the dashboard, cycle, monitor, and CLI all used to reach into
+a `dict[str, Any]` (`app_state`) or pull soft-optional dependencies via
+`getattr(self, "_x", None)`. That masked dead wiring (a real bug class
+in round 1's `_replay_store`) and made mypy-strict on the
+non-`db/repository.py` surface impossible.
 
-The fix is a small, frozen, typed `BotContext` dataclass that holds
-every long-lived dependency the bot needs (engine, repo, hub, broker,
-LLM, settings). Build it once at composition time and pass it
-explicitly. The dashboard takes a `DashboardContext` (a strict subset
-— no broker, no LLM). Both are strict-typed.
+**What landed (round-4/5 + this commit)**:
+- `core/context.py` — `RuntimeView` (mutable cycle-state container),
+  `DashboardContext` (frozen, read-only deps + RuntimeView), and
+  `BotContext` (superset for the trading bot) with a
+  `to_dashboard_context()` projection that shares the *same*
+  RuntimeView ref so the bot's cycle mutations are visible to the
+  dashboard. (round-4/5)
+- `web/dependencies.py:get_ctx` — single FastAPI dependency that
+  resolves the context from `request.app.state.ctx`. All web routes
+  use `Depends(get_ctx)`. (round-4/5)
+- `BaseTradingBot.__init__` now constructs a fresh `RuntimeView` and
+  declares an `_ctx: BotContext | None = None` slot. Built in
+  `CryptoTradingBot._create_components` from the crypto components
+  bag (engine, repo, hub, analytics, settings, bus) right after the
+  long-lived subsystems are wired.
+- `CryptoTradingBot` now writes to `self._runtime.X` instead of
+  `app_state[...]`:
+  - `_create_components` → `bot_running=True`, `started_at`,
+    `ws_manager`, `sentiment_manager`, `crypto_broker`.
+  - `shutdown()` → `bot_running=False`.
+  - cycle loop → `last_cycle = {"completed_at", "market"}` after each
+    successful cycle.
+- `web/app.py` — the legacy `app_state: dict[str, Any] = {}` declaration
+  is **deleted**. The lifespan still creates a per-process
+  DashboardContext with its own RuntimeView (co-host case below is
+  deferred).
+- `core/insights_hub.py:to_app_state` renamed to `snapshot()` — same
+  shape, no lingering name reference.
 
-**Scope**:
-- `core/context.py` — `@dataclass(frozen=True, slots=True)` with each
-  long-lived dependency typed. Builders return it; consumers read it.
-- Replace `app_state["engine"]`, `app_state["repo"]`, `app_state["hub"]`
-  reads in the 22 web routes with `ctx: DashboardContext` injected
-  via FastAPI `Depends`.
-- Promote mypy strict to `web/`, `crypto/cycle.py`, `crypto/scheduler.py`,
-  `crypto/components.py`.
-- Delete `app_state` entirely.
+**Acceptance** (both met):
+- `grep -r 'app_state\["' src/` returns zero hits — verified by the
+  test `test_no_app_state_dict_reads_in_src` in
+  `tests/test_bot_context_wiring.py`.
+- `app_state` no longer importable from `halal_trader.web.app` —
+  verified by `test_app_state_no_longer_importable_from_web_app`.
+- `RuntimeView` ref is shared between BotContext and its DashboardContext
+  projection — verified by
+  `test_bot_context_to_dashboard_context_shares_runtime_ref` and
+  `test_runtime_view_mutation_visible_through_dashboard_ctx`.
 
-**Acceptance**:
-- `grep -r 'app_state\["' src/` returns zero hits.
-- `uv run mypy --strict src/halal_trader/web` clean.
-- The dashboard has a real type signature for "what state am I
-  reading."
-
-**Estimated effort**: 1 day (broad but mechanical once the dataclass
-shape is right).
+**Deferred**:
+- **mypy --strict promotion to `web/`, `crypto/cycle.py`,
+  `crypto/scheduler.py`, `crypto/components.py`.** The structural blocker
+  (untypable `app_state` reads) is gone, but the actual mypy config
+  bump + the inevitable fix-up of any inferred-Any usages is a
+  separate pass.
+- **Co-host runtime sync.** When the bot and dashboard are co-located
+  in one process, the dashboard's lifespan today builds its own
+  RuntimeView (unaware of the bot's). A future pass can install the
+  bot's BotContext.to_dashboard_context() onto the FastAPI app at
+  bot start. Today's deployment runs them as separate processes, so
+  this is cosmetic for now.
 
 ---
 
