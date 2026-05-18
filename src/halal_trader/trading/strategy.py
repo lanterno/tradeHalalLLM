@@ -7,7 +7,7 @@ from typing import Any
 
 from halal_trader.core.llm.ensemble import EnsembleVariant, run_ensemble, wrap_existing
 from halal_trader.core.llm.prompts import register as _register_prompt
-from halal_trader.core.strategy import BaseStrategy
+from halal_trader.core.strategy import AgentConfig, BaseStrategy
 from halal_trader.db.repos import LlmDecisionRepo
 from halal_trader.domain.models import Account, Position, TradingPlan
 from halal_trader.domain.ports import LLMBackend
@@ -179,6 +179,10 @@ class TradingStrategy(BaseStrategy):
         ensemble_llms: list[LLMBackend] | None = None,
         ensemble_quorum: int = 2,
         ensemble_skip_at: float | None = None,
+        agentic_enabled: bool = False,
+        agentic_max_turns: int = 5,
+        agentic_max_seconds: float = 30.0,
+        agentic_hub: Any | None = None,
     ) -> None:
         super().__init__(
             llm,
@@ -203,6 +207,17 @@ class TradingStrategy(BaseStrategy):
         self._ensemble_quorum = ensemble_quorum
         self._ensemble_skip_at = ensemble_skip_at
         self.last_ensemble_verdict = None
+
+        # Wave H — stocks-side agentic mode. Two asset-agnostic tools:
+        # query_rag (analogous past rationales) and
+        # query_regime_memory (analogous past regimes). The crypto-side
+        # analyze_pair / compute_var_95 tools have no clean stocks
+        # equivalent today and are intentionally omitted.
+        self._agentic_enabled = agentic_enabled
+        self._agentic_max_turns = agentic_max_turns
+        self._agentic_max_seconds = agentic_max_seconds
+        self._agentic_hub = agentic_hub
+        self.last_agent_transcript: list[dict[str, Any]] | None = None
 
     async def analyze(
         self,
@@ -247,7 +262,27 @@ class TradingStrategy(BaseStrategy):
             catalysts_text=catalysts_text or "No recent catalysts.",
         )
 
-        from halal_trader.core.llm.tools import SUBMIT_DECISIONS_TOOL
+        from halal_trader.core.llm.tools import (
+            QUERY_RAG_TOOL,
+            QUERY_REGIME_MEMORY_TOOL,
+            SUBMIT_DECISIONS_TOOL,
+        )
+
+        agent_cfg: AgentConfig | None = None
+        if self._agentic_enabled:
+            from halal_trader.trading.agent_tools import build_agent_handlers
+
+            agent_cfg = AgentConfig(
+                tools=[
+                    QUERY_RAG_TOOL,
+                    QUERY_REGIME_MEMORY_TOOL,
+                    SUBMIT_DECISIONS_TOOL,
+                ],
+                handlers=build_agent_handlers(hub=self._agentic_hub),
+                terminal_tool="submit_decisions",
+                max_turns=self._agentic_max_turns,
+                max_seconds=self._agentic_max_seconds,
+            )
 
         plan = await self._run_llm_analysis(
             system,
@@ -269,6 +304,7 @@ class TradingStrategy(BaseStrategy):
             },
             prompt_version=PROMPT_VERSION.short,
             tool=SUBMIT_DECISIONS_TOOL,
+            agent=agent_cfg,
         )
 
         if self._ensemble_llms and plan.decisions:

@@ -158,6 +158,52 @@ ANALYZE_PAIR_TOOL = Tool(
 )
 
 
+QUERY_REGIME_MEMORY_TOOL = Tool(
+    name="query_regime_memory",
+    description=(
+        "Retrieve top-K historical days whose market regime is most similar "
+        "to today's, by cosine similarity on a 10-dim regime feature vector. "
+        "Use this to ask 'when has the market looked like this before, and "
+        "what happened next?' before committing to a trade. Args supply the "
+        "feature vector explicitly (or pass an empty dict to use today's "
+        "current snapshot)."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "volatility": {
+                "type": "number",
+                "description": "ATR / price (decimal, e.g. 0.02 for 2%).",
+            },
+            "trend": {
+                "type": "number",
+                "description": "Multi-timeframe trend alignment in [-1, +1].",
+            },
+            "breadth": {
+                "type": "number",
+                "description": "Share of universe up minus down in [-1, +1].",
+            },
+            "sentiment": {
+                "type": "number",
+                "description": "Composite news/social sentiment in [-1, +1].",
+            },
+            "drawdown": {
+                "type": "number",
+                "description": "Current drawdown from peak in [0, 1].",
+            },
+            "k": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 20,
+                "default": 5,
+                "description": "How many analogous past regimes to return.",
+            },
+        },
+        "additionalProperties": False,
+    },
+)
+
+
 QUERY_RAG_TOOL = Tool(
     name="query_rag",
     description=(
@@ -198,6 +244,7 @@ CRYPTO_STRATEGY_TOOLS: list[Tool] = [SUBMIT_PLAN_TOOL]
 CRYPTO_AGENTIC_TOOLS: list[Tool] = [
     ANALYZE_PAIR_TOOL,
     QUERY_RAG_TOOL,
+    QUERY_REGIME_MEMORY_TOOL,
     COMPUTE_VAR_TOOL,
     SUBMIT_PLAN_TOOL,
 ]

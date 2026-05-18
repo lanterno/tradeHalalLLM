@@ -47,6 +47,7 @@ def build_agent_handlers(
     return {
         "analyze_pair": _make_analyze_pair_handler(ctx, timeframes=timeframes),
         "query_rag": _make_query_rag_handler(hub=hub),
+        "query_regime_memory": _make_query_regime_memory_handler(hub=hub, ctx=ctx),
         "compute_var_95": _make_compute_var_handler(ctx),
     }
 
@@ -179,5 +180,63 @@ def _make_compute_var_handler(ctx: "PromptContext") -> ToolHandler:
         except Exception as exc:  # noqa: BLE001
             logger.debug("compute_var_95 failed: %s", exc)
             return f"compute_var_95 failed transiently: {exc}"
+
+    return _handler
+
+
+def _make_query_regime_memory_handler(
+    *,
+    hub: Any | None,
+    ctx: "PromptContext",
+) -> ToolHandler:
+    """Top-K analogous past market regimes via pgvector cosine similarity.
+
+    The handler accepts a feature dict in the tool call (volatility,
+    trend, sentiment, drawdown, …); missing keys fall through to
+    ``RegimeFeatures``' safe defaults so the model can pass a partial
+    snapshot. Returns the formatted hits block from
+    :func:`ml.regime_memory.format_for_prompt`.
+
+    When no regime store is wired (dashboard-only process), returns a
+    plain "not wired" message — the model treats it as "no analogue
+    available" and proceeds.
+    """
+
+    async def _handler(call: "ToolCall") -> str:
+        regime = getattr(hub, "regime", None) if hub is not None else None
+        if regime is None:
+            return "Regime memory not wired this cycle — no historical analogues available."
+        try:
+            from halal_trader.ml.regime_memory import (
+                RegimeFeatures,
+                format_for_prompt,
+            )
+
+            args = dict(call.args or {})
+            k = int(args.pop("k", 5))
+            # Drop unknown keys defensively; the dataclass would crash
+            # on **{"not_a_field": 1}, and we'd rather degrade than
+            # abort the agent loop.
+            allowed = {
+                "volatility",
+                "trend",
+                "breadth",
+                "sentiment",
+                "drawdown",
+                "volume_ratio",
+                "correlation",
+                "realized_return_1d",
+                "rsi",
+                "spread_bps",
+            }
+            features_dict = {k_: float(v) for k_, v in args.items() if k_ in allowed}
+            features = RegimeFeatures(**features_dict)
+            hits = await regime.query(features, k=k)
+            if not hits:
+                return "No analogous past regimes found for the requested feature vector."
+            return format_for_prompt(features, hits, max_lines=k)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("query_regime_memory failed: %s", exc)
+            return f"Regime memory lookup failed transiently: {exc}"
 
     return _handler

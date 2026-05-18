@@ -202,6 +202,14 @@ class StockSettings(BaseSettings):
     correlation_reduction_factor: float = Field(default=0.5, ge=0.1, le=1.0)
     atr_baseline: float = Field(default=0.02, gt=0)
 
+    # Wave H stocks-side agentic mode. Off by default; opt in to drive
+    # the LLM through a bounded tool-calling loop (query_rag,
+    # query_regime_memory, submit_decisions) before each cycle's
+    # decision. Mirrors the crypto knobs.
+    agentic_enabled: bool = Field(default=False)
+    agentic_max_turns: int = Field(default=5, ge=1, le=20)
+    agentic_max_seconds: float = Field(default=30.0, gt=0, le=120.0)
+
 
 class CryptoSettings(BaseSettings):
     model_config = SettingsConfigDict(**_BASE_CONFIG, env_prefix="CRYPTO_")

@@ -106,6 +106,16 @@ class TradingBot(BaseTradingBot):
             daily_return_target=self.settings.stocks.daily_return_target,
             max_simultaneous_positions=self.settings.stocks.max_simultaneous_positions,
             attacker_llm=attacker_llm,
+            # Wave H follow-up: stocks-side agentic mode. Default off;
+            # ``agentic_hub`` stays None until the stocks bot grows its
+            # own InsightsHub (RAG + regime memory are DB-backed, so
+            # adding the hub is purely a composition-root change).
+            # When enabled with no hub, the handlers degrade gracefully
+            # to "not wired" messages.
+            agentic_enabled=self.settings.stocks.agentic_enabled,
+            agentic_max_turns=self.settings.stocks.agentic_max_turns,
+            agentic_max_seconds=self.settings.stocks.agentic_max_seconds,
+            agentic_hub=None,
         )
         self.executor = TradeExecutor(
             self.broker,

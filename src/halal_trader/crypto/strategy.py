@@ -216,6 +216,7 @@ class CryptoTradingStrategy(BaseStrategy):
             ANALYZE_PAIR_TOOL,
             COMPUTE_VAR_TOOL,
             QUERY_RAG_TOOL,
+            QUERY_REGIME_MEMORY_TOOL,
             SUBMIT_DECISIONS_TOOL,
         )
 
@@ -236,6 +237,7 @@ class CryptoTradingStrategy(BaseStrategy):
                 tools=[
                     ANALYZE_PAIR_TOOL,
                     QUERY_RAG_TOOL,
+                    QUERY_REGIME_MEMORY_TOOL,
                     COMPUTE_VAR_TOOL,
                     SUBMIT_DECISIONS_TOOL,
                 ],
