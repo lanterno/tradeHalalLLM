@@ -45,6 +45,7 @@ class CryptoExecutor(BaseExecutor):
         take_profit_pct: float = 0.02,
         min_hold_seconds: int = 600,
         slippage_model: SlippageModel | None = None,
+        bus: Any | None = None,
     ) -> None:
         super().__init__(
             max_position_pct=max_position_pct,
@@ -77,6 +78,20 @@ class CryptoExecutor(BaseExecutor):
         # scored later. ``None`` = no model wired → no prediction
         # recorded; existing rows stay backwards-compatible.
         self._slippage_model = slippage_model
+        # Wave I: when wired, fills + rejections fire on the in-process
+        # EventBus alongside the JSON log entry so /ws/cycle subscribers
+        # see them in real time without polling.
+        self._bus = bus
+
+    async def _publish_event(self, topic: str, payload: dict[str, Any]) -> None:
+        """Best-effort publish to ``self._bus``. Swallowed on failure so a
+        slow / disconnected ``/ws/cycle`` subscriber can't block a fill."""
+        if self._bus is None:
+            return
+        try:
+            await self._bus.publish(topic, payload)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("bus publish %s failed: %s", topic, exc)
 
     def is_pair_blocked(self, symbol: str) -> bool:
         """Check if a pair is temporarily blocked due to repeated errors."""
@@ -355,6 +370,17 @@ class CryptoExecutor(BaseExecutor):
                     "filled_price": fill.filled_price,
                 },
             )
+            await self._publish_event(
+                events.TRADE_BUY_PLACED,
+                {
+                    "pair": decision.symbol,
+                    "order_id": order_id,
+                    "status": db_status,
+                    "quantity": quantity,
+                    "filled_quantity": fill.filled_quantity,
+                    "filled_price": fill.filled_price,
+                },
+            )
 
             if db_status == "partially_filled":
                 logger.warning(
@@ -570,6 +596,17 @@ class CryptoExecutor(BaseExecutor):
                     "pair": decision.symbol,
                     "order_id": order_id,
                     "status": db_status,
+                    "filled_quantity": fill.filled_quantity,
+                    "filled_price": fill.filled_price,
+                },
+            )
+            await self._publish_event(
+                events.TRADE_SELL_PLACED,
+                {
+                    "pair": decision.symbol,
+                    "order_id": order_id,
+                    "status": db_status,
+                    "quantity": quantity,
                     "filled_quantity": fill.filled_quantity,
                     "filled_price": fill.filled_price,
                 },

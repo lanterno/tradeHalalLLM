@@ -253,6 +253,15 @@ async def build_components(
     from halal_trader.core.event_bus import EventBus
 
     event_bus = EventBus()
+    # Wave I: every successful LLM call emits ``llm.call.complete`` on
+    # the bus so the dashboard's /ws/cycle stream sees provider /
+    # model / elapsed / cost in real time. Attached after construction
+    # so non-LLM CLIs (which build providers without a bus) work.
+    llm.attach_bus(event_bus)
+    if attacker_llm is not None:
+        attacker_llm.attach_bus(event_bus)
+    for alt in ensemble_llms:
+        alt.attach_bus(event_bus)
     insights_hub = InsightsHub(rag=rag_store, regime=RegimeMemory(engine=engine))
 
     # Optional Etherscan whale-flow source. The cycle records its
@@ -331,6 +340,8 @@ async def build_components(
         stop_loss_pct=0.01,
         take_profit_pct=0.02,
         slippage_model=slippage_model,
+        # Wave I: fills + rejections flow on /ws/cycle.
+        bus=event_bus,
     )
 
     portfolio = CryptoPortfolioTracker(
@@ -398,6 +409,8 @@ async def build_components(
         retrainer=retrainer,
         exiting_pairs=exiting_pairs,
         close_recorders=close_recorders,
+        # Wave I: SL/TP fires flow on /ws/cycle.
+        bus=event_bus,
     )
 
     # Optional shadow strategy — frozen-prompt variant that runs

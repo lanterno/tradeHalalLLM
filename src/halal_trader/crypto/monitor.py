@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from binance import BinanceAPIException
 
@@ -51,6 +51,7 @@ class PositionMonitor:
         retrainer: RetrainingScheduler | None = None,
         exiting_pairs: set[str] | None = None,
         close_recorders: object | None = None,
+        bus: Any | None = None,
     ) -> None:
         self._broker = broker
         self._repo = repo
@@ -75,6 +76,20 @@ class PositionMonitor:
         # ``record_close`` after a successful SL/TP exit. When ``None``,
         # the monitor behaves exactly as before (back-compat).
         self._close_recorders = close_recorders
+        # Wave I: when wired, exit events flow on the in-process
+        # EventBus alongside the JSON log entry so /ws/cycle subscribers
+        # see SL/TP fires in real time.
+        self._bus = bus
+
+    async def _publish_event(self, topic: str, payload: dict[str, Any]) -> None:
+        """Best-effort publish — swallowed on failure so a stuck WS
+        subscriber can't block a SL/TP exit."""
+        if self._bus is None:
+            return
+        try:
+            await self._bus.publish(topic, payload)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("bus publish %s failed: %s", topic, exc)
 
     async def start(self) -> None:
         """Start the monitor as a background task.
@@ -158,6 +173,15 @@ class PositionMonitor:
                     "stop_loss": trade.stop_loss,
                 },
             )
+            await self._publish_event(
+                events.TRADE_EXIT_SL,
+                {
+                    "trade_id": trade_id,
+                    "pair": trade.pair,
+                    "price": price,
+                    "stop_loss": trade.stop_loss,
+                },
+            )
             await self._exit_position(trade, price, "stop_loss")
 
         elif trade.target_price and price >= trade.target_price:
@@ -169,6 +193,15 @@ class PositionMonitor:
                 trade.target_price,
                 extra={
                     "event": events.TRADE_EXIT_TP,
+                    "trade_id": trade_id,
+                    "pair": trade.pair,
+                    "price": price,
+                    "target_price": trade.target_price,
+                },
+            )
+            await self._publish_event(
+                events.TRADE_EXIT_TP,
+                {
                     "trade_id": trade_id,
                     "pair": trade.pair,
                     "price": price,

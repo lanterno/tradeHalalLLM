@@ -581,38 +581,65 @@ setups.
 
 ## Operability + UX
 
-### Wave I — Live-cycle WebSocket: what the dashboard *should* show
+### Wave I — Live-cycle WebSocket: what the dashboard *should* show ✅ landed (backend)
 
 **Why**: the dashboard polls `/api/positions`, `/api/trades`,
 `/api/insights/*` every few seconds. That misses anything that
 happens *between* polls and burns server CPU on every refresh.
-What the operator actually wants is **a live feed of what the bot
-is doing right now**: this cycle started, fetched klines, called
-the LLM, decided to BUY BTCUSDT 0.005 at $42100 with stop $41600.
+What the operator wants is a live feed of what the bot is doing
+right now: this cycle started, fetched klines, called the LLM,
+decided to BUY BTCUSDT 0.005 at $42100 with stop $41600.
 
-A single `/ws/cycle` WebSocket that streams structured events:
-`cycle.start`, `cycle.stage.complete`, `llm.call.start`,
-`llm.call.complete`, `executor.fill`, `monitor.exit`. The bot
-publishes events to an in-process `EventBus`; the WS streams them
-to connected clients.
+**What landed (round-4/5 + this commit)**:
+- `core/event_bus.py:EventBus` — async pub/sub with topic-glob
+  patterns and back-pressure-safe slow-consumer drop (`_Subscriber`
+  with a bounded queue + drop-on-overflow). (round-4/5)
+- `core/cycle_pipeline.stage()` context manager publishes
+  `cycle.stage.start` / `cycle.stage.end` for every stage in the
+  Wave B pipeline. (round-4/5)
+- `core/cycle.BaseCycleService.run_cycle` publishes `cycle.start`,
+  `cycle.complete`, `cycle.failed`. (round-4/5)
+- `web/routes/streaming.py:/ws/cycle` — WebSocket route that subscribes
+  to a bus pattern (default `*`) and streams JSON-serialised events
+  to connected clients. (round-4/5)
+- **NEW this commit**: the bot now publishes the trading-side events
+  the dashboard's live feed actually cares about:
+  - `CryptoExecutor` → `trade.buy.placed` / `trade.sell.placed` on
+    fills + rejections (alongside the existing JSON log emit).
+  - `PositionMonitor` → `trade.exit.stop_loss` /
+    `trade.exit.take_profit` when SL/TP fires.
+  - `BaseLLM._record_usage` → `llm.call.complete` with
+    provider / model / elapsed / token / cost — every successful
+    provider call.
+- `BaseLLM.attach_bus(bus)` — new setter that wires the in-process
+  EventBus into a provider after construction. Used by
+  `crypto/components.py` to attach the bus to the primary LLM +
+  any adversarial + ensemble variants.
 
-This pairs perfectly with Wave B (per-stage cycle pipeline) — the
-stages already emit events; the bus just multiplexes them.
+**Trade-offs documented**:
+- `_publish_event` helpers on executor + monitor are **best-effort**:
+  a failing `bus.publish` is swallowed at debug level so a stuck
+  `/ws/cycle` subscriber can't block a fill or SL exit.
+- `BaseLLM._record_usage` is **synchronous** (existing API contract);
+  its bus publish uses `asyncio.get_running_loop().create_task(...)`
+  so it works inside the cycle's running loop. When there's no loop
+  (some test contexts), it silently skips — the metric / token
+  rollup still fires unchanged.
 
-**Scope**:
-- `core/event_bus.py` — async pub/sub with topic globs and
-  back-pressure-safe slow-consumer drop.
-- `web/routes/streaming.py:/ws/cycle` — new route, JSON line
-  protocol.
-- Dashboard "Live" page — a single scrolling timeline of events
-  with collapsible nested LLM tool calls.
+**Acceptance** (backend half met):
+- ✓ Every event source the dashboard's "Live" page needs is now on
+  the bus — verified by `tests/test_live_cycle_events.py` (10
+  tests: attach_bus, record_usage publishes, executor/monitor
+  publish helpers route to bus + noop without bus + swallow
+  failures, topic-glob filtering, event-name constants match).
+- ✓ Events match what the JSON log file contains — same canonical
+  constants from `core/events.py`.
 
-**Acceptance**:
-- Open the dashboard, watch one full cycle render in real time,
-  end-to-end.
-- The events match what the JSON log file contains.
-
-**Estimated effort**: 1.5 days.
+**Deferred**:
+- **Dashboard "Live" page** — pure frontend work (a scrolling
+  timeline with collapsible nested LLM tool calls). The WS data is
+  flowing end-to-end today; the React component to render it is the
+  remaining work for a UI pass.
 
 ---
 

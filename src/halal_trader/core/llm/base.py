@@ -85,6 +85,22 @@ class BaseLLM(ABC):
         self._daily_tokens: int = 0
         self._daily_reset_date: str = ""
         self._last_threshold_logged: int = 0
+        # Wave I: when wired, every successful LLM call emits
+        # ``llm.call.complete`` on the EventBus so /ws/cycle subscribers
+        # see provider/model/elapsed/cost without polling the DB.
+        # Stays None on standalone providers (CLI, tests, agent loops
+        # that build their own LLM).
+        self._bus: Any = None
+
+    def attach_bus(self, bus: Any) -> None:
+        """Wire the in-process EventBus for ``llm.call.complete`` emit.
+
+        Pulled out as a setter rather than a ctor kwarg because every
+        provider has its own ``__init__`` and threading a new arg
+        through all of them is invasive. The composition root calls
+        this once after building the LLM stack.
+        """
+        self._bus = bus
 
     def _track_usage(self, tokens: int) -> None:
         """Accumulate daily token usage and log at key thresholds."""
@@ -128,6 +144,33 @@ class BaseLLM(ABC):
                 model=usage.model,
                 ms=float(usage.elapsed_ms),
             )
+        # Wave I: surface to /ws/cycle subscribers. Fire-and-forget;
+        # synchronous schedule so non-async providers can still call
+        # _record_usage (the bus's ``publish`` is a coroutine, so we
+        # need an event loop running — every provider call IS inside
+        # an event loop today, so ``asyncio.ensure_future`` works).
+        if self._bus is not None:
+            import asyncio
+
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(
+                    self._bus.publish(
+                        "llm.call.complete",
+                        {
+                            "provider": usage.provider,
+                            "model": usage.model,
+                            "elapsed_ms": usage.elapsed_ms,
+                            "input_tokens": usage.input_tokens,
+                            "output_tokens": usage.output_tokens,
+                            "cost_usd": float(usage.cost_usd) if usage.cost_usd else 0.0,
+                        },
+                    )
+                )
+            except RuntimeError:
+                # No running loop — happens in some test contexts.
+                # Skip silently rather than crash the LLM call.
+                pass
 
     @abstractmethod
     async def generate(self, prompt: str, system: str | None = None) -> str:
