@@ -253,20 +253,42 @@ class TestShouldSkipLlm:
 
 
 class TestGetTradeablePairs:
+    """Happy-path tests for the tradeable-pairs Wave B stage. Extensive
+    branch coverage lives in :mod:`tests.test_crypto_cycle_tradeable`;
+    these two pin the cycle-service ↔ stage integration."""
+
     @patch("halal_trader.crypto.cycle.get_settings")
     async def test_returns_intersection_of_configured_and_halal(self, mock_get_settings):
+        from halal_trader.core.cycle_pipeline import CycleState
+        from halal_trader.core.cycle_stages import GetTradeablePairsStage
+
         mock_get_settings.return_value = _mock_settings()
         svc, *_ = _make_cycle_service(halal_pairs=["BTC", "SOL"])
         svc._configured_pairs = ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
-        result = await svc._get_tradeable_pairs()
-        assert "BTCUSDT" in result
-        assert "SOLUSDT" in result
-        assert "ETHUSDT" not in result
+        state = CycleState()
+        await GetTradeablePairsStage(
+            screener=svc._screener,
+            portfolio=svc._portfolio,
+            configured_pairs=svc._configured_pairs,
+            max_pairs=svc._settings.crypto.max_pairs_per_cycle,
+        ).run(state)
+        assert "BTCUSDT" in state.halal_pairs
+        assert "SOLUSDT" in state.halal_pairs
+        assert "ETHUSDT" not in state.halal_pairs
 
     @patch("halal_trader.crypto.cycle.get_settings")
     async def test_falls_back_to_configured_when_no_halal(self, mock_get_settings):
+        from halal_trader.core.cycle_pipeline import CycleState
+        from halal_trader.core.cycle_stages import GetTradeablePairsStage
+
         mock_get_settings.return_value = _mock_settings()
         svc, _, screener, *_ = _make_cycle_service()
         screener.get_halal_pairs.return_value = []
-        result = await svc._get_tradeable_pairs()
-        assert result == ["BTCUSDT", "ETHUSDT"]
+        state = CycleState()
+        await GetTradeablePairsStage(
+            screener=svc._screener,
+            portfolio=svc._portfolio,
+            configured_pairs=svc._configured_pairs,
+            max_pairs=svc._settings.crypto.max_pairs_per_cycle,
+        ).run(state)
+        assert state.halal_pairs == ["BTCUSDT", "ETHUSDT"]

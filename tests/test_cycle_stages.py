@@ -32,6 +32,8 @@ from halal_trader.core.cycle_stages import (
     BuildSentimentStage,
     BuildStockRiskStage,
     BuildTimeframeStage,
+    ComputeIndicatorsStage,
+    RecordCycleAnalyticsStage,
 )
 from halal_trader.crypto.regime import MarketRegime
 
@@ -490,7 +492,7 @@ async def test_sentiment_stage_high_buzz_fires_notifier():
     notifier.notify_buzz = AsyncMock()
     state = CycleState(halal_pairs=["BTCUSDT"])
     await BuildSentimentStage(sentiment_manager=manager, notifier=notifier).run(state)
-    notifier.notify_buzz.assert_awaited_once_with("BTCUSDT", 4.5, 0.7)
+    notifier.notify_buzz.assert_awaited_once_with("BTCUSDT", 4.5, 0.7, market="crypto")
 
 
 @pytest.mark.asyncio
@@ -953,3 +955,152 @@ async def test_regime_gate_blocks_buys_in_downtrend_for_stocks():
 @pytest.mark.asyncio
 async def test_regime_gate_has_stable_name():
     assert ApplyRegimeGateStage(detector=None).name == "apply_regime_gate"
+
+
+# ── ComputeIndicatorsStage ───────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_compute_indicators_stage_populates_cache_per_pair():
+    """Each pair in ``state.klines_by_symbol`` gets one entry in
+    ``state.indicators_cache`` — the helper is responsible for the
+    inner dict's shape, the stage just iterates."""
+    state = CycleState(
+        klines_by_symbol={
+            "BTCUSDT": [_kline(close=50_000.0) for _ in range(30)],
+            "ETHUSDT": [_kline(close=3_000.0) for _ in range(30)],
+        }
+    )
+    await ComputeIndicatorsStage().run(state)
+    assert set(state.indicators_cache.keys()) == {"BTCUSDT", "ETHUSDT"}
+
+
+@pytest.mark.asyncio
+async def test_compute_indicators_stage_empty_klines_yields_empty_cache():
+    """No klines → no cache entries, no exception."""
+    state = CycleState()
+    await ComputeIndicatorsStage().run(state)
+    assert state.indicators_cache == {}
+
+
+def test_compute_indicators_stage_has_stable_name():
+    assert ComputeIndicatorsStage().name == "compute_indicators"
+
+
+def _kline(close: float = 50_000.0):
+    """Helper for ComputeIndicators tests — minimal Kline factory."""
+    from halal_trader.domain.models import Kline
+
+    return Kline(
+        open_time=1,
+        open=close,
+        high=close + 1,
+        low=close - 1,
+        close=close,
+        volume=1.0,
+        close_time=2,
+    )
+
+
+# ── RecordCycleAnalyticsStage ────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_analytics_stage_records_shadow_placeholder_when_no_runner():
+    """Without a shadow runner, the stage writes a placeholder shadow-
+    ledger row so the dashboard's per-cycle equity chart isn't full of
+    gaps when the operator hasn't wired a shadow strategy."""
+    from halal_trader.domain.models import CryptoAccount
+
+    hub = MagicMock()
+    hub.shadow = MagicMock()
+    hub.regime = None  # skip regime memory path
+
+    stage = RecordCycleAnalyticsStage(
+        hub=hub,
+        shadow_runner=None,
+        replay_store=None,
+    )
+    state = CycleState(
+        account=CryptoAccount(
+            total_balance_usdt=10_000.0,
+            available_balance_usdt=8_000.0,
+            in_order_usdt=2_000.0,
+            usdt_free=8_000.0,
+        ),
+    )
+    await stage.run(state)
+    hub.shadow.record.assert_called_once()
+    kw = hub.shadow.record.call_args.kwargs
+    assert kw["live_equity"] == 10_000.0
+    assert kw["shadow_equity"] == 10_000.0  # same placeholder value
+
+
+@pytest.mark.asyncio
+async def test_analytics_stage_skips_shadow_record_when_runner_observes():
+    """With a shadow runner wired, this stage doesn't write the
+    placeholder row — ``ExecuteAndNotifyStage`` will call
+    ``observe_cycle`` after execute, which writes the real ledger row."""
+    from halal_trader.domain.models import CryptoAccount
+
+    hub = MagicMock()
+    hub.shadow = MagicMock()
+    hub.regime = None
+    runner = MagicMock()  # truthy → skip placeholder
+
+    stage = RecordCycleAnalyticsStage(hub=hub, shadow_runner=runner, replay_store=None)
+    await stage.run(
+        CycleState(
+            account=CryptoAccount(
+                total_balance_usdt=10_000.0,
+                available_balance_usdt=10_000.0,
+                in_order_usdt=0.0,
+                usdt_free=10_000.0,
+            )
+        )
+    )
+    hub.shadow.record.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_analytics_stage_swallows_shadow_failure():
+    """Shadow ledger DB hiccup must not bubble — the cycle continues."""
+    from halal_trader.domain.models import CryptoAccount
+
+    hub = MagicMock()
+    hub.shadow = MagicMock()
+    hub.shadow.record.side_effect = RuntimeError("shadow ledger DB down")
+    hub.regime = None
+
+    stage = RecordCycleAnalyticsStage(hub=hub, shadow_runner=None, replay_store=None)
+    await stage.run(
+        CycleState(
+            account=CryptoAccount(
+                total_balance_usdt=10_000.0,
+                available_balance_usdt=10_000.0,
+                in_order_usdt=0.0,
+                usdt_free=10_000.0,
+            )
+        )
+    )  # must not raise
+
+
+@pytest.mark.asyncio
+async def test_analytics_stage_no_account_skips_cleanly():
+    """A cycle that bailed before fetching the account leaves
+    ``state.account is None`` — the stage tolerates that and skips
+    every account-dependent step rather than dereferencing None."""
+    hub = MagicMock()
+    hub.shadow = MagicMock()
+    hub.regime = None
+
+    stage = RecordCycleAnalyticsStage(hub=hub, shadow_runner=None, replay_store=None)
+    await stage.run(CycleState())  # account=None
+    # The placeholder shadow record still fires; the dependent paths skip.
+    hub.shadow.record.assert_called_once()
+
+
+def test_analytics_stage_has_stable_name():
+    """The stage name appears in instrumentation events; lock it."""
+    stage = RecordCycleAnalyticsStage(hub=MagicMock(), shadow_runner=None, replay_store=None)
+    assert stage.name == "record_cycle_analytics"

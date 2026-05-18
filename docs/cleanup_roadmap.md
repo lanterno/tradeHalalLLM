@@ -1,16 +1,22 @@
 # Roadmap — Round 3
 
-> **Status: 11 of 12 waves shipped; Wave B substantively shipped.**
-> Wave B's primitives are all in place — `CycleState` dataclass,
-> `CycleStage` Protocol, `run_stages` driver with `stop_on_halt`, and
-> 18 concrete stage classes (12 `BuildXStage` + 4 `Augment*Stage` +
-> `ApplyRegimeGateStage` + `BuildForecastsStage`). Both crypto and
-> stocks cycles drive a single stage list end-to-end. The aspirational
-> "crypto/cycle.py under 100 lines" target wasn't met (currently ~711
-> lines of orchestration around the stage list), but the architectural
-> goal — "new prompt source = one new file, one new line in the stage
-> list" — is satisfied. See `docs/roadmap_status.md` for per-wave
-> commit hashes and a detailed running list of stage extractions.
+> **Status: 12 of 12 waves shipped.** Wave B's finishers landed in
+> the post-Round-5 cycle: the procedural `_get_tradeable_pairs`,
+> `_fetch_klines`, `_fetch_orderbooks`, `_record_cycle_analytics`,
+> `_execute_and_notify`, and inline indicator-compute helpers on
+> `CryptoCycleService` are now `GetTradeablePairsStage`,
+> `FetchKlinesStage`, `FetchOrderbooksStage`, `ComputeIndicatorsStage`,
+> `RecordCycleAnalyticsStage`, and `ExecuteAndNotifyStage` — six new
+> `CycleStage` classes that drop into the same `run_stages` driver
+> as the prompt-context builders. `crypto/cycle.py` shrank from 738
+> → 432 lines (-41 %); the residual is cycle-control glue (flat-skip
+> counter, live-mode safeguard, low-USDT guard, the `swallow=False`
+> LLM analyze block). The architectural goal — "new prompt source =
+> one new file, one new line in the stage list" — was already met
+> by the round-4/5 work; the finishers extend that property to
+> every cycle action, which unblocks Wave G (replay-fitted slippage
+> per stage), Wave J (Prometheus histograms per stage), and Wave F
+> (prompt-evolution A/B over individual stages).
 
 The two earlier rounds were focused on **mechanical cleanup**:
 schema hygiene, dead code, type safety, test parallelism. The

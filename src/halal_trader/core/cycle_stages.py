@@ -807,3 +807,432 @@ class BuildNewsStage:
             logger.debug("News feed unavailable: %s", exc)
             state.news_text = ""
         return state
+
+
+# ── Pre-LLM data-gathering stages (crypto) ───────────────────────
+# These replace the procedural helpers that used to live on
+# ``CryptoCycleService`` (`_get_tradeable_pairs`, `_fetch_klines`,
+# `_fetch_orderbooks`, and the inline indicator-compute loop). Each is
+# instantiated fresh per cycle in :func:`crypto.cycle._run_cycle_impl`.
+
+
+class GetTradeablePairsStage:
+    """Intersect configured pairs with the halal screener → ``state.halal_pairs``.
+
+    Operator-paused pairs (via ``POST /api/admin/pair/.../pause``) are
+    filtered out at this layer so a pause takes effect on the very next
+    cycle without needing a bot restart. Falls back to the configured
+    pairs (minus paused) when the halal cache is empty.
+    """
+
+    name = "get_tradeable_pairs"
+
+    def __init__(
+        self,
+        *,
+        screener: Any,
+        portfolio: Any,
+        configured_pairs: list[str],
+        max_pairs: int,
+    ) -> None:
+        self._screener = screener
+        self._portfolio = portfolio
+        self._configured_pairs = configured_pairs
+        self._max_pairs = max_pairs
+
+    async def run(self, state: CycleState) -> CycleState:
+        halal_symbols = await self._screener.get_halal_pairs()
+
+        paused: set[str] = set()
+        try:
+            paused = await self._portfolio.get_paused_pairs()
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Could not fetch paused pairs: %s", exc)
+
+        if not halal_symbols:
+            logger.info("No halal cache — using configured pairs: %s", self._configured_pairs)
+            state.halal_pairs = [p for p in self._configured_pairs if p.upper() not in paused][
+                : self._max_pairs
+            ]
+            return state
+
+        halal_set = {s.upper() for s in halal_symbols}
+        tradeable: list[str] = []
+        for pair in self._configured_pairs:
+            upper_pair = pair.upper()
+            if upper_pair in paused:
+                logger.info("Pair %s is paused by operator — skipping", pair)
+                continue
+            for suffix in ("USDT", "BUSD"):
+                if upper_pair.endswith(suffix):
+                    base = upper_pair.removesuffix(suffix)
+                    break
+            else:
+                base = upper_pair
+            if upper_pair in halal_set or base in halal_set:
+                tradeable.append(pair)
+
+        seen: set[str] = set()
+        unique: list[str] = []
+        for p in tradeable:
+            if p not in seen:
+                seen.add(p)
+                unique.append(p)
+
+        if unique:
+            state.halal_pairs = unique[: self._max_pairs]
+        else:
+            state.halal_pairs = [p for p in self._configured_pairs if p.upper() not in paused][
+                : self._max_pairs
+            ]
+        return state
+
+
+class FetchKlinesStage:
+    """Fetch klines for ``state.halal_pairs`` → ``state.klines_by_symbol``.
+
+    Prefers the WebSocket buffer when ≥20 candles are cached (avoids a
+    REST round-trip); falls back to throttled REST otherwise. Throttle
+    is a semaphore of 5 concurrent requests. Per-pair failures are
+    debug-logged; Binance ``-1003`` rate-limit responses trigger a 30s
+    sleep before the next pair attempts.
+    """
+
+    name = "fetch_klines"
+
+    def __init__(self, *, broker: Any, ws_manager: Any | None = None) -> None:
+        self._broker = broker
+        self._ws = ws_manager
+
+    async def run(self, state: CycleState) -> CycleState:
+        import asyncio
+
+        from binance import BinanceAPIException
+
+        sem = asyncio.Semaphore(5)
+
+        async def _get(pair: str) -> tuple[str, list[Any]]:
+            if self._ws:
+                ws_klines = self._ws.get_klines(pair, limit=100)
+                if len(ws_klines) >= 20:
+                    return pair, ws_klines
+            async with sem:
+                klines = await self._broker.get_klines(pair, interval="1m", limit=100)
+                return pair, klines
+
+        results = await asyncio.gather(
+            *[_get(p) for p in state.halal_pairs], return_exceptions=True
+        )
+        out: dict[str, list[Any]] = {}
+        for result in results:
+            if isinstance(result, Exception):
+                if isinstance(result, BinanceAPIException) and result.code == -1003:
+                    logger.warning("Rate limited fetching klines, backing off")
+                    await asyncio.sleep(30)
+                else:
+                    logger.debug("Failed to get klines: %s", result)
+                continue
+            pair, klines = result
+            out[pair] = klines
+        state.klines_by_symbol = out
+        return state
+
+
+class ComputeIndicatorsStage:
+    """Compute per-pair indicators over ``state.klines_by_symbol``.
+
+    Stamps ``state.indicators_cache`` with one entry per pair that
+    produced klines. The cache is scoped to symbols that actually have
+    klines so downstream stages don't have to defensively filter.
+    """
+
+    name = "compute_indicators"
+
+    async def run(self, state: CycleState) -> CycleState:
+        from halal_trader.crypto.indicators import compute_all
+
+        cache: dict[str, dict[str, Any]] = {}
+        for symbol, klines in state.klines_by_symbol.items():
+            cache[symbol] = compute_all(klines)
+        state.indicators_cache = cache
+        return state
+
+
+class FetchOrderbooksStage:
+    """Fetch order-book depth for ``state.halal_pairs`` → ``state.orderbooks``.
+
+    Same throttle + rate-limit handling as :class:`FetchKlinesStage`.
+    Order books are best-effort context for the microstructure stage;
+    a partial result is preferred to none.
+    """
+
+    name = "fetch_orderbooks"
+
+    def __init__(self, *, broker: Any) -> None:
+        self._broker = broker
+
+    async def run(self, state: CycleState) -> CycleState:
+        import asyncio
+
+        from binance import BinanceAPIException
+
+        sem = asyncio.Semaphore(5)
+
+        async def _get(pair: str) -> tuple[str, dict[str, Any]]:
+            async with sem:
+                book = await self._broker.get_order_book(pair, limit=10)
+                return pair, book
+
+        results = await asyncio.gather(
+            *[_get(p) for p in state.halal_pairs], return_exceptions=True
+        )
+        out: dict[str, dict[str, Any]] = {}
+        for result in results:
+            if isinstance(result, Exception):
+                if isinstance(result, BinanceAPIException) and result.code == -1003:
+                    logger.warning("Rate limited fetching orderbooks, backing off")
+                    await asyncio.sleep(30)
+                else:
+                    logger.debug("Failed to get order book: %s", result)
+                continue
+            pair, book = result
+            out[pair] = book
+        state.orderbooks = out
+        return state
+
+
+# ── Post-LLM execution + analytics stages (crypto) ───────────────
+
+
+class RecordCycleAnalyticsStage:
+    """Per-cycle bookkeeping: shadow ledger + replay snapshot + regime memory + treasury log.
+
+    Each step is best-effort; failures are debug-logged but never bubble
+    up. The stage owns the once-per-day regime-snapshot date so the same
+    stage instance can be reused across cycles (instantiate once in the
+    service ``__init__``, not per-cycle inline). Reads
+    ``state.account``, ``state.klines_by_symbol``,
+    ``state.indicators_cache``, ``state.halal_pairs``, ``state.today_pnl``,
+    and the four prompt-context texts; doesn't mutate ``state``.
+    """
+
+    name = "record_cycle_analytics"
+
+    def __init__(
+        self,
+        *,
+        hub: Any,
+        shadow_runner: Any | None,
+        replay_store: Any | None,
+    ) -> None:
+        from datetime import date
+
+        self._hub = hub
+        self._shadow_runner = shadow_runner
+        self._replay_store = replay_store
+        self._last_regime_snapshot_date: date | None = None
+        # The treasury-log de-dup key persists across cycles so the same
+        # "idle cash → sukuk" line doesn't fire every 90s while flat.
+        self._last_treasury_key: tuple[Any, ...] | None = None
+
+    async def run(self, state: CycleState) -> CycleState:
+        from halal_trader.core.observability import cycle_id_var
+
+        cycle_id = cycle_id_var.get() or "cycle-unknown"
+        account = state.account
+        equity = getattr(account, "total_balance_usdt", 0.0) or 0.0
+
+        # Shadow ledger placeholder when no runner is observing.
+        if self._shadow_runner is None:
+            try:
+                self._hub.shadow.record(
+                    cycle_id=cycle_id,
+                    live_equity=equity,
+                    shadow_equity=equity,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("shadow ledger record failed: %s", exc)
+
+        # Replay snapshot — the full prompt-context for prompt A/B scoring.
+        if self._replay_store is not None and account is not None:
+            try:
+                from halal_trader.core.replay import (
+                    CycleSnapshot,
+                    record_snapshot,
+                )
+
+                snap = CycleSnapshot.from_inputs(
+                    cycle_id=cycle_id,
+                    market="crypto",
+                    klines_by_symbol=state.klines_by_symbol,
+                    indicators_cache=state.indicators_cache,
+                    halal_pairs=list(state.halal_pairs),
+                    today_pnl=state.today_pnl,
+                    sentiment_text=state.sentiment_text,
+                    regime_text=state.regime_text,
+                    risk_text=state.risk_text,
+                    microstructure_text=state.microstructure_text,
+                    account={
+                        "total_balance_usdt": equity,
+                        "available_balance_usdt": account.available_balance_usdt,
+                        "in_order_usdt": account.in_order_usdt,
+                    },
+                )
+                await record_snapshot(self._replay_store, snap)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("replay snapshot failed: %s", exc)
+
+        # Daily regime snapshot — once per day on the first cycle.
+        try:
+            from datetime import UTC
+            from datetime import datetime as _dt
+
+            from halal_trader.ml.regime_memory import build_regime_features
+
+            today = _dt.now(UTC).date()
+            if self._last_regime_snapshot_date != today and account is not None:
+                feats = build_regime_features(
+                    indicators_cache=state.indicators_cache,
+                    today_pnl=state.today_pnl,
+                    equity=equity,
+                )
+                regime_mem = getattr(self._hub, "regime", None)
+                if feats is not None and regime_mem is not None:
+                    await regime_mem.add_today(feats, today=today)
+                    self._last_regime_snapshot_date = today
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("regime memory snapshot failed: %s", exc)
+
+        # Idle-cash treasury policy log when fully flat.
+        try:
+            self._log_treasury_plan(account)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("treasury plan failed: %s", exc)
+
+        return state
+
+    def _log_treasury_plan(self, account: Any) -> None:
+        if account is None:
+            return
+        if account.in_order_usdt > 0 or account.available_balance_usdt < 50:
+            return
+        try:
+            from halal_trader.core.treasury import (
+                TreasuryPolicy,
+                plan_idle_cash,
+            )
+
+            plan = plan_idle_cash(
+                cash_balance=account.available_balance_usdt,
+                positions_value=account.total_balance_usdt - account.available_balance_usdt,
+                current_treasury_value=0.0,
+                policy=TreasuryPolicy(),
+            )
+            if plan.is_noop:
+                return
+            key = (plan.action, plan.instrument, round(plan.amount_usd / 10) * 10)
+            if key == self._last_treasury_key:
+                return
+            self._last_treasury_key = key
+            logger.info(
+                "treasury: %s $%.2f into %s — %s",
+                plan.action,
+                plan.amount_usd,
+                plan.instrument,
+                plan.reason,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("treasury plan computation failed: %s", exc)
+
+
+class ExecuteAndNotifyStage:
+    """Execute ``state.plan``, drive the shadow runner, notify on fills.
+
+    Reads ``state.plan`` (set by the LLM analyze block) and
+    ``state.account`` / ``state.klines_by_symbol`` / ``state.indicators_cache``.
+    Side effects: posts orders via the executor, calls
+    ``shadow_runner.observe_cycle`` (best-effort), records indicator
+    snapshots for filled buys (so the ML retraining loop can label
+    them when the position closes), and notifies the operator via
+    Telegram on submitted/filled trades.
+
+    The ``shadow_kwargs`` builder receives the analyze-kwargs dict
+    every cycle from :class:`crypto.cycle.CryptoCycleService` so the
+    shadow runner sees the exact prompt-context the live LLM saw.
+    """
+
+    name = "execute_and_notify"
+
+    def __init__(
+        self,
+        *,
+        executor: Any,
+        portfolio: Any,
+        notifier: Any | None,
+        shadow_runner: Any | None,
+        shadow_kwargs_builder: Any | None = None,
+    ) -> None:
+        self._executor = executor
+        self._portfolio = portfolio
+        self._notifier = notifier
+        self._shadow_runner = shadow_runner
+        # A callable ``state -> dict`` that produces the analyze-kwargs
+        # dict the shadow runner replays. Per-cycle (the live cycle
+        # rebuilds analyze_kwargs each tick), so injected as a builder.
+        self._shadow_kwargs_builder = shadow_kwargs_builder
+
+    async def run(self, state: CycleState) -> CycleState:
+        from halal_trader.core.observability import cycle_id_var
+        from halal_trader.core.tracing import tracer
+
+        plan = state.plan
+        results: list[dict[str, Any]] = []
+        if plan is not None and getattr(plan, "decisions", None):
+            async with tracer.aspan("cycle.execute_plan", decision_count=len(plan.decisions)):
+                results = await self._executor.execute_plan(plan, account=state.account)
+        else:
+            logger.info("No crypto trades to execute this cycle")
+
+        if self._shadow_runner is not None and self._shadow_kwargs_builder is not None:
+            try:
+                latest_prices = {
+                    pair: (klines[-1].close if klines else 0.0)
+                    for pair, klines in state.klines_by_symbol.items()
+                }
+                await self._shadow_runner.observe_cycle(
+                    cycle_id=cycle_id_var.get() or "cycle-unknown",
+                    live_equity=(state.account.total_balance_usdt if state.account else 0.0) or 0.0,
+                    latest_prices=latest_prices,
+                    analyze_kwargs=self._shadow_kwargs_builder(state),
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("shadow runner observe_cycle failed: %s", exc)
+
+        for r in results:
+            logger.info("Crypto execution: %s", r)
+            status = r.get("status")
+            if status in ("submitted", "filled") and r.get("action") == "buy":
+                trade_id = r.get("trade_id")
+                symbol = r.get("symbol", "")
+                if trade_id and symbol in state.indicators_cache:
+                    try:
+                        await self._portfolio.record_indicator_snapshot(
+                            trade_id=trade_id,
+                            pair=symbol,
+                            indicators=state.indicators_cache[symbol],
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        logger.debug("Failed to record indicator snapshot: %s", exc)
+            if self._notifier and status in ("submitted", "filled"):
+                try:
+                    await self._notifier.notify_trade(
+                        pair=r.get("symbol", ""),
+                        side=r.get("action", ""),
+                        quantity=r.get("quantity", 0),
+                        price=r.get("price", 0),
+                        market="crypto",
+                        order_id=str(r.get("order_id", "")),
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("Failed to send trade notification: %s", exc)
+        return state

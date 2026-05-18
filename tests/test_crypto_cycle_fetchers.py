@@ -1,7 +1,7 @@
-"""Tests for `CryptoCycleService._fetch_klines` and `_fetch_orderbooks`.
+"""Tests for :class:`FetchKlinesStage` and :class:`FetchOrderbooksStage`.
 
-These two helpers run the per-cycle market-data sweep with a 5-way
-semaphore + REST/WS prefer logic + per-pair exception isolation.
+These two Wave B stages run the per-cycle market-data sweep with a
+5-way semaphore + REST/WS prefer logic + per-pair exception isolation.
 A regression here would either over-pressure the Binance API
 (rate-limit storm) or silently drop pairs from the cycle's view.
 """
@@ -13,21 +13,9 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from binance import BinanceAPIException
 
-from halal_trader.crypto.cycle import CryptoCycleService
+from halal_trader.core.cycle_pipeline import CycleState
+from halal_trader.core.cycle_stages import FetchKlinesStage, FetchOrderbooksStage
 from halal_trader.domain.models import Kline
-
-
-def _service(*, ws_manager=None, broker=None) -> CryptoCycleService:
-    """Construct a service with stubbed deps for fetcher tests."""
-    return CryptoCycleService(
-        broker=broker or AsyncMock(),
-        screener=AsyncMock(),
-        strategy=AsyncMock(),
-        executor=AsyncMock(),
-        portfolio=AsyncMock(),
-        ws_manager=ws_manager,
-        configured_pairs=["BTCUSDT", "ETHUSDT"],
-    )
 
 
 def _kline(open_time: int = 1, close: float = 100.0) -> Kline:
@@ -45,13 +33,25 @@ def _kline(open_time: int = 1, close: float = 100.0) -> Kline:
 def _binance_rate_limit() -> BinanceAPIException:
     """Construct a -1003 (rate-limit) BinanceAPIException — the
     constructor takes (response, status_code, text). We forge a
-    minimal shape to drive the exception's `.code` attribute."""
+    minimal shape to drive the exception's ``.code`` attribute."""
     fake_response = MagicMock(status_code=429)
     fake_response.json.return_value = {"code": -1003, "msg": "Too many requests"}
     return BinanceAPIException(fake_response, 429, '{"code":-1003,"msg":"Too many requests"}')
 
 
-# ── _fetch_klines ──────────────────────────────────────────
+async def _run_klines(pairs, *, broker, ws_manager=None) -> dict:
+    state = CycleState(halal_pairs=list(pairs))
+    await FetchKlinesStage(broker=broker, ws_manager=ws_manager).run(state)
+    return state.klines_by_symbol
+
+
+async def _run_orderbooks(pairs, *, broker) -> dict:
+    state = CycleState(halal_pairs=list(pairs))
+    await FetchOrderbooksStage(broker=broker).run(state)
+    return state.orderbooks
+
+
+# ── FetchKlinesStage ───────────────────────────────────────
 
 
 @pytest.mark.asyncio
@@ -61,11 +61,9 @@ async def test_fetch_klines_uses_ws_buffer_when_sufficient():
     ws.get_klines.return_value = [_kline(i) for i in range(30)]  # 30 bars
 
     broker = AsyncMock()
-    # If the test fails, this would still get called and we'd notice.
     broker.get_klines = AsyncMock(side_effect=AssertionError("REST should not be called"))
 
-    svc = _service(ws_manager=ws, broker=broker)
-    out = await svc._fetch_klines(["BTCUSDT"])
+    out = await _run_klines(["BTCUSDT"], broker=broker, ws_manager=ws)
 
     assert "BTCUSDT" in out
     assert len(out["BTCUSDT"]) == 30
@@ -84,8 +82,7 @@ async def test_fetch_klines_falls_back_to_rest_when_ws_buffer_short():
     broker = AsyncMock()
     broker.get_klines = AsyncMock(return_value=rest_klines)
 
-    svc = _service(ws_manager=ws, broker=broker)
-    out = await svc._fetch_klines(["BTCUSDT"])
+    out = await _run_klines(["BTCUSDT"], broker=broker, ws_manager=ws)
 
     assert out["BTCUSDT"][0].close == 200.0  # REST data, not WS
     broker.get_klines.assert_awaited_once()
@@ -98,8 +95,7 @@ async def test_fetch_klines_falls_back_to_rest_when_no_ws():
     broker = AsyncMock()
     broker.get_klines = AsyncMock(return_value=rest_klines)
 
-    svc = _service(ws_manager=None, broker=broker)
-    out = await svc._fetch_klines(["BTCUSDT"])
+    out = await _run_klines(["BTCUSDT"], broker=broker, ws_manager=None)
 
     assert "BTCUSDT" in out
     broker.get_klines.assert_awaited_once()
@@ -121,8 +117,7 @@ async def test_fetch_klines_isolates_per_pair_failure():
 
     broker.get_klines = AsyncMock(side_effect=get_klines_side_effect)
 
-    svc = _service(ws_manager=ws, broker=broker)
-    out = await svc._fetch_klines(["BTCUSDT", "ETHUSDT"])
+    out = await _run_klines(["BTCUSDT", "ETHUSDT"], broker=broker, ws_manager=ws)
 
     assert "BTCUSDT" not in out  # failed pair dropped
     assert "ETHUSDT" in out  # successful pair kept
@@ -133,9 +128,8 @@ async def test_fetch_klines_empty_pairs_returns_empty_dict():
     """Empty input list → empty output, no broker calls."""
     broker = AsyncMock()
     broker.get_klines = AsyncMock()
-    svc = _service(ws_manager=None, broker=broker)
 
-    out = await svc._fetch_klines([])
+    out = await _run_klines([], broker=broker)
 
     assert out == {}
     broker.get_klines.assert_not_awaited()
@@ -143,9 +137,9 @@ async def test_fetch_klines_empty_pairs_returns_empty_dict():
 
 @pytest.mark.asyncio
 async def test_fetch_klines_handles_rate_limit_exception_quietly():
-    """A `-1003` BinanceAPIException triggers a 30-s backoff log but
+    """A ``-1003`` BinanceAPIException triggers a 30-s backoff log but
     must not propagate (the cycle continues with what it has). Patch
-    asyncio.sleep so the test isn't slow."""
+    ``asyncio.sleep`` so the test isn't slow."""
     import asyncio as _asyncio
 
     sleep_calls: list[float] = []
@@ -159,18 +153,20 @@ async def test_fetch_klines_handles_rate_limit_exception_quietly():
         broker = AsyncMock()
         broker.get_klines = AsyncMock(side_effect=_binance_rate_limit())
 
-        svc = _service(ws_manager=None, broker=broker)
-        out = await svc._fetch_klines(["BTCUSDT"])
+        out = await _run_klines(["BTCUSDT"], broker=broker)
 
-        # No data, but no exception either.
         assert out == {}
-        # 30s backoff was triggered.
         assert 30 in sleep_calls
     finally:
         _asyncio.sleep = real_sleep
 
 
-# ── _fetch_orderbooks ──────────────────────────────────────
+def test_fetch_klines_stage_has_stable_name():
+    """The stage name appears in instrumentation events; lock it."""
+    assert FetchKlinesStage(broker=AsyncMock()).name == "fetch_klines"
+
+
+# ── FetchOrderbooksStage ───────────────────────────────────
 
 
 @pytest.mark.asyncio
@@ -178,8 +174,7 @@ async def test_fetch_orderbooks_calls_broker_per_pair():
     broker = AsyncMock()
     broker.get_order_book = AsyncMock(return_value={"bids": [[100, 1]], "asks": [[101, 1]]})
 
-    svc = _service(broker=broker)
-    out = await svc._fetch_orderbooks(["BTCUSDT", "ETHUSDT"])
+    out = await _run_orderbooks(["BTCUSDT", "ETHUSDT"], broker=broker)
 
     assert "BTCUSDT" in out
     assert "ETHUSDT" in out
@@ -193,13 +188,11 @@ async def test_fetch_orderbooks_uses_limit_10():
     broker = AsyncMock()
     broker.get_order_book = AsyncMock(return_value={"bids": [], "asks": []})
 
-    svc = _service(broker=broker)
-    await svc._fetch_orderbooks(["BTCUSDT"])
+    await _run_orderbooks(["BTCUSDT"], broker=broker)
 
     broker.get_order_book.assert_awaited_once()
     kwargs = broker.get_order_book.call_args.kwargs
     args = broker.get_order_book.call_args.args
-    # limit could be positional or kwarg; check both.
     assert kwargs.get("limit") == 10 or 10 in args
 
 
@@ -214,8 +207,7 @@ async def test_fetch_orderbooks_isolates_per_pair_failure():
 
     broker.get_order_book = AsyncMock(side_effect=get_book_side_effect)
 
-    svc = _service(broker=broker)
-    out = await svc._fetch_orderbooks(["BTCUSDT", "ETHUSDT"])
+    out = await _run_orderbooks(["BTCUSDT", "ETHUSDT"], broker=broker)
 
     assert "BTCUSDT" not in out
     assert "ETHUSDT" in out
@@ -237,8 +229,7 @@ async def test_fetch_orderbooks_handles_rate_limit():
         broker = AsyncMock()
         broker.get_order_book = AsyncMock(side_effect=_binance_rate_limit())
 
-        svc = _service(broker=broker)
-        out = await svc._fetch_orderbooks(["BTCUSDT"])
+        out = await _run_orderbooks(["BTCUSDT"], broker=broker)
 
         assert out == {}
         assert 30 in sleep_calls
@@ -251,8 +242,11 @@ async def test_fetch_orderbooks_empty_pairs_returns_empty_dict():
     broker = AsyncMock()
     broker.get_order_book = AsyncMock()
 
-    svc = _service(broker=broker)
-    out = await svc._fetch_orderbooks([])
+    out = await _run_orderbooks([], broker=broker)
 
     assert out == {}
     broker.get_order_book.assert_not_awaited()
+
+
+def test_fetch_orderbooks_stage_has_stable_name():
+    assert FetchOrderbooksStage(broker=AsyncMock()).name == "fetch_orderbooks"
