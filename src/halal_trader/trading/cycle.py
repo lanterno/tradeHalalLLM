@@ -42,6 +42,8 @@ class TradingCycleService(BaseCycleService):
         timeframe_analyzer: Any = None,
         insights_hub: Any = None,
         notifier: Any = None,
+        analytics: Any = None,
+        self_review: Any = None,
     ) -> None:
         super().__init__(alerts=alerts, engine=engine)
         self._live_mode_checker = live_mode_checker
@@ -82,6 +84,14 @@ class TradingCycleService(BaseCycleService):
         # buys/sells so the operator gets the same Telegram alerts on
         # stocks fills they already get for crypto.
         self._notifier = notifier
+        # Stocks-side parity (round-7 follow-up): rolling-window
+        # performance summary + active self-improve adjustments. The
+        # analytics impl just needs ``compute_stats`` + ``format_for_prompt``
+        # (``CrossAssetAnalytics(repo, asset_class="stock")`` satisfies);
+        # ``self_review`` just needs ``format_adjustments_for_prompt()``.
+        # Both default to None — stage emits an empty block.
+        self._analytics = analytics
+        self._self_review = self_review
 
     async def _pre_cycle_checks(self) -> bool:
         now = now_eastern()
@@ -156,8 +166,10 @@ class TradingCycleService(BaseCycleService):
         from halal_trader.core.cycle_pipeline import CycleState, run_stages
         from halal_trader.core.cycle_stages import (
             ApplyRegimeGateStage,
+            BuildActiveAdjustmentsStage,
             BuildCatalystsStage,
             BuildMlSignalsStage,
+            BuildPerformanceStage,
             BuildRegimeStage,
             BuildStockRiskStage,
             BuildTimeframeStage,
@@ -182,6 +194,11 @@ class TradingCycleService(BaseCycleService):
                 ),
                 BuildTimeframeStage(self._timeframes),
                 BuildCatalystsStage(self._catalyst_feed),
+                # 7-day lookback — stocks cycle is daily-ish (15min cron,
+                # but trades close intraday). Matches the crypto 24h
+                # window in spirit (one trading day's worth of round-trips).
+                BuildPerformanceStage(self._analytics, lookback_days=7),
+                BuildActiveAdjustmentsStage(self._self_review),
             ],
             stop_on_halt=True,
         )
@@ -224,6 +241,8 @@ class TradingCycleService(BaseCycleService):
             ml_signals_text=state.ml_signals_text,
             timeframe_text=state.timeframe_text,
             catalysts_text=state.catalysts_text,
+            performance_text=state.performance_text,
+            active_adjustments=state.active_adjustments,
         )
         plan = await self._strategy.analyze(**analyze_kwargs)
 

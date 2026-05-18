@@ -128,3 +128,57 @@ def test_format_bars_handles_missing_bar_fields_with_zero_default():
     out = _format_bars(bars)
     assert "t0" in out
     assert "0.00" in out
+
+
+# ── Round-7 follow-up: performance_text + active_adjustments ──────
+
+
+def test_user_prompt_template_renders_performance_block():
+    """The Wave-equivalent ``=== RECENT PERFORMANCE ===`` block lands in
+    the rendered prompt. Pinning so a future refactor doesn't silently
+    drop the new prompt-context block crypto already has."""
+    from halal_trader.trading.strategy import USER_PROMPT_TEMPLATE
+
+    assert "=== RECENT PERFORMANCE" in USER_PROMPT_TEMPLATE
+    assert "{performance_text}" in USER_PROMPT_TEMPLATE
+
+
+def test_user_prompt_template_renders_active_adjustments_block():
+    from halal_trader.trading.strategy import USER_PROMPT_TEMPLATE
+
+    assert "=== ACTIVE STRATEGY ADJUSTMENTS" in USER_PROMPT_TEMPLATE
+    assert "{active_adjustments}" in USER_PROMPT_TEMPLATE
+
+
+def test_user_prompt_template_falls_back_to_friendly_defaults():
+    """The strategy passes ``performance_text or "No completed trades yet."``
+    so a fresh bot with no analytics wired still renders a clean prompt."""
+    from halal_trader.trading.strategy import USER_PROMPT_TEMPLATE
+
+    rendered = USER_PROMPT_TEMPLATE.format(
+        buying_power=100000.0,
+        portfolio_value=100000.0,
+        cash=100000.0,
+        today_pnl=0.0,
+        today_pnl_pct=0.0,
+        positions_text="No open positions.",
+        halal_symbols="AAPL, MSFT",
+        snapshots_text="(none)",
+        bars_text="(none)",
+        sentiment_text="(none)",
+        risk_text="(none)",
+        regime_text="(none)",
+        ml_signals_text="(none)",
+        timeframe_text="(none)",
+        catalysts_text="(none)",
+        performance_text="No completed trades yet.",
+        active_adjustments="None.",
+    )
+    # The blocks render in the canonical order — bars before performance
+    # before active_adjustments before sentiment — so the LLM sees
+    # context in a stable layout.
+    bars_pos = rendered.index("RECENT PRICE BARS")
+    perf_pos = rendered.index("RECENT PERFORMANCE")
+    adj_pos = rendered.index("ACTIVE STRATEGY ADJUSTMENTS")
+    sentiment_pos = rendered.index("SENTIMENT ANALYSIS")
+    assert bars_pos < perf_pos < adj_pos < sentiment_pos

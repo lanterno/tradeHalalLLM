@@ -110,3 +110,37 @@ def test_constructor_threads_through_optional_kwargs():
     assert svc._timeframes is timeframes
     assert svc._hub is hub
     assert svc._notifier is notifier
+
+
+def test_constructor_threads_analytics_and_self_review():
+    """Stocks-side parity: ``analytics`` + ``self_review`` flow into the
+    cycle so ``BuildPerformanceStage`` + ``BuildActiveAdjustmentsStage``
+    stamp ``state.performance_text`` / ``state.active_adjustments``."""
+    analytics = MagicMock()
+    self_review = MagicMock()
+    svc = TradingCycleService(
+        broker=AsyncMock(),
+        screener=MagicMock(),
+        strategy=AsyncMock(),
+        executor=AsyncMock(),
+        portfolio=AsyncMock(),
+        analytics=analytics,
+        self_review=self_review,
+    )
+    assert svc._analytics is analytics
+    assert svc._self_review is self_review
+
+
+def test_constructor_analytics_and_self_review_default_to_none():
+    """Both default to None — the stages handle the missing collaborator
+    gracefully (emit an empty block). Pinned so a future refactor doesn't
+    silently promote either to a required parameter."""
+    svc = TradingCycleService(
+        broker=AsyncMock(),
+        screener=MagicMock(),
+        strategy=AsyncMock(),
+        executor=AsyncMock(),
+        portfolio=AsyncMock(),
+    )
+    assert svc._analytics is None
+    assert svc._self_review is None

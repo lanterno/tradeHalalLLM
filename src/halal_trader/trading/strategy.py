@@ -76,6 +76,12 @@ Today's P&L: ${today_pnl:+,.2f} ({today_pnl_pct:+.2%})
 === RECENT PRICE BARS (5-day daily) ===
 {bars_text}
 
+=== RECENT PERFORMANCE (rolling) ===
+{performance_text}
+
+=== ACTIVE STRATEGY ADJUSTMENTS ===
+{active_adjustments}
+
 === SENTIMENT ANALYSIS ===
 {sentiment_text}
 
@@ -233,6 +239,8 @@ class TradingStrategy(BaseStrategy):
         regime_text: str = "",
         ml_signals_text: str = "",
         timeframe_text: str = "",
+        performance_text: str = "",
+        active_adjustments: str = "",
     ) -> TradingPlan:
         portfolio_value = account.portfolio_value or account.equity or 100000
         today_pnl_pct = today_pnl / portfolio_value if portfolio_value else 0
@@ -260,6 +268,8 @@ class TradingStrategy(BaseStrategy):
             ml_signals_text=ml_signals_text or "No ML signals available.",
             timeframe_text=timeframe_text or "No multi-timeframe data available.",
             catalysts_text=catalysts_text or "No recent catalysts.",
+            performance_text=performance_text or "No completed trades yet.",
+            active_adjustments=active_adjustments or "None.",
         )
 
         from halal_trader.core.llm.tools import (

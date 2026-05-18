@@ -160,6 +160,17 @@ class TradingBot(BaseTradingBot):
 
         catalyst_feed = StockCatalystFeed(sources=catalyst_sources) if catalyst_sources else None
 
+        # Stocks-side rolling-performance analytics — same surface as
+        # the crypto cycle (``BuildPerformanceStage`` reads
+        # ``compute_stats`` + ``format_for_prompt``). Built once here so
+        # the cycle's stage list can stamp ``state.performance_text``
+        # on each pass without a per-cycle constructor.
+        from halal_trader.core.analytics import CrossAssetAnalytics
+
+        repo = self._repo
+        assert repo is not None  # populated by BaseTradingBot.initialize()
+        stocks_analytics = CrossAssetAnalytics(repo, asset_class="stock")
+
         # Cycle service — owns the intraday trading logic
         self.cycle_service = TradingCycleService(
             broker=self.broker,
@@ -171,6 +182,11 @@ class TradingBot(BaseTradingBot):
             engine=self._engine,
             live_mode_checker=self._live_mode_checker,
             catalyst_feed=catalyst_feed,
+            analytics=stocks_analytics,
+            # ``self_review=None`` — stocks-side ``TradeSelfReview``
+            # equivalent is a separate build; the stage emits an empty
+            # block until one ships.
+            self_review=None,
         )
 
         logger.info("Trading bot initialized successfully")
