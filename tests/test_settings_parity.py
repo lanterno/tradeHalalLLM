@@ -23,10 +23,13 @@ from halal_trader.config import Settings
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 ENV_EXAMPLE = PROJECT_ROOT / ".env.example"
+# Stocks-only starter template — same field set as the canonical
+# example, just reorganized for operators running ``just stocks`` only.
+ENV_STOCKS_EXAMPLE = PROJECT_ROOT / ".env.stocks.example"
 
 
-def _env_keys() -> set[str]:
-    text = ENV_EXAMPLE.read_text()
+def _env_keys(path: Path = ENV_EXAMPLE) -> set[str]:
+    text = path.read_text()
     return {m.group(1) for m in re.finditer(r"^([A-Z][A-Z0-9_]*)=", text, flags=re.MULTILINE)}
 
 
@@ -113,3 +116,52 @@ def test_field_default_matches_or_is_explicit(env_name):
         assert str(default) == example_value or float(example_value) == float(default), (
             f"{env_name}: example={example_value!r} default={default!r}"
         )
+
+
+# ── .env.stocks.example parity (same field set, reorganized) ─────
+
+
+def test_env_stocks_example_exists():
+    assert ENV_STOCKS_EXAMPLE.exists(), f"missing {ENV_STOCKS_EXAMPLE}"
+
+
+def test_stocks_example_documents_every_settings_field():
+    """The stocks-only starter template should be a complete reference
+    — every leaf in ``Settings`` must be documented, even the crypto-side
+    fields (kept at the bottom under "NOT USED for stocks"). Otherwise
+    operators copying ``.env.stocks.example → .env`` would silently lose
+    a knob they later wanted to flip on.
+    """
+    documented = _env_keys(ENV_STOCKS_EXAMPLE)
+    missing = [name for name in _LEAF_NAMES if name not in documented]
+    assert not missing, (
+        f"Settings fields missing from .env.stocks.example: {sorted(missing)}. "
+        f"Add a line `{missing[0]}=<default>` (probably under the "
+        f"NOT USED section if it's crypto-side)."
+    )
+
+
+def test_stocks_example_has_no_unknown_keys():
+    documented = _env_keys(ENV_STOCKS_EXAMPLE)
+    unknown = documented - set(_LEAF_NAMES)
+    assert not unknown, (
+        f".env.stocks.example has keys not in Settings: {sorted(unknown)}. "
+        f"Either add the field to config.py or remove the env line."
+    )
+
+
+def test_stocks_example_matches_canonical_field_set():
+    """Both example files document the same fields. Add a field to
+    ``Settings`` → both files must list it; remove a field → both files
+    must drop the line. Catches drift before the docs lie to operators.
+    """
+    canonical = _env_keys(ENV_EXAMPLE)
+    stocks = _env_keys(ENV_STOCKS_EXAMPLE)
+    only_in_canonical = canonical - stocks
+    only_in_stocks = stocks - canonical
+    assert not only_in_canonical, (
+        f"In .env.example but not .env.stocks.example: {sorted(only_in_canonical)}"
+    )
+    assert not only_in_stocks, (
+        f"In .env.stocks.example but not .env.example: {sorted(only_in_stocks)}"
+    )
