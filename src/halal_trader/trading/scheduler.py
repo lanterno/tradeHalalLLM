@@ -351,11 +351,18 @@ class TradingBot(BaseTradingBot):
                 " (early close)" if close.hour < 16 else "",
             )
 
-            # Log upcoming trading calendar
+            # Log upcoming trading calendar. The Alpaca MCP server wraps
+            # its response as ``{"result": [...]}``; unwrap before
+            # iterating. Decorative-only — failures are debug-logged.
             try:
                 calendar = await self.broker.get_calendar()
-                if isinstance(calendar, list) and calendar:
-                    next_days = calendar[:5]
+                rows = (
+                    calendar.get("result", [])
+                    if isinstance(calendar, dict)
+                    else (calendar if isinstance(calendar, list) else [])
+                )
+                if rows:
+                    next_days = rows[:5]
                     logger.info(
                         "Upcoming trading days: %s",
                         [d.get("date", d) if isinstance(d, dict) else d for d in next_days],

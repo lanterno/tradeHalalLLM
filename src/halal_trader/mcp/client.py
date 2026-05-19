@@ -246,11 +246,16 @@ class AlpacaMCPClient:
             start: Start date (YYYY-MM-DD). Defaults to today (US/Eastern).
             end: End date (YYYY-MM-DD). Defaults to 30 days from start.
         """
+        # Upstream Alpaca MCP renamed the tool's args from
+        # ``start_date``/``end_date`` to ``start``/``end`` and added a
+        # ``date_type`` knob. Sending the old names emits
+        # ``Argument 'start_date' not found in parameter map for
+        # LegacyCalendar`` warnings and silently no-ops the call.
         today = today_eastern()
-        start_date = start or today.isoformat()
-        end_date = end or (today + timedelta(days=30)).isoformat()
+        start_value = start or today.isoformat()
+        end_value = end or (today + timedelta(days=30)).isoformat()
         return await self.call_tool(
-            "get_calendar", {"start_date": start_date, "end_date": end_date}
+            "get_calendar", {"start": start_value, "end": end_value}
         )
 
     async def get_all_positions(self) -> list[Position]:
