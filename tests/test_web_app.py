@@ -66,6 +66,30 @@ def test_trades_endpoint_empty(client):
     assert r.json() == []
 
 
+def test_trades_endpoint_market_stocks_reads_stocks_table(client):
+    """``?market=stocks`` reads the stocks ``trades`` table (returns
+    list of stock trades), not the crypto ledger. Empty pre-trade is
+    correct; the route just must not 404 or fall back to crypto."""
+    r = client.get("/api/trades?market=stocks")
+    assert r.status_code == 200
+    assert isinstance(r.json(), list)
+
+
+def test_trades_endpoint_default_is_crypto_for_back_compat(client):
+    """No ``market`` param → crypto, matching pre-Round-7 behavior."""
+    a = client.get("/api/trades")
+    b = client.get("/api/trades?market=crypto")
+    assert a.status_code == 200
+    assert b.status_code == 200
+    assert a.json() == b.json()
+
+
+def test_trades_endpoint_rejects_unknown_market(client):
+    r = client.get("/api/trades?market=options")
+    assert r.status_code == 400
+    assert "market must be" in r.json()["detail"]
+
+
 def test_pnl_daily_empty(client):
     r = client.get("/api/pnl/daily?days=7")
     assert r.status_code == 200
@@ -109,6 +133,25 @@ def test_analytics_returns_zeros_with_no_trades(client):
     assert r.status_code == 200
     body = r.json()
     assert body["total_trades"] == 0
+
+
+def test_analytics_market_stocks_routes_to_cross_asset_analytics(client):
+    """``?market=stocks`` builds a fresh CrossAssetAnalytics(asset_class=
+    'stock') and reads ``get_completed_stock_round_trips`` instead of
+    ``get_completed_round_trips``. Same response shape, sourced from
+    the stocks ``trades`` table."""
+    r = client.get("/api/analytics?market=stocks")
+    assert r.status_code == 200
+    body = r.json()
+    # Same field set as the crypto path — frontend renders identically.
+    for key in ("total_trades", "wins", "losses", "win_rate", "profit_factor"):
+        assert key in body
+
+
+def test_analytics_rejects_unknown_market(client):
+    r = client.get("/api/analytics?market=options")
+    assert r.status_code == 400
+    assert "market must be" in r.json()["detail"]
 
 
 # ── Risk + system status ───────────────────────────────────────

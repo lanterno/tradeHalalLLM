@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from fastapi import Depends, FastAPI
+from typing import Any
+
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 
 from halal_trader.core.context import DashboardContext
@@ -16,16 +18,46 @@ def register(app: FastAPI) -> None:
         limit: int = 100,
         offset: int = 0,
         pair: str | None = None,
+        symbol: str | None = None,
         side: str | None = None,
         status: str | None = None,
         from_date: str | None = None,
         to_date: str | None = None,
+        market: str = "crypto",
         ctx: DashboardContext = Depends(get_ctx),
     ) -> JSONResponse:
-        trades = await ctx.repo.get_recent_crypto_trades(limit=limit + offset)
+        """Recent trades for one market.
+
+        ``market="crypto"`` (default, back-compat) reads
+        ``crypto_trades`` via ``get_recent_crypto_trades``; rows are
+        keyed by ``pair``. ``market="stocks"`` reads ``trades`` via
+        ``get_recent_trades``; rows are keyed by ``symbol``. The
+        ``pair`` and ``symbol`` filters are both accepted and applied
+        to whichever key the row carries, so a frontend that doesn't
+        know the market discriminator still gets sensible filtering.
+        """
+        market = market.lower()
+        trades: list[dict[str, Any]]
+        if market == "crypto":
+            trades = await ctx.repo.get_recent_crypto_trades(limit=limit + offset)
+        elif market in ("stock", "stocks"):
+            trades = await ctx.repo.get_recent_trades(limit=limit + offset)
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail=f"market must be 'crypto' or 'stocks', got {market!r}",
+            )
         result = trades[offset:]
-        if pair:
-            result = [t for t in result if t.get("pair") == pair]
+        # Stocks rows expose ``symbol``; crypto rows expose ``pair``.
+        # Both filters work on either by checking whichever key the
+        # row has — saves the frontend a market switch.
+        entity_filter = pair or symbol
+        if entity_filter:
+            result = [
+                t
+                for t in result
+                if t.get("pair") == entity_filter or t.get("symbol") == entity_filter
+            ]
         if side:
             result = [t for t in result if t.get("side") == side]
         if status:
