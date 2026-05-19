@@ -72,6 +72,38 @@ def test_pnl_daily_empty(client):
     assert isinstance(r.json(), list)
 
 
+def test_pnl_daily_defaults_to_crypto_for_back_compat(client):
+    """Pre-Round-7 the route always queried the crypto table — pin
+    that default so existing dashboard fetches (no ``market`` param)
+    keep hitting crypto rows."""
+    r = client.get("/api/pnl/daily?days=7")
+    assert r.status_code == 200
+    # Same response shape as the explicit ``?market=crypto`` call.
+    r2 = client.get("/api/pnl/daily?days=7&market=crypto")
+    assert r2.status_code == 200
+    assert r.json() == r2.json()
+
+
+def test_pnl_daily_market_stocks_reads_stocks_table(client):
+    """``?market=stocks`` must hit the stocks-side ``daily_pnl`` table
+    via :meth:`get_pnl_history`, not the crypto ledger. With no rows
+    written yet it still must respond 200 + ``[]`` (not 404 / not
+    'crypto fallback'). Pin so the stocks day-end row is reachable
+    via this route once the bot has run a day."""
+    r = client.get("/api/pnl/daily?days=7&market=stocks")
+    assert r.status_code == 200
+    assert isinstance(r.json(), list)
+
+
+def test_pnl_daily_rejects_unknown_market(client):
+    """Anything other than crypto/stocks/stock 400s loudly — silent
+    empty results were how the stocks ledger went missing from the
+    dashboard for weeks."""
+    r = client.get("/api/pnl/daily?market=junk")
+    assert r.status_code == 400
+    assert "market must be" in r.json()["detail"]
+
+
 def test_analytics_returns_zeros_with_no_trades(client):
     r = client.get("/api/analytics")
     assert r.status_code == 200
