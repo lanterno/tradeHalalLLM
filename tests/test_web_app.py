@@ -310,3 +310,31 @@ def test_metrics_llm_returns_zero_calls_with_no_log(client, tmp_path, monkeypatc
     r = client.get("/api/metrics/llm?window=86400")
     assert r.status_code == 200
     assert r.json()["calls"] == 0
+
+
+# ── /api/positions market dispatch ───────────────────────────
+
+
+def test_positions_default_is_crypto_for_back_compat(client):
+    """No ``market`` param → crypto path, matching pre-Round-7."""
+    a = client.get("/api/positions")
+    b = client.get("/api/positions?market=crypto")
+    assert a.status_code == 200
+    assert b.status_code == 200
+    assert a.json() == b.json()
+
+
+def test_positions_market_stocks_reads_stocks_open_trades(client):
+    """``?market=stocks`` calls ``get_open_trades`` (stocks repo)
+    instead of ``get_open_crypto_trades``. Empty pre-trade is fine
+    — the route just must return 200 and a list, not 404 or
+    silently fall back to crypto."""
+    r = client.get("/api/positions?market=stocks")
+    assert r.status_code == 200
+    assert isinstance(r.json(), list)
+
+
+def test_positions_rejects_unknown_market(client):
+    r = client.get("/api/positions?market=options")
+    assert r.status_code == 400
+    assert "market must be" in r.json()["detail"]
