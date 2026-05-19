@@ -427,3 +427,170 @@ async def test_no_notifier_wired_skips_silently():
 def test_execute_and_notify_stage_has_stable_name():
     stage = _stage(executor=AsyncMock())
     assert stage.name == "execute_and_notify"
+
+
+# ── Exec-failure counter wiring (Round-7 closing the dead path) ─
+
+
+@pytest.mark.asyncio
+async def test_error_result_records_execution_failure():
+    """An ``error``-status result must bump the self-review's per-pair
+    failure counter so the 10-failures trigger eventually fires.
+    Pre-fix this counter never moved off zero (no caller wired)."""
+    executor = AsyncMock()
+    executor.execute_plan = AsyncMock(
+        return_value=[
+            {
+                "symbol": "BTCUSDT",
+                "action": "buy",
+                "status": "error",
+                "reason": "MIN_NOTIONAL",
+            }
+        ]
+    )
+    self_review = MagicMock()
+    self_review.record_execution_failure = MagicMock()
+
+    stage = ExecuteAndNotifyStage(
+        executor=executor,
+        portfolio=AsyncMock(),
+        notifier=None,
+        shadow_runner=None,
+        self_review=self_review,
+    )
+    await stage.run(_state(plan=_plan_with_buy(), account=_account()))
+
+    self_review.record_execution_failure.assert_called_once_with("BTCUSDT", "MIN_NOTIONAL")
+
+
+@pytest.mark.asyncio
+async def test_rejected_result_records_execution_failure():
+    """``rejected`` status (e.g. halal screening blocked the buy)
+    also bumps the failure counter — repeated halal rejections on a
+    symbol are operator-actionable signal."""
+    executor = AsyncMock()
+    executor.execute_plan = AsyncMock(
+        return_value=[
+            {
+                "symbol": "ETHUSDT",
+                "action": "buy",
+                "status": "rejected",
+                "reason": "below_min_notional",
+            }
+        ]
+    )
+    self_review = MagicMock()
+    self_review.record_execution_failure = MagicMock()
+
+    stage = ExecuteAndNotifyStage(
+        executor=executor,
+        portfolio=AsyncMock(),
+        notifier=None,
+        shadow_runner=None,
+        self_review=self_review,
+    )
+    await stage.run(_state(plan=_plan_with_buy(), account=_account()))
+
+    self_review.record_execution_failure.assert_called_once_with("ETHUSDT", "below_min_notional")
+
+
+@pytest.mark.asyncio
+async def test_filled_result_does_not_record_execution_failure():
+    """Happy path: a filled buy must NOT bump the failure counter
+    (otherwise every successful trade would trigger reviews)."""
+    executor = AsyncMock()
+    executor.execute_plan = AsyncMock(
+        return_value=[
+            {
+                "symbol": "BTCUSDT",
+                "action": "buy",
+                "status": "filled",
+                "trade_id": 42,
+                "quantity": 0.001,
+                "price": 50_000.0,
+            }
+        ]
+    )
+    self_review = MagicMock()
+    self_review.record_execution_failure = MagicMock()
+
+    stage = ExecuteAndNotifyStage(
+        executor=executor,
+        portfolio=AsyncMock(),
+        notifier=None,
+        shadow_runner=None,
+        self_review=self_review,
+    )
+    await stage.run(_state(plan=_plan_with_buy(), account=_account()))
+
+    self_review.record_execution_failure.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_record_failure_no_op_when_self_review_none():
+    """Default wiring (``self_review=None``) — error results just log,
+    no AttributeError on the missing call site."""
+    executor = AsyncMock()
+    executor.execute_plan = AsyncMock(
+        return_value=[
+            {
+                "symbol": "BTCUSDT",
+                "action": "buy",
+                "status": "error",
+                "reason": "boom",
+            }
+        ]
+    )
+
+    stage = ExecuteAndNotifyStage(
+        executor=executor,
+        portfolio=AsyncMock(),
+        notifier=None,
+        shadow_runner=None,
+        # self_review defaults to None
+    )
+    # Must not raise.
+    await stage.run(_state(plan=_plan_with_buy(), account=_account()))
+
+
+@pytest.mark.asyncio
+async def test_record_failure_swallows_recorder_exception():
+    """A broken recorder (impossible in practice, defense-in-depth)
+    must not abort the cycle's notify loop. Subsequent successful
+    results still process."""
+    executor = AsyncMock()
+    executor.execute_plan = AsyncMock(
+        return_value=[
+            {"symbol": "BTCUSDT", "action": "buy", "status": "error", "reason": "x"},
+            {
+                "symbol": "ETHUSDT",
+                "action": "buy",
+                "status": "filled",
+                "trade_id": 99,
+                "quantity": 0.01,
+                "price": 3000.0,
+            },
+        ]
+    )
+    portfolio = AsyncMock()
+    portfolio.record_indicator_snapshot = AsyncMock()
+
+    self_review = MagicMock()
+    self_review.record_execution_failure = MagicMock(side_effect=RuntimeError("boom"))
+
+    stage = ExecuteAndNotifyStage(
+        executor=executor,
+        portfolio=portfolio,
+        notifier=None,
+        shadow_runner=None,
+        self_review=self_review,
+    )
+    await stage.run(
+        _state(
+            plan=_plan_with_buy(),
+            account=_account(),
+            indicators_cache={"ETHUSDT": {"rsi_14": 40.0}},
+        )
+    )
+    # The filled-buy snapshot still ran despite the failure-recorder blowing up.
+    portfolio.record_indicator_snapshot.assert_awaited_once()

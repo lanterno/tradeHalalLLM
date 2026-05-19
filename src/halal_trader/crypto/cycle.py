@@ -356,6 +356,7 @@ class CryptoCycleService(BaseCycleService):
                     notifier=self._notifier,
                     shadow_runner=self._shadow_runner,
                     shadow_kwargs_builder=lambda _s: analyze_kwargs,
+                    self_review=self._self_review,
                 ),
             ],
             bus=self._bus,

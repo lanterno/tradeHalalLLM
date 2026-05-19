@@ -275,20 +275,7 @@ class TradingCycleService(BaseCycleService):
             # Pass current positions so the executor can apply the
             # per-sector halal allocation cap on each candidate buy.
             results = await self._executor.execute_plan(plan, bars=bars, positions=positions)
-            for r in results:
-                logger.info("Execution result: %s", r)
-                if self._notifier and r.get("status") in ("submitted", "filled"):
-                    try:
-                        await self._notifier.notify_trade(
-                            pair=r.get("symbol", ""),
-                            side=r.get("action", ""),
-                            quantity=r.get("quantity", 0),
-                            price=r.get("price", 0),
-                            market="stocks",
-                            order_id=str(r.get("order_id", "")),
-                        )
-                    except Exception as exc:  # noqa: BLE001
-                        logger.debug("Failed to send trade notification: %s", exc)
+            await self._handle_execution_results(results)
         else:
             logger.info("No trades to execute this cycle")
 
@@ -305,6 +292,44 @@ class TradingCycleService(BaseCycleService):
                 logger.debug("stocks shadow runner observe_cycle failed: %s", exc)
 
     # ── Private helpers ──────────────────────────────────────────
+
+    async def _handle_execution_results(self, results: list[dict[str, Any]]) -> None:
+        """Process executor results: notify on fills, record failures.
+
+        Mirrors the crypto cycle's :class:`ExecuteAndNotifyStage` post-
+        execute loop but kept inline because the stocks cycle doesn't
+        yet drive the post-LLM block through a stage list.
+
+        Failures (``status`` in ``"error"`` / ``"rejected"``) bump the
+        self-review's per-symbol counter so the 10-failures trigger
+        can fire on persistent failure modes. Filled trades fire a
+        Telegram notification. Both side effects are best-effort —
+        the cycle never aborts on a missing collaborator or a
+        downstream blow-up.
+        """
+        for r in results:
+            logger.info("Execution result: %s", r)
+            status = r.get("status")
+            if status in ("error", "rejected") and self._self_review is not None:
+                try:
+                    self._self_review.record_execution_failure(
+                        r.get("symbol", "?"),
+                        str(r.get("reason", status)),
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("Failed to record execution failure: %s", exc)
+            if self._notifier and status in ("submitted", "filled"):
+                try:
+                    await self._notifier.notify_trade(
+                        pair=r.get("symbol", ""),
+                        side=r.get("action", ""),
+                        quantity=r.get("quantity", 0),
+                        price=r.get("price", 0),
+                        market="stocks",
+                        order_id=str(r.get("order_id", "")),
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("Failed to send trade notification: %s", exc)
 
     async def _fetch_market_data(
         self, halal_symbols: list[str]

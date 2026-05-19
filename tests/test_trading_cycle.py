@@ -144,3 +144,118 @@ def test_constructor_analytics_and_self_review_default_to_none():
     )
     assert svc._analytics is None
     assert svc._self_review is None
+
+
+# ── _handle_execution_results (Round-7 extracted helper) ─────
+
+
+@pytest.mark.asyncio
+async def test_handle_execution_results_records_failure_on_error():
+    """``status="error"`` result bumps the self-review's per-symbol
+    failure counter so the 10-failures trigger can eventually fire."""
+    svc = _make_service()
+    self_review = MagicMock()
+    self_review.record_execution_failure = MagicMock()
+    svc._self_review = self_review
+
+    await svc._handle_execution_results(
+        [
+            {"symbol": "AAPL", "action": "buy", "status": "error", "reason": "RATE_LIMIT"},
+        ]
+    )
+
+    self_review.record_execution_failure.assert_called_once_with("AAPL", "RATE_LIMIT")
+
+
+@pytest.mark.asyncio
+async def test_handle_execution_results_records_failure_on_rejected():
+    """``status="rejected"`` (e.g. halal screener blocked the buy)
+    also bumps the counter — repeated rejections on a symbol are
+    operator-actionable signal."""
+    svc = _make_service()
+    self_review = MagicMock()
+    self_review.record_execution_failure = MagicMock()
+    svc._self_review = self_review
+
+    await svc._handle_execution_results(
+        [
+            {
+                "symbol": "MSFT",
+                "action": "buy",
+                "status": "rejected",
+                "reason": "below_min_notional",
+            },
+        ]
+    )
+
+    self_review.record_execution_failure.assert_called_once_with("MSFT", "below_min_notional")
+
+
+@pytest.mark.asyncio
+async def test_handle_execution_results_skips_recording_on_filled():
+    """Happy path: a filled buy must NOT bump the failure counter
+    (otherwise every successful trade would trigger reviews)."""
+    svc = _make_service()
+    self_review = MagicMock()
+    self_review.record_execution_failure = MagicMock()
+    svc._self_review = self_review
+
+    await svc._handle_execution_results(
+        [
+            {
+                "symbol": "AAPL",
+                "action": "buy",
+                "status": "filled",
+                "quantity": 10,
+                "price": 180.0,
+            },
+        ]
+    )
+
+    self_review.record_execution_failure.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_handle_execution_results_no_op_when_self_review_none():
+    """Default wiring (``self_review=None``) — error results just log,
+    no AttributeError on the missing call site."""
+    svc = _make_service()
+    assert svc._self_review is None  # default
+
+    # Must not raise.
+    await svc._handle_execution_results(
+        [{"symbol": "AAPL", "action": "buy", "status": "error", "reason": "x"}]
+    )
+
+
+@pytest.mark.asyncio
+async def test_handle_execution_results_swallows_recorder_exception():
+    """A broken recorder must not block subsequent notifications.
+    The filled result that follows the failing one must still
+    trigger ``notify_trade``."""
+    from unittest.mock import AsyncMock
+
+    svc = _make_service()
+    self_review = MagicMock()
+    self_review.record_execution_failure = MagicMock(side_effect=RuntimeError("boom"))
+    svc._self_review = self_review
+
+    notifier = MagicMock()
+    notifier.notify_trade = AsyncMock()
+    svc._notifier = notifier
+
+    await svc._handle_execution_results(
+        [
+            {"symbol": "AAPL", "action": "buy", "status": "error", "reason": "x"},
+            {
+                "symbol": "MSFT",
+                "action": "buy",
+                "status": "filled",
+                "quantity": 5,
+                "price": 400.0,
+            },
+        ]
+    )
+
+    # Recorder blew up but the notifier still ran on the second result.
+    notifier.notify_trade.assert_awaited_once()

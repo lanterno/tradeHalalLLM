@@ -1253,8 +1253,10 @@ class ExecuteAndNotifyStage:
     Side effects: posts orders via the executor, calls
     ``shadow_runner.observe_cycle`` (best-effort), records indicator
     snapshots for filled buys (so the ML retraining loop can label
-    them when the position closes), and notifies the operator via
-    Telegram on submitted/filled trades.
+    them when the position closes), notifies the operator via
+    Telegram on submitted/filled trades, AND bumps the self-review's
+    exec-failure counter on rejected/error results so the trigger
+    can fire on persistent failure modes (10 errors → emergency review).
 
     The ``shadow_kwargs`` builder receives the analyze-kwargs dict
     every cycle from :class:`crypto.cycle.CryptoCycleService` so the
@@ -1271,6 +1273,7 @@ class ExecuteAndNotifyStage:
         notifier: Any | None,
         shadow_runner: Any | None,
         shadow_kwargs_builder: Any | None = None,
+        self_review: Any | None = None,
     ) -> None:
         self._executor = executor
         self._portfolio = portfolio
@@ -1280,6 +1283,11 @@ class ExecuteAndNotifyStage:
         # dict the shadow runner replays. Per-cycle (the live cycle
         # rebuilds analyze_kwargs each tick), so injected as a builder.
         self._shadow_kwargs_builder = shadow_kwargs_builder
+        # Optional :class:`TradeSelfReviewBase`. When set, the stage
+        # calls ``record_execution_failure(symbol, reason)`` for every
+        # rejected/error result — the per-pair counter feeds the
+        # ``should_trigger_review`` check at the next cycle.
+        self._self_review = self_review
 
     async def run(self, state: CycleState) -> CycleState:
         from halal_trader.core.observability import cycle_id_var
@@ -1328,6 +1336,14 @@ class ExecuteAndNotifyStage:
                         )
                     except Exception as exc:  # noqa: BLE001
                         logger.debug("Failed to record indicator snapshot: %s", exc)
+            if status in ("error", "rejected") and self._self_review is not None:
+                try:
+                    self._self_review.record_execution_failure(
+                        r.get("symbol", "?"),
+                        str(r.get("reason", status)),
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("Failed to record execution failure: %s", exc)
             if self._notifier and status in ("submitted", "filled"):
                 try:
                     await self._notifier.notify_trade(
