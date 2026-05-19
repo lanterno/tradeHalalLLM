@@ -19,11 +19,28 @@ logger = logging.getLogger(__name__)
 
 def register(app: FastAPI) -> None:
     @app.get("/api/sse")
-    async def sse(ctx: DashboardContext = Depends(get_ctx)) -> StreamingResponse:
+    async def sse(
+        ctx: DashboardContext = Depends(get_ctx),
+        market: str = "crypto",
+    ) -> StreamingResponse:
+        """SSE feed of the 5 most-recent trades, refreshing every 10s.
+
+        ``market="crypto"`` (default, back-compat) streams from the
+        crypto ledger. ``market="stocks"`` streams from the stocks
+        ``trades`` table. The /ws/cycle WebSocket (below) is the
+        modern event-bus path; this endpoint is the legacy polling
+        stream kept for older frontend integrations.
+        """
+        market_lower = market.lower()
+        is_stocks = market_lower in ("stock", "stocks")
+
         async def event_stream() -> AsyncIterator[str]:
             while True:
-                trades = await ctx.repo.get_recent_crypto_trades(5)
-                data = json.dumps({"trades": trades}, default=str)
+                if is_stocks:
+                    trades = await ctx.repo.get_recent_trades(5)
+                else:
+                    trades = await ctx.repo.get_recent_crypto_trades(5)
+                data = json.dumps({"trades": trades, "market": market_lower}, default=str)
                 yield f"data: {data}\n\n"
                 await asyncio.sleep(10)
 
