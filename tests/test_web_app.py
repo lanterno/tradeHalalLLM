@@ -60,6 +60,66 @@ def test_request_id_generated_if_missing(client):
     assert rid.startswith("req-")
 
 
+def test_request_id_present_on_auth_rejected_request(client):
+    """Auth-rejected 401s must STILL carry an X-Request-ID header.
+    Pre-Round-7 the correlate middleware was registered before auth,
+    so 401s went out without the header and the operator had no
+    correlatable trace ID for failed-auth attempts.
+
+    Pin so a future middleware reshuffle doesn't silently regress
+    this — the auth-rejected request must still hit the correlate
+    middleware's response phase to pick up the header.
+    """
+    # Strip the default token so auth_middleware rejects us.
+    client.headers.pop("X-Trader-Token", None)
+    r = client.post(
+        "/api/system/halt",
+        json={"reason": "auth-rejection trace test"},
+        headers={"X-Request-ID": "auth-rejected-correlator"},
+    )
+    assert r.status_code == 401
+    # The echo header must still appear on the rejected response.
+    assert r.headers.get("X-Request-ID") == "auth-rejected-correlator"
+
+
+def test_audit_actor_reflects_request_id(client):
+    """``web_actions.actor`` must equal the request-id of the call,
+    not the default ``"anon"``. Pre-fix the correlate middleware ran
+    AFTER audit on the inbound path, so the audit row's
+    ``request_id_var.get()`` always read an empty value and every
+    row recorded ``"anon"``.
+
+    This test exercises the path end-to-end: send a mutation with an
+    explicit X-Request-ID, then read it back via the activity-log
+    endpoint and confirm the actor matches.
+    """
+    client.post(
+        "/api/system/halt",
+        json={"reason": "actor-correlation test"},
+        headers={"X-Halt-Confirm": "yes", "X-Request-ID": "actor-cor-rid-42"},
+    )
+    # Clean up: resume the halt so the test DB ends in a known state.
+    client.delete(
+        "/api/system/halt", headers={"X-Halt-Confirm": "yes"}
+    )
+
+    r = client.get("/api/activity?limit=5")
+    assert r.status_code == 200
+    rows = r.json()
+    # The most-recent POST row should carry our explicit request-id
+    # as actor — not "anon".
+    post_rows = [
+        row
+        for row in rows
+        if row.get("method") == "POST" and row.get("path") == "/api/system/halt"
+    ]
+    assert post_rows, f"no POST audit row found in {rows[:3]}"
+    assert post_rows[0]["actor"] == "actor-cor-rid-42", (
+        f"expected actor='actor-cor-rid-42', got {post_rows[0]['actor']!r}. "
+        f"Likely correlate_request is running AFTER audit on inbound path."
+    )
+
+
 def test_trades_endpoint_empty(client):
     r = client.get("/api/trades")
     assert r.status_code == 200

@@ -86,6 +86,25 @@ def create_app() -> Any:
         allow_headers=["*"],
     )
 
+    # Middleware execution is LIFO — the LAST registered runs FIRST
+    # on inbound. To get the documented flow
+    #   correlate (outermost) → auth → audit (innermost) → handler
+    # the registrations must run audit → auth → correlate so the stack
+    # is built with audit at the bottom and correlate at the top.
+    #
+    # Why this order matters:
+    # * correlate must run before auth so a rejected auth request
+    #   still gets an ``X-Request-ID`` header (operator-facing 401s
+    #   were previously untraceable).
+    # * correlate must run before audit so ``request_id_var`` is set
+    #   when audit writes its row (every ``web_actions.actor`` was
+    #   previously the default ``"anon"``).
+    from halal_trader.web.audit import audit_middleware
+    from halal_trader.web.middleware.auth import auth_middleware
+
+    app.middleware("http")(audit_middleware)
+    app.middleware("http")(auth_middleware)
+
     @app.middleware("http")
     async def correlate_request(
         request: Request,
@@ -99,17 +118,6 @@ def create_app() -> Any:
             request_id_var.reset(token)
         response.headers["X-Request-ID"] = rid
         return response
-
-    # Middleware register order is LIFO — register audit FIRST so it
-    # runs INSIDE the auth gate (auth fires on the outer hop, then audit
-    # writes the row only if the request is going to actually reach a
-    # handler). request_id correlation stays outermost so even rejected
-    # auth requests get a header-correlated trace.
-    from halal_trader.web.audit import audit_middleware
-    from halal_trader.web.middleware.auth import auth_middleware
-
-    app.middleware("http")(audit_middleware)
-    app.middleware("http")(auth_middleware)
 
     register_all(app)
 
