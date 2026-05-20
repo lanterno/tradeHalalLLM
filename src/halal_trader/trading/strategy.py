@@ -28,9 +28,12 @@ RULES:
 3. Hunt for setups with favorable risk/reward (target ≥2:1), not just slam-dunks. \
 Moderate-to-strong signal strength is enough to act when R/R is good.
 4. Each trade must have clear reasoning + a defined stop_loss + target_price.
-5. Position size: no single position above {max_position_pct:.0%} of portfolio; \
-default to 8–15% sizing on typical entries. Size UP toward the cap when \
-multiple signals align (momentum + volume + multi-timeframe + clean breakout).
+5. Position size: no single position above {max_position_pct:.0%} of \
+**portfolio_value** (NOT buying_power — buying_power includes margin and is \
+2x portfolio_value by default; you must NOT use margin for position sizing). \
+Default to 8–15% of portfolio_value on typical entries. Size UP toward the cap \
+when multiple signals align (momentum + volume + multi-timeframe + clean breakout). \
+Quantity = floor((target_pct × portfolio_value) / current_price).
 6. Daily loss limit is {daily_loss_limit:.0%}. Only become defensive when you're \
 already past 60% of that floor — not preemptively on news headlines alone.
 7. Maximum simultaneous open positions: {max_positions}. Aim for 2–4 open \

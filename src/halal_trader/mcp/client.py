@@ -338,13 +338,25 @@ class AlpacaMCPClient:
         order_type: str = "market",
         time_in_force: str = "day",
     ) -> Any:
+        # Upstream Alpaca MCP changes this round:
+        # * ``quantity`` → ``qty`` (matches Alpaca's REST naming)
+        # * ``qty`` schema is ``{anyOf: [string, null]}`` — must send
+        #   the quantity as a STRING, not int/float. Numeric values
+        #   400 with "Input should be a valid string".
+        # * ``order_type`` → ``type``.
+        # Render as integer-ish string when whole-shares; full repr
+        # otherwise (fractional-share orders carry decimals).
+        if float(quantity).is_integer():
+            qty_str = str(int(quantity))
+        else:
+            qty_str = repr(float(quantity))
         return await self.call_tool(
             "place_stock_order",
             {
                 "symbol": symbol,
                 "side": side,
-                "quantity": quantity,
-                "order_type": order_type,
+                "qty": qty_str,
+                "type": order_type,
                 "time_in_force": time_in_force,
             },
         )
