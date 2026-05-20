@@ -308,8 +308,14 @@ class AlpacaMCPClient:
         return []
 
     async def get_stock_snapshot(self, symbols: str) -> Any:
-        """Get a comprehensive snapshot for one or more symbols (comma-separated)."""
-        return await self.call_tool("get_stock_snapshot", {"symbol_or_symbols": symbols})
+        """Get a comprehensive snapshot for one or more symbols (comma-separated).
+
+        Upstream Alpaca MCP renamed ``symbol_or_symbols`` → ``symbols``
+        but the schema still accepts the legacy comma-separated string
+        shape (not a list — sending a list 400s with "multiple values
+        for single value parameter").
+        """
+        return await self.call_tool("get_stock_snapshot", {"symbols": symbols})
 
     async def get_stock_bars(
         self,
@@ -317,9 +323,11 @@ class AlpacaMCPClient:
         days: int = 5,
         timeframe: str = "1Day",
     ) -> Any:
+        # Upstream Alpaca MCP renamed ``symbol`` → ``symbols`` (still
+        # a string; "Missing required argument: symbols" without rename).
         return await self.call_tool(
             "get_stock_bars",
-            {"symbol": symbol, "days": days, "timeframe": timeframe},
+            {"symbols": symbol, "days": days, "timeframe": timeframe},
         )
 
     async def place_order(
