@@ -99,9 +99,7 @@ def test_audit_actor_reflects_request_id(client):
         headers={"X-Halt-Confirm": "yes", "X-Request-ID": "actor-cor-rid-42"},
     )
     # Clean up: resume the halt so the test DB ends in a known state.
-    client.delete(
-        "/api/system/halt", headers={"X-Halt-Confirm": "yes"}
-    )
+    client.delete("/api/system/halt", headers={"X-Halt-Confirm": "yes"})
 
     r = client.get("/api/activity?limit=5")
     assert r.status_code == 200
@@ -109,9 +107,7 @@ def test_audit_actor_reflects_request_id(client):
     # The most-recent POST row should carry our explicit request-id
     # as actor — not "anon".
     post_rows = [
-        row
-        for row in rows
-        if row.get("method") == "POST" and row.get("path") == "/api/system/halt"
+        row for row in rows if row.get("method") == "POST" and row.get("path") == "/api/system/halt"
     ]
     assert post_rows, f"no POST audit row found in {rows[:3]}"
     assert post_rows[0]["actor"] == "actor-cor-rid-42", (
@@ -398,3 +394,26 @@ def test_positions_rejects_unknown_market(client):
     r = client.get("/api/positions?market=options")
     assert r.status_code == 400
     assert "market must be" in r.json()["detail"]
+
+
+# ── /api/system/status both-market cadence ────────────────────
+
+
+def test_system_status_exposes_both_market_cadences(client):
+    """Pre-Round-7 the ``cycle_interval_seconds`` field only carried
+    the crypto value (60s default). A stocks operator saw "60" even
+    though the stocks cycle runs every 15 min. Pin both new fields
+    and the back-compat key."""
+    r = client.get("/api/system/status")
+    assert r.status_code == 200
+    body = r.json()
+    # Back-compat: ``cycle_interval_seconds`` mirrors crypto.
+    assert "cycle_interval_seconds" in body
+    # New: explicit crypto + stocks fields.
+    assert "crypto_cycle_interval_seconds" in body
+    assert "stocks_cycle_interval_seconds" in body
+    # Defaults: crypto = 60s, stocks = 15min * 60 = 900s.
+    assert body["crypto_cycle_interval_seconds"] == 60
+    assert body["stocks_cycle_interval_seconds"] == 900
+    # Back-compat field equals crypto value.
+    assert body["cycle_interval_seconds"] == body["crypto_cycle_interval_seconds"]
