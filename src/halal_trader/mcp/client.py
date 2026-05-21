@@ -265,47 +265,63 @@ class AlpacaMCPClient:
             type(raw).__name__,
             len(raw) if isinstance(raw, (list, dict)) else repr(raw)[:200],
         )
+        # Upstream Alpaca MCP wraps the response as ``{"result": [...]}``
+        # (mirrors ``get_calendar`` after that tool's rename). A bare
+        # list shape is also accepted as legacy fallback. Without this
+        # unwrap, every position appeared as 0 → 100% reconcile drift
+        # on every cycle. The "{}" empty-result case (no open
+        # positions) returns an empty list.
+        items: list[Any] = []
         if isinstance(raw, list):
-            positions = []
-            for p in raw:
-                if isinstance(p, dict):
-                    positions.append(
-                        Position(
-                            symbol=str(_flex_get(p, "symbol", default="")),
-                            qty=float(_flex_get(p, "qty", "quantity", default=0) or 0),
-                            avg_entry_price=float(
-                                _flex_get(p, "avg_entry_price", "avgEntryPrice", default=0) or 0
-                            ),
-                            current_price=float(
-                                _flex_get(p, "current_price", "currentPrice", default=0) or 0
-                            ),
-                            unrealized_pl=float(
-                                _flex_get(
-                                    p,
-                                    "unrealized_pl",
-                                    "unrealizedPl",
-                                    "unrealized_pnl",
-                                    default=0,
-                                )
-                                or 0
-                            ),
-                            unrealized_plpc=float(
-                                _flex_get(
-                                    p,
-                                    "unrealized_plpc",
-                                    "unrealizedPlpc",
-                                    "unrealized_pnl_pct",
-                                    default=0,
-                                )
-                                or 0
-                            ),
-                        )
-                    )
-            return positions
-        if isinstance(raw, str) and raw.strip():
-            # Text responses like "no positions" are acceptable — just means empty
+            items = raw
+        elif isinstance(raw, dict):
+            wrapped = raw.get("result")
+            if isinstance(wrapped, list):
+                items = wrapped
+            else:
+                # Some MCP versions return ``{}`` for "no positions".
+                # Treat any non-list ``result`` as empty.
+                items = []
+        elif isinstance(raw, str) and raw.strip():
             logger.debug("get_all_positions() text response: %s", raw[:200])
-        return []
+
+        positions: list[Position] = []
+        for p in items:
+            if not isinstance(p, dict):
+                continue
+            positions.append(
+                Position(
+                    symbol=str(_flex_get(p, "symbol", default="")),
+                    qty=float(_flex_get(p, "qty", "quantity", default=0) or 0),
+                    avg_entry_price=float(
+                        _flex_get(p, "avg_entry_price", "avgEntryPrice", default=0) or 0
+                    ),
+                    current_price=float(
+                        _flex_get(p, "current_price", "currentPrice", default=0) or 0
+                    ),
+                    unrealized_pl=float(
+                        _flex_get(
+                            p,
+                            "unrealized_pl",
+                            "unrealizedPl",
+                            "unrealized_pnl",
+                            default=0,
+                        )
+                        or 0
+                    ),
+                    unrealized_plpc=float(
+                        _flex_get(
+                            p,
+                            "unrealized_plpc",
+                            "unrealizedPlpc",
+                            "unrealized_pnl_pct",
+                            default=0,
+                        )
+                        or 0
+                    ),
+                )
+            )
+        return positions
 
     async def get_stock_snapshot(self, symbols: str) -> Any:
         """Get a comprehensive snapshot for one or more symbols (comma-separated).

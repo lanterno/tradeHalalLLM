@@ -14,13 +14,14 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Iterable
 
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from halal_trader.core import events
 from halal_trader.db.models import ReconciliationLog
+from halal_trader.domain.status import TradeStatus
 
 if TYPE_CHECKING:
     from halal_trader.notifications.telegram import AlertSink
@@ -28,6 +29,27 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 DEFAULT_DRIFT_THRESHOLD = 0.01  # 1%
+
+# Statuses that mean "no shares actually changed hands" — these Trade
+# rows must not contribute to the DB-side position sum. Without this
+# filter, a rejected order with quantity=380 (requested) and
+# filled_quantity=0 was being counted as a 380-share phantom because
+# the legacy ``or quantity`` fallback masked the zero fill.
+_NON_EXECUTED_STATUSES: frozenset[str] = frozenset(
+    {
+        TradeStatus.REJECTED.value,
+        TradeStatus.CANCELED.value,
+        TradeStatus.ERROR.value,
+        TradeStatus.PENDING.value,
+        TradeStatus.SUBMITTED.value,
+    }
+)
+
+# A stocks fill recorded within this window may not yet be visible on
+# Alpaca's ``/v2/positions`` cache. When drift is observed on such a
+# symbol we downgrade the alert to a settlement-race note instead of a
+# warning — the next reconcile pass will confirm or escalate.
+_STOCKS_SETTLEMENT_GRACE = timedelta(seconds=10)
 
 
 @dataclass(frozen=True)
@@ -39,6 +61,12 @@ class Drift:
     drift_pct: float
     drift_usd: float | None = None
     notes: str | None = None
+    # True when the freshest fill on this symbol is within the broker's
+    # settlement-propagation window. The drift is real on paper but
+    # most likely a race; persist + log at INFO, skip the operator
+    # alert. The next reconcile pass after the broker catches up will
+    # either upgrade or clear it.
+    is_settling: bool = False
 
 
 @dataclass
@@ -49,7 +77,7 @@ class ReconcileReport:
 
     @property
     def has_drift(self) -> bool:
-        return bool(self.drifts)
+        return any(not d.is_settling for d in self.drifts)
 
 
 def _drift_pct(db_qty: float, broker_qty: float) -> float:
@@ -74,6 +102,12 @@ async def reconcile_crypto(
     Crypto positions on Binance are tracked as raw balances (no per-position
     rows). We sum open BUY trades by base asset (e.g. ``BTC``) and compare
     against the corresponding ``free + locked`` balance the exchange reports.
+
+    ``get_open_crypto_trades`` only filters out ``rejected``; we additionally
+    skip ``pending`` / ``submitted`` / ``canceled`` / ``error`` rows so that
+    an order which never actually settled doesn't carry its requested
+    quantity into the DB sum (this was the same orphan path that produced
+    100% phantom drift on the stocks side).
     """
     from halal_trader.db.repos import RepoBundle
 
@@ -84,10 +118,20 @@ async def reconcile_crypto(
     for trade in open_trades:
         if getattr(trade, "side", "") != "buy":
             continue
+        status = str(getattr(trade, "status", "") or "").lower()
+        if status in _NON_EXECUTED_STATUSES:
+            continue
         base = trade.pair.upper().removesuffix("USDT").removesuffix("BUSD") if trade.pair else ""
         if not base:
             continue
-        db_by_asset[base] = db_by_asset.get(base, 0.0) + float(trade.quantity or 0)
+        # Prefer filled_quantity (broker truth) over the requested
+        # quantity. Fall back to quantity for legacy rows that predate
+        # the fill-confirmer.
+        filled = float(getattr(trade, "filled_quantity", 0) or 0)
+        qty = filled if filled > 0 else float(getattr(trade, "quantity", 0) or 0)
+        if qty <= 0:
+            continue
+        db_by_asset[base] = db_by_asset.get(base, 0.0) + qty
 
     balances = await broker.get_balances()
     broker_by_asset: dict[str, float] = {
@@ -158,32 +202,107 @@ def _safe_cached_price(broker: Any, symbol: str) -> float | None:
 # ── Stock reconciler ───────────────────────────────────────────
 
 
+def _parse_iso(value: Any) -> datetime | None:
+    """Best-effort ISO-string → tz-aware UTC datetime parser.
+
+    Trade rows from ``model_dump()`` serialize ``filled_at`` as a string;
+    rows from a direct ORM query keep it as ``datetime``. Accept either.
+    """
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=UTC)
+    if isinstance(value, str):
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+    return None
+
+
+def _aggregate_stocks_positions(
+    rows: Iterable[dict[str, Any]],
+    *,
+    now: datetime,
+    grace: timedelta,
+) -> tuple[dict[str, float], set[str]]:
+    """Fold Trade rows into (signed-quantity per symbol, symbols still settling).
+
+    Skips rows whose ``status`` is non-executed (pending, rejected, …) —
+    a row that never moved shares must not inflate the DB-side sum;
+    this filter is the core fix for the historical orphan-counting bug.
+    For executed rows, ``filled_quantity`` is preferred but the legacy
+    ``quantity`` is accepted as a fallback (older fills predate the
+    fill-confirmer that populates ``filled_quantity``). ``filled_at``
+    newer than (now - grace) marks the symbol as "settling" so callers
+    can downgrade the alert during the broker's propagation window.
+    """
+    db_by_symbol: dict[str, float] = {}
+    settling: set[str] = set()
+    for row in rows:
+        symbol = (row.get("symbol") or "").upper()
+        if not symbol:
+            continue
+        status = (row.get("status") or "").lower()
+        # Drop non-executed rows entirely — they never moved shares.
+        # Unknown/empty statuses default to "trust the row" so legacy
+        # fixtures keep their semantics.
+        if status in _NON_EXECUTED_STATUSES:
+            continue
+        filled_raw = row.get("filled_quantity")
+        try:
+            qty = float(filled_raw) if filled_raw is not None else 0.0
+        except (TypeError, ValueError):
+            qty = 0.0
+        if qty <= 0:
+            # Executed status but no fill column — fall back to the
+            # requested quantity. Real fills set filled_quantity > 0;
+            # this branch only matters for legacy rows / tests.
+            qty_raw = row.get("quantity")
+            try:
+                qty = float(qty_raw) if qty_raw is not None else 0.0
+            except (TypeError, ValueError):
+                qty = 0.0
+        if qty <= 0:
+            continue
+        side = (row.get("side") or "").lower()
+        sign = 1 if side == "buy" else -1 if side == "sell" else 0
+        if sign == 0:
+            continue
+        db_by_symbol[symbol] = db_by_symbol.get(symbol, 0.0) + sign * qty
+        filled_at = _parse_iso(row.get("filled_at"))
+        if filled_at is not None and (now - filled_at) <= grace:
+            settling.add(symbol)
+    return db_by_symbol, settling
+
+
 async def reconcile_stocks(
     *,
     engine: AsyncEngine,
     broker: Any,
     threshold_pct: float = DEFAULT_DRIFT_THRESHOLD,
     alerts: "AlertSink | None" = None,
+    settlement_grace: timedelta = _STOCKS_SETTLEMENT_GRACE,
 ) -> ReconcileReport:
-    """Compare aggregate open-trade quantity per ticker against broker positions.
+    """Compare aggregate filled-quantity per ticker against broker positions.
 
-    For stocks we sum signed quantities (buys positive, sells negative) per
-    symbol and compare to ``Position.qty`` from Alpaca.
+    Sums signed ``filled_quantity`` (buys positive, sells negative) per
+    symbol — never the requested ``quantity`` — and skips rows whose
+    ``status`` indicates the order never transferred shares. A symbol
+    with a fresh fill (within ``settlement_grace``) is flagged
+    ``is_settling`` so the alert sink can drop the noise from Alpaca's
+    REST-position cache lag.
     """
     from halal_trader.db.repos import RepoBundle
 
     repos = RepoBundle.from_engine(engine)
     recent = await repos.trades.get_recent_trades(limit=500)
 
-    db_by_symbol: dict[str, float] = {}
-    for row in recent:
-        symbol = (row.get("symbol") or "").upper()
-        if not symbol:
-            continue
-        side = (row.get("side") or "").lower()
-        qty = float(row.get("filled_quantity") or row.get("quantity") or 0)
-        sign = 1 if side == "buy" else -1 if side == "sell" else 0
-        db_by_symbol[symbol] = db_by_symbol.get(symbol, 0.0) + sign * qty
+    now = datetime.now(UTC)
+    db_by_symbol, settling_symbols = _aggregate_stocks_positions(
+        recent, now=now, grace=settlement_grace
+    )
 
     positions = await broker.get_all_positions()
     broker_by_symbol: dict[str, float] = {p.symbol.upper(): float(p.qty) for p in positions}
@@ -203,6 +322,7 @@ async def reconcile_stocks(
                     db_quantity=db_qty,
                     broker_quantity=broker_qty,
                     drift_pct=pct,
+                    is_settling=symbol in settling_symbols,
                 )
             )
 
@@ -235,7 +355,7 @@ async def _persist_and_alert(
     report: ReconcileReport,
     alerts: "AlertSink | None",
 ) -> None:
-    if not report.has_drift:
+    if not report.drifts:
         logger.debug(
             "Reconciliation clean: %s checked_symbols=%d",
             report.market,
@@ -247,6 +367,31 @@ async def _persist_and_alert(
     untracked_count = 0
     untracked_usd = 0.0
     for drift in report.drifts:
+        # Settlement-race drift: a fill landed within the propagation
+        # window. The numbers are real but expected to resolve on the
+        # next pass — log at INFO and skip persistence + alert so we
+        # don't burn the operator's attention on every fresh fill.
+        if drift.is_settling:
+            logger.info(
+                "Reconcile settling: %s/%s db=%.8f broker=%.8f drift=%.2f%% "
+                "(fresh fill within grace window)",
+                drift.market,
+                drift.symbol,
+                drift.db_quantity,
+                drift.broker_quantity,
+                drift.drift_pct * 100,
+                extra={
+                    "event": events.RECONCILE_DRIFT,
+                    "market": drift.market,
+                    "symbol": drift.symbol,
+                    "db_quantity": drift.db_quantity,
+                    "broker_quantity": drift.broker_quantity,
+                    "drift_pct": drift.drift_pct,
+                    "settling": True,
+                },
+            )
+            continue
+
         # "Untracked broker balance" (bot has no record, exchange does)
         # is informational — the bot has no claim and nothing to reconcile.
         # Real drift on a tracked position (db_quantity > 0 with a mismatch)
@@ -319,13 +464,17 @@ async def _persist_and_alert(
         # alerting on each one burns the rate limit. Stocks: any
         # broker position with no DB row IS actionable (the equities
         # universe is small enough that an untracked AAPL position is
-        # signal, not noise).
+        # signal, not noise). Settling drifts (fresh-fill race) never
+        # alert regardless of market.
         if report.market == "crypto":
             actionable = [
-                d for d in report.drifts if not (d.db_quantity == 0.0 and d.broker_quantity > 0.0)
+                d
+                for d in report.drifts
+                if not d.is_settling
+                and not (d.db_quantity == 0.0 and d.broker_quantity > 0.0)
             ]
         else:
-            actionable = list(report.drifts)
+            actionable = [d for d in report.drifts if not d.is_settling]
         if actionable:
             summary = _summarize_drifts(actionable)
             await alerts.notify(
@@ -345,6 +494,196 @@ def _summarize_drifts(drifts: Iterable[Drift]) -> str:
             f"drift={d.drift_pct * 100:.1f}%{usd}"
         )
     return "Reconciliation drift detected:\n" + "\n".join(parts)
+
+
+# ── One-time orphan-fix backfill ───────────────────────────────
+
+
+@dataclass(frozen=True)
+class OrphanFix:
+    """One Trade row the backfill considered."""
+
+    trade_id: int
+    symbol: str
+    side: str
+    quantity: float
+    order_id: str
+    old_status: str
+    new_status: str
+    source: str  # "broker" | "no-order-id" | "skipped"
+    notes: str | None = None
+
+
+@dataclass
+class OrphanFixReport:
+    candidates: int = 0
+    updated: int = 0
+    fixes: list[OrphanFix] = field(default_factory=list)
+
+
+async def fix_stocks_orphans(
+    *,
+    engine: AsyncEngine,
+    broker: Any | None = None,
+    min_age_minutes: int = 5,
+    dry_run: bool = True,
+) -> OrphanFixReport:
+    """Find pending Trade rows that have no real fill and resolve them.
+
+    A row qualifies as an orphan when ``status='pending'`` AND
+    ``filled_quantity`` is 0 / NULL AND ``closed_at`` is unset AND the
+    row is at least ``min_age_minutes`` old. For each candidate:
+
+    * if ``order_id`` is non-empty and a broker is supplied, call
+      ``get_order_by_id`` and adopt the broker's terminal status;
+    * if ``order_id`` is empty (the order never made it to the
+      exchange — e.g. yesterday's Pydantic-validation rejections),
+      mark the row ``rejected`` directly.
+
+    ``dry_run=True`` (the default) writes nothing — useful for the
+    confirmation step in the CLI.
+    """
+    from sqlmodel import col, select
+
+    from halal_trader.db.models import Trade
+
+    report = OrphanFixReport()
+    cutoff = datetime.now(UTC) - timedelta(minutes=min_age_minutes)
+    async with AsyncSession(engine) as session:
+        stmt = (
+            select(Trade)
+            .where(Trade.status == TradeStatus.PENDING.value)
+            .where(col(Trade.closed_at).is_(None))
+            .where(Trade.timestamp < cutoff)
+            .order_by(col(Trade.timestamp).asc())
+        )
+        result = await session.execute(stmt)
+        rows = list(result.scalars().all())
+
+    for trade in rows:
+        filled = float(trade.filled_quantity or 0.0)
+        if filled > 0:
+            # Not actually orphaned — the executor recorded a fill but
+            # forgot to bump status (a separate bug if it ever happens);
+            # don't touch it here.
+            continue
+        report.candidates += 1
+
+        order_id = (trade.order_id or "").strip()
+        new_status: str
+        source: str
+        notes: str | None = None
+
+        if order_id and broker is not None:
+            try:
+                order = await broker.get_order_by_id(order_id)
+            except Exception as exc:  # noqa: BLE001
+                source = "broker-error"
+                new_status = trade.status
+                notes = f"broker get_order_by_id failed: {exc!r}"
+            else:
+                raw_status = ""
+                filled_qty_broker = 0.0
+                filled_avg = None
+                if isinstance(order, dict):
+                    raw_status = str(order.get("status", "")).lower()
+                    try:
+                        filled_qty_broker = float(order.get("filled_qty") or 0)
+                    except (TypeError, ValueError):
+                        filled_qty_broker = 0.0
+                    fa_raw = order.get("filled_avg_price")
+                    if isinstance(fa_raw, (int, float, str)) and fa_raw != "":
+                        try:
+                            filled_avg = float(fa_raw)
+                        except (TypeError, ValueError):
+                            filled_avg = None
+                # Map Alpaca order statuses to TradeStatus values.
+                if raw_status == "filled":
+                    new_status = TradeStatus.FILLED.value
+                elif raw_status == "partially_filled":
+                    new_status = TradeStatus.PARTIALLY_FILLED.value
+                elif raw_status in {"canceled", "cancelled", "expired"}:
+                    new_status = TradeStatus.CANCELED.value
+                elif raw_status == "rejected":
+                    new_status = TradeStatus.REJECTED.value
+                elif raw_status in {"new", "pending_new", "accepted"}:
+                    # Still really pending — leave it alone, the
+                    # executor's confirm loop will catch it next cycle.
+                    new_status = trade.status
+                    notes = (
+                        "broker reports still open ("
+                        f"{raw_status!r}); skipping"
+                    )
+                elif not raw_status:
+                    # Broker had no record — treat as rejected so the
+                    # row stops counting against drift.
+                    new_status = TradeStatus.REJECTED.value
+                    notes = "broker returned no status"
+                else:
+                    new_status = TradeStatus.REJECTED.value
+                    notes = f"unknown broker status {raw_status!r}; treating as rejected"
+                source = "broker"
+
+                if new_status in {
+                    TradeStatus.FILLED.value,
+                    TradeStatus.PARTIALLY_FILLED.value,
+                } and filled_qty_broker > 0:
+                    # Update fill columns from broker truth.
+                    trade.filled_quantity = filled_qty_broker
+                    trade.filled_price = filled_avg
+                    trade.filled_at = trade.filled_at or datetime.now(UTC)
+        elif not order_id:
+            # Order never made it past the bot's own request layer
+            # (e.g. upstream MCP validation rejected it before
+            # assigning an id). The reconciler must ignore it.
+            new_status = TradeStatus.REJECTED.value
+            source = "no-order-id"
+            notes = "no broker order id ever assigned"
+        else:
+            # order_id present but no broker supplied — can't verify.
+            new_status = trade.status
+            source = "skipped"
+            notes = "order_id present but no broker available to query"
+
+        if new_status == trade.status:
+            report.fixes.append(
+                OrphanFix(
+                    trade_id=trade.id or -1,
+                    symbol=trade.symbol,
+                    side=trade.side,
+                    quantity=float(trade.quantity or 0),
+                    order_id=order_id,
+                    old_status=trade.status,
+                    new_status=new_status,
+                    source=source,
+                    notes=notes,
+                )
+            )
+            continue
+
+        old_status = trade.status
+        trade.status = new_status
+        report.fixes.append(
+            OrphanFix(
+                trade_id=trade.id or -1,
+                symbol=trade.symbol,
+                side=trade.side,
+                quantity=float(trade.quantity or 0),
+                order_id=order_id,
+                old_status=old_status,
+                new_status=new_status,
+                source=source,
+                notes=notes,
+            )
+        )
+
+        if not dry_run:
+            async with AsyncSession(engine) as session:
+                session.add(trade)
+                await session.commit()
+            report.updated += 1
+
+    return report
 
 
 # ── Repository helper ─────────────────────────────────────────

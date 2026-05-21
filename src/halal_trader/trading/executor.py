@@ -10,11 +10,32 @@ from halal_trader.core.fills import confirm_alpaca
 from halal_trader.db.repos import TradeRepo
 from halal_trader.domain.models import TradingPlan
 from halal_trader.domain.ports import Broker
+from halal_trader.domain.status import TradeStatus
 
 logger = logging.getLogger(__name__)
 
 _FILL_TIMEOUT = 30.0
 _FILL_POLL_INTERVAL = 2.0
+
+
+def _extract_order_id(order_result: Any) -> str:
+    """Return the broker's order id, or ``""`` for malformed responses.
+
+    Accepts both the bare order dict (``{"id": "...", ...}``) and the
+    newer ``{"result": {"id": "...", ...}}`` envelope upstream Alpaca
+    MCP wraps replies in (same shape change ``get_all_positions``
+    saw). A non-dict / id-less response returns ``""`` so callers can
+    treat the order as rejected instead of carrying it as a phantom
+    ``pending`` row forever.
+    """
+    if not isinstance(order_result, dict):
+        return ""
+    raw = order_result.get("id", "")
+    if not raw:
+        wrapped = order_result.get("result")
+        if isinstance(wrapped, dict):
+            raw = wrapped.get("id", "")
+    return str(raw) if raw else ""
 
 
 class TradeExecutor(BaseExecutor):
@@ -116,7 +137,51 @@ class TradeExecutor(BaseExecutor):
                 order_type="market",
                 time_in_force="day",
             )
-            order_id = order_result.get("id", "") if isinstance(order_result, dict) else ""
+            order_id = _extract_order_id(order_result)
+            # The broker call "succeeded" (no exception) but returned a
+            # malformed payload — almost certainly a validation error
+            # string from upstream. Persist as rejected with a synthetic
+            # reason so the reconciler ignores the row instead of
+            # carrying it as a phantom position.
+            if not order_id:
+                broker_msg = (
+                    str(order_result)[:300] if order_result is not None else "no response"
+                )
+                logger.error(
+                    "BUY order rejected by broker (no order id): %s — %s",
+                    decision.symbol,
+                    broker_msg,
+                    extra={
+                        "event": events.TRADE_BUY_PLACED,
+                        "symbol": decision.symbol,
+                        "order_id": "",
+                        "status": TradeStatus.REJECTED.value,
+                        "filled_quantity": 0.0,
+                        "filled_price": None,
+                    },
+                )
+                trade_id = await self._repo.record_trade(
+                    symbol=decision.symbol,
+                    side="buy",
+                    quantity=decision.quantity,
+                    price=estimated_price,
+                    order_id="",
+                    status=TradeStatus.REJECTED.value,
+                    llm_reasoning=decision.reasoning,
+                    submitted_at=submitted_at,
+                    filled_at=None,
+                    filled_price=None,
+                    filled_quantity=0.0,
+                )
+                return {
+                    "symbol": decision.symbol,
+                    "action": "buy",
+                    "status": TradeStatus.REJECTED.value,
+                    "reason": broker_msg,
+                    "order": order_result,
+                    "trade_id": trade_id,
+                }
+
             fill = await self._confirm_fill(order_id, submitted_at)
 
             logger.info(
@@ -183,7 +248,27 @@ class TradeExecutor(BaseExecutor):
         """Execute a sell order (close or reduce position)."""
         try:
             submitted_at = datetime.now(UTC)
-            if decision.quantity == 0:
+            is_close_position = decision.quantity == 0
+            # For ``close_position`` we snapshot the position size BEFORE
+            # firing the broker call. The Alpaca MCP ``close_position``
+            # tool routinely returns a payload with no ``id`` field, so
+            # without the pre-call snapshot we'd have no way to record a
+            # meaningful ``filled_quantity`` and the underlying BUY would
+            # stay perpetually "open" in the DB → reconciler drift.
+            pre_close_qty = 0.0
+            if is_close_position:
+                pre_close_qty = await self._fetch_position_qty(decision.symbol)
+                if pre_close_qty <= 0:
+                    logger.info(
+                        "SELL close_position skipped: %s has no open position",
+                        decision.symbol,
+                    )
+                    return {
+                        "symbol": decision.symbol,
+                        "action": "sell",
+                        "status": "skipped",
+                        "reason": "no open position",
+                    }
                 result = await self._broker.close_position(decision.symbol)
             else:
                 result = await self._broker.place_order(
@@ -194,8 +279,58 @@ class TradeExecutor(BaseExecutor):
                     time_in_force="day",
                 )
 
-            order_id = result.get("id", "") if isinstance(result, dict) else ""
-            fill = await self._confirm_fill(order_id, submitted_at)
+            order_id = _extract_order_id(result)
+
+            # Path A: sized SELL with malformed response → rejected.
+            if not order_id and not is_close_position:
+                broker_msg = str(result)[:300] if result is not None else "no response"
+                logger.error(
+                    "SELL order rejected by broker (no order id): %s — %s",
+                    decision.symbol,
+                    broker_msg,
+                    extra={
+                        "event": events.TRADE_SELL_PLACED,
+                        "symbol": decision.symbol,
+                        "order_id": "",
+                        "status": TradeStatus.REJECTED.value,
+                        "filled_quantity": 0.0,
+                        "filled_price": None,
+                    },
+                )
+                await self._repo.record_trade(
+                    symbol=decision.symbol,
+                    side="sell",
+                    quantity=decision.quantity,
+                    price=None,
+                    order_id="",
+                    status=TradeStatus.REJECTED.value,
+                    llm_reasoning=decision.reasoning,
+                    submitted_at=submitted_at,
+                    filled_at=None,
+                    filled_price=None,
+                    filled_quantity=0.0,
+                )
+                return {
+                    "symbol": decision.symbol,
+                    "action": "sell",
+                    "status": TradeStatus.REJECTED.value,
+                    "reason": broker_msg,
+                    "order": result,
+                }
+
+            # Path B: close_position with no order id → verify by polling
+            # the broker for the post-call position. If the position
+            # shrank we trust the close and record a filled SELL with the
+            # actual closed quantity. If it didn't change, mark rejected.
+            if not order_id and is_close_position:
+                fill = await self._synthesize_close_fill(
+                    symbol=decision.symbol,
+                    pre_close_qty=pre_close_qty,
+                    submitted_at=submitted_at,
+                    raw=result if isinstance(result, dict) else {},
+                )
+            else:
+                fill = await self._confirm_fill(order_id, submitted_at)
 
             logger.info(
                 "SELL order placed: %s x%d — orderId=%s status=%s filled=%s",
@@ -243,6 +378,86 @@ class TradeExecutor(BaseExecutor):
                 "status": "error",
                 "reason": str(e),
             }
+
+    async def _fetch_position_qty(self, symbol: str) -> float:
+        """Look up the broker's current open quantity for ``symbol``.
+
+        Used by the close_position path to snapshot pre- and post-close
+        state. Returns 0.0 if the position doesn't exist or the broker
+        call fails — close_position is a best-effort path so a transient
+        broker error shouldn't crash the cycle.
+        """
+        try:
+            positions = await self._broker.get_all_positions()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "get_all_positions failed during close-position lookup for %s: %s",
+                symbol,
+                exc,
+            )
+            return 0.0
+        wanted = symbol.upper()
+        for pos in positions:
+            if str(getattr(pos, "symbol", "")).upper() == wanted:
+                try:
+                    return float(getattr(pos, "qty", 0) or 0)
+                except (TypeError, ValueError):
+                    return 0.0
+        return 0.0
+
+    async def _synthesize_close_fill(
+        self,
+        *,
+        symbol: str,
+        pre_close_qty: float,
+        submitted_at: datetime,
+        raw: dict[str, Any],
+    ) -> Any:
+        """Construct a :class:`FillResult` for a close_position call that
+        didn't return an order id.
+
+        Verifies the close by re-fetching the position; if it shrank,
+        record the delta as filled. Otherwise mark rejected so the
+        reconciler doesn't carry the underlying BUY as still-open.
+        """
+        from halal_trader.core.fills import FillResult
+
+        post_close_qty = await self._fetch_position_qty(symbol)
+        closed_qty = max(pre_close_qty - post_close_qty, 0.0)
+        if closed_qty > 0:
+            logger.info(
+                "close_position succeeded for %s (no order id; verified via "
+                "position delta %.4f → %.4f, closed %.4f)",
+                symbol,
+                pre_close_qty,
+                post_close_qty,
+                closed_qty,
+            )
+            return FillResult(
+                status=TradeStatus.FILLED.value,
+                order_id="",
+                filled_quantity=closed_qty,
+                filled_price=None,
+                submitted_at=submitted_at,
+                filled_at=datetime.now(UTC),
+                raw=raw,
+            )
+        logger.warning(
+            "close_position returned no order id and position unchanged for %s "
+            "(pre=%.4f, post=%.4f) — marking rejected",
+            symbol,
+            pre_close_qty,
+            post_close_qty,
+        )
+        return FillResult(
+            status=TradeStatus.REJECTED.value,
+            order_id="",
+            filled_quantity=0.0,
+            filled_price=None,
+            submitted_at=submitted_at,
+            filled_at=None,
+            raw=raw,
+        )
 
     async def _confirm_fill(self, order_id: str, submitted_at: datetime) -> Any:
         """Poll the broker for fill state, returning a FillResult.
