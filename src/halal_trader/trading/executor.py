@@ -49,6 +49,7 @@ class TradeExecutor(BaseExecutor):
         max_position_pct: float,
         max_simultaneous_positions: int,
         max_sector_pct: float = 0.40,
+        recent_close_cooldown_minutes: int = 30,
     ) -> None:
         super().__init__(
             max_position_pct=max_position_pct,
@@ -60,6 +61,13 @@ class TradeExecutor(BaseExecutor):
         # an operator who hasn't tuned this gets a sane diversification
         # floor on day one.
         self._max_sector_pct = max_sector_pct
+        # Hard gate that refuses BUYs for any symbol with a `closed_at`
+        # within the last N minutes. Backs up the prompt-level
+        # RECENTLY CLOSED warning + system-prompt rule 8 because the
+        # LLM was visibly ignoring both on 2026-05-21 (CSCO ping-pong:
+        # 4 transactions in 90 min on the same symbol despite three
+        # escalating prompt warnings). Set to 0 to disable.
+        self._recent_close_cooldown_minutes = recent_close_cooldown_minutes
 
     async def execute_plan(
         self,
@@ -89,6 +97,21 @@ class TradeExecutor(BaseExecutor):
 
     async def _execute_buy(self, decision: Any, **kwargs: Any) -> dict[str, Any]:
         """Execute a buy order."""
+        # Hard re-entry cooldown — refuse a BUY for any symbol the bot
+        # closed within the last ``recent_close_cooldown_minutes``. Sits
+        # ABOVE the broker calls so a blocked re-entry costs nothing
+        # (no MCP round-trip, no snapshot fetch). The prompt-level
+        # RECENTLY CLOSED warning + rule 8 stay in place to teach the
+        # LLM; this gate catches the residual misses.
+        cooldown_reject = await self._check_recent_close_cooldown(decision.symbol)
+        if cooldown_reject is not None:
+            return {
+                "symbol": decision.symbol,
+                "action": "buy",
+                "status": "rejected",
+                "reason": cooldown_reject,
+            }
+
         account = await self._broker.get_account_info()
 
         snapshot = await self._broker.get_stock_snapshot(decision.symbol)
@@ -378,6 +401,74 @@ class TradeExecutor(BaseExecutor):
                 "status": "error",
                 "reason": str(e),
             }
+
+    async def _check_recent_close_cooldown(self, symbol: str) -> str | None:
+        """Return a rejection reason if ``symbol`` was closed within the
+        cooldown window. Returns ``None`` to allow the BUY.
+
+        A repo error degrades to "allow" — we never block a legitimate
+        trade on a DB blip. Cooldown <= 0 disables the check entirely
+        (operator escape hatch).
+        """
+        if self._recent_close_cooldown_minutes <= 0:
+            return None
+        try:
+            rows = await self._repo.get_recently_closed(
+                minutes=self._recent_close_cooldown_minutes
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(
+                "recent-close cooldown lookup failed for %s: %s — allowing trade",
+                symbol,
+                exc,
+            )
+            return None
+
+        from datetime import UTC, datetime
+
+        wanted = symbol.upper()
+        now = datetime.now(UTC)
+        latest_close = None
+        for row in rows:
+            if str(row.get("symbol") or "").upper() != wanted:
+                continue
+            closed_at_raw = row.get("closed_at")
+            if isinstance(closed_at_raw, str):
+                try:
+                    closed_at = datetime.fromisoformat(
+                        closed_at_raw.replace("Z", "+00:00")
+                    )
+                except ValueError:
+                    continue
+            elif isinstance(closed_at_raw, datetime):
+                closed_at = closed_at_raw
+            else:
+                continue
+            if closed_at.tzinfo is None:
+                closed_at = closed_at.replace(tzinfo=UTC)
+            if latest_close is None or closed_at > latest_close:
+                latest_close = closed_at
+
+        if latest_close is None:
+            return None
+
+        gap_min = (now - latest_close).total_seconds() / 60.0
+        if gap_min >= self._recent_close_cooldown_minutes:
+            return None
+
+        reason = (
+            f"recent-close cooldown: {symbol} closed {gap_min:.0f} min ago "
+            f"(cooldown {self._recent_close_cooldown_minutes} min). "
+            "Wait for the cooldown to elapse or pick a different symbol."
+        )
+        logger.warning(
+            "BUY rejected by recent-close cooldown: %s (closed %.0f min ago, "
+            "cooldown %d min)",
+            symbol,
+            gap_min,
+            self._recent_close_cooldown_minutes,
+        )
+        return reason
 
     async def _fetch_position_qty(self, symbol: str) -> float:
         """Look up the broker's current open quantity for ``symbol``.
