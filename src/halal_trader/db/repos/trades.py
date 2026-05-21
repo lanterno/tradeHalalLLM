@@ -97,6 +97,27 @@ class TradeRepoImpl:
             results = await session.exec(statement)
             return list(results.all())
 
+    async def get_recently_closed(self, *, minutes: int = 60) -> list[dict[str, Any]]:
+        """Closed stock trades (BUYs whose ``closed_at`` is within the window).
+
+        The LLM uses this to avoid re-buying a symbol it just sold —
+        the prompt only shows current positions, not recent exits, so
+        without surfacing this the bot can flip out and back into the
+        same symbol on consecutive cycles (observed 2026-05-21 13:15
+        → 13:30 on AMZN: sold then re-bought 15 min later).
+        """
+        cutoff = datetime.now(UTC) - timedelta(minutes=minutes)
+        async with AsyncSession(self._engine) as session:
+            statement = (
+                select(Trade)
+                .where(Trade.side == "buy")
+                .where(col(Trade.closed_at).is_not(None))
+                .where(col(Trade.closed_at) >= cutoff)
+                .order_by(col(Trade.closed_at).desc())
+            )
+            results = await session.exec(statement)
+            return [r.model_dump() for r in results.all()]
+
     async def close_trade(self, trade_id: int, exit_price: float, exit_reason: str) -> None:
         """Mark a stock trade as closed with exit price + reason."""
         async with AsyncSession(self._engine) as session:

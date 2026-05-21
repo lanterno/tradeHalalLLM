@@ -101,6 +101,9 @@ Today's P&L: ${today_pnl:+,.2f} ({today_pnl_pct:+.2%})
 === SECTOR EXPOSURE ===
 {sector_text}
 
+=== RECENTLY CLOSED (last 60 min) ===
+{recent_closed_text}
+
 === HALAL-COMPLIANT STOCK UNIVERSE ===
 {halal_symbols}
 
@@ -158,6 +161,51 @@ def _format_positions(positions: list[Position]) -> str:
             f"${p.avg_entry_price:.2f} | "
             f"Current: ${p.current_price:.2f} | "
             f"P&L: ${p.unrealized_pl:+.2f} ({p.unrealized_plpc:+.2%})"
+        )
+    return "\n".join(lines)
+
+
+def _format_recent_closed(rows: list[dict[str, Any]]) -> str:
+    """Render the last hour of closed BUYs so the LLM can see what it
+    just exited and avoid re-buying the same symbol on a similar thesis.
+
+    Observed 2026-05-21 13:00→13:30: bought AMZN, sold AMZN 15 min
+    later, bought AMZN BACK 15 min after that. Same ticker, same
+    rationale, 30 min churn. The prompt only shows current positions
+    so the LLM couldn't see its own recent exit history.
+    """
+    if not rows:
+        return "No closed trades in the last 60 min."
+    from datetime import UTC, datetime
+
+    now = datetime.now(UTC)
+    lines = ["⚠ Avoid re-entering symbols you just closed on the same thesis:"]
+    for row in rows[:8]:  # cap to keep prompt compact
+        symbol = row.get("symbol") or "?"
+        closed_at = row.get("closed_at")
+        # closed_at may be a datetime (ORM) or an ISO string (model_dump).
+        if isinstance(closed_at, str):
+            try:
+                closed_at = datetime.fromisoformat(closed_at.replace("Z", "+00:00"))
+            except ValueError:
+                closed_at = None
+        mins_ago: float | None = None
+        if isinstance(closed_at, datetime):
+            if closed_at.tzinfo is None:
+                closed_at = closed_at.replace(tzinfo=UTC)
+            mins_ago = (now - closed_at).total_seconds() / 60.0
+        qty = row.get("quantity") or row.get("filled_quantity") or 0
+        entry = row.get("filled_price") or row.get("price") or 0
+        exit_p = row.get("exit_price") or 0
+        reason = row.get("exit_reason") or ""
+        ago = f"{mins_ago:.0f} min ago" if mins_ago is not None else "recently"
+        pnl_pct = ""
+        if entry and exit_p:
+            pnl_pct = f" P&L: {(float(exit_p) - float(entry)) / float(entry):+.2%}"
+        reason_str = f" ({reason})" if reason else ""
+        lines.append(
+            f"  {symbol}: closed {ago} · {qty:g} @ "
+            f"${float(entry):.2f}→${float(exit_p):.2f}{pnl_pct}{reason_str}"
         )
     return "\n".join(lines)
 
@@ -385,6 +433,7 @@ class TradingStrategy(BaseStrategy):
         performance_text: str = "",
         active_adjustments: str = "",
         news_text: str = "",
+        recent_closed_text: str = "No closed trades in the last 60 min.",
     ) -> TradingPlan:
         portfolio_value = account.portfolio_value or account.equity or 100000
         today_pnl_pct = today_pnl / portfolio_value if portfolio_value else 0
@@ -409,6 +458,7 @@ class TradingStrategy(BaseStrategy):
             sector_text=_format_sector_exposure(
                 positions, portfolio_value, self._max_sector_pct
             ),
+            recent_closed_text=recent_closed_text,
             halal_symbols=", ".join(halal_symbols),
             snapshots_text=_format_snapshots(snapshots),
             bars_text=_format_bars(bars),

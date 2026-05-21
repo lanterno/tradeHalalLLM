@@ -240,6 +240,22 @@ class TradingCycleService(BaseCycleService):
             )
             return
 
+        # Surface the last hour of closed BUYs to the LLM so it can
+        # see what it just exited and avoid same-thesis re-buys. Empty
+        # / failing fetch degrades to the default "no recent closes"
+        # string — never aborts the cycle.
+        recent_closed_text = "No closed trades in the last 60 min."
+        try:
+            from halal_trader.db.repos import RepoBundle
+            from halal_trader.trading.strategy import _format_recent_closed
+
+            repos = RepoBundle.from_engine(self._engine) if self._engine else None
+            if repos is not None:
+                rows = await repos.trades.get_recently_closed(minutes=60)
+                recent_closed_text = _format_recent_closed(rows)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("recent-closed fetch failed: %s", exc)
+
         analyze_kwargs = dict(
             account=account,
             positions=positions,
@@ -255,6 +271,7 @@ class TradingCycleService(BaseCycleService):
             performance_text=state.performance_text,
             active_adjustments=state.active_adjustments,
             news_text=state.news_text,
+            recent_closed_text=recent_closed_text,
         )
         plan = await self._strategy.analyze(**analyze_kwargs)
 
