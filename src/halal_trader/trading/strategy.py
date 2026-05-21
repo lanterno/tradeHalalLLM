@@ -98,6 +98,9 @@ Today's P&L: ${today_pnl:+,.2f} ({today_pnl_pct:+.2%})
 === CAPACITY STATUS ===
 {capacity_text}
 
+=== SECTOR EXPOSURE ===
+{sector_text}
+
 === HALAL-COMPLIANT STOCK UNIVERSE ===
 {halal_symbols}
 
@@ -155,6 +158,57 @@ def _format_positions(positions: list[Position]) -> str:
             f"${p.avg_entry_price:.2f} | "
             f"Current: ${p.current_price:.2f} | "
             f"P&L: ${p.unrealized_pl:+.2f} ({p.unrealized_plpc:+.2%})"
+        )
+    return "\n".join(lines)
+
+
+def _format_sector_exposure(
+    positions: list[Position],
+    equity: float,
+    max_sector_pct: float,
+) -> str:
+    """Render current sector breakdown + warn when any sector approaches
+    the halal sector-rotation cap.
+
+    Without this, the LLM proposes buys into a sector the bot can't
+    actually fill — observed 2026-05-21 12:45 ET: 2 Tech buys rejected
+    because Tech was already at 35% and the buys would have pushed it
+    to 45% > 40% cap. The LLM had no visibility into existing sector
+    exposure or the cap value.
+    """
+    if equity <= 0:
+        return "No equity data available — sector cap check disabled."
+    from halal_trader.halal.sector_limits import compute_allocation
+
+    positions_value = {
+        p.symbol: float(p.qty) * float(p.current_price or p.avg_entry_price)
+        for p in positions
+    }
+    allocation = compute_allocation(positions_value, total_equity=equity)
+    if not allocation.by_sector:
+        return (
+            f"No sector exposure (all-cash). Sector cap: {max_sector_pct:.0%} per "
+            "sector — full freedom on any single sector for the first allocation."
+        )
+    cap_pct = max_sector_pct
+    lines = [f"Sector cap: {cap_pct:.0%} per sector"]
+    near_cap_sectors: list[str] = []
+    for sector, value in sorted(allocation.by_sector.items(), key=lambda kv: -kv[1]):
+        pct = value / equity
+        flag = ""
+        if pct >= cap_pct:
+            flag = "  ⚠ AT CAP"
+            near_cap_sectors.append(sector)
+        elif pct >= cap_pct * 0.80:  # within 80% of cap
+            flag = "  ⚠ near cap"
+            near_cap_sectors.append(sector)
+        lines.append(f"  {sector}: {pct:.0%} (${value:,.0f}){flag}")
+    if near_cap_sectors:
+        lines.append(
+            "⚠ NEW BUYS IN "
+            + ", ".join(near_cap_sectors)
+            + " WILL BE REJECTED if they push the sector past the cap. "
+            "Pick a different sector, or sell from the capped sector first."
         )
     return "\n".join(lines)
 
@@ -238,6 +292,7 @@ class TradingStrategy(BaseStrategy):
         daily_loss_limit: float,
         daily_return_target: float,
         max_simultaneous_positions: int,
+        max_sector_pct: float = 0.40,
         attacker_llm: LLMBackend | None = None,
         adversarial_downsize_at: float = 0.45,
         adversarial_skip_at: float = 0.75,
@@ -258,6 +313,12 @@ class TradingStrategy(BaseStrategy):
             daily_return_target=daily_return_target,
             max_simultaneous_positions=max_simultaneous_positions,
         )
+        # Mirrors the executor's TradeExecutor.max_sector_pct so the
+        # prompt's SECTOR EXPOSURE block uses the same threshold the
+        # executor enforces. Threaded as a kwarg (defaults to the
+        # executor's 0.40 default) rather than read from Settings —
+        # ``Settings.stocks`` doesn't carry a sector-cap field yet.
+        self._max_sector_pct = max_sector_pct
         # Optional adversarial co-bot — mirrors the crypto wiring.
         self._attacker_llm = attacker_llm
         self._adv_downsize_at = adversarial_downsize_at
@@ -321,6 +382,9 @@ class TradingStrategy(BaseStrategy):
             positions_text=_format_positions(positions),
             capacity_text=_format_capacity(
                 len(positions), self._max_simultaneous_positions
+            ),
+            sector_text=_format_sector_exposure(
+                positions, portfolio_value, self._max_sector_pct
             ),
             halal_symbols=", ".join(halal_symbols),
             snapshots_text=_format_snapshots(snapshots),

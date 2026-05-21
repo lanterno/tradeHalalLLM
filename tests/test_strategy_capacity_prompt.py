@@ -44,6 +44,71 @@ def test_capacity_over_cap_defensive():
     assert "7/5" in out
 
 
+# ── Sector exposure ──────────────────────────────────────────
+
+
+def _pos(symbol: str, qty: float, price: float):
+    """Build a Position with current_price set so values are computable."""
+    from halal_trader.domain.models import Position
+    return Position(symbol=symbol, qty=qty, avg_entry_price=price, current_price=price)
+
+
+def test_sector_exposure_empty_when_no_positions():
+    from halal_trader.trading.strategy import _format_sector_exposure
+    out = _format_sector_exposure([], equity=100_000, max_sector_pct=0.40)
+    assert "all-cash" in out
+    assert "40%" in out
+
+
+def test_sector_exposure_below_cap_no_warning():
+    from halal_trader.trading.strategy import _format_sector_exposure
+    # MSFT 10% of equity — well below 40% cap
+    out = _format_sector_exposure(
+        [_pos("MSFT", 50, 200)], equity=100_000, max_sector_pct=0.40
+    )
+    assert "Technology" in out
+    assert "10%" in out
+    # No alarm wording when comfortably below the cap.
+    assert "AT CAP" not in out
+    assert "near cap" not in out
+    assert "WILL BE REJECTED" not in out
+
+
+def test_sector_exposure_at_cap_emits_warning():
+    from halal_trader.trading.strategy import _format_sector_exposure
+    # MSFT $40k of $100k equity = exactly 40% — at cap
+    out = _format_sector_exposure(
+        [_pos("MSFT", 200, 200)], equity=100_000, max_sector_pct=0.40
+    )
+    assert "AT CAP" in out
+    assert "WILL BE REJECTED" in out
+    assert "Technology" in out
+
+
+def test_sector_exposure_near_cap_emits_warning():
+    from halal_trader.trading.strategy import _format_sector_exposure
+    # MSFT $33k of $100k = 33% — within 80% of 40% cap (>=32%)
+    out = _format_sector_exposure(
+        [_pos("MSFT", 165, 200)], equity=100_000, max_sector_pct=0.40
+    )
+    assert "near cap" in out
+    assert "WILL BE REJECTED" in out
+
+
+def test_sector_exposure_aggregates_multiple_symbols_in_same_sector():
+    from halal_trader.trading.strategy import _format_sector_exposure
+    # MSFT 20% + NVDA 25% = 45% Tech — over cap
+    out = _format_sector_exposure(
+        [_pos("MSFT", 100, 200), _pos("NVDA", 250, 100)],
+        equity=100_000,
+        max_sector_pct=0.40,
+    )
+    assert "AT CAP" in out
+    assert "Technology" in out
+    # 45% Tech total
+    assert "45%" in out
+
+
 def test_system_prompt_has_transaction_cost_rule():
     """Pin the rule that discourages whipsaw round-trips on noise.
 
