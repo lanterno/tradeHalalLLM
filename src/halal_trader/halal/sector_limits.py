@@ -15,7 +15,15 @@ still trade them but they share the unknown-sector cap.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Mapping
+from typing import Iterable, Mapping
+
+# Sectors that are NOT subject to the per-sector cap. The halal stocks
+# universe is structurally heavy on US large-cap Technology (most of
+# the Shariah-compliant tickers are software / semis / cloud); capping
+# Tech at the same threshold as every other sector would force the bot
+# to leave most of its high-conviction setups on the table. Operator
+# policy as of 2026-05-21: exempt Technology only.
+DEFAULT_EXEMPT_SECTORS: frozenset[str] = frozenset({"Technology"})
 
 # A small, hand-maintained seed map. Real symbols/sectors should come
 # from Alpaca's snapshot or a fundamentals provider; this keeps tests
@@ -112,16 +120,27 @@ def check_buy_against_limits(
     allocation: SectorAllocation,
     max_sector_pct: float = 0.40,
     sector_map: Mapping[str, str] | None = None,
+    exempt_sectors: Iterable[str] | None = None,
 ) -> tuple[bool, str]:
     """Return ``(allowed, reason)`` for a candidate buy.
 
     The cap is total post-trade exposure — the candidate's notional gets
     added to the existing bucket before the comparison, so a +1% buy on
     top of 39% existing exposure still trips the 40% cap.
+
+    ``exempt_sectors`` short-circuits the cap check for sectors the
+    operator has whitelisted (defaults to :data:`DEFAULT_EXEMPT_SECTORS`,
+    currently ``{"Technology"}`` — see that constant for the rationale).
+    Pass an explicit empty set to disable the exemption.
     """
     if allocation.total_equity <= 0:
         return True, ""
     sector = sector_for(symbol, sector_map=sector_map)
+    exempt = (
+        DEFAULT_EXEMPT_SECTORS if exempt_sectors is None else frozenset(exempt_sectors)
+    )
+    if sector in exempt:
+        return True, ""
     current = allocation.by_sector.get(sector, 0.0)
     post = current + notional_usd
     post_pct = post / allocation.total_equity

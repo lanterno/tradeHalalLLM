@@ -175,10 +175,18 @@ def _format_sector_exposure(
     because Tech was already at 35% and the buys would have pushed it
     to 45% > 40% cap. The LLM had no visibility into existing sector
     exposure or the cap value.
+
+    Sectors in ``DEFAULT_EXEMPT_SECTORS`` (currently ``{"Technology"}``)
+    are shown for transparency but explicitly labeled as exempt — the
+    halal universe is structurally Tech-heavy so capping it would
+    leave most setups unfunded.
     """
     if equity <= 0:
         return "No equity data available — sector cap check disabled."
-    from halal_trader.halal.sector_limits import compute_allocation
+    from halal_trader.halal.sector_limits import (
+        DEFAULT_EXEMPT_SECTORS,
+        compute_allocation,
+    )
 
     positions_value = {
         p.symbol: float(p.qty) * float(p.current_price or p.avg_entry_price)
@@ -186,17 +194,25 @@ def _format_sector_exposure(
     }
     allocation = compute_allocation(positions_value, total_equity=equity)
     if not allocation.by_sector:
+        exempt_note = (
+            f" Exempt: {', '.join(sorted(DEFAULT_EXEMPT_SECTORS))} (no cap)."
+            if DEFAULT_EXEMPT_SECTORS
+            else ""
+        )
         return (
             f"No sector exposure (all-cash). Sector cap: {max_sector_pct:.0%} per "
-            "sector — full freedom on any single sector for the first allocation."
+            f"sector — full freedom on any single sector for the first allocation.{exempt_note}"
         )
     cap_pct = max_sector_pct
-    lines = [f"Sector cap: {cap_pct:.0%} per sector"]
+    exempt_list = ", ".join(sorted(DEFAULT_EXEMPT_SECTORS)) or "none"
+    lines = [f"Sector cap: {cap_pct:.0%} per sector (exempt: {exempt_list})"]
     near_cap_sectors: list[str] = []
     for sector, value in sorted(allocation.by_sector.items(), key=lambda kv: -kv[1]):
         pct = value / equity
         flag = ""
-        if pct >= cap_pct:
+        if sector in DEFAULT_EXEMPT_SECTORS:
+            flag = "  (exempt — no cap)"
+        elif pct >= cap_pct:
             flag = "  ⚠ AT CAP"
             near_cap_sectors.append(sector)
         elif pct >= cap_pct * 0.80:  # within 80% of cap

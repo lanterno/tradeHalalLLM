@@ -88,38 +88,80 @@ def test_sector_exposure_below_cap_no_warning():
 
 
 def test_sector_exposure_at_cap_emits_warning():
+    """Tech is exempt; use a non-exempt sector (Healthcare via JNJ) to
+    exercise the AT-CAP warning."""
     from halal_trader.trading.strategy import _format_sector_exposure
-    # MSFT $40k of $100k equity = exactly 40% — at cap
+    # JNJ $40k of $100k equity = exactly 40% — at cap
     out = _format_sector_exposure(
-        [_pos("MSFT", 200, 200)], equity=100_000, max_sector_pct=0.40
+        [_pos("JNJ", 250, 160)], equity=100_000, max_sector_pct=0.40
     )
     assert "AT CAP" in out
     assert "WILL BE REJECTED" in out
-    assert "Technology" in out
+    assert "Healthcare" in out
 
 
 def test_sector_exposure_near_cap_emits_warning():
     from halal_trader.trading.strategy import _format_sector_exposure
-    # MSFT $33k of $100k = 33% — within 80% of 40% cap (>=32%)
+    # JNJ $33k of $100k = 33% — within 80% of 40% cap (>=32%)
     out = _format_sector_exposure(
-        [_pos("MSFT", 165, 200)], equity=100_000, max_sector_pct=0.40
+        [_pos("JNJ", 206, 160)], equity=100_000, max_sector_pct=0.40
     )
     assert "near cap" in out
     assert "WILL BE REJECTED" in out
 
 
 def test_sector_exposure_aggregates_multiple_symbols_in_same_sector():
+    """Two Healthcare symbols sum to 45% → past the cap warning fires."""
     from halal_trader.trading.strategy import _format_sector_exposure
-    # MSFT 20% + NVDA 25% = 45% Tech — over cap
+    # JNJ 20% + LLY 25% = 45% Healthcare — over cap
     out = _format_sector_exposure(
-        [_pos("MSFT", 100, 200), _pos("NVDA", 250, 100)],
+        [_pos("JNJ", 125, 160), _pos("LLY", 50, 500)],
         equity=100_000,
         max_sector_pct=0.40,
     )
     assert "AT CAP" in out
-    assert "Technology" in out
-    # 45% Tech total
+    assert "Healthcare" in out
+    # 45% Healthcare total
     assert "45%" in out
+
+
+def test_sector_exposure_marks_technology_exempt():
+    """Tech positions render with "(exempt)" and never trigger the
+    cap warning, even when 80%+ of portfolio."""
+    from halal_trader.trading.strategy import _format_sector_exposure
+    # MSFT $80k of $100k = 80% — would normally scream AT CAP.
+    out = _format_sector_exposure(
+        [_pos("MSFT", 400, 200)], equity=100_000, max_sector_pct=0.40
+    )
+    assert "Technology" in out
+    assert "exempt" in out
+    # The cap-warning footer must NOT mention Technology.
+    assert "AT CAP" not in out
+    assert "near cap" not in out
+    assert "WILL BE REJECTED" not in out
+    # Header should advertise the exempt list to the LLM.
+    assert "exempt: Technology" in out
+
+
+def test_sector_exposure_mixed_tech_and_capped_sectors():
+    """Tech is silent (exempt); Healthcare at 40% still triggers the
+    warning footer."""
+    from halal_trader.trading.strategy import _format_sector_exposure
+    out = _format_sector_exposure(
+        [
+            _pos("MSFT", 400, 200),  # $80k Tech (exempt)
+            _pos("JNJ", 100, 160),  # $16k Healthcare
+            _pos("LLY", 30, 500),  # $15k Healthcare — total 31%, below 32% threshold
+        ],
+        equity=100_000,
+        max_sector_pct=0.40,
+    )
+    assert "Technology" in out
+    assert "(exempt — no cap)" in out
+    assert "Healthcare" in out
+    # Healthcare at 31% is below the 32% "near-cap" threshold
+    # (80% × 40%), so no warning marker should appear on Healthcare.
+    assert "near cap" not in out
 
 
 def test_system_prompt_has_transaction_cost_rule():

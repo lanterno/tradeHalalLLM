@@ -51,8 +51,14 @@ def _decision(symbol: str = "MSFT", quantity: int = 30) -> TradeDecision:
     )
 
 
-async def test_sector_cap_blocks_buy_that_concentrates_tech():
-    """7k AAPL position + 3k MSFT buy = 100% Tech → reject under 40% cap."""
+async def test_sector_cap_blocks_buy_that_concentrates_healthcare():
+    """7k JNJ position + 3k LLY buy = 100% Healthcare → reject under 40% cap.
+
+    (Previously tested Tech, but as of 2026-05-21 Technology is in
+    DEFAULT_EXEMPT_SECTORS — the halal universe is structurally Tech-heavy
+    so capping it would leave most setups unfunded. Switched to Healthcare,
+    a non-exempt sector, to keep exercising the cap-blocks path.)
+    """
     account = _account(buying_power=10_000, portfolio_value=10_000)
     repo = MagicMock()
     broker = _broker(account, snapshot_price=100.0)
@@ -63,12 +69,32 @@ async def test_sector_cap_blocks_buy_that_concentrates_tech():
         max_simultaneous_positions=10,
         max_sector_pct=0.40,
     )
-    positions = [_position("AAPL", qty=70, price=100)]  # 7000 in Tech
-    result = await executor._execute_buy(_decision("MSFT", quantity=30), positions=positions)
+    positions = [_position("JNJ", qty=70, price=100)]  # 7000 in Healthcare
+    result = await executor._execute_buy(_decision("LLY", quantity=30), positions=positions)
 
     assert result["status"] == "rejected"
     assert "sector" in result["reason"].lower()
     broker.place_order.assert_not_called()
+
+
+async def test_sector_cap_does_not_block_tech_buys_by_default():
+    """Companion to the rename above: confirm a Tech-heavy portfolio
+    can still add more Tech because Tech is exempt by default."""
+    account = _account(buying_power=10_000, portfolio_value=10_000)
+    repo = MagicMock()
+    repo.record_trade = AsyncMock(return_value=99)
+    broker = _broker(account, snapshot_price=100.0)
+    executor = TradeExecutor(
+        broker,
+        repo,
+        max_position_pct=1.0,
+        max_simultaneous_positions=10,
+        max_sector_pct=0.40,
+    )
+    positions = [_position("AAPL", qty=70, price=100)]  # 7000 in Tech — past 40%
+    result = await executor._execute_buy(_decision("MSFT", quantity=30), positions=positions)
+    # Tech is exempt → buy proceeds normally (no rejection).
+    assert result["status"] != "rejected"
 
 
 async def test_sector_cap_allows_buy_in_a_different_sector():
