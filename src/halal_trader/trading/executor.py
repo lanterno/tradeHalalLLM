@@ -433,8 +433,16 @@ class TradeExecutor(BaseExecutor):
             }
 
     async def _check_recent_close_cooldown(self, symbol: str) -> str | None:
-        """Return a rejection reason if ``symbol`` was closed within the
-        cooldown window. Returns ``None`` to allow the BUY.
+        """Return a rejection reason if ``symbol`` had any exit (closed
+        BUY OR recent SELL) within the cooldown window. ``None`` allows
+        the BUY.
+
+        Looks at TWO sources because LLM-initiated SELLs may not have
+        stamped ``closed_at`` on the original BUY (legacy rows from
+        before the close-on-sell fix, or in-flight lag): ``get_recently_closed``
+        catches closed BUYs, ``get_recent_sells`` catches SELL events
+        regardless of the BUY's state. The latest timestamp of either
+        wins.
 
         A repo error degrades to "allow" — we never block a legitimate
         trade on a DB blip. Cooldown <= 0 disables the check entirely
@@ -442,59 +450,89 @@ class TradeExecutor(BaseExecutor):
         """
         if self._recent_close_cooldown_minutes <= 0:
             return None
-        try:
-            rows = await self._repo.get_recently_closed(
-                minutes=self._recent_close_cooldown_minutes
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.debug(
-                "recent-close cooldown lookup failed for %s: %s — allowing trade",
-                symbol,
-                exc,
-            )
-            return None
-
         from datetime import UTC, datetime
 
         wanted = symbol.upper()
         now = datetime.now(UTC)
-        latest_close = None
-        for row in rows:
-            if str(row.get("symbol") or "").upper() != wanted:
-                continue
-            closed_at_raw = row.get("closed_at")
-            if isinstance(closed_at_raw, str):
-                try:
-                    closed_at = datetime.fromisoformat(
-                        closed_at_raw.replace("Z", "+00:00")
-                    )
-                except ValueError:
-                    continue
-            elif isinstance(closed_at_raw, datetime):
-                closed_at = closed_at_raw
-            else:
-                continue
-            if closed_at.tzinfo is None:
-                closed_at = closed_at.replace(tzinfo=UTC)
-            if latest_close is None or closed_at > latest_close:
-                latest_close = closed_at
+        latest_exit: datetime | None = None
+        exit_kind = ""
 
-        if latest_close is None:
+        async def _scan(
+            rows: list[dict[str, Any]], ts_key: str
+        ) -> tuple[datetime | None, str]:
+            best: datetime | None = None
+            for row in rows:
+                if str(row.get("symbol") or "").upper() != wanted:
+                    continue
+                ts_raw = row.get(ts_key)
+                if isinstance(ts_raw, str):
+                    try:
+                        ts = datetime.fromisoformat(ts_raw.replace("Z", "+00:00"))
+                    except ValueError:
+                        continue
+                elif isinstance(ts_raw, datetime):
+                    ts = ts_raw
+                else:
+                    continue
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=UTC)
+                if best is None or ts > best:
+                    best = ts
+            return best, ts_key
+
+        try:
+            closed_rows = await self._repo.get_recently_closed(
+                minutes=self._recent_close_cooldown_minutes
+            )
+            closed_ts, _ = await _scan(closed_rows, "closed_at")
+            if closed_ts is not None:
+                latest_exit = closed_ts
+                exit_kind = "closed"
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(
+                "recent-close cooldown closed-lookup failed for %s: %s",
+                symbol,
+                exc,
+            )
+
+        # Also check raw SELL events — covers LLM sells where closed_at
+        # didn't get stamped on the BUY (pre-fix data or transient lag).
+        sells_method = getattr(self._repo, "get_recent_sells", None)
+        if sells_method is not None:
+            try:
+                sell_rows = await sells_method(
+                    minutes=self._recent_close_cooldown_minutes
+                )
+                sell_ts, _ = await _scan(sell_rows, "timestamp")
+                if sell_ts is not None and (
+                    latest_exit is None or sell_ts > latest_exit
+                ):
+                    latest_exit = sell_ts
+                    exit_kind = "sold"
+            except Exception as exc:  # noqa: BLE001
+                logger.debug(
+                    "recent-close cooldown sells-lookup failed for %s: %s",
+                    symbol,
+                    exc,
+                )
+
+        if latest_exit is None:
             return None
 
-        gap_min = (now - latest_close).total_seconds() / 60.0
+        gap_min = (now - latest_exit).total_seconds() / 60.0
         if gap_min >= self._recent_close_cooldown_minutes:
             return None
 
         reason = (
-            f"recent-close cooldown: {symbol} closed {gap_min:.0f} min ago "
+            f"recent-close cooldown: {symbol} {exit_kind} {gap_min:.0f} min ago "
             f"(cooldown {self._recent_close_cooldown_minutes} min). "
             "Wait for the cooldown to elapse or pick a different symbol."
         )
         logger.warning(
-            "BUY rejected by recent-close cooldown: %s (closed %.0f min ago, "
+            "BUY rejected by recent-close cooldown: %s (%s %.0f min ago, "
             "cooldown %d min)",
             symbol,
+            exit_kind,
             gap_min,
             self._recent_close_cooldown_minutes,
         )

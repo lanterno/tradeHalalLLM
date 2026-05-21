@@ -176,6 +176,55 @@ async def test_repo_error_does_not_block_trade():
 
 
 @pytest.mark.asyncio
+async def test_recent_sell_without_closed_at_blocks_buy():
+    """A SELL row from the window must block re-buy even if its
+    underlying BUY's `closed_at` is still NULL (legacy data from
+    before the close-on-sell fix, or in-flight lag)."""
+    repo = MagicMock()
+    repo.get_recently_closed = AsyncMock(return_value=[])  # no closed BUYs
+    repo.get_recent_sells = AsyncMock(
+        return_value=[
+            {"symbol": "CSCO", "side": "sell", "timestamp": datetime.now(UTC) - timedelta(minutes=12)},
+        ]
+    )
+    repo.record_trade = AsyncMock()
+    executor = _executor(repo)
+
+    result = await executor._execute_buy(_decision("CSCO"), positions=[])
+
+    assert result["status"] == "rejected"
+    assert "cooldown" in result["reason"].lower()
+    # Latest exit was a SELL — reason should reflect that vocabulary.
+    assert "sold" in result["reason"].lower()
+    executor._broker.place_order.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_uses_latest_exit_across_closed_and_sold():
+    """Both sources have a hit; the cooldown uses whichever is more recent."""
+    repo = MagicMock()
+    # closed 25 min ago, sold 8 min ago → SELL is more recent
+    repo.get_recently_closed = AsyncMock(
+        return_value=[
+            {"symbol": "CSCO", "closed_at": datetime.now(UTC) - timedelta(minutes=25)},
+        ]
+    )
+    repo.get_recent_sells = AsyncMock(
+        return_value=[
+            {"symbol": "CSCO", "side": "sell", "timestamp": datetime.now(UTC) - timedelta(minutes=8)},
+        ]
+    )
+    repo.record_trade = AsyncMock()
+    executor = _executor(repo)
+
+    result = await executor._execute_buy(_decision("CSCO"), positions=[])
+    assert result["status"] == "rejected"
+    # Should report 8 min (the SELL), not 25 min (the close).
+    assert "8 min ago" in result["reason"] or "9 min ago" in result["reason"]
+    assert "sold" in result["reason"].lower()
+
+
+@pytest.mark.asyncio
 async def test_picks_most_recent_close_when_symbol_appears_twice():
     """If the symbol shows up multiple times (e.g. bought + closed twice
     in the window), the cooldown uses the LATEST close timestamp."""

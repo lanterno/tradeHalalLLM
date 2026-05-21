@@ -118,6 +118,27 @@ class TradeRepoImpl:
             results = await session.exec(statement)
             return [r.model_dump() for r in results.all()]
 
+    async def get_recent_sells(self, *, minutes: int = 60) -> list[dict[str, Any]]:
+        """SELL trades created within the window.
+
+        Companion to ``get_recently_closed`` for the executor's
+        re-entry cooldown — captures LLM-initiated SELLs whose
+        ``close_open_trades_for_symbol`` write may have lagged or
+        (for rows that predate that fix) never fired. Using
+        ``Trade.timestamp`` rather than a separate close-time column
+        because SELLs are terminal events in their own right.
+        """
+        cutoff = datetime.now(UTC) - timedelta(minutes=minutes)
+        async with AsyncSession(self._engine) as session:
+            statement = (
+                select(Trade)
+                .where(Trade.side == "sell")
+                .where(Trade.timestamp >= cutoff)
+                .order_by(col(Trade.timestamp).desc())
+            )
+            results = await session.exec(statement)
+            return [r.model_dump() for r in results.all()]
+
     async def close_trade(self, trade_id: int, exit_price: float, exit_reason: str) -> None:
         """Mark a stock trade as closed with exit price + reason."""
         async with AsyncSession(self._engine) as session:

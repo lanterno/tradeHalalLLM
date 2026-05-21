@@ -142,6 +142,9 @@ class Repository:
     async def get_recently_closed(self, *, minutes: int = 60) -> list[dict[str, Any]]:
         return await self._trades.get_recently_closed(minutes=minutes)
 
+    async def get_recent_sells(self, *, minutes: int = 60) -> list[dict[str, Any]]:
+        return await self._trades.get_recent_sells(minutes=minutes)
+
     async def close_trade(self, trade_id: int, exit_price: float, exit_reason: str) -> None:
         await self._trades.close_trade(trade_id, exit_price, exit_reason)
 
