@@ -310,17 +310,20 @@ def _format_capacity(open_count: int, max_count: int) -> str:
     if open_count >= max_count:
         return (
             f"⚠ AT POSITION CAP: {open_count}/{max_count} slots used. "
-            "New BUYs WILL BE REJECTED unless this same plan SELLs an "
-            "existing position to free a slot. To swap into a stronger "
-            "setup, include the SELL for the weaker position and the "
-            "BUY for the new one in this plan together."
+            "To open new positions, this plan must ALSO SELL existing ones. "
+            "The number of new BUYs MUST EQUAL the number of SELLs you "
+            "propose (1 sell + 1 buy = swap; 2 sells + 2 buys = double swap). "
+            "Any BUYs above the SELL count WILL BE REJECTED by the executor. "
+            "Observed 2026-05-21 15:15 ET: 5/5 cap + 1 SELL + 2 BUYs → the "
+            "2nd BUY was rejected; only propose what can actually fill."
         )
     plural = "" if free == 1 else "s"
     return (
         f"Open positions: {open_count}/{max_count} ({free} slot{plural} free). "
         f"⚠ PROPOSE AT MOST {free} new BUY{plural} this cycle — any extras "
         "WILL BE REJECTED by the executor as a no-op. To add more than "
-        f"{free}, SELL an existing position in the same plan to free its slot."
+        f"{free}, SELL an existing position in the same plan to free its slot "
+        "(buys and sells balance 1-for-1)."
     )
 
 

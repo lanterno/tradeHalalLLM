@@ -20,6 +20,10 @@ def test_capacity_at_cap_warns_explicitly():
     # The LLM must be told that adding a buy without a sell will fail.
     assert "REJECTED" in out
     assert "SELL" in out
+    # And that # BUYs must equal # SELLs (cycle-1f3fe6fa edge case:
+    # the LLM proposed 2 BUYs against 1 SELL and the 2nd hit the
+    # position cap).
+    assert "EQUAL" in out or "1-for-1" in out
 
 
 def test_capacity_below_cap_hard_caps_proposal_count():
