@@ -20,6 +20,7 @@ from halal_trader.cli import ml as ml_cmd
 from halal_trader.cli import prompts as prompts_cmd
 from halal_trader.cli import reconcile as reconcile_cmd
 from halal_trader.cli import stocks as stocks_cmd
+from halal_trader.cli import watchdog as watchdog_cmd
 
 
 @click.group()
@@ -52,6 +53,7 @@ cli.add_command(halt_cmd.resume)
 cli.add_command(halt_cmd.halt_status)
 
 # ── Reconciliation ─────────────────────────────────────────────
+# Now a Click group: `reconcile check {market}` + `reconcile fix-orphans`
 cli.add_command(reconcile_cmd.reconcile)
 
 # ── LLM Decision Audit ─────────────────────────────────────────
@@ -74,6 +76,9 @@ cli.add_command(ml_cmd.ml_group)
 
 # ── Halal compliance explainer (Wave L) ────────────────────────
 cli.add_command(halal_cmd.halal_group)
+
+# ── Dead-man-switch watchdog (out-of-process via launchd) ──────
+cli.add_command(watchdog_cmd.watchdog)
 
 
 __all__ = ["cli"]

@@ -25,6 +25,9 @@ build/
 .DS_Store
 Thumbs.db
 
+# Runtime
+halal_trader.pid
+
 # Logs
 *.log
 logs/

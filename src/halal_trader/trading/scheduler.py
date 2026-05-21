@@ -499,22 +499,25 @@ class TradingBot(BaseTradingBot):
         await self.end_of_day()
 
     async def _heartbeat(self) -> None:
-        """Hourly idle-time heartbeat — proves the bot is alive between
-        market sessions. Stays silent during trading hours when cycle
-        logs already serve as the heartbeat."""
+        """Hourly heartbeat — proves the bot is alive even when no cycle
+        is due. Fires regardless of market state so a silent log file is
+        always an alarm, not just "the market is closed."
+        """
         from halal_trader.market_hours import is_market_open_local
 
-        if is_market_open_local():
-            return
         now = now_eastern()
         try:
             clock = await self.broker.get_clock()
             next_open = clock.next_open
+            next_close = clock.next_close
         except Exception:
             next_open = None
+            next_close = None
         logger.info(
-            "Stocks bot heartbeat — market closed, next open: %s (now: %s ET)",
+            "Stocks bot heartbeat — market_open=%s next_open=%s next_close=%s (now: %s ET)",
+            is_market_open_local(),
             next_open or "unknown",
+            next_close or "unknown",
             now.strftime("%Y-%m-%d %H:%M"),
         )
 
@@ -582,12 +585,16 @@ class TradingBot(BaseTradingBot):
                 CronTrigger(day_of_week="mon-fri", hour=15, minute=50, timezone=MARKET_TZ),
                 id="end_of_day",
                 replace_existing=True,
+                misfire_grace_time=1800,
+                coalesce=True,
             )
             self.scheduler.add_job(
                 self._early_close_eod,
                 CronTrigger(day_of_week="mon-fri", hour=12, minute=50, timezone=MARKET_TZ),
                 id="early_close_eod",
                 replace_existing=True,
+                misfire_grace_time=1800,
+                coalesce=True,
             )
 
             # Idle-period heartbeat — proves the bot is alive on
@@ -600,6 +607,8 @@ class TradingBot(BaseTradingBot):
                 CronTrigger(minute=0, timezone=MARKET_TZ),  # top of every hour
                 id="heartbeat",
                 replace_existing=True,
+                misfire_grace_time=900,
+                coalesce=True,
             )
 
             self.scheduler.start()
