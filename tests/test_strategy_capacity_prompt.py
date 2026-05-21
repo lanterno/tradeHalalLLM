@@ -22,19 +22,32 @@ def test_capacity_at_cap_warns_explicitly():
     assert "SELL" in out
 
 
-def test_capacity_below_cap_is_permissive():
+def test_capacity_below_cap_hard_caps_proposal_count():
+    """Permissive wording ("you may add") was read by the LLM as
+    "propose freely" — observed 2026-05-21 13:00 ET, 4/5 positions,
+    LLM proposed 2 buys and the 2nd hit the slot cap. Tighten to
+    "PROPOSE AT MOST N" so the count is unambiguous."""
     out = _format_capacity(3, 5)
     assert "3/5" in out
-    assert "2 slot(s) free" in out
-    assert "may add new BUYs" in out
-    # No alarm wording when below the cap.
+    assert "2 slots free" in out
+    assert "PROPOSE AT MOST 2" in out
+    # No "AT POSITION CAP" alarm when not at cap.
+    assert "AT POSITION CAP" not in out
+
+
+def test_capacity_one_slot_free_uses_singular_grammar():
+    out = _format_capacity(4, 5)
+    assert "4/5" in out
+    assert "1 slot free" in out  # singular
+    assert "PROPOSE AT MOST 1 new BUY" in out  # singular BUY
     assert "AT POSITION CAP" not in out
 
 
 def test_capacity_at_zero_open():
     out = _format_capacity(0, 5)
     assert "0/5" in out
-    assert "5 slot(s) free" in out
+    assert "5 slots free" in out
+    assert "PROPOSE AT MOST 5" in out
 
 
 def test_capacity_over_cap_defensive():

@@ -219,9 +219,13 @@ def _format_capacity(open_count: int, max_count: int) -> str:
     Without this, plans that add new BUYs while already at the cap get
     silently rejected by the executor (``Max simultaneous positions
     reached``) and produce wasted no-op cycles. The empirical pattern
-    we saw on 2026-05-21 12:00 ET: 5/5 positions held, LLM proposed
-    2 buys + 0 sells, all rejected. Calling out the cap inline forces
-    the LLM to either propose sells first or accept the no-action.
+    we saw on 2026-05-21:
+    * 12:00 ET (5/5 positions): LLM proposed 2 buys / 0 sells → both
+      rejected. Fixed by adding this block in ff1f3b6.
+    * 13:00 ET (4/5 positions, "1 slot free" wording): LLM still
+      proposed 2 buys → the 2nd hit the slot cap. Permissive "you
+      may add" was being read as "propose freely". Tightened to
+      "PROPOSE AT MOST N new BUYs" so the count is hard-capped.
     """
     free = max(0, max_count - open_count)
     if open_count >= max_count:
@@ -232,9 +236,12 @@ def _format_capacity(open_count: int, max_count: int) -> str:
             "setup, include the SELL for the weaker position and the "
             "BUY for the new one in this plan together."
         )
+    plural = "" if free == 1 else "s"
     return (
-        f"Open positions: {open_count}/{max_count} ({free} slot(s) free). "
-        "You may add new BUYs."
+        f"Open positions: {open_count}/{max_count} ({free} slot{plural} free). "
+        f"⚠ PROPOSE AT MOST {free} new BUY{plural} this cycle — any extras "
+        "WILL BE REJECTED by the executor as a no-op. To add more than "
+        f"{free}, SELL an existing position in the same plan to free its slot."
     )
 
 
