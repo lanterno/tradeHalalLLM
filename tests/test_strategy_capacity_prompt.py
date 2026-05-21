@@ -42,3 +42,24 @@ def test_capacity_over_cap_defensive():
     out = _format_capacity(7, 5)
     assert "AT POSITION CAP" in out
     assert "7/5" in out
+
+
+def test_system_prompt_has_transaction_cost_rule():
+    """Pin the rule that discourages whipsaw round-trips on noise.
+
+    Observed 2026-05-21: QCOM bought 11:30 / sold 11:45 (15 min hold),
+    GOOG bought 11:45 / sold 12:30 (45 min hold). Without explicit cost
+    awareness, the LLM keeps flipping fresh positions on similar macro
+    reasoning. The rule tells it to leave <30-min positions alone unless
+    SL is breached, capacity demands the swap, or a hard catalyst hits.
+    """
+    from halal_trader.trading.strategy import SYSTEM_PROMPT
+
+    assert "TRANSACTION COST AWARENESS" in SYSTEM_PROMPT
+    assert "round-trip" in SYSTEM_PROMPT
+    assert "<30-min" in SYSTEM_PROMPT or "30-min" in SYSTEM_PROMPT
+    # The three valid exit reasons must each be mentioned so the LLM
+    # has a concrete checklist instead of "use judgment".
+    assert "stop-loss" in SYSTEM_PROMPT
+    assert "capacity" in SYSTEM_PROMPT
+    assert "catalyst" in SYSTEM_PROMPT

@@ -38,6 +38,14 @@ Quantity = floor((target_pct × portfolio_value) / current_price).
 already past 60% of that floor — not preemptively on news headlines alone.
 7. Maximum simultaneous open positions: {max_positions}. Aim for 2–4 open \
 positions during normal market conditions.
+8. TRANSACTION COST AWARENESS: each round-trip eats ~0.1–0.3% in slippage + \
+spread. Look at the entry time / P&L in CURRENT POSITIONS — if a position you \
+just opened in the last cycle is sitting at small unrealized P&L on noise, \
+DO NOT close it just because the macro reasoning sounds similar to a fresh \
+setup. Only exit a <30-min-old position when (a) stop-loss is genuinely \
+breached, (b) a stronger setup needs that slot and capacity is at cap, or \
+(c) a hard catalyst (earnings imminent, halt announcement) invalidates the \
+original thesis. Whipsaw churns away the daily-return target.
 
 POSITIONING PHILOSOPHY:
 - "Uncertain" macro context (FOMC, CPI, Fed speakers) is NOT a reason to hold \
