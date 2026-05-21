@@ -386,6 +386,36 @@ class TradeExecutor(BaseExecutor):
                 filled_quantity=fill.filled_quantity,
             )
 
+            # Close the open BUY(s) for this symbol so the DB reflects
+            # the exit. Without this, ``closed_at`` stays NULL on the
+            # BUY, which (a) makes recent-exit queries miss LLM sells
+            # and (b) leaves the symbol "open" for the cooldown gate.
+            # Best-effort: a fill that succeeded shouldn't be rolled
+            # back if the close-out write fails.
+            if fill.status in ("filled", "partially_filled") and fill.filled_price:
+                try:
+                    closer = getattr(
+                        self._repo, "close_open_trades_for_symbol", None
+                    )
+                    if closer is not None:
+                        closed_n = await closer(
+                            decision.symbol,
+                            float(fill.filled_price),
+                            "llm_sell" if not is_close_position else "llm_close_position",
+                        )
+                        if closed_n:
+                            logger.info(
+                                "Closed %d open BUY(s) for %s on SELL fill",
+                                closed_n,
+                                decision.symbol,
+                            )
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug(
+                        "close_open_trades_for_symbol failed for %s: %s",
+                        decision.symbol,
+                        exc,
+                    )
+
             return {
                 "symbol": decision.symbol,
                 "action": "sell",

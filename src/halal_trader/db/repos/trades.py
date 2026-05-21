@@ -131,6 +131,45 @@ class TradeRepoImpl:
             session.add(trade)
             await session.commit()
 
+    async def close_open_trades_for_symbol(
+        self,
+        symbol: str,
+        exit_price: float,
+        exit_reason: str,
+    ) -> int:
+        """Mark all open BUYs for ``symbol`` as closed (mirrors the crypto
+        ``close_open_crypto_trades_for_pair`` helper).
+
+        Called from the executor's ``_execute_sell`` so an LLM-initiated
+        SELL doesn't just record a SELL row but also stamps ``closed_at``
+        on the underlying open BUY(s). Without this, the recent-close
+        cooldown query missed LLM exits and same-symbol re-buys leaked
+        through (observed 2026-05-21 14:45 ET: QCOM sold 14:30, bought
+        back 14:45 — cooldown was blind because the BUY's ``closed_at``
+        stayed NULL).
+        """
+        async with AsyncSession(self._engine) as session:
+            statement = (
+                select(Trade)
+                .where(Trade.side == "buy")
+                .where(Trade.symbol == symbol)
+                .where(col(Trade.closed_at).is_(None))
+                .where(Trade.status != "rejected")
+            )
+            results = await session.exec(statement)
+            trades = list(results.all())
+            now = datetime.now(UTC)
+            count = 0
+            for trade in trades:
+                trade.exit_price = exit_price
+                trade.exit_reason = exit_reason
+                trade.closed_at = now
+                trade.status = "closed"
+                session.add(trade)
+                count += 1
+            await session.commit()
+            return count
+
     async def update_stock_trade_stop_loss(self, trade_id: int, new_stop_loss: float) -> None:
         """Ratchet up the stop_loss on a stock trade (trailing-stop helper)."""
         async with AsyncSession(self._engine) as session:

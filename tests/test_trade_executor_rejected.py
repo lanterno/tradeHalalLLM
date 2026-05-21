@@ -185,6 +185,46 @@ async def test_close_position_no_open_position_skipped():
 
 
 @pytest.mark.asyncio
+async def test_sell_fill_closes_open_buy_row():
+    """An LLM-initiated SELL must stamp closed_at on the underlying open
+    BUY(s). Without this, the recent-close cooldown query missed LLM
+    sells and same-symbol re-buys leaked through (observed 2026-05-21
+    14:45 ET on QCOM)."""
+    broker = MagicMock()
+    broker.get_account_info = AsyncMock(return_value=_account())
+    broker.place_order = AsyncMock(return_value={"id": "sell-1", "status": "filled"})
+    broker.get_order_by_id = AsyncMock(
+        return_value={
+            "id": "sell-1",
+            "status": "filled",
+            "filled_qty": "40",
+            "filled_avg_price": "207",
+            "filled_at": "2026-05-21T18:00:00Z",
+        }
+    )
+    repo = MagicMock()
+    repo.record_trade = AsyncMock(return_value=300)
+    repo.close_open_trades_for_symbol = AsyncMock(return_value=1)
+
+    executor = TradeExecutor(
+        broker, repo, max_position_pct=1.0, max_simultaneous_positions=10, max_sector_pct=0
+    )
+
+    sized_sell = TradeDecision(
+        action=TradeAction.SELL, symbol="QCOM", quantity=40, confidence=0.8, reasoning="exit"
+    )
+    result = await executor._execute_sell(sized_sell)
+
+    assert result["status"] == "filled"
+    # The critical assertion: the executor closed the open BUY(s).
+    repo.close_open_trades_for_symbol.assert_awaited_once()
+    args = repo.close_open_trades_for_symbol.await_args.args
+    assert args[0] == "QCOM"
+    assert args[1] == 207.0  # filled_avg_price from broker
+    assert args[2] == "llm_sell"
+
+
+@pytest.mark.asyncio
 async def test_close_position_with_order_id_uses_confirm_fill_path():
     """When close_position DOES return an order id, the normal poll path
     runs (no synthesized fill)."""
