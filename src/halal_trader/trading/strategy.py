@@ -87,6 +87,9 @@ Today's P&L: ${today_pnl:+,.2f} ({today_pnl_pct:+.2%})
 === CURRENT POSITIONS ===
 {positions_text}
 
+=== CAPACITY STATUS ===
+{capacity_text}
+
 === HALAL-COMPLIANT STOCK UNIVERSE ===
 {halal_symbols}
 
@@ -146,6 +149,31 @@ def _format_positions(positions: list[Position]) -> str:
             f"P&L: ${p.unrealized_pl:+.2f} ({p.unrealized_plpc:+.2%})"
         )
     return "\n".join(lines)
+
+
+def _format_capacity(open_count: int, max_count: int) -> str:
+    """Render an explicit slot-budget line for the LLM.
+
+    Without this, plans that add new BUYs while already at the cap get
+    silently rejected by the executor (``Max simultaneous positions
+    reached``) and produce wasted no-op cycles. The empirical pattern
+    we saw on 2026-05-21 12:00 ET: 5/5 positions held, LLM proposed
+    2 buys + 0 sells, all rejected. Calling out the cap inline forces
+    the LLM to either propose sells first or accept the no-action.
+    """
+    free = max(0, max_count - open_count)
+    if open_count >= max_count:
+        return (
+            f"⚠ AT POSITION CAP: {open_count}/{max_count} slots used. "
+            "New BUYs WILL BE REJECTED unless this same plan SELLs an "
+            "existing position to free a slot. To swap into a stronger "
+            "setup, include the SELL for the weaker position and the "
+            "BUY for the new one in this plan together."
+        )
+    return (
+        f"Open positions: {open_count}/{max_count} ({free} slot(s) free). "
+        "You may add new BUYs."
+    )
 
 
 def _format_snapshots(snapshots: dict[str, Any]) -> str:
@@ -283,6 +311,9 @@ class TradingStrategy(BaseStrategy):
             today_pnl=today_pnl,
             today_pnl_pct=today_pnl_pct,
             positions_text=_format_positions(positions),
+            capacity_text=_format_capacity(
+                len(positions), self._max_simultaneous_positions
+            ),
             halal_symbols=", ".join(halal_symbols),
             snapshots_text=_format_snapshots(snapshots),
             bars_text=_format_bars(bars),

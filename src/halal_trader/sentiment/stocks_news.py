@@ -56,6 +56,9 @@ _UA = (
 )
 
 
+_BREAKER_THRESHOLD = 5  # consecutive failures before silencing
+
+
 class StockNewsCollector:
     """Per-symbol news fetcher backed by Yahoo Finance search.
 
@@ -63,6 +66,11 @@ class StockNewsCollector:
     :class:`RecentNewsFeed` + :class:`BuildNewsStage` render them
     identically to crypto-side CryptoPanic items. Cache is bounded by
     symbol+TTL — repeated calls within the TTL window hit memory only.
+
+    Session-level circuit breaker: after ``_BREAKER_THRESHOLD``
+    consecutive failures (Yahoo's search endpoint returns 429 once the
+    per-IP allowance is spent and doesn't recover until the next day),
+    the collector stops calling for the rest of the process lifetime.
     """
 
     def __init__(
@@ -75,6 +83,8 @@ class StockNewsCollector:
         self._cache_ttl = cache_ttl_seconds
         self._cache: dict[str, tuple[float, list[NewsEvent]]] = {}
         self._client: httpx.AsyncClient | None = None
+        self._consecutive_failures: int = 0
+        self._circuit_open: bool = False
 
     async def _http(self) -> httpx.AsyncClient:
         if self._client is None:
@@ -114,6 +124,8 @@ class StockNewsCollector:
         cached = self._cache.get(sym)
         if cached is not None and now - cached[0] < self._cache_ttl:
             return cached[1]
+        if self._circuit_open:
+            return []
 
         client = await self._http()
         params = {
@@ -129,9 +141,27 @@ class StockNewsCollector:
             data = r.json()
         except Exception as exc:  # noqa: BLE001
             logger.debug("Yahoo news request failed for %s: %s", sym, exc)
+            self._consecutive_failures += 1
+            if (
+                not self._circuit_open
+                and self._consecutive_failures >= _BREAKER_THRESHOLD
+            ):
+                self._circuit_open = True
+                logger.warning(
+                    "Yahoo news circuit breaker OPEN after %d consecutive "
+                    "failures — silencing for the rest of this process.",
+                    self._consecutive_failures,
+                )
             self._cache[sym] = (now, [])
             return []
 
+        if self._consecutive_failures or self._circuit_open:
+            logger.info(
+                "Yahoo news recovered after %d failures",
+                self._consecutive_failures,
+            )
+        self._consecutive_failures = 0
+        self._circuit_open = False
         events = _parse_news_payload(sym, data)
         self._cache[sym] = (now, events)
         return events

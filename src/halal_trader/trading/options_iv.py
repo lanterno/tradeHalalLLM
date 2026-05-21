@@ -73,6 +73,9 @@ class _CacheEntry:
     snapshot: OptionsIVSnapshot | None
 
 
+_BREAKER_THRESHOLD = 5  # consecutive failures before opening
+
+
 @dataclass
 class YahooOptionsIV:
     """Pulls Yahoo Finance options chains and reduces them to one
@@ -81,12 +84,21 @@ class YahooOptionsIV:
     Public endpoint, no key. Always-on; the operator doesn't need to
     enable anything. ``user_agent`` is for politeness — Yahoo doesn't
     enforce it, but a generic one occasionally gets 403'd.
+
+    Session-level circuit breaker: after ``_BREAKER_THRESHOLD``
+    consecutive non-200 responses (typically 401 when Yahoo rotates
+    its anti-bot tokens), the client stops calling the endpoint for
+    the rest of the process lifetime. Without this, every cycle was
+    burning ~10 HTTP requests + log lines on a source that wasn't
+    going to recover until the process restarts.
     """
 
     user_agent: str = "halal-trader/0.1 (options-iv)"
     near_money_band: float = 0.10  # ±10% of spot for ATM filter
     _client: Any | None = None
     _cache: dict[str, _CacheEntry] = field(default_factory=dict)
+    _consecutive_failures: int = 0
+    _circuit_open: bool = False
 
     async def fetch(self, symbols: Sequence[str]) -> dict[str, OptionsIVSnapshot]:
         if not symbols:
@@ -110,11 +122,34 @@ class YahooOptionsIV:
         return out
 
     async def _fetch_for(self, symbol: str) -> OptionsIVSnapshot | None:
+        if self._circuit_open:
+            return None
         client = await self._get_client()
         resp = await client.get(f"{_API_BASE}/{symbol}")
         if resp.status_code != 200:
             logger.debug("yahoo options %s returned %d", symbol, resp.status_code)
+            self._consecutive_failures += 1
+            if (
+                not self._circuit_open
+                and self._consecutive_failures >= _BREAKER_THRESHOLD
+            ):
+                self._circuit_open = True
+                logger.warning(
+                    "yahoo options IV circuit breaker OPEN after %d consecutive "
+                    "non-200 responses — silencing for the rest of this process. "
+                    "Last status code: %d",
+                    self._consecutive_failures,
+                    resp.status_code,
+                )
             return None
+        # Reset on first success.
+        if self._consecutive_failures or self._circuit_open:
+            logger.info(
+                "yahoo options IV recovered after %d failures",
+                self._consecutive_failures,
+            )
+        self._consecutive_failures = 0
+        self._circuit_open = False
         data = resp.json()
         results = (data.get("optionChain", {}) or {}).get("result", []) or []
         if not results:

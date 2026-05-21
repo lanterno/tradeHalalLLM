@@ -306,10 +306,25 @@ class TradingCycleService(BaseCycleService):
         Telegram notification. Both side effects are best-effort —
         the cycle never aborts on a missing collaborator or a
         downstream blow-up.
+
+        If the cycle proposed actions but every result was rejected /
+        errored / skipped, emit a ``cycle.no_action`` event so we can
+        grep wasted-cycle frequency from the JSON log. (Empty plans
+        are silently no-op — the LLM had nothing to do.)
         """
+        from halal_trader.core import events as _events
+
+        no_action_statuses = {"error", "rejected", "skipped"}
+        total = len(results)
+        rejected_count = 0
+        rejection_reasons: list[str] = []
         for r in results:
             logger.info("Execution result: %s", r)
             status = r.get("status")
+            if status in no_action_statuses:
+                rejected_count += 1
+                reason = str(r.get("reason", status))[:120]
+                rejection_reasons.append(f"{r.get('symbol', '?')}:{reason}")
             if status in ("error", "rejected") and self._self_review is not None:
                 try:
                     self._self_review.record_execution_failure(
@@ -330,6 +345,23 @@ class TradingCycleService(BaseCycleService):
                     )
                 except Exception as exc:  # noqa: BLE001
                     logger.debug("Failed to send trade notification: %s", exc)
+
+        # If the LLM proposed work AND every result was rejected/errored/
+        # skipped, the cycle was a no-op despite a full LLM call. Emit
+        # a structured event so we can grep wasted-cycle frequency and
+        # tune the system prompt (e.g. position-cap awareness).
+        if total > 0 and rejected_count == total:
+            logger.warning(
+                "Cycle proposed %d action(s) but every one was rejected/errored: %s",
+                total,
+                "; ".join(rejection_reasons[:5]),
+                extra={
+                    "event": _events.CYCLE_NO_ACTION,
+                    "proposed": total,
+                    "rejected": rejected_count,
+                    "reasons": rejection_reasons[:5],
+                },
+            )
 
     async def _fetch_market_data(
         self, halal_symbols: list[str]

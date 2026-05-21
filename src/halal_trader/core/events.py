@@ -15,6 +15,7 @@ CYCLE_COMPLETE: Final[str] = "cycle.complete"
 CYCLE_SKIPPED: Final[str] = "cycle.skipped"
 CYCLE_HALTED: Final[str] = "cycle.halted"
 CYCLE_FAILED: Final[str] = "cycle.failed"
+CYCLE_NO_ACTION: Final[str] = "cycle.no_action"
 
 # ── Trades ──────────────────────────────────────────────────────
 TRADE_BUY_PLACED: Final[str] = "trade.buy.placed"
