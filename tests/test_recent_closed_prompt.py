@@ -36,9 +36,20 @@ def test_empty_rows_returns_default():
 
 def test_single_recent_close_rendered():
     out = _format_recent_closed([_row("AMZN", 15)])
-    assert "Avoid re-entering" in out
+    # Header pins the strong-wording version (see commit history —
+    # "Avoid re-entering" was too soft; LLM ignored CSCO re-buy warning
+    # on cycle-a4c37015, prompting the upgrade to "DO NOT re-buy").
+    assert "DO NOT re-buy" in out
     assert "AMZN" in out
     assert "15 min ago" in out
+
+
+def test_header_requires_measurable_structure_change():
+    """The header must give the LLM an explicit non-noise out so it
+    doesn't read the warning as absolute and start hallucinating."""
+    out = _format_recent_closed([_row("AMZN", 15)])
+    assert "MEASURABLY changed" in out
+    assert "halal symbol" in out
 
 
 def test_pnl_pct_included_when_prices_present():

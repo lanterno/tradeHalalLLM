@@ -47,6 +47,16 @@ breached, (b) a stronger setup needs that slot and capacity is at cap, or \
 (c) a hard catalyst (earnings imminent, halt announcement) invalidates the \
 original thesis. Whipsaw churns away the daily-return target.
 
+   ALSO: the RECENTLY CLOSED block lists symbols you EXITED in the last \
+60 min. Re-buying them on a similar macro thesis is the same whipsaw bug \
+viewed from the other side. Only re-enter a recently-closed symbol when \
+market structure has MEASURABLY changed since the exit — e.g. a fresh \
+breakout above the prior intraday high, a new catalyst headline, a regime \
+shift on the timeframe view. "FOMC volatility" or "momentum continuation" \
+is NOT a structural change if those were also the reasons 30 min ago. If \
+in doubt, pick a different symbol from the halal universe — the cost of \
+sitting out a single re-entry is far smaller than the round-trip slippage.
+
 POSITIONING PHILOSOPHY:
 - "Uncertain" macro context (FOMC, CPI, Fed speakers) is NOT a reason to hold \
 cash — volatility creates intraday opportunities, that's the edge.
@@ -179,7 +189,12 @@ def _format_recent_closed(rows: list[dict[str, Any]]) -> str:
     from datetime import UTC, datetime
 
     now = datetime.now(UTC)
-    lines = ["⚠ Avoid re-entering symbols you just closed on the same thesis:"]
+    lines = [
+        "⚠ DO NOT re-buy these symbols this cycle UNLESS market structure has "
+        "MEASURABLY changed since exit (fresh breakout level, new catalyst, "
+        "regime shift). Re-entering on the same macro thesis is whipsaw — "
+        "pick a different halal symbol instead:"
+    ]
     for row in rows[:8]:  # cap to keep prompt compact
         symbol = row.get("symbol") or "?"
         closed_at = row.get("closed_at")
