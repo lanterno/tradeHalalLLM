@@ -182,10 +182,9 @@ async def test_recent_sell_without_closed_at_blocks_buy():
     before the close-on-sell fix, or in-flight lag)."""
     repo = MagicMock()
     repo.get_recently_closed = AsyncMock(return_value=[])  # no closed BUYs
+    sell_ts = datetime.now(UTC) - timedelta(minutes=12)
     repo.get_recent_sells = AsyncMock(
-        return_value=[
-            {"symbol": "CSCO", "side": "sell", "timestamp": datetime.now(UTC) - timedelta(minutes=12)},
-        ]
+        return_value=[{"symbol": "CSCO", "side": "sell", "timestamp": sell_ts}]
     )
     repo.record_trade = AsyncMock()
     executor = _executor(repo)
@@ -209,10 +208,9 @@ async def test_uses_latest_exit_across_closed_and_sold():
             {"symbol": "CSCO", "closed_at": datetime.now(UTC) - timedelta(minutes=25)},
         ]
     )
+    sell_ts2 = datetime.now(UTC) - timedelta(minutes=8)
     repo.get_recent_sells = AsyncMock(
-        return_value=[
-            {"symbol": "CSCO", "side": "sell", "timestamp": datetime.now(UTC) - timedelta(minutes=8)},
-        ]
+        return_value=[{"symbol": "CSCO", "side": "sell", "timestamp": sell_ts2}]
     )
     repo.record_trade = AsyncMock()
     executor = _executor(repo)
