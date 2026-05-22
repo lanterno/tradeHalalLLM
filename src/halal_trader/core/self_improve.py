@@ -273,6 +273,25 @@ Analyze these trades and execution failures, and suggest improvements.
                     reasoning=adj.reasoning,
                 )
 
+            # Persist observations so they survive into tomorrow's
+            # session prompt. Stored as StrategyAdjustment rows with
+            # parameter="self_review_observation" so we avoid a new
+            # table / Alembic migration; the strategy reader filters
+            # on that exact parameter.
+            for obs in result.observations:
+                obs_text = (obs or "").strip()
+                if not obs_text:
+                    continue
+                try:
+                    await self._strategy_adjustments.record_strategy_adjustment(
+                        parameter="self_review_observation",
+                        old_value=None,
+                        new_value=0.0,
+                        reasoning=obs_text[:500],
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("Failed to persist observation: %s", exc)
+
             self._apply_adjustments(result)
             self._exec_failures.clear()
 

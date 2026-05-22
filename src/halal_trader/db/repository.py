@@ -112,6 +112,7 @@ class Repository:
         halal_screening_id: int | None = None,
         stop_loss: float | None = None,
         target_price: float | None = None,
+        paper_slippage_pct: float | None = None,
     ) -> int:
         return await self._trades.record_trade(
             symbol,
@@ -128,6 +129,7 @@ class Repository:
             halal_screening_id=halal_screening_id,
             stop_loss=stop_loss,
             target_price=target_price,
+            paper_slippage_pct=paper_slippage_pct,
         )
 
     async def get_today_trades(self) -> list[dict[str, Any]]:

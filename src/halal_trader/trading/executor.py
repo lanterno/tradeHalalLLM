@@ -18,6 +18,29 @@ _FILL_TIMEOUT = 30.0
 _FILL_POLL_INTERVAL = 2.0
 
 
+def _compute_slippage_pct(
+    *, side: str, estimated_price: float | None, filled_price: float | None
+) -> float | None:
+    """Return the per-trade paper-slippage as a signed fraction.
+
+    Convention: positive value = adverse slippage to the bot.
+      * BUY filled higher than estimated → positive (paid more)
+      * SELL filled lower than estimated → positive (received less)
+    Returns ``None`` when either input is missing or non-positive.
+    """
+    if (
+        estimated_price is None
+        or filled_price is None
+        or estimated_price <= 0
+        or filled_price <= 0
+    ):
+        return None
+    delta = float(filled_price) - float(estimated_price)
+    if side.lower() == "buy":
+        return delta / float(estimated_price)
+    return -delta / float(estimated_price)
+
+
 def _extract_order_id(order_result: Any) -> str:
     """Return the broker's order id, or ``""`` for malformed responses.
 
@@ -266,6 +289,11 @@ class TradeExecutor(BaseExecutor):
                 filled_at=fill.filled_at,
                 filled_price=fill.filled_price,
                 filled_quantity=fill.filled_quantity,
+                paper_slippage_pct=_compute_slippage_pct(
+                    side="buy",
+                    estimated_price=estimated_price,
+                    filled_price=fill.filled_price,
+                ),
             )
 
             # Stock-side ML snapshot — best-effort, never aborts the buy.

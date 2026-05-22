@@ -29,6 +29,7 @@ class TradeRepo(Protocol):
         halal_screening_id: int | None = ...,
         stop_loss: float | None = ...,
         target_price: float | None = ...,
+        paper_slippage_pct: float | None = ...,
     ) -> int: ...
 
     async def get_today_trades(self) -> list[dict[str, Any]]: ...

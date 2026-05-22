@@ -245,16 +245,44 @@ class TradingCycleService(BaseCycleService):
         # / failing fetch degrades to the default "no recent closes"
         # string — never aborts the cycle.
         recent_closed_text = "No closed trades in the last 60 min."
+        slippage_text = "No slippage data yet."
+        learnings_text = "No prior observations yet."
         try:
             from halal_trader.db.repos import RepoBundle
-            from halal_trader.trading.strategy import _format_recent_closed
+            from halal_trader.trading.strategy import (
+                _format_learnings,
+                _format_recent_closed,
+                _format_slippage,
+            )
 
             repos = RepoBundle.from_engine(self._engine) if self._engine else None
             if repos is not None:
                 rows = await repos.trades.get_recently_closed(minutes=60)
                 recent_closed_text = _format_recent_closed(rows)
+                recent_trades = await repos.trades.get_recent_trades(limit=20)
+                # Slippage block reads paper_slippage_pct from BUY rows;
+                # SELL rows have None for now (sell-side slippage needs
+                # a pre-sell snapshot fetch — separate scope).
+                slippage_text = _format_slippage(
+                    [r for r in recent_trades if (r.get("side") or "").lower() == "buy"]
+                )
+                # Self-review observations land in strategy_adjustments
+                # with parameter="self_review_observation" — read the
+                # most recent N here.
+                try:
+                    adjustments = await repos.strategy_adjustments.get_recent_adjustments(
+                        limit=30
+                    )
+                    obs = [
+                        (row.get("reasoning") or "")
+                        for row in adjustments
+                        if row.get("parameter") == "self_review_observation"
+                    ]
+                    learnings_text = _format_learnings(obs)
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("self-review observation read failed: %s", exc)
         except Exception as exc:  # noqa: BLE001
-            logger.debug("recent-closed fetch failed: %s", exc)
+            logger.debug("prompt-context fetch failed: %s", exc)
 
         analyze_kwargs = dict(
             account=account,
@@ -272,6 +300,8 @@ class TradingCycleService(BaseCycleService):
             active_adjustments=state.active_adjustments,
             news_text=state.news_text,
             recent_closed_text=recent_closed_text,
+            slippage_text=slippage_text,
+            learnings_text=learnings_text,
         )
         plan = await self._strategy.analyze(**analyze_kwargs)
 

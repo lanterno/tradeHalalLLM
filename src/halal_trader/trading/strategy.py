@@ -114,6 +114,12 @@ Today's P&L: ${today_pnl:+,.2f} ({today_pnl_pct:+.2%})
 === RECENTLY CLOSED (last 60 min) ===
 {recent_closed_text}
 
+=== SLIPPAGE TRACKING (recent fills) ===
+{slippage_text}
+
+=== SELF-REVIEW LEARNINGS (from prior sessions) ===
+{learnings_text}
+
 === HALAL-COMPLIANT STOCK UNIVERSE ===
 {halal_symbols}
 
@@ -172,6 +178,58 @@ def _format_positions(positions: list[Position]) -> str:
             f"Current: ${p.current_price:.2f} | "
             f"P&L: ${p.unrealized_pl:+.2f} ({p.unrealized_plpc:+.2%})"
         )
+    return "\n".join(lines)
+
+
+def _format_slippage(rows: list[dict[str, Any]], *, limit: int = 20) -> str:
+    """Render rolling slippage stats so the LLM can see its own
+    execution cost. Each round-trip historically costs ~0.1-0.3%; if
+    the bot is churning, this number compounds and eats the daily
+    target. Observed 2026-05-21: $607 gross closed-trip P&L → $42 net
+    EOD equity change, implying ~$565 in slippage and MTM drag.
+    """
+    samples = []
+    for row in rows[:limit]:
+        sp = row.get("paper_slippage_pct")
+        if sp is None:
+            continue
+        try:
+            samples.append(float(sp))
+        except (TypeError, ValueError):
+            continue
+    if not samples:
+        return "No slippage data yet."
+    n = len(samples)
+    avg = sum(samples) / n
+    adverse = sum(1 for s in samples if s > 0)
+    worst = max(samples)
+    return (
+        f"Last {n} buy fills: avg slippage {avg * 100:+.3f}% "
+        f"(adverse on {adverse}/{n}, worst {worst * 100:+.3f}%). "
+        "Positive = paid more than estimated. Round-trip cost is "
+        "roughly 2× this for entry+exit; sizing into thin liquidity "
+        "or chasing momentum makes it worse."
+    )
+
+
+def _format_learnings(observations: list[str]) -> str:
+    """Render self-review observations from prior cycles as bullet
+    points so the LLM can incorporate learnings across sessions.
+
+    Yesterday's EOD self-review surfaced "NVDA trades show a pattern
+    of holding positions for several hours and exiting with losses,
+    indicating poten[tial issues]" — that insight was logged once and
+    forgotten. Persisting + re-injecting these turns the self-review
+    into a feedback loop.
+    """
+    if not observations:
+        return "No prior observations yet."
+    lines = ["These patterns were flagged in earlier sessions — factor them into today:"]
+    for obs in observations[:6]:
+        text = obs.strip()
+        if not text:
+            continue
+        lines.append(f"  • {text[:240]}")
     return "\n".join(lines)
 
 
@@ -452,6 +510,8 @@ class TradingStrategy(BaseStrategy):
         active_adjustments: str = "",
         news_text: str = "",
         recent_closed_text: str = "No closed trades in the last 60 min.",
+        slippage_text: str = "No slippage data yet.",
+        learnings_text: str = "No prior observations yet.",
     ) -> TradingPlan:
         portfolio_value = account.portfolio_value or account.equity or 100000
         today_pnl_pct = today_pnl / portfolio_value if portfolio_value else 0
@@ -477,6 +537,8 @@ class TradingStrategy(BaseStrategy):
                 positions, portfolio_value, self._max_sector_pct
             ),
             recent_closed_text=recent_closed_text,
+            slippage_text=slippage_text,
+            learnings_text=learnings_text,
             halal_symbols=", ".join(halal_symbols),
             snapshots_text=_format_snapshots(snapshots),
             bars_text=_format_bars(bars),

@@ -127,10 +127,12 @@ async def test_sell_allowed_when_youngest_buy_past_hold():
 async def test_sell_blocked_uses_youngest_buy_when_multiple_open():
     """Multiple BUYs open: youngest one determines the gate."""
     repo = MagicMock()
+    old_ts = datetime.now(UTC) - timedelta(hours=2)
+    young_ts = datetime.now(UTC) - timedelta(minutes=10)
     repo.get_open_trades = AsyncMock(
         return_value=[
-            SimpleNamespace(symbol="AAPL", side="buy", timestamp=datetime.now(UTC) - timedelta(hours=2)),
-            SimpleNamespace(symbol="AAPL", side="buy", timestamp=datetime.now(UTC) - timedelta(minutes=10)),
+            SimpleNamespace(symbol="AAPL", side="buy", timestamp=old_ts),
+            SimpleNamespace(symbol="AAPL", side="buy", timestamp=young_ts),
         ]
     )
     repo.record_trade = AsyncMock()
@@ -161,9 +163,10 @@ async def test_min_hold_zero_disables():
 async def test_min_hold_other_symbol_not_affected():
     """A young AAPL BUY shouldn't block a SELL of MSFT."""
     repo = MagicMock()
+    aapl_ts = datetime.now(UTC) - timedelta(minutes=10)
     repo.get_open_trades = AsyncMock(
         return_value=[
-            SimpleNamespace(symbol="AAPL", side="buy", timestamp=datetime.now(UTC) - timedelta(minutes=10)),
+            SimpleNamespace(symbol="AAPL", side="buy", timestamp=aapl_ts),
         ]
     )
     repo.record_trade = AsyncMock(return_value=1)
@@ -193,10 +196,6 @@ async def test_buy_blocked_in_lockout_window():
     repo.get_recent_sells = AsyncMock(return_value=[])
     repo.record_trade = AsyncMock()
     executor = _executor(repo)
-
-    with patch("halal_trader.trading.executor.datetime") as mock_dt:
-        # The lockout uses now_eastern() — patch it via market_hours.
-        pass  # We'll patch differently below.
 
     with patch(
         "halal_trader.market_hours.now_eastern",
@@ -251,11 +250,10 @@ async def test_lockout_zero_disables():
 async def test_lockout_does_not_block_sells():
     """SELLs go through even in the lockout window (operator can always close)."""
     repo = MagicMock()
-    repo.get_open_trades = AsyncMock(
-        return_value=[
-            SimpleNamespace(symbol="AAPL", side="buy", timestamp=datetime.now(UTC) - timedelta(hours=2)),
-        ]
+    old_buy = SimpleNamespace(
+        symbol="AAPL", side="buy", timestamp=datetime.now(UTC) - timedelta(hours=2)
     )
+    repo.get_open_trades = AsyncMock(return_value=[old_buy])
     repo.record_trade = AsyncMock(return_value=1)
     repo.close_open_trades_for_symbol = AsyncMock(return_value=1)
     executor = _executor(repo, cooldown=0)
