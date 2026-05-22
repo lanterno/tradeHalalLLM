@@ -642,13 +642,25 @@ class TradeExecutor(BaseExecutor):
 
     async def _check_min_hold(self, symbol: str) -> str | None:
         """Return rejection reason if any open BUY for ``symbol`` is
-        younger than ``min_hold_minutes``. ``None`` allows the SELL.
+        younger than ``min_hold_minutes`` OR carries the
+        ``reactor_momentum`` entry-type. ``None`` allows the SELL.
 
-        Operator escape hatch: ``min_hold_minutes <= 0`` disables.
+        Two flavours of lockout share this gate:
+
+        * **Time-window lockout** for scheduled-cycle entries
+          (default 30 min) — protects against the LLM second-guessing
+          fresh positions on noise. Past the window, SELLs proceed.
+        * **Permanent lockout** for reactor-driven momentum entries
+          (any open BUY with ``entry_type='reactor_momentum'``) —
+          the operator's "slow out" discipline (memory:
+          strategy-fast-in-slow-out). LLM CANNOT close these; only the
+          monitor's rule-based exit (trailing stop / trend break) can.
+
+        Operator escape hatch: ``min_hold_minutes <= 0`` disables the
+        time-window check but does NOT disable the reactor-momentum
+        lockout — that's a deliberate policy gate, not a tunable.
         Repo errors degrade to "allow".
         """
-        if self._min_hold_minutes <= 0:
-            return None
         try:
             opens = await self._repo.get_open_trades()
         except Exception as exc:  # noqa: BLE001
@@ -659,10 +671,13 @@ class TradeExecutor(BaseExecutor):
         wanted = symbol.upper()
         now = datetime.now(UTC)
         youngest_age: float | None = None
+        has_reactor_momentum = False
         for trade in opens:
             t_sym = str(getattr(trade, "symbol", "") or "").upper()
             if t_sym != wanted:
                 continue
+            if str(getattr(trade, "entry_type", "") or "") == "reactor_momentum":
+                has_reactor_momentum = True
             ts = getattr(trade, "timestamp", None)
             if not isinstance(ts, datetime):
                 continue
@@ -672,6 +687,24 @@ class TradeExecutor(BaseExecutor):
             if youngest_age is None or age_min < youngest_age:
                 youngest_age = age_min
 
+        # Permanent lockout — overrides any time-window relaxation.
+        if has_reactor_momentum:
+            reason = (
+                f"reactor-momentum lockout: {symbol} has an open BUY tagged "
+                "'reactor_momentum'. LLM-initiated SELLs on these positions "
+                "are permanently blocked — exits go through the monitor's "
+                "rule-based trailing stop / trend-break detector. "
+                "(Operator memory: strategy-fast-in-slow-out — don't second-guess "
+                "winners on noise.)"
+            )
+            logger.warning(
+                "SELL rejected by reactor-momentum lockout: %s",
+                symbol,
+            )
+            return reason
+
+        if self._min_hold_minutes <= 0:
+            return None
         if youngest_age is None or youngest_age >= self._min_hold_minutes:
             return None
 

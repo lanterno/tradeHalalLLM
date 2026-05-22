@@ -145,18 +145,91 @@ async def test_sell_blocked_uses_youngest_buy_when_multiple_open():
 
 
 @pytest.mark.asyncio
-async def test_min_hold_zero_disables():
-    """Operator escape: min_hold=0 → check skipped entirely."""
+async def test_min_hold_zero_disables_time_window():
+    """Operator escape: min_hold=0 disables the TIME-WINDOW check but
+    NOT the reactor-momentum permanent lockout (which is policy, not
+    a tunable). When no reactor positions are open the SELL proceeds."""
     repo = MagicMock()
-    repo.get_open_trades = AsyncMock()  # should NOT be called
-    repo.record_trade = AsyncMock()
+    # Empty list → no reactor_momentum positions, no time-window
+    # candidates either → SELL allowed.
+    repo.get_open_trades = AsyncMock(return_value=[])
+    repo.record_trade = AsyncMock(return_value=1)
     repo.close_open_trades_for_symbol = AsyncMock(return_value=0)
     executor = _executor(repo, min_hold=0, cooldown=0)
 
     result = await executor._execute_sell(_decision_sell("AAPL"))
-    # Not rejected by min-hold (may be rejected by other gates).
+    # Not rejected by either lockout.
     assert "min-hold" not in result.get("reason", "").lower()
-    repo.get_open_trades.assert_not_called()
+    assert "reactor-momentum" not in result.get("reason", "").lower()
+    # Repo IS called now (was previously skipped under min_hold=0) because
+    # the reactor-momentum lockout must always be checked.
+    repo.get_open_trades.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_reactor_momentum_position_permanently_blocks_sell():
+    """A BUY tagged 'reactor_momentum' (even if hours old, past the
+    min-hold window) must STILL block LLM SELLs. Only the monitor
+    can close these. (Memory: strategy-fast-in-slow-out.)"""
+    repo = MagicMock()
+    # Old enough to clear time-window AND tagged reactor_momentum.
+    old_reactor_buy = SimpleNamespace(
+        symbol="AAPL",
+        side="buy",
+        timestamp=datetime.now(UTC) - timedelta(hours=5),
+        entry_type="reactor_momentum",
+    )
+    repo.get_open_trades = AsyncMock(return_value=[old_reactor_buy])
+    repo.record_trade = AsyncMock()
+    executor = _executor(repo, cooldown=0)
+
+    result = await executor._execute_sell(_decision_sell("AAPL"))
+    assert result["status"] == "rejected"
+    assert "reactor-momentum" in result["reason"].lower()
+    repo.record_trade.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_reactor_momentum_lockout_bypassed_when_no_such_position():
+    """When there's an open BUY for the symbol but it's NOT tagged
+    reactor_momentum, the reactor lockout doesn't fire — only the
+    time-window check applies."""
+    repo = MagicMock()
+    old_scheduled_buy = SimpleNamespace(
+        symbol="AAPL",
+        side="buy",
+        timestamp=datetime.now(UTC) - timedelta(hours=5),
+        entry_type=None,  # legacy / scheduled — not a reactor position
+    )
+    repo.get_open_trades = AsyncMock(return_value=[old_scheduled_buy])
+    repo.record_trade = AsyncMock(return_value=1)
+    repo.close_open_trades_for_symbol = AsyncMock(return_value=1)
+    executor = _executor(repo, cooldown=0)
+
+    result = await executor._execute_sell(_decision_sell("AAPL"))
+    # Not rejected — old + scheduled, both checks pass.
+    assert "reactor-momentum" not in result.get("reason", "").lower()
+    assert "min-hold" not in result.get("reason", "").lower()
+
+
+@pytest.mark.asyncio
+async def test_reactor_momentum_lockout_overrides_min_hold_zero():
+    """Operator setting min_hold=0 still doesn't bypass the reactor
+    lockout — it's a policy gate, not a tunable."""
+    repo = MagicMock()
+    reactor_buy = SimpleNamespace(
+        symbol="AAPL",
+        side="buy",
+        timestamp=datetime.now(UTC) - timedelta(minutes=2),
+        entry_type="reactor_momentum",
+    )
+    repo.get_open_trades = AsyncMock(return_value=[reactor_buy])
+    repo.record_trade = AsyncMock()
+    executor = _executor(repo, min_hold=0, cooldown=0)
+
+    result = await executor._execute_sell(_decision_sell("AAPL"))
+    assert result["status"] == "rejected"
+    assert "reactor-momentum" in result["reason"].lower()
 
 
 @pytest.mark.asyncio

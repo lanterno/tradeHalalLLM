@@ -54,6 +54,15 @@ class TradingBot(BaseTradingBot):
         # called from ``end_of_day``. ``Any`` because the bot's typed
         # ``self_review`` slot on ``TradingCycleService`` is also ``Any``.
         self._self_review: Any | None = None
+        # News-momentum reactor + background task — wired in
+        # ``_create_components`` (when FINNHUB_API_KEY is set), spawned
+        # in ``run()``, cancelled in ``shutdown()``. Phase 2A foundation
+        # for the "fast in, slow out" pivot (memory:
+        # strategy-fast-in-slow-out): events fire callbacks but real
+        # trade execution stays in 2B once the operator has seen events
+        # flowing in production.
+        self._news_reactor: Any | None = None
+        self._news_reactor_task: asyncio.Task[None] | None = None
 
     async def _create_components(self) -> None:
         """Create stock-specific trading components."""
@@ -215,6 +224,48 @@ class TradingBot(BaseTradingBot):
         await stocks_self_review.load_from_db()
         self._self_review = stocks_self_review
 
+        # News-momentum reactor (Phase 2A). Off when Finnhub key is
+        # unset — the cron cycle keeps working. When enabled, every
+        # ~60s the reactor polls Finnhub per halal symbol, classifies
+        # each new headline through the LLM, and fires
+        # ``_on_news_event`` on score >= threshold (default 0.7).
+        # Phase 2A only LOGS + notifies on these events; actual entry
+        # execution lands in 2B once the operator has validated the
+        # signal stream in production.
+        finnhub_cfg = getattr(self.settings, "finnhub", None)
+        finnhub_key = getattr(finnhub_cfg, "api_key", "") if finnhub_cfg else ""
+        if finnhub_key:
+            from halal_trader.sentiment.stocks_events import (
+                GPTHeadlineClassifier,
+                StockNewsEventReactor,
+            )
+
+            # Reuse the strategy's LLM for classification — same key,
+            # same provider, same rate budget. GPT-4o-mini at ~$0.0005
+            # per headline stays well under the operator daily cap.
+            try:
+                watchlist = await self.screener.get_halal_symbols()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "halal symbols unavailable for reactor watchlist (%s) "
+                    "— reactor disabled",
+                    exc,
+                )
+                watchlist = []
+            if watchlist:
+                classifier = GPTHeadlineClassifier(llm)
+                self._news_reactor = StockNewsEventReactor(
+                    api_key=finnhub_key,
+                    symbols=watchlist,
+                    classifier=classifier,
+                )
+                self._news_reactor.on_event(self._on_news_event)
+                logger.info(
+                    "StockNewsEventReactor wired (%d symbols, threshold=0.7) "
+                    "— event execution stays disabled until Phase 2B",
+                    len(watchlist),
+                )
+
         # Cycle service — owns the intraday trading logic
         self.cycle_service = TradingCycleService(
             broker=self.broker,
@@ -287,6 +338,17 @@ class TradingBot(BaseTradingBot):
         logger.info("Shutting down trading bot...")
         if self.scheduler.running:
             self.scheduler.shutdown(wait=False)
+        # Cancel the reactor BEFORE the MCP disconnect so its in-flight
+        # callback can't reference a torn-down broker.
+        if self._news_reactor_task is not None and not self._news_reactor_task.done():
+            if self._news_reactor is not None:
+                await self._news_reactor.stop()
+            self._news_reactor_task.cancel()
+            try:
+                await self._news_reactor_task
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                pass
+            self._news_reactor_task = None
         if self._stocks_news is not None:
             try:
                 await self._stocks_news.close()
@@ -296,6 +358,33 @@ class TradingBot(BaseTradingBot):
         self._release_lock()
         await super().shutdown()
         logger.info("Trading bot shut down")
+
+    async def _on_news_event(self, event: Any) -> None:
+        """Phase 2A handler — log + notify only. Real entry execution
+        lands in 2B once we've seen the signal stream and validated
+        the classifier in production. Mirrors crypto's
+        ``_on_news_event`` shape so 2B is a copy-paste + adjust."""
+        cls = event.classification
+        logger.info(
+            "Stocks news-momentum event: [%s score=%.2f tag=%s] %s — %s",
+            event.symbol,
+            cls.score,
+            cls.tag,
+            event.title[:80],
+            cls.rationale[:120],
+        )
+        if self._notifier and self._notifier.enabled:
+            try:
+                await self._notifier.send(
+                    f"\U0001f4f0 <b>Stocks news-momentum event</b>\n"
+                    f"<b>{event.symbol}</b> · score {cls.score:.2f} · {cls.tag}\n"
+                    f"{event.title}\n"
+                    f"<i>{cls.rationale[:160]}</i>\n"
+                    f"Source: {event.source}\n"
+                    f"<i>(Phase 2A — entry execution disabled, observation only)</i>"
+                )
+            except Exception:  # noqa: BLE001
+                pass
 
     def _require_initialized(
         self,
@@ -633,6 +722,15 @@ class TradingBot(BaseTradingBot):
                 self.settings.stocks.daily_return_target * 100,
                 self.settings.stocks.daily_loss_limit * 100,
             )
+
+            # Spawn the news-momentum reactor as a long-lived task so
+            # callbacks fire on the event loop alongside the scheduler.
+            # ``shutdown()`` cancels this cleanly. The reactor's own
+            # ``enabled`` check short-circuits the loop when disabled.
+            if self._news_reactor is not None and self._news_reactor.enabled:
+                self._news_reactor_task = asyncio.create_task(
+                    self._news_reactor.run(), name="stocks-news-reactor"
+                )
 
             # Run pre-market once at startup to ensure cache and equity are
             # initialized even if the scheduled job was missed (e.g. system sleep).
