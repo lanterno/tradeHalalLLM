@@ -175,6 +175,10 @@ async def test_review_clamps_max_position_pct_to_stocks_bounds():
     persisted = {
         c.kwargs["parameter"]: c.kwargs["new_value"]
         for c in strategy_adjustments.record_strategy_adjustment.await_args_list
+        # Filter out the self_review_observation rows that the
+        # feed-forward loop writes alongside actual adjustments —
+        # this test only asserts on tunable-knob writes.
+        if c.kwargs["parameter"] != "self_review_observation"
     }
     assert persisted == {"max_position_pct": 0.30, "daily_loss_limit": 0.005}
     assert {a.parameter for a in result.adjustments} == {
