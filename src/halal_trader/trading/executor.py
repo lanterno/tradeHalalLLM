@@ -50,6 +50,8 @@ class TradeExecutor(BaseExecutor):
         max_simultaneous_positions: int,
         max_sector_pct: float = 0.40,
         recent_close_cooldown_minutes: int = 30,
+        min_hold_minutes: int = 30,
+        no_new_positions_minutes_before_close: int = 30,
     ) -> None:
         super().__init__(
             max_position_pct=max_position_pct,
@@ -68,6 +70,22 @@ class TradeExecutor(BaseExecutor):
         # 4 transactions in 90 min on the same symbol despite three
         # escalating prompt warnings). Set to 0 to disable.
         self._recent_close_cooldown_minutes = recent_close_cooldown_minutes
+        # Symmetric hold-time gate on the SELL side: refuse an LLM-
+        # initiated SELL when the youngest open BUY for the symbol is
+        # younger than this. Monitor-driven SL/TP exits go through a
+        # separate code path (``close_trade``) so they're unaffected.
+        # Observed 2026-05-21 15:30 ET (cycle-166585c8): LLM sold AVGO
+        # 15 min after opening it. Set to 0 to disable.
+        self._min_hold_minutes = min_hold_minutes
+        # End-of-day lockout: refuse new BUYs in the last N min before
+        # market close. Stops the bot from opening positions it can't
+        # manage through close — those become forced-exit at the EOD
+        # routine and lose to slippage. SELLs are always allowed (the
+        # operator + monitor still need to be able to close anything).
+        # Set to 0 to disable.
+        self._no_new_positions_minutes_before_close = (
+            no_new_positions_minutes_before_close
+        )
 
     async def execute_plan(
         self,
@@ -97,6 +115,18 @@ class TradeExecutor(BaseExecutor):
 
     async def _execute_buy(self, decision: Any, **kwargs: Any) -> dict[str, Any]:
         """Execute a buy order."""
+        # Last-N-min-before-close lockout. Refuses NEW BUYs late in
+        # the session because positions opened in the final minutes
+        # can't be managed and become forced exits at EOD.
+        close_lockout_reject = self._check_market_close_lockout()
+        if close_lockout_reject is not None:
+            return {
+                "symbol": decision.symbol,
+                "action": "buy",
+                "status": "rejected",
+                "reason": close_lockout_reject,
+            }
+
         # Hard re-entry cooldown — refuse a BUY for any symbol the bot
         # closed within the last ``recent_close_cooldown_minutes``. Sits
         # ABOVE the broker calls so a blocked re-entry costs nothing
@@ -269,6 +299,17 @@ class TradeExecutor(BaseExecutor):
 
     async def _execute_sell(self, decision: Any, **_kwargs: Any) -> dict[str, Any]:
         """Execute a sell order (close or reduce position)."""
+        # Hold-time gate — refuse LLM-initiated SELLs of positions
+        # younger than ``min_hold_minutes``. Monitor-driven SL/TP exits
+        # don't go through this path so genuine stop-outs still fire.
+        hold_reject = await self._check_min_hold(decision.symbol)
+        if hold_reject is not None:
+            return {
+                "symbol": decision.symbol,
+                "action": "sell",
+                "status": "rejected",
+                "reason": hold_reject,
+            }
         try:
             submitted_at = datetime.now(UTC)
             is_close_position = decision.quantity == 0
@@ -535,6 +576,89 @@ class TradeExecutor(BaseExecutor):
             exit_kind,
             gap_min,
             self._recent_close_cooldown_minutes,
+        )
+        return reason
+
+    def _check_market_close_lockout(self) -> str | None:
+        """Refuse new BUYs in the last ``no_new_positions_minutes_before_close``
+        minutes before market close (4:00 PM ET).
+
+        Lets EOD reconciliation close the day cleanly without fresh
+        positions in flight. ``None`` allows the BUY. Set to 0 to disable.
+        """
+        if self._no_new_positions_minutes_before_close <= 0:
+            return None
+        from halal_trader.market_hours import effective_close_time, now_eastern
+
+        try:
+            now_et = now_eastern()
+        except Exception:  # noqa: BLE001
+            return None
+        close_t = effective_close_time(now_et.date())
+        close_dt = now_et.replace(
+            hour=close_t.hour, minute=close_t.minute, second=0, microsecond=0
+        )
+        minutes_to_close = (close_dt - now_et).total_seconds() / 60.0
+        if minutes_to_close > self._no_new_positions_minutes_before_close:
+            return None
+        if minutes_to_close < 0:
+            # Already past close — separate concern; let other gates handle.
+            return None
+        reason = (
+            f"market-close lockout: {minutes_to_close:.0f} min to close "
+            f"(lockout window {self._no_new_positions_minutes_before_close} min). "
+            "New BUYs blocked — only SELLs / closes from here."
+        )
+        logger.info("BUY rejected by close lockout: %s", reason)
+        return reason
+
+    async def _check_min_hold(self, symbol: str) -> str | None:
+        """Return rejection reason if any open BUY for ``symbol`` is
+        younger than ``min_hold_minutes``. ``None`` allows the SELL.
+
+        Operator escape hatch: ``min_hold_minutes <= 0`` disables.
+        Repo errors degrade to "allow".
+        """
+        if self._min_hold_minutes <= 0:
+            return None
+        try:
+            opens = await self._repo.get_open_trades()
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("min-hold lookup failed for %s: %s — allowing sell", symbol, exc)
+            return None
+        from datetime import UTC, datetime
+
+        wanted = symbol.upper()
+        now = datetime.now(UTC)
+        youngest_age: float | None = None
+        for trade in opens:
+            t_sym = str(getattr(trade, "symbol", "") or "").upper()
+            if t_sym != wanted:
+                continue
+            ts = getattr(trade, "timestamp", None)
+            if not isinstance(ts, datetime):
+                continue
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=UTC)
+            age_min = (now - ts).total_seconds() / 60.0
+            if youngest_age is None or age_min < youngest_age:
+                youngest_age = age_min
+
+        if youngest_age is None or youngest_age >= self._min_hold_minutes:
+            return None
+
+        reason = (
+            f"min-hold gate: {symbol} youngest BUY is only {youngest_age:.0f} min "
+            f"old (min hold {self._min_hold_minutes} min). LLM-initiated SELL "
+            "blocked to prevent whipsaw. Stop-loss / take-profit exits via the "
+            "monitor are unaffected; wait for the hold window to elapse, or fire "
+            "the monitor's SL if the position is genuinely broken."
+        )
+        logger.warning(
+            "SELL rejected by min-hold gate: %s (youngest BUY %.0f min, min %d)",
+            symbol,
+            youngest_age,
+            self._min_hold_minutes,
         )
         return reason
 
