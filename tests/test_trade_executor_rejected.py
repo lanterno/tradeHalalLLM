@@ -225,6 +225,135 @@ async def test_sell_fill_closes_open_buy_row():
 
 
 @pytest.mark.asyncio
+async def test_close_all_records_synthetic_sell_for_each_symbol():
+    """EOD close-all must record matching SELL Trade rows so the
+    reconciler's signed-net math (BUY+ minus SELL-) cancels. Without
+    this, the next morning's reconcile shows db=<qty> broker=0 =
+    100% drift — exactly what we hit on 2026-05-22 morning on
+    SHOP/NOW/MSFT after the previous EOD."""
+    from types import SimpleNamespace
+
+    broker = MagicMock()
+    broker.get_all_positions = AsyncMock(
+        return_value=[
+            SimpleNamespace(symbol="SHOP", qty=290, current_price=42.5),
+        ]
+    )
+    broker.close_all_positions = AsyncMock(return_value={"result": "closed"})
+
+    repo = MagicMock()
+    # Two open BUYs for SHOP — total 290 shares.
+    repo.get_open_trades = AsyncMock(
+        return_value=[
+            SimpleNamespace(symbol="SHOP", side="buy", filled_quantity=145, filled_price=40.0),
+            SimpleNamespace(symbol="SHOP", side="buy", filled_quantity=145, filled_price=41.0),
+        ]
+    )
+    repo.close_open_trades_for_symbol = AsyncMock(return_value=2)
+    repo.record_trade = AsyncMock(return_value=999)
+
+    executor = TradeExecutor(
+        broker, repo, max_position_pct=1.0, max_simultaneous_positions=10, max_sector_pct=0
+    )
+
+    await executor.close_all()
+
+    # Synthetic SELL recorded with the SUM of open BUY quantities.
+    repo.record_trade.assert_awaited_once()
+    kwargs = repo.record_trade.await_args.kwargs
+    assert kwargs["symbol"] == "SHOP"
+    assert kwargs["side"] == "sell"
+    assert kwargs["quantity"] == 290.0
+    assert kwargs["filled_quantity"] == 290.0
+    assert kwargs["filled_price"] == 42.5  # pre-snapshot current_price
+    assert kwargs["status"] == "filled"
+
+
+@pytest.mark.asyncio
+async def test_close_all_stamps_closed_at_on_orphan_buys():
+    """The EOD close-all path now walks the DB and stamps closed_at on
+    every open BUY. Without this the previous EOD left orphans that
+    showed as 100% reconcile drift the next morning (observed
+    2026-05-22 10:30 ET on SHOP/NOW/MSFT)."""
+    from types import SimpleNamespace
+
+    broker = MagicMock()
+    broker.get_all_positions = AsyncMock(
+        return_value=[
+            SimpleNamespace(symbol="SHOP", qty=290, current_price=42.5),
+            SimpleNamespace(symbol="NOW", qty=90, current_price=820.0),
+        ]
+    )
+    broker.close_all_positions = AsyncMock(return_value={"result": "closed"})
+
+    repo = MagicMock()
+    repo.get_open_trades = AsyncMock(
+        return_value=[
+            SimpleNamespace(symbol="SHOP", side="buy", filled_price=40.0),
+            SimpleNamespace(symbol="NOW", side="buy", filled_price=800.0),
+            SimpleNamespace(symbol="MSFT", side="buy", filled_price=410.0),  # not in broker
+        ]
+    )
+    repo.close_open_trades_for_symbol = AsyncMock(return_value=1)
+
+    executor = TradeExecutor(
+        broker, repo, max_position_pct=1.0, max_simultaneous_positions=10, max_sector_pct=0
+    )
+
+    await executor.close_all()
+
+    # All three symbols should get a close call — even MSFT which the
+    # broker didn't have (orphan: DB thought we held it but broker
+    # didn't, exactly the case we're fixing).
+    closed_symbols = {
+        call.args[0] for call in repo.close_open_trades_for_symbol.await_args_list
+    }
+    assert closed_symbols == {"SHOP", "NOW", "MSFT"}
+    # Exit price for SHOP comes from pre-snapshot current_price (42.5).
+    shop_call = next(
+        c for c in repo.close_open_trades_for_symbol.await_args_list if c.args[0] == "SHOP"
+    )
+    assert shop_call.args[1] == 42.5
+    # MSFT had no snapshot entry → falls back to BUY's filled_price (410).
+    msft_call = next(
+        c for c in repo.close_open_trades_for_symbol.await_args_list if c.args[0] == "MSFT"
+    )
+    assert msft_call.args[1] == 410.0
+    # Reason is uniform across all close-all entries.
+    for call in repo.close_open_trades_for_symbol.await_args_list:
+        assert call.args[2] == "eod_close_all"
+
+
+@pytest.mark.asyncio
+async def test_close_all_survives_pre_snapshot_failure():
+    """If the broker's pre-position snapshot fails, the close-out still
+    walks the DB and closes BUYs with whatever filled_price they have."""
+    from types import SimpleNamespace
+
+    broker = MagicMock()
+    broker.get_all_positions = AsyncMock(side_effect=RuntimeError("broker down"))
+    broker.close_all_positions = AsyncMock(return_value={"result": "closed"})
+
+    repo = MagicMock()
+    repo.get_open_trades = AsyncMock(
+        return_value=[SimpleNamespace(symbol="SHOP", side="buy", filled_price=40.0)]
+    )
+    repo.close_open_trades_for_symbol = AsyncMock(return_value=1)
+
+    executor = TradeExecutor(
+        broker, repo, max_position_pct=1.0, max_simultaneous_positions=10, max_sector_pct=0
+    )
+
+    await executor.close_all()
+
+    # Still closed the BUY, using the filled_price fallback.
+    assert repo.close_open_trades_for_symbol.await_count == 1
+    call = repo.close_open_trades_for_symbol.await_args_list[0]
+    assert call.args[0] == "SHOP"
+    assert call.args[1] == 40.0
+
+
+@pytest.mark.asyncio
 async def test_close_position_with_order_id_uses_confirm_fill_path():
     """When close_position DOES return an order id, the normal poll path
     runs (no synthesized fill)."""

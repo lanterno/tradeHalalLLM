@@ -832,9 +832,137 @@ class TradeExecutor(BaseExecutor):
         )
 
     async def close_all(self) -> Any:
-        """Close all open positions (end of day)."""
+        """Close all open positions (end of day).
+
+        Fires the broker-side close-all, then walks the DB and stamps
+        ``closed_at`` on every open BUY so the next morning's reconcile
+        doesn't show drift on positions that were genuinely closed.
+
+        Without the DB cleanup, the previous EOD-close pattern left
+        orphan BUYs that surfaced as 100% reconcile drift the next day
+        (observed 2026-05-22 10:30 ET on SHOP/NOW/MSFT — all closed at
+        EOD on 2026-05-21 but DB still showed them open).
+
+        Pre-fetches the broker's pre-close positions so we know which
+        exit price to stamp on each BUY. If the pre-fetch fails (broker
+        flake), falls back to the BUY's last-known filled_price so the
+        row is at least closed cleanly.
+        """
         logger.info("Closing all positions (end of day)")
-        return await self._broker.close_all_positions()
+
+        # Snapshot per-symbol prices BEFORE the broker call so the DB
+        # rows get a meaningful exit_price. close_all_positions is
+        # destructive; positions are gone after.
+        price_by_symbol: dict[str, float] = {}
+        try:
+            pre_positions = await self._broker.get_all_positions()
+            for p in pre_positions:
+                sym = str(getattr(p, "symbol", "") or "").upper()
+                cp = float(getattr(p, "current_price", 0) or 0)
+                if sym and cp > 0:
+                    price_by_symbol[sym] = cp
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("EOD pre-position snapshot failed: %s", exc)
+
+        result = await self._broker.close_all_positions()
+
+        # Stamp closed_at on every open BUY. We don't know per-symbol
+        # exit_price for sure (broker may have filled at a slightly
+        # different price than the pre-snapshot), but the snapshot is
+        # accurate within the second. close_open_trades_for_symbol
+        # already handles "no open BUYs" → noop.
+        try:
+            opens = await self._repo.get_open_trades()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "EOD close-all: get_open_trades failed (%s) — DB orphans may "
+                "show as drift on tomorrow's first cycle",
+                exc,
+            )
+            return result
+
+        symbols_to_close: set[str] = set()
+        for trade in opens:
+            sym = str(getattr(trade, "symbol", "") or "").upper()
+            if sym:
+                symbols_to_close.add(sym)
+
+        closer = getattr(self._repo, "close_open_trades_for_symbol", None)
+        if closer is None:
+            logger.debug("EOD close-all: repo has no close_open_trades_for_symbol")
+            return result
+
+        # Pre-compute total open qty per symbol — needed for the
+        # synthetic SELL trade we'll record so the reconciler's signed-
+        # net math nets to zero.
+        open_qty_by_sym: dict[str, float] = {}
+        for trade in opens:
+            sym = str(getattr(trade, "symbol", "") or "").upper()
+            if not sym:
+                continue
+            q = getattr(trade, "filled_quantity", None) or getattr(trade, "quantity", 0)
+            try:
+                open_qty_by_sym[sym] = open_qty_by_sym.get(sym, 0.0) + float(q or 0)
+            except (TypeError, ValueError):
+                continue
+
+        total_closed = 0
+        from datetime import datetime as _dt
+
+        now_utc = _dt.now(UTC)
+        for sym in symbols_to_close:
+            # Per-symbol price: prefer pre-snapshot, else fall back to
+            # the open BUY's last known fill price.
+            exit_price = price_by_symbol.get(sym)
+            if exit_price is None:
+                for trade in opens:
+                    if str(getattr(trade, "symbol", "") or "").upper() != sym:
+                        continue
+                    fp = getattr(trade, "filled_price", None)
+                    if fp is not None and float(fp) > 0:
+                        exit_price = float(fp)
+                        break
+            try:
+                n = await closer(sym, float(exit_price or 0), "eod_close_all")
+                total_closed += n
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "EOD close-all: failed to stamp closed_at on %s: %s", sym, exc
+                )
+                continue
+
+            # Record a synthetic SELL Trade row so the reconciler's
+            # signed-net math (sum of BUY filled_qty minus SELL
+            # filled_qty) cancels for this symbol. Without this, the
+            # next morning's reconcile shows db=<original-qty>
+            # broker=0 → 100% drift (observed 2026-05-22 on
+            # SHOP/NOW/MSFT after the EOD on 2026-05-21).
+            total_qty = open_qty_by_sym.get(sym, 0.0)
+            if total_qty <= 0:
+                continue
+            try:
+                await self._repo.record_trade(
+                    symbol=sym,
+                    side="sell",
+                    quantity=total_qty,
+                    price=float(exit_price or 0),
+                    order_id="",
+                    status="filled",
+                    llm_reasoning="EOD close-all (synthetic exit)",
+                    submitted_at=now_utc,
+                    filled_at=now_utc,
+                    filled_price=float(exit_price or 0),
+                    filled_quantity=total_qty,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "EOD close-all: failed to record synthetic SELL for %s: %s",
+                    sym,
+                    exc,
+                )
+        if total_closed:
+            logger.info("EOD close-all: stamped closed_at on %d open BUY(s)", total_closed)
+        return result
 
     async def _check_sector_limit(
         self,
