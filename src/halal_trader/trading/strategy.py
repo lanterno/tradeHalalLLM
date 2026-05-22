@@ -39,13 +39,14 @@ already past 60% of that floor — not preemptively on news headlines alone.
 7. Maximum simultaneous open positions: {max_positions}. Aim for 2–4 open \
 positions during normal market conditions.
 8. TRANSACTION COST AWARENESS: each round-trip eats ~0.1–0.3% in slippage + \
-spread. Look at the entry time / P&L in CURRENT POSITIONS — if a position you \
-just opened in the last cycle is sitting at small unrealized P&L on noise, \
-DO NOT close it just because the macro reasoning sounds similar to a fresh \
-setup. Only exit a <30-min-old position when (a) stop-loss is genuinely \
-breached, (b) a stronger setup needs that slot and capacity is at cap, or \
-(c) a hard catalyst (earnings imminent, halt announcement) invalidates the \
-original thesis. Whipsaw churns away the daily-return target.
+spread. CURRENT POSITIONS shows the holding time on each line. A HARD \
+EXECUTOR GATE rejects any SELL of a position younger than 30 min — the \
+"⚠ SELL BLOCKED (<30min)" tag flags this in the prompt. DO NOT waste a \
+decision slot on a SELL the executor will reject; pick a position that has \
+already cleared the 30-min hold. When the position cap forces a swap (5/5 \
+slots), PREFER the LONGEST-held position with the weakest signal as your \
+SELL candidate — not the freshest one. Stop-loss exits go through the \
+monitor's separate code path and bypass this gate.
 
    ALSO: the RECENTLY CLOSED block lists symbols you EXITED in the last \
 60 min. Re-buying them on a similar macro thesis is the same whipsaw bug \
@@ -167,16 +168,44 @@ PROMPT_VERSION = _register_prompt("trading.strategy.system", SYSTEM_PROMPT)
 USER_PROMPT_VERSION = _register_prompt("trading.strategy.user", USER_PROMPT_TEMPLATE)
 
 
-def _format_positions(positions: list[Position]) -> str:
+def _format_positions(
+    positions: list[Position],
+    holding_minutes_by_symbol: dict[str, float] | None = None,
+) -> str:
+    """Render the current-positions block for the user prompt.
+
+    Optionally surface per-symbol holding time so the LLM can pick
+    SELL candidates intelligently when the position cap forces a
+    swap (memory: strategy-fast-in-slow-out). Without this, the LLM
+    consistently picks the freshest BUY for the SELL slot — exactly
+    the whipsaw pattern the min-hold gate then rejects, wasting the
+    cycle (observed 2026-05-22 cycles 11:15, 11:30, 11:45, 12:30:
+    every cycle proposed selling positions opened <30 min ago, all
+    rejected).
+    """
     if not positions:
         return "No open positions."
+    holding = holding_minutes_by_symbol or {}
     lines = []
     for p in positions:
+        age = holding.get(p.symbol)
+        if age is None:
+            age_str = "held: unknown"
+        elif age < 60:
+            age_str = f"held: {age:.0f} min"
+        else:
+            age_str = f"held: {age / 60:.1f} h"
+        # Flag positions still inside the 30-min sell gate so the
+        # LLM doesn't waste a SELL slot proposing them.
+        gate_flag = ""
+        if age is not None and age < 30:
+            gate_flag = "  ⚠ SELL BLOCKED (<30min)"
         lines.append(
             f"  {p.symbol}: {p.qty} shares @ "
             f"${p.avg_entry_price:.2f} | "
             f"Current: ${p.current_price:.2f} | "
-            f"P&L: ${p.unrealized_pl:+.2f} ({p.unrealized_plpc:+.2%})"
+            f"P&L: ${p.unrealized_pl:+.2f} ({p.unrealized_plpc:+.2%}) | "
+            f"{age_str}{gate_flag}"
         )
     return "\n".join(lines)
 
@@ -512,6 +541,7 @@ class TradingStrategy(BaseStrategy):
         recent_closed_text: str = "No closed trades in the last 60 min.",
         slippage_text: str = "No slippage data yet.",
         learnings_text: str = "No prior observations yet.",
+        holding_minutes_by_symbol: dict[str, float] | None = None,
     ) -> TradingPlan:
         portfolio_value = account.portfolio_value or account.equity or 100000
         today_pnl_pct = today_pnl / portfolio_value if portfolio_value else 0
@@ -529,7 +559,7 @@ class TradingStrategy(BaseStrategy):
             cash=account.cash,
             today_pnl=today_pnl,
             today_pnl_pct=today_pnl_pct,
-            positions_text=_format_positions(positions),
+            positions_text=_format_positions(positions, holding_minutes_by_symbol),
             capacity_text=_format_capacity(
                 len(positions), self._max_simultaneous_positions
             ),

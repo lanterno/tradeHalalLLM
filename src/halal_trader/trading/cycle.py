@@ -247,7 +247,15 @@ class TradingCycleService(BaseCycleService):
         recent_closed_text = "No closed trades in the last 60 min."
         slippage_text = "No slippage data yet."
         learnings_text = "No prior observations yet."
+        # Per-symbol "minutes since open" so the LLM can pick SELL
+        # candidates intelligently — without this, every cycle
+        # blindly proposes selling the freshest position and gets
+        # rejected by the min-hold gate (observed 2026-05-22
+        # cycles 11:15, 11:30, 11:45, 12:30 — all wasted cycles).
+        holding_minutes_by_symbol: dict[str, float] = {}
         try:
+            from datetime import UTC, datetime
+
             from halal_trader.db.repos import RepoBundle
             from halal_trader.trading.strategy import (
                 _format_learnings,
@@ -260,12 +268,37 @@ class TradingCycleService(BaseCycleService):
                 rows = await repos.trades.get_recently_closed(minutes=60)
                 recent_closed_text = _format_recent_closed(rows)
                 recent_trades = await repos.trades.get_recent_trades(limit=20)
-                # Slippage block reads paper_slippage_pct from BUY rows;
-                # SELL rows have None for now (sell-side slippage needs
-                # a pre-sell snapshot fetch — separate scope).
                 slippage_text = _format_slippage(
                     [r for r in recent_trades if (r.get("side") or "").lower() == "buy"]
                 )
+                # Compute holding time for each currently-held symbol —
+                # use the YOUNGEST open BUY per symbol (matches the
+                # gate's logic). Older positions show longer hold;
+                # fresh positions show their actual age + the
+                # ⚠ SELL BLOCKED flag in the rendered prompt.
+                try:
+                    opens = await repos.trades.get_open_trades()
+                except Exception:  # noqa: BLE001
+                    opens = []
+                now_utc = datetime.now(UTC)
+                youngest_ts_by_sym: dict[str, datetime] = {}
+                for trade in opens:
+                    sym = str(getattr(trade, "symbol", "") or "").upper()
+                    if not sym:
+                        continue
+                    ts = getattr(trade, "timestamp", None)
+                    if not isinstance(ts, datetime):
+                        continue
+                    if ts.tzinfo is None:
+                        ts = ts.replace(tzinfo=UTC)
+                    prev = youngest_ts_by_sym.get(sym)
+                    if prev is None or ts > prev:
+                        youngest_ts_by_sym[sym] = ts
+                for sym, ts in youngest_ts_by_sym.items():
+                    holding_minutes_by_symbol[sym] = (
+                        now_utc - ts
+                    ).total_seconds() / 60.0
+
                 # Self-review observations land in strategy_adjustments
                 # with parameter="self_review_observation" — read the
                 # most recent N here.
@@ -302,6 +335,7 @@ class TradingCycleService(BaseCycleService):
             recent_closed_text=recent_closed_text,
             slippage_text=slippage_text,
             learnings_text=learnings_text,
+            holding_minutes_by_symbol=holding_minutes_by_symbol,
         )
         plan = await self._strategy.analyze(**analyze_kwargs)
 

@@ -181,9 +181,12 @@ def test_system_prompt_has_transaction_cost_rule():
 
     assert "TRANSACTION COST AWARENESS" in SYSTEM_PROMPT
     assert "round-trip" in SYSTEM_PROMPT
-    assert "<30-min" in SYSTEM_PROMPT or "30-min" in SYSTEM_PROMPT
-    # The three valid exit reasons must each be mentioned so the LLM
-    # has a concrete checklist instead of "use judgment".
-    assert "stop-loss" in SYSTEM_PROMPT
-    assert "capacity" in SYSTEM_PROMPT
-    assert "catalyst" in SYSTEM_PROMPT
+    assert "30 min" in SYSTEM_PROMPT or "30-min" in SYSTEM_PROMPT
+    # Refactored 2026-05-22 evening: the prior "three valid exit
+    # reasons" list (stop-loss / capacity / catalyst) was replaced
+    # with a more direct instruction — the executor hard-rejects
+    # <30min SELLs, so the LLM should pick a longer-held position
+    # for swap candidates. Pin the new structural assertions.
+    assert "HARD EXECUTOR GATE" in SYSTEM_PROMPT
+    assert "LONGEST-held position" in SYSTEM_PROMPT
+    assert "Stop-loss exits" in SYSTEM_PROMPT  # monitor path still mentioned
