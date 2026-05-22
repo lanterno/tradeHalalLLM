@@ -8,20 +8,32 @@ to prevent idle-sleep and App-Nap throttling of the asyncio loop.
 ## One-time install
 
 ```bash
-just launchd-install
+just launchd-install          # stocks + watchdog only (safer default)
+# or
+just launchd-install-all      # stocks + crypto + watchdog
 ```
 
-This copies the plists into `~/Library/LaunchAgents/`, `launchctl
-bootstrap`s them under your user GUI session, and starts them
-immediately. The bots will then start automatically at every login.
+Both copy plists into `~/Library/LaunchAgents/`, `launchctl bootstrap`
+them under your user GUI session, and start them immediately. The bots
+auto-start at every login from then on.
+
+The default `launchd-install` **does not enable crypto** — the bot
+would loop on `API Secret required for private endpoints` until
+`BINANCE_API_KEY` + `BINANCE_SECRET_KEY` are in `.env`. Once creds
+are set, enable it with:
+
+```bash
+just launchd-enable-crypto    # bootstrap crypto from the on-disk plist
+just launchd-disable-crypto   # bootout crypto (plist stays on disk)
+```
 
 ## Operate
 
 ```bash
-just launchd-status                   # ps + launchctl print for both agents
+just launchd-status                   # ps + launchctl print for all three
 just launchd-restart-stocks           # bounce just the stocks bot
 just launchd-restart-crypto           # bounce just the crypto bot
-just launchd-uninstall                # bootout + delete the plists
+just launchd-uninstall                # bootout + delete all plists
 ```
 
 Log files:

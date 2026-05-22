@@ -53,8 +53,19 @@ status:
 
 # ── launchd (macOS auto-start + auto-restart) ─────────────
 
-# Install + start the stocks + crypto + watchdog launchd agents (see infra/launchd/README.md)
+# Install stocks + watchdog only (default; enable crypto separately when ready)
 launchd-install:
+    @mkdir -p ~/Library/LaunchAgents logs
+    cp infra/launchd/com.halabot.stocks.plist ~/Library/LaunchAgents/
+    cp infra/launchd/com.halabot.watchdog.plist ~/Library/LaunchAgents/
+    -launchctl bootout "gui/$(id -u)/com.halabot.stocks" 2>/dev/null
+    -launchctl bootout "gui/$(id -u)/com.halabot.watchdog" 2>/dev/null
+    launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.halabot.stocks.plist
+    launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.halabot.watchdog.plist
+    @echo "Installed stocks + watchdog. (Crypto stays disabled — run \`just launchd-enable-crypto\` to turn it on.)"
+
+# Install ALL three agents (stocks + crypto + watchdog) — needs Binance creds in .env
+launchd-install-all:
     @mkdir -p ~/Library/LaunchAgents logs
     cp infra/launchd/com.halabot.stocks.plist ~/Library/LaunchAgents/
     cp infra/launchd/com.halabot.crypto.plist ~/Library/LaunchAgents/
@@ -65,7 +76,19 @@ launchd-install:
     launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.halabot.stocks.plist
     launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.halabot.crypto.plist
     launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.halabot.watchdog.plist
-    @echo "Installed. Tail launch logs: tail -f logs/launchd-*.log"
+    @echo "Installed stocks + crypto + watchdog."
+
+# Enable + start the crypto agent (needs Binance creds in .env)
+launchd-enable-crypto:
+    cp infra/launchd/com.halabot.crypto.plist ~/Library/LaunchAgents/
+    -launchctl bootout "gui/$(id -u)/com.halabot.crypto" 2>/dev/null
+    launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.halabot.crypto.plist
+    @echo "Crypto agent enabled."
+
+# Bootout the crypto agent (keeps plist on disk — re-enable with launchd-enable-crypto)
+launchd-disable-crypto:
+    -launchctl bootout "gui/$(id -u)/com.halabot.crypto"
+    @echo "Crypto agent disabled. Plist stays at ~/Library/LaunchAgents/com.halabot.crypto.plist."
 
 # Remove the launchd agents
 launchd-uninstall:
