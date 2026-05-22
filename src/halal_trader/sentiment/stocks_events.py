@@ -101,7 +101,18 @@ class StockNewsEventReactor:
     """
 
     _DEFAULT_POLL_INTERVAL_S = 60
-    _DEFAULT_SCORE_THRESHOLD = 0.7
+    # Raised from 0.7 to 0.85 on 2026-05-22 after the NVDA earnings
+    # cascade flooded the reactor — the classifier was clustering
+    # everything at exactly 0.70 (threshold floor), so 0.7 acted as
+    # an "any AI-positive headline" filter, not a "material catalyst"
+    # filter. 0.85 forces the LLM to express higher conviction.
+    _DEFAULT_SCORE_THRESHOLD = 0.85
+    # Per-symbol notification cooldown: even with a tighter threshold,
+    # a single catalyst (earnings, M&A) reliably generates 10-30
+    # repackaged headlines across publishers. This caps callbacks at
+    # one per (symbol, window) so the operator's Telegram doesn't
+    # flood and we don't burn budget on stale duplicates.
+    _DEFAULT_NOTIFY_COOLDOWN_S = 900  # 15 min — match cycle cadence
     _SEEN_CAP = 1000
 
     def __init__(
@@ -113,6 +124,7 @@ class StockNewsEventReactor:
         poll_interval_seconds: int = _DEFAULT_POLL_INTERVAL_S,
         score_threshold: float = _DEFAULT_SCORE_THRESHOLD,
         per_symbol_request_spacing_s: float = 0.5,
+        per_symbol_notify_cooldown_s: int = _DEFAULT_NOTIFY_COOLDOWN_S,
     ) -> None:
         self._api_key = api_key
         self._symbols = [s.upper() for s in symbols]
@@ -120,7 +132,10 @@ class StockNewsEventReactor:
         self._poll_interval = poll_interval_seconds
         self._score_threshold = score_threshold
         self._spacing = per_symbol_request_spacing_s
+        self._notify_cooldown_s = per_symbol_notify_cooldown_s
         self._seen: set[tuple[str, str]] = set()
+        # symbol → monotonic timestamp of last callback fire
+        self._last_notify: dict[str, float] = {}
         self._callbacks: list[EventCallback] = []
         self._running = False
         self._client: httpx.AsyncClient | None = None
@@ -167,7 +182,14 @@ class StockNewsEventReactor:
         while self._running:
             try:
                 events = await self._scan_all_symbols()
+                import time as _t
+
                 for event in events:
+                    # Per-symbol notification cooldown — a single
+                    # catalyst (earnings, M&A) reliably re-fires across
+                    # 10+ repackaged headlines. We still LOG every
+                    # scored event (so we can audit classifier drift)
+                    # but only fire callbacks once per (symbol, window).
                     logger.info(
                         "Scored stock-news event: [%s score=%.2f tag=%s] %s — %s",
                         event.symbol,
@@ -176,6 +198,20 @@ class StockNewsEventReactor:
                         event.title[:80],
                         event.classification.rationale[:120],
                     )
+                    last = self._last_notify.get(event.symbol, 0.0)
+                    now_t = _t.monotonic()
+                    if (
+                        self._notify_cooldown_s > 0
+                        and (now_t - last) < self._notify_cooldown_s
+                    ):
+                        logger.debug(
+                            "Notification cooldown — skipping callback for %s "
+                            "(%.0fs since last)",
+                            event.symbol,
+                            now_t - last,
+                        )
+                        continue
+                    self._last_notify[event.symbol] = now_t
                     for cb in self._callbacks:
                         try:
                             await cb(event)

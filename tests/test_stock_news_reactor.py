@@ -48,6 +48,7 @@ def _reactor(
     symbols=("AAPL", "MSFT"),
     api_key: str = "test-key",
     score_threshold: float = 0.7,
+    notify_cooldown_s: int = 900,
 ):
     return StockNewsEventReactor(
         api_key=api_key,
@@ -55,6 +56,7 @@ def _reactor(
         classifier=classifier,
         score_threshold=score_threshold,
         per_symbol_request_spacing_s=0,
+        per_symbol_notify_cooldown_s=notify_cooldown_s,
     )
 
 
@@ -74,6 +76,120 @@ def test_reactor_disabled_without_symbols():
 def test_reactor_enabled_when_both_present():
     r = _reactor(_FakeClassifier({}))
     assert r.enabled is True
+
+
+def test_reactor_default_threshold_raised_to_085():
+    """Threshold floor was raised from 0.7 → 0.85 on 2026-05-22 after
+    the NVDA earnings cascade flooded with editorial coverage all
+    scoring exactly 0.70."""
+    from halal_trader.sentiment.stocks_events import StockNewsEventReactor
+    assert StockNewsEventReactor._DEFAULT_SCORE_THRESHOLD == 0.85
+
+
+def test_reactor_default_notify_cooldown_900s():
+    """Per-symbol notification cooldown defaults to 15min — matches
+    the trading-cycle cadence so each cycle gets at most one
+    per-symbol callback."""
+    from halal_trader.sentiment.stocks_events import StockNewsEventReactor
+    assert StockNewsEventReactor._DEFAULT_NOTIFY_COOLDOWN_S == 900
+
+
+# ── per-symbol notification cooldown ────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_notify_cooldown_drops_second_callback_for_same_symbol():
+    """A single catalyst reliably produces 10-30 repackaged headlines
+    across publishers (observed NVDA earnings cascade on 2026-05-22).
+    Cooldown caps callbacks to one per (symbol, window)."""
+    classifier = _FakeClassifier({"good": 0.95})
+    r = _reactor(classifier, notify_cooldown_s=900)
+
+    cb = AsyncMock()
+    r.on_event(cb)
+
+    # Simulate two scored events for the same symbol arriving back-to-back.
+    items = [
+        {"url": "https://x.com/1", "headline": "good news first"},
+        {"url": "https://x.com/2", "headline": "good news repackaged"},
+    ]
+    events = []
+    for item in items:
+        e = await r._maybe_emit("MSFT", item)
+        if e is not None:
+            events.append(e)
+    assert len(events) == 2  # both scored
+
+    # Now run them through the dispatch logic. Use the same code-path
+    # the poll loop uses: log + cooldown check + callback.
+    import time as _t
+
+    for e in events:
+        last = r._last_notify.get(e.symbol, 0.0)
+        now_t = _t.monotonic()
+        if r._notify_cooldown_s > 0 and (now_t - last) < r._notify_cooldown_s:
+            continue
+        r._last_notify[e.symbol] = now_t
+        await cb(e)
+
+    # Only the first fired; the second hit the cooldown.
+    assert cb.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_notify_cooldown_zero_disables():
+    """Operator escape: notify_cooldown=0 → every scored event fires."""
+    classifier = _FakeClassifier({"good": 0.95})
+    r = _reactor(classifier, notify_cooldown_s=0)
+
+    cb = AsyncMock()
+    r.on_event(cb)
+
+    items = [
+        {"url": "https://x.com/1", "headline": "good news A"},
+        {"url": "https://x.com/2", "headline": "good news B"},
+    ]
+    import time as _t
+
+    for item in items:
+        e = await r._maybe_emit("MSFT", item)
+        if e is None:
+            continue
+        # Same dispatch as the poll loop.
+        last = r._last_notify.get(e.symbol, 0.0)
+        now_t = _t.monotonic()
+        if r._notify_cooldown_s > 0 and (now_t - last) < r._notify_cooldown_s:
+            continue
+        r._last_notify[e.symbol] = now_t
+        await cb(e)
+
+    assert cb.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_notify_cooldown_per_symbol_not_global():
+    """The cooldown is per-symbol — a NVDA event shouldn't block an
+    MSFT event in the same minute."""
+    classifier = _FakeClassifier({"good": 0.95})
+    r = _reactor(classifier, notify_cooldown_s=900)
+
+    cb = AsyncMock()
+    r.on_event(cb)
+
+    import time as _t
+
+    for sym in ("NVDA", "MSFT"):
+        e = await r._maybe_emit(sym, {"url": f"https://x.com/{sym}", "headline": "good"})
+        if e is None:
+            continue
+        last = r._last_notify.get(e.symbol, 0.0)
+        now_t = _t.monotonic()
+        if r._notify_cooldown_s > 0 and (now_t - last) < r._notify_cooldown_s:
+            continue
+        r._last_notify[e.symbol] = now_t
+        await cb(e)
+
+    assert cb.await_count == 2
 
 
 # ── _maybe_emit: dedup + threshold ──────────────────────────────
