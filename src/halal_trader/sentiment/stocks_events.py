@@ -112,7 +112,12 @@ class StockNewsEventReactor:
     # repackaged headlines across publishers. This caps callbacks at
     # one per (symbol, window) so the operator's Telegram doesn't
     # flood and we don't burn budget on stale duplicates.
-    _DEFAULT_NOTIFY_COOLDOWN_S = 900  # 15 min — match cycle cadence
+    # Raised 15 → 30 min on 2026-05-22 19:03 after observing the
+    # same NVDA Q1 catalyst re-firing every ~15 min via new
+    # headlines (analyst notes, recaps). 30 min still lets a
+    # genuinely-new catalyst (different tag, different rationale)
+    # land within the cycle cadence.
+    _DEFAULT_NOTIFY_COOLDOWN_S = 1800  # 30 min
     _SEEN_CAP = 1000
 
     def __init__(

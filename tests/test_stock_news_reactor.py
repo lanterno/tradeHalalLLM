@@ -86,12 +86,12 @@ def test_reactor_default_threshold_raised_to_085():
     assert StockNewsEventReactor._DEFAULT_SCORE_THRESHOLD == 0.85
 
 
-def test_reactor_default_notify_cooldown_900s():
-    """Per-symbol notification cooldown defaults to 15min — matches
-    the trading-cycle cadence so each cycle gets at most one
-    per-symbol callback."""
+def test_reactor_default_notify_cooldown_1800s():
+    """Per-symbol notification cooldown defaults to 30min.
+    Raised from 15→30 on 2026-05-22 after observing the same NVDA
+    Q1 catalyst re-firing every ~15 min via repackaged headlines."""
     from halal_trader.sentiment.stocks_events import StockNewsEventReactor
-    assert StockNewsEventReactor._DEFAULT_NOTIFY_COOLDOWN_S == 900
+    assert StockNewsEventReactor._DEFAULT_NOTIFY_COOLDOWN_S == 1800
 
 
 # ── per-symbol notification cooldown ────────────────────────────
