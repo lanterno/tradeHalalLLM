@@ -185,33 +185,39 @@ class StockNewsEventReactor:
                 import time as _t
 
                 for event in events:
-                    # Per-symbol notification cooldown — a single
-                    # catalyst (earnings, M&A) reliably re-fires across
-                    # 10+ repackaged headlines. We still LOG every
-                    # scored event (so we can audit classifier drift)
-                    # but only fire callbacks once per (symbol, window).
-                    logger.info(
-                        "Scored stock-news event: [%s score=%.2f tag=%s] %s — %s",
+                    # Audit log at DEBUG: every scored event flows
+                    # through here. Operators tailing the log can
+                    # adjust the level if they want to see the full
+                    # classifier output for drift analysis.
+                    logger.debug(
+                        "Scored stock-news event (audit): [%s score=%.2f tag=%s] %s",
                         event.symbol,
                         event.classification.score,
                         event.classification.tag,
                         event.title[:80],
-                        event.classification.rationale[:120],
                     )
+                    # Per-symbol notification cooldown — a single
+                    # catalyst (earnings, M&A) reliably re-fires across
+                    # 10+ repackaged headlines. Only the FIRST event
+                    # per (symbol, window) gets the INFO log + callback
+                    # dispatch, so external watchers (Monitor, Telegram)
+                    # see one signal per real catalyst.
                     last = self._last_notify.get(event.symbol, 0.0)
                     now_t = _t.monotonic()
                     if (
                         self._notify_cooldown_s > 0
                         and (now_t - last) < self._notify_cooldown_s
                     ):
-                        logger.debug(
-                            "Notification cooldown — skipping callback for %s "
-                            "(%.0fs since last)",
-                            event.symbol,
-                            now_t - last,
-                        )
                         continue
                     self._last_notify[event.symbol] = now_t
+                    logger.info(
+                        "Reactor dispatch: [%s score=%.2f tag=%s] %s — %s",
+                        event.symbol,
+                        event.classification.score,
+                        event.classification.tag,
+                        event.title[:80],
+                        event.classification.rationale[:120],
+                    )
                     for cb in self._callbacks:
                         try:
                             await cb(event)
