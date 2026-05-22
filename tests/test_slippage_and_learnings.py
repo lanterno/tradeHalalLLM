@@ -13,7 +13,6 @@ from __future__ import annotations
 from halal_trader.trading.executor import _compute_slippage_pct
 from halal_trader.trading.strategy import _format_learnings, _format_slippage
 
-
 # ── _compute_slippage_pct ───────────────────────────────────────
 
 

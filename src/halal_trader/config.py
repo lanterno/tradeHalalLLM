@@ -61,6 +61,18 @@ class CoinGeckoSettings(BaseSettings):
     api_key: str = Field(default="")
 
 
+class FinnhubSettings(BaseSettings):
+    """Finnhub.io free-tier API key for stocks news. Drop-in
+    replacement for the Yahoo Finance search endpoint which started
+    hitting per-IP 429 rate limits within minutes of the morning
+    cycle on 2026-05-21. Empty ``api_key`` falls back to Yahoo with
+    its existing circuit breaker.
+    """
+
+    model_config = SettingsConfigDict(**_BASE_CONFIG, env_prefix="FINNHUB_")
+    api_key: str = Field(default="")
+
+
 class FREDSettings(BaseSettings):
     """St. Louis Fed economic-data API.
 
@@ -384,6 +396,7 @@ class Settings(BaseSettings):
     zoya: ZoyaSettings = Field(default_factory=ZoyaSettings)
     coingecko: CoinGeckoSettings = Field(default_factory=CoinGeckoSettings)
     fred: FREDSettings = Field(default_factory=FREDSettings)
+    finnhub: FinnhubSettings = Field(default_factory=FinnhubSettings)
     edgar: EDGARSettings = Field(default_factory=EDGARSettings)
     etherscan: EtherscanSettings = Field(default_factory=EtherscanSettings)
     halal: HalalSettings = Field(default_factory=HalalSettings)

@@ -58,6 +58,12 @@ _UA = (
 
 _BREAKER_THRESHOLD = 5  # consecutive failures before silencing
 
+# Finnhub's per-symbol company-news endpoint. Free tier: 60 calls/min,
+# enough for our 10-symbol universe at a 15-min cadence (~40 calls/h).
+# Drop-in replacement for the Yahoo search endpoint which started 429-ing
+# within minutes of the morning cycle on 2026-05-21.
+_FINNHUB_API_BASE = "https://finnhub.io/api/v1/company-news"
+
 
 class StockNewsCollector:
     """Per-symbol news fetcher backed by Yahoo Finance search.
@@ -165,6 +171,140 @@ class StockNewsCollector:
         events = _parse_news_payload(sym, data)
         self._cache[sym] = (now, events)
         return events
+
+
+class FinnhubNewsCollector:
+    """Finnhub company-news collector — same interface as :class:`StockNewsCollector`
+    so the composition root can swap them based on whether the API key
+    is configured.
+
+    Free-tier limits (60 req/min) are generous compared to the bot's
+    actual demand (~40 req/h on a 15-min cycle × 10 symbols), so the
+    rate-limit failure mode that killed Yahoo is unlikely here.
+    Failures still flow through the same consecutive-failure breaker
+    so a long outage silences the source for the rest of the process.
+    """
+
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        news_per_symbol: int = _DEFAULT_NEWS_PER_SYMBOL,
+        cache_ttl_seconds: int = _CACHE_TTL_S,
+        lookback_days: int = 1,
+    ) -> None:
+        self._api_key = api_key
+        self._news_per_symbol = news_per_symbol
+        self._cache_ttl = cache_ttl_seconds
+        self._lookback_days = lookback_days
+        self._cache: dict[str, tuple[float, list[NewsEvent]]] = {}
+        self._client: httpx.AsyncClient | None = None
+        self._consecutive_failures: int = 0
+        self._circuit_open: bool = False
+
+    async def _http(self) -> httpx.AsyncClient:
+        if self._client is None:
+            self._client = httpx.AsyncClient(timeout=_HTTP_TIMEOUT_S)
+        return self._client
+
+    async def close(self) -> None:
+        if self._client is not None:
+            await self._client.aclose()
+            self._client = None
+
+    async def fetch_for_symbols(self, symbols: list[str]) -> list[NewsEvent]:
+        out: list[NewsEvent] = []
+        for sym in symbols:
+            try:
+                out.extend(await self._fetch_one(sym))
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("Finnhub news fetch failed for %s: %s", sym, exc)
+        out.sort(key=lambda e: e.published_at, reverse=True)
+        return out
+
+    async def _fetch_one(self, symbol: str) -> list[NewsEvent]:
+        from datetime import UTC, datetime, timedelta
+
+        sym = symbol.upper()
+        now_t = time.monotonic()
+        cached = self._cache.get(sym)
+        if cached is not None and now_t - cached[0] < self._cache_ttl:
+            return cached[1]
+        if self._circuit_open:
+            return []
+
+        now = datetime.now(UTC).date()
+        from_date = (now - timedelta(days=self._lookback_days)).isoformat()
+        to_date = now.isoformat()
+        client = await self._http()
+        params = {
+            "symbol": sym,
+            "from": from_date,
+            "to": to_date,
+            "token": self._api_key,
+        }
+        try:
+            r = await client.get(_FINNHUB_API_BASE, params=params)
+            r.raise_for_status()
+            data = r.json()
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Finnhub news request failed for %s: %s", sym, exc)
+            self._consecutive_failures += 1
+            if (
+                not self._circuit_open
+                and self._consecutive_failures >= _BREAKER_THRESHOLD
+            ):
+                self._circuit_open = True
+                logger.warning(
+                    "Finnhub news circuit breaker OPEN after %d consecutive "
+                    "failures — silencing for the rest of this process.",
+                    self._consecutive_failures,
+                )
+            self._cache[sym] = (now_t, [])
+            return []
+
+        if self._consecutive_failures or self._circuit_open:
+            logger.info(
+                "Finnhub news recovered after %d failures",
+                self._consecutive_failures,
+            )
+        self._consecutive_failures = 0
+        self._circuit_open = False
+        events = _parse_finnhub_payload(sym, data, limit=self._news_per_symbol)
+        self._cache[sym] = (now_t, events)
+        return events
+
+
+def _parse_finnhub_payload(
+    symbol: str, payload: Any, *, limit: int
+) -> list[NewsEvent]:
+    """Finnhub returns ``[{"headline": str, "source": str, "url": str,
+    "datetime": int (epoch s), "summary": str}, ...]`` — a bare list,
+    not a wrapped object."""
+    if not isinstance(payload, list):
+        return []
+    out: list[NewsEvent] = []
+    for item in payload[:limit]:
+        if not isinstance(item, dict):
+            continue
+        title = item.get("headline")
+        url = item.get("url")
+        source = item.get("source") or "Finnhub"
+        ts = item.get("datetime")
+        if not isinstance(title, str) or not isinstance(url, str) or not title.strip():
+            continue
+        published = _epoch_to_iso(ts) if isinstance(ts, (int, float)) else ""
+        clean_title = title.strip()
+        out.append(
+            NewsEvent(
+                title=clean_title,
+                source=source,
+                url=url,
+                published_at=published,
+                sentiment=classify_headline(clean_title),
+            )
+        )
+    return out
 
 
 def _parse_news_payload(symbol: str, payload: dict[str, Any]) -> list[NewsEvent]:

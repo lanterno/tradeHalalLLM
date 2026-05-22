@@ -172,7 +172,10 @@ class TradingBot(BaseTradingBot):
         # the cycle's stage list can stamp ``state.performance_text``
         # on each pass without a per-cycle constructor.
         from halal_trader.core.analytics import CrossAssetAnalytics
-        from halal_trader.sentiment.stocks_news import StockNewsCollector
+        from halal_trader.sentiment.stocks_news import (
+            FinnhubNewsCollector,
+            StockNewsCollector,
+        )
         from halal_trader.trading.self_improve import StockTradeSelfReview
 
         repo = self._repo
@@ -183,7 +186,19 @@ class TradingBot(BaseTradingBot):
         # Yahoo Finance — no API key, 15-min cache inside the collector.
         # Closed in :meth:`shutdown` so the underlying ``httpx`` client
         # doesn't leak past process exit.
-        self._stocks_news = StockNewsCollector()
+        # Prefer Finnhub (free-tier 60 req/min, no IP rate-limit issues
+        # like Yahoo's search endpoint) when a key is configured. Falls
+        # back to Yahoo's `query2.finance.yahoo.com/v1/finance/search`
+        # which has its own circuit breaker for the now-typical 429
+        # storms. Operator drops `FINNHUB_API_KEY=…` in `.env` to switch.
+        finnhub_key = getattr(self.settings, "finnhub", None)
+        finnhub_key = getattr(finnhub_key, "api_key", "") if finnhub_key else ""
+        if finnhub_key:
+            self._stocks_news = FinnhubNewsCollector(api_key=finnhub_key)
+            logger.info("StockNews backend: Finnhub")
+        else:
+            self._stocks_news = StockNewsCollector()
+            logger.info("StockNews backend: Yahoo (fallback — FINNHUB_API_KEY not set)")
 
         # Stocks-side self-review — reviews closed Trade round-trips and
         # suggests bounded knob overrides (``max_position_pct``,
