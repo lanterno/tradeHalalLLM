@@ -15,7 +15,7 @@ dev:
 
 # Start 24/7 crypto trading bot (caffeinate -i = no idle sleep / App Nap)
 crypto:
-    caffeinate -i uv run halal-trader crypto start
+    caffeinate -dimsu uv run halal-trader crypto start
 
 # Run a single crypto trading cycle
 crypto-once:
@@ -41,7 +41,7 @@ crypto-screen:
 
 # Start stock trading bot (caffeinate -i = no idle sleep / App Nap)
 stocks:
-    caffeinate -i uv run halal-trader start
+    caffeinate -dimsu uv run halal-trader start
 
 # Run a single stock trading cycle
 stocks-once:

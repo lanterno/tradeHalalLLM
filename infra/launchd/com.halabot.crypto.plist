@@ -8,7 +8,7 @@
     <key>ProgramArguments</key>
     <array>
         <string>/usr/bin/caffeinate</string>
-        <string>-i</string>
+        <string>-dimsu</string>
         <string>/Users/nourataha/.local/bin/uv</string>
         <string>run</string>
         <string>halal-trader</string>
