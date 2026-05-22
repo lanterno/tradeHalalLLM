@@ -53,6 +53,13 @@ class Trade(SQLModel, table=True):
     # monitor/analytics surface can treat both asset classes uniformly.
     stop_loss: float | None = None
     target_price: float | None = None
+
+    # How the trade entered the book. Used by the slow-out discipline
+    # (memory: strategy-fast-in-slow-out): "reactor_momentum" trades
+    # are LLM-untouchable on the SELL side — only the monitor's
+    # rule-based exit can close them. None = legacy / "scheduled"
+    # (default for cron-cycle entries).
+    entry_type: str | None = None
     exit_price: float | None = None
     exit_reason: str | None = None
     closed_at: datetime | None = Field(default=None, sa_type=sa.DateTime(timezone=True))
