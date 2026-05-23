@@ -395,3 +395,110 @@ async def test_fix_orphans_broker_still_open_leaves_pending(engine):
         refreshed = await session.get(Trade, trade_id)
         assert refreshed is not None
         assert refreshed.status == "pending"  # unchanged
+
+
+# ── Reverse orphan: broker holds a position the DB never recorded ──
+
+
+@pytest.mark.asyncio
+async def test_fix_orphans_imports_broker_only_position(engine):
+    """A position present on the broker with no DB row gets imported as
+    a filled BUY at the broker's avg_entry_price, so it's tracked,
+    risk-managed, and nets out in reconcile instead of showing as
+    permanent broker-surplus drift."""
+    broker = MagicMock()
+    broker.get_order_by_id = AsyncMock(return_value={})
+    broker.get_all_positions = AsyncMock(
+        return_value=[
+            SimpleNamespace(symbol="AAPL", qty=12, avg_entry_price=195.0, current_price=198.0),
+        ]
+    )
+
+    report = await reconcile.fix_stocks_orphans(
+        engine=engine, broker=broker, min_age_minutes=5, dry_run=False
+    )
+    assert report.candidates == 1
+    assert report.updated == 1
+    fix = report.fixes[0]
+    assert fix.source == "broker-import"
+    assert fix.new_status == "filled"
+
+    repo = Repository(engine)
+    rows = await repo.get_recent_trades(limit=10)
+    aapl = [r for r in rows if r["symbol"] == "AAPL"]
+    assert len(aapl) == 1
+    assert aapl[0]["side"] == "buy"
+    assert aapl[0]["filled_price"] == 195.0
+    assert aapl[0]["filled_quantity"] == 12.0
+
+
+@pytest.mark.asyncio
+async def test_fix_orphans_skips_broker_position_already_tracked(engine):
+    """If the DB already nets long on a symbol the broker also holds,
+    don't double-import it."""
+    repo = Repository(engine)
+    await repo.record_trade(
+        symbol="AAPL",
+        side="buy",
+        quantity=12,
+        status="filled",
+        filled_quantity=12,
+        filled_price=195.0,
+        order_id="real-fill",
+    )
+
+    broker = MagicMock()
+    broker.get_all_positions = AsyncMock(
+        return_value=[
+            SimpleNamespace(symbol="AAPL", qty=12, avg_entry_price=195.0, current_price=198.0),
+        ]
+    )
+
+    report = await reconcile.fix_stocks_orphans(
+        engine=engine, broker=broker, min_age_minutes=5, dry_run=False
+    )
+    # Forward pass found nothing; reverse pass skipped AAPL (already tracked).
+    assert all(f.source != "broker-import" for f in report.fixes)
+    rows = await repo.get_recent_trades(limit=10)
+    assert len([r for r in rows if r["symbol"] == "AAPL"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_fix_orphans_broker_import_dry_run_does_not_persist(engine):
+    """Dry-run reports the import candidate but writes no Trade row."""
+    broker = MagicMock()
+    broker.get_all_positions = AsyncMock(
+        return_value=[
+            SimpleNamespace(symbol="TSLA", qty=5, avg_entry_price=240.0, current_price=242.0),
+        ]
+    )
+
+    report = await reconcile.fix_stocks_orphans(
+        engine=engine, broker=broker, min_age_minutes=5, dry_run=True
+    )
+    assert report.candidates == 1
+    assert report.updated == 0
+    repo = Repository(engine)
+    rows = await repo.get_recent_trades(limit=10)
+    assert [r for r in rows if r["symbol"] == "TSLA"] == []
+
+
+@pytest.mark.asyncio
+async def test_fix_orphans_broker_import_skips_unpriceable(engine):
+    """A broker position with no cost basis (avg_entry=0, current=0) is
+    NOT imported with a $0 basis — that would poison P&L the same way the
+    EOD $0 close did. It's reported skipped instead."""
+    broker = MagicMock()
+    broker.get_all_positions = AsyncMock(
+        return_value=[
+            SimpleNamespace(symbol="GME", qty=3, avg_entry_price=0.0, current_price=0.0),
+        ]
+    )
+
+    report = await reconcile.fix_stocks_orphans(
+        engine=engine, broker=broker, min_age_minutes=5, dry_run=False
+    )
+    assert report.candidates == 1
+    assert report.updated == 0
+    assert report.fixes[0].source == "broker-import"
+    assert report.fixes[0].new_status == "(skipped)"

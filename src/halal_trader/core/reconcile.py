@@ -683,7 +683,105 @@ async def fix_stocks_orphans(
                 await session.commit()
             report.updated += 1
 
+    # ── Reverse orphan: broker holds a position the DB never recorded ──
+    # The forward pass above resolves DB rows that have no real fill. The
+    # reverse case is a position present on the broker (a fill that
+    # landed after a crash, a pre-existing position) with no DB row at
+    # all. Left alone it surfaces as permanent "position present on
+    # broker with no recent trade row" drift and — worse — the monitor
+    # never enforces SL/TP on it because it isn't tracked. Import it as a
+    # filled BUY using the broker's ``avg_entry_price`` as cost basis so
+    # it nets out in reconcile and gets risk-managed like any other.
+    if broker is not None:
+        await _import_broker_only_positions(engine, broker, report, dry_run)
+
     return report
+
+
+async def _import_broker_only_positions(
+    engine: AsyncEngine,
+    broker: Any,
+    report: OrphanFixReport,
+    dry_run: bool,
+) -> None:
+    """Import broker positions the DB has no open row for (reverse orphan)."""
+    from halal_trader.db.repos import RepoBundle
+
+    repos = RepoBundle.from_engine(engine)
+    try:
+        positions = await broker.get_all_positions()
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("reverse-orphan import: get_all_positions failed: %s", exc)
+        return
+
+    recent = await repos.trades.get_recent_trades(limit=500)
+    # grace=0: we only care whether the DB already tracks net-long shares,
+    # not whether a fill is mid-settlement.
+    db_net, _ = _aggregate_stocks_positions(
+        recent, now=datetime.now(UTC), grace=timedelta(0)
+    )
+
+    for p in positions:
+        sym = str(getattr(p, "symbol", "") or "").upper()
+        broker_qty = float(getattr(p, "qty", 0) or 0)
+        if not sym or broker_qty <= 0:
+            continue
+        # DB already nets long on this symbol → forward path / fine.
+        if db_net.get(sym, 0.0) > 0:
+            continue
+        report.candidates += 1
+
+        entry = float(getattr(p, "avg_entry_price", 0) or 0)
+        if entry <= 0:
+            entry = float(getattr(p, "current_price", 0) or 0)
+        if entry <= 0:
+            # No usable cost basis — don't store a $0-basis row (it would
+            # poison P&L the same way the EOD $0 close did).
+            report.fixes.append(
+                OrphanFix(
+                    trade_id=-1,
+                    symbol=sym,
+                    side="buy",
+                    quantity=broker_qty,
+                    order_id="",
+                    old_status="(broker-only)",
+                    new_status="(skipped)",
+                    source="broker-import",
+                    notes="broker reported no usable entry price",
+                )
+            )
+            continue
+
+        now = datetime.now(UTC)
+        if not dry_run:
+            await repos.trades.record_trade(
+                sym,
+                "buy",
+                broker_qty,
+                price=entry,
+                order_id="",
+                status=TradeStatus.FILLED.value,
+                llm_reasoning="reverse-orphan import (broker held position, DB had no row)",
+                submitted_at=now,
+                filled_at=now,
+                filled_price=entry,
+                filled_quantity=broker_qty,
+                entry_type="broker_import",
+            )
+            report.updated += 1
+        report.fixes.append(
+            OrphanFix(
+                trade_id=-1,
+                symbol=sym,
+                side="buy",
+                quantity=broker_qty,
+                order_id="",
+                old_status="(broker-only)",
+                new_status=TradeStatus.FILLED.value,
+                source="broker-import",
+                notes=f"imported at entry={entry:.2f}",
+            )
+        )
 
 
 # ── Repository helper ─────────────────────────────────────────

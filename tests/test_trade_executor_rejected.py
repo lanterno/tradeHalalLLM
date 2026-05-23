@@ -354,6 +354,84 @@ async def test_close_all_survives_pre_snapshot_failure():
 
 
 @pytest.mark.asyncio
+async def test_close_all_skips_synthetic_sell_when_unpriceable():
+    """A reverse-orphan BUY (broker has no position, no filled_price, no
+    entry estimate) must NOT get a fabricated $0 synthetic SELL — that
+    stamped exit_price=0 on the BUY and showed a phantom −100% loss in
+    P&L (observed 2026-05-22 on CSCO). Skip it entirely instead."""
+    from types import SimpleNamespace
+
+    broker = MagicMock()
+    broker.get_all_positions = AsyncMock(return_value=[])  # broker holds nothing
+    broker.close_all_positions = AsyncMock(return_value={"result": "closed"})
+
+    repo = MagicMock()
+    repo.get_open_trades = AsyncMock(
+        return_value=[
+            SimpleNamespace(
+                symbol="CSCO",
+                side="buy",
+                filled_quantity=50,
+                filled_price=None,  # never confirmed
+                price=None,  # no entry estimate either
+            )
+        ]
+    )
+    repo.close_open_trades_for_symbol = AsyncMock(return_value=1)
+    repo.record_trade = AsyncMock(return_value=1)
+
+    executor = TradeExecutor(
+        broker, repo, max_position_pct=1.0, max_simultaneous_positions=10, max_sector_pct=0
+    )
+
+    await executor.close_all()
+
+    # No $0 synthetic SELL, and no $0 close stamp.
+    repo.record_trade.assert_not_awaited()
+    repo.close_open_trades_for_symbol.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_close_all_falls_back_to_entry_price_when_no_fill():
+    """When a BUY has no confirmed filled_price but does carry an entry
+    estimate (``price``), the EOD close uses that as a breakeven exit
+    rather than skipping or fabricating $0."""
+    from types import SimpleNamespace
+
+    broker = MagicMock()
+    broker.get_all_positions = AsyncMock(return_value=[])  # not on broker
+    broker.close_all_positions = AsyncMock(return_value={"result": "closed"})
+
+    repo = MagicMock()
+    repo.get_open_trades = AsyncMock(
+        return_value=[
+            SimpleNamespace(
+                symbol="CSCO",
+                side="buy",
+                filled_quantity=50,
+                filled_price=None,
+                price=48.0,  # entry estimate → breakeven exit
+            )
+        ]
+    )
+    repo.close_open_trades_for_symbol = AsyncMock(return_value=1)
+    repo.record_trade = AsyncMock(return_value=1)
+
+    executor = TradeExecutor(
+        broker, repo, max_position_pct=1.0, max_simultaneous_positions=10, max_sector_pct=0
+    )
+
+    await executor.close_all()
+
+    close_call = repo.close_open_trades_for_symbol.await_args_list[0]
+    assert close_call.args[0] == "CSCO"
+    assert close_call.args[1] == 48.0
+    sell_kwargs = repo.record_trade.await_args.kwargs
+    assert sell_kwargs["filled_price"] == 48.0
+    assert sell_kwargs["quantity"] == 50.0
+
+
+@pytest.mark.asyncio
 async def test_close_position_with_order_id_uses_confirm_fill_path():
     """When close_position DOES return an order id, the normal poll path
     runs (no synthesized fill)."""

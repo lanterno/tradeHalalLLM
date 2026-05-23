@@ -831,6 +831,44 @@ class TradeExecutor(BaseExecutor):
             interval=_FILL_POLL_INTERVAL,
         )
 
+    @staticmethod
+    def _eod_exit_price(
+        sym: str, opens: list[Any], price_by_symbol: dict[str, float]
+    ) -> float | None:
+        """Best usable exit price for an EOD close, or None.
+
+        Resolution order, each gated on ``> 0``:
+
+        1. pre-close broker snapshot (``current_price`` of the live
+           position) — the truth when the broker still holds it;
+        2. the open BUY's ``filled_price`` — the confirmed entry fill;
+        3. the open BUY's estimated ``price`` — a breakeven fallback so
+           an unconfirmed (``filled_price`` NULL) position closes flat
+           rather than at a fabricated $0.
+
+        Returns None only when none of these yields a positive price,
+        which the caller treats as "don't fabricate a SELL".
+        """
+        snap = price_by_symbol.get(sym)
+        if snap is not None and snap > 0:
+            return float(snap)
+        fill_fallback: float | None = None
+        entry_fallback: float | None = None
+        for trade in opens:
+            if str(getattr(trade, "symbol", "") or "").upper() != sym:
+                continue
+            fp = getattr(trade, "filled_price", None)
+            if fill_fallback is None and fp is not None and float(fp) > 0:
+                fill_fallback = float(fp)
+            ep = getattr(trade, "price", None)
+            if entry_fallback is None and ep is not None and float(ep) > 0:
+                entry_fallback = float(ep)
+        if fill_fallback is not None:
+            return fill_fallback
+        if entry_fallback is not None:
+            return entry_fallback
+        return None
+
     async def close_all(self) -> Any:
         """Close all open positions (end of day).
 
@@ -911,19 +949,26 @@ class TradeExecutor(BaseExecutor):
 
         now_utc = _dt.now(UTC)
         for sym in symbols_to_close:
-            # Per-symbol price: prefer pre-snapshot, else fall back to
-            # the open BUY's last known fill price.
-            exit_price = price_by_symbol.get(sym)
+            exit_price = self._eod_exit_price(sym, opens, price_by_symbol)
             if exit_price is None:
-                for trade in opens:
-                    if str(getattr(trade, "symbol", "") or "").upper() != sym:
-                        continue
-                    fp = getattr(trade, "filled_price", None)
-                    if fp is not None and float(fp) > 0:
-                        exit_price = float(fp)
-                        break
+                # No usable exit price anywhere: not in the pre-close
+                # snapshot (broker didn't report the position — a
+                # reverse-orphan / never-filled phantom), no fill price,
+                # and no entry estimate. Recording a $0 synthetic SELL
+                # here is worse than doing nothing: it stamps exit_price=0
+                # on the BUY, which shows up as a fabricated −100% loss in
+                # P&L analytics (observed 2026-05-22 on CSCO). Leave the
+                # row for ``fix_stocks_orphans`` to resolve from broker
+                # truth instead of inventing a price.
+                logger.warning(
+                    "EOD close-all: no usable exit price for %s — skipping "
+                    "synthetic SELL (leaving the orphan for fix_stocks_orphans "
+                    "rather than fabricating a $0 close)",
+                    sym,
+                )
+                continue
             try:
-                n = await closer(sym, float(exit_price or 0), "eod_close_all")
+                n = await closer(sym, exit_price, "eod_close_all")
                 total_closed += n
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
@@ -945,13 +990,13 @@ class TradeExecutor(BaseExecutor):
                     symbol=sym,
                     side="sell",
                     quantity=total_qty,
-                    price=float(exit_price or 0),
+                    price=exit_price,
                     order_id="",
                     status="filled",
                     llm_reasoning="EOD close-all (synthetic exit)",
                     submitted_at=now_utc,
                     filled_at=now_utc,
-                    filled_price=float(exit_price or 0),
+                    filled_price=exit_price,
                     filled_quantity=total_qty,
                 )
             except Exception as exc:  # noqa: BLE001
