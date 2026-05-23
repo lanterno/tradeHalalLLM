@@ -328,6 +328,22 @@ class StockNewsEventReactor:
 # ── Default LLM classifier (GPT-4o-mini wrapper) ────────────────
 
 
+_QUOTA_ERROR_MARKERS = ("insufficient_quota", "exceeded your current quota")
+# Default per-UTC-day call ceiling. Yesterday's reactor scored 188
+# headlines in a 6h session; 250 leaves room for an active day without
+# silently slipping into an unbounded spend (the trigger for tonight's
+# 3,736-call 429 hammering).
+_DEFAULT_DAILY_CLASSIFY_CAP = 250
+
+
+def _is_quota_exhausted(error: Exception) -> bool:
+    """True when the provider says we're out of credits (vs a rate
+    limit / transient 5xx). Quota exhaustion is irrecoverable inside a
+    session — the credit gets topped up by a human, not by waiting."""
+    msg = str(error).lower()
+    return any(marker in msg for marker in _QUOTA_ERROR_MARKERS)
+
+
 class GPTHeadlineClassifier:
     """LLM-backed classifier — wraps any object exposing
     ``generate_json(prompt, system=...)`` returning a dict with
@@ -337,6 +353,20 @@ class GPTHeadlineClassifier:
     this surface, so composition reuses one LLM client across the
     bot. Costs at GPT-4o-mini: ~$0.0005 per headline, well inside
     operator budgets at the reactor's ~100-300 classified events/day.
+
+    Two guards added 2026-05-23 after a quota-exhaustion incident
+    triggered 3,736 wasted 429 calls to OpenAI in ~9.5h:
+
+    * **Insufficient-quota circuit breaker.** First ``insufficient_quota``
+      response trips a session flag; subsequent calls short-circuit to
+      score=0.0 without hitting the API. One Telegram alert fires via
+      the injected ``AlertSink`` (deduped by its own cooldown).
+      Auto-resets on bot restart — a human top-up is the only valid
+      recovery path.
+    * **Daily classify ceiling.** Hard ceiling on attempted API calls
+      per UTC day (default 250). When tripped, classify returns 0.0
+      silently and logs once per day. Resets at UTC midnight or
+      restart.
     """
 
     _SYSTEM_PROMPT = (
@@ -356,19 +386,103 @@ class GPTHeadlineClassifier:
         "old news score <= 0.3."
     )
 
-    def __init__(self, llm: Any) -> None:
+    def __init__(
+        self,
+        llm: Any,
+        *,
+        alert_sink: Any = None,
+        daily_classify_cap: int = _DEFAULT_DAILY_CLASSIFY_CAP,
+    ) -> None:
         self._llm = llm
+        self._alert_sink = alert_sink
+        self._daily_cap = max(0, daily_classify_cap)
+        # Quota-exhausted session flag — set on first insufficient_quota
+        # and never cleared (a process restart is the only reset).
+        self._quota_exhausted = False
+        # Daily counter — counts every attempted API call (success or
+        # failure) since both consume rate budget and we want a single
+        # truth-source for "how many calls did we make today".
+        self._daily_count = 0
+        self._daily_reset_date = ""
+        # Day-scoped log dedup so we only emit one "cap reached" warning
+        # per UTC day instead of one per skipped headline.
+        self._cap_log_date = ""
+
+    def _roll_daily_counter(self) -> None:
+        from datetime import UTC, datetime
+
+        today = datetime.now(UTC).strftime("%Y-%m-%d")
+        if today != self._daily_reset_date:
+            self._daily_count = 0
+            self._daily_reset_date = today
+
+    def _daily_cap_reached(self) -> bool:
+        if self._daily_cap == 0:
+            return False
+        self._roll_daily_counter()
+        if self._daily_count < self._daily_cap:
+            return False
+        if self._cap_log_date != self._daily_reset_date:
+            logger.warning(
+                "Classifier daily cap reached (%d calls); skipping further classify "
+                "calls until UTC midnight",
+                self._daily_cap,
+            )
+            self._cap_log_date = self._daily_reset_date
+        return True
+
+    async def _trip_quota_breaker(self, *, symbol: str, headline: str) -> None:
+        """Fire the one-shot alert + flip the session flag."""
+        self._quota_exhausted = True
+        logger.warning(
+            "LLM quota exhausted (first detected on %s '%s') — classifier will "
+            "short-circuit to score=0.0 until bot restart; top up provider quota "
+            "to revive the reactor",
+            symbol,
+            headline[:80],
+        )
+        if self._alert_sink is None:
+            return
+        try:
+            await self._alert_sink.notify(
+                "classifier.quota_exhausted",
+                (
+                    "Reactor classifier hit insufficient_quota on the LLM "
+                    f"provider (first headline: {symbol} '{headline[:80]}'). "
+                    "All further classifies will return score=0.0 until you "
+                    "top up quota and restart the bot. The 'fast in' half of "
+                    "the strategy is OFFLINE."
+                ),
+                market="stocks",
+                severity="critical",
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("AlertSink notify failed: %s", exc)
 
     async def classify(
         self, *, symbol: str, headline: str, summary: str = ""
     ) -> HeadlineClassification:
+        # Guard 1: session-level quota breaker. No API call.
+        if self._quota_exhausted:
+            return HeadlineClassification(score=0.0)
+        # Guard 2: daily ceiling. No API call.
+        if self._daily_cap_reached():
+            return HeadlineClassification(score=0.0)
+
         prompt = f"Symbol: {symbol}\nHeadline: {headline}"
         if summary:
             prompt += f"\nSummary: {summary[:500]}"
+        # Count the attempt BEFORE the call so a hanging provider can't
+        # let us burn past the cap while in flight.
+        self._roll_daily_counter()
+        self._daily_count += 1
         try:
             raw = await self._llm.generate_json(prompt, system=self._SYSTEM_PROMPT)
         except Exception as exc:  # noqa: BLE001
-            logger.debug("LLM classify failed for %s: %s", symbol, exc)
+            if _is_quota_exhausted(exc):
+                await self._trip_quota_breaker(symbol=symbol, headline=headline)
+            else:
+                logger.debug("LLM classify failed for %s: %s", symbol, exc)
             return HeadlineClassification(score=0.0)
         try:
             score = float(raw.get("score", 0.0))

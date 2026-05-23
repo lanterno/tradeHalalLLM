@@ -253,7 +253,11 @@ class TradingBot(BaseTradingBot):
                 )
                 watchlist = []
             if watchlist:
-                classifier = GPTHeadlineClassifier(llm)
+                classifier = GPTHeadlineClassifier(
+                    llm,
+                    alert_sink=self._alerts,
+                    daily_classify_cap=self.settings.stocks.reactor_daily_classify_cap,
+                )
                 self._news_reactor = StockNewsEventReactor(
                     api_key=finnhub_key,
                     symbols=watchlist,
@@ -261,9 +265,12 @@ class TradingBot(BaseTradingBot):
                 )
                 self._news_reactor.on_event(self._on_news_event)
                 logger.info(
-                    "StockNewsEventReactor wired (%d symbols, threshold=0.7) "
-                    "— event execution stays disabled until Phase 2B",
+                    "StockNewsEventReactor wired (%d symbols, threshold=%.2f, "
+                    "daily_classify_cap=%d) — event execution stays disabled "
+                    "until Phase 2B",
                     len(watchlist),
+                    StockNewsEventReactor._DEFAULT_SCORE_THRESHOLD,
+                    self.settings.stocks.reactor_daily_classify_cap,
                 )
 
         # Cycle service — owns the intraday trading logic

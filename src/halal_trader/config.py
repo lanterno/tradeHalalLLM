@@ -222,6 +222,13 @@ class StockSettings(BaseSettings):
     agentic_max_turns: int = Field(default=5, ge=1, le=20)
     agentic_max_seconds: float = Field(default=30.0, gt=0, le=120.0)
 
+    # News-momentum reactor: hard ceiling on classifier API calls per
+    # UTC day. Trip is silent (score=0.0) with one warning log per day.
+    # 0 disables the cap. Backstop against runaway polling spend after
+    # the 2026-05-22 incident where a single quota exhaustion led to
+    # 3,736 wasted 429 calls in ~9.5h.
+    reactor_daily_classify_cap: int = Field(default=250, ge=0)
+
 
 class CryptoSettings(BaseSettings):
     model_config = SettingsConfigDict(**_BASE_CONFIG, env_prefix="CRYPTO_")
