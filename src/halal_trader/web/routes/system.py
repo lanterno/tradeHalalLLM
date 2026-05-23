@@ -35,6 +35,20 @@ def register(app: FastAPI) -> None:
         if ws_mgr and hasattr(ws_mgr, "health_status"):
             ws_health = ws_mgr.health_status()
 
+        # Classifier health — added after the 2026-05-22 quota incident
+        # so "is the brain healthy" is one HTTP call instead of grepping
+        # JSON logs. None when bot is dashboard-only or reactor isn't
+        # configured (no Finnhub key / empty halal watchlist).
+        classifier_health: dict[str, Any] | None = None
+        reactor = getattr(ctx.runtime, "stocks_news_reactor", None)
+        if reactor is not None:
+            classifier = getattr(reactor, "classifier", None)
+            if classifier is not None and hasattr(classifier, "get_telemetry"):
+                try:
+                    classifier_health = classifier.get_telemetry()
+                except Exception:  # noqa: BLE001
+                    classifier_health = None
+
         # Both market cadences — crypto runs every 60s by default,
         # stocks on a 15-min cron. Frontends used to read only the
         # crypto value and showed "60s" for stocks operators.
@@ -49,6 +63,7 @@ def register(app: FastAPI) -> None:
                 "crypto_cycle_interval_seconds": ctx.settings.crypto.trading_interval_seconds,
                 "stocks_cycle_interval_seconds": ctx.settings.stocks.trading_interval_minutes * 60,
                 "ws_health": ws_health,
+                "classifier_health": classifier_health,
                 "uptime_seconds": uptime,
             }
         )

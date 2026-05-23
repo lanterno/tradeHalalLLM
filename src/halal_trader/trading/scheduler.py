@@ -273,6 +273,11 @@ class TradingBot(BaseTradingBot):
                     classifier=classifier,
                 )
                 self._news_reactor.on_event(self._on_news_event)
+                # Surface the reactor on the dashboard runtime so
+                # /api/system/status can show classifier health (provider
+                # rotation, quota state, daily call volume) without
+                # operators grepping JSON logs.
+                self._runtime.stocks_news_reactor = self._news_reactor
                 logger.info(
                     "StockNewsEventReactor wired (%d symbols, threshold=%.2f, "
                     "daily_classify_cap=%d) — event execution stays disabled "

@@ -417,3 +417,62 @@ def test_system_status_exposes_both_market_cadences(client):
     assert body["stocks_cycle_interval_seconds"] == 900
     # Back-compat field equals crypto value.
     assert body["cycle_interval_seconds"] == body["crypto_cycle_interval_seconds"]
+
+
+def test_system_status_classifier_health_null_without_reactor(client):
+    """Dashboard-only process (no co-hosted bot) → no reactor
+    available → classifier_health is None, not missing."""
+    r = client.get("/api/system/status")
+    body = r.json()
+    assert "classifier_health" in body
+    assert body["classifier_health"] is None
+
+
+def test_system_status_classifier_health_surfaces_telemetry(client):
+    """When the bot's wired up the reactor, /api/system/status surfaces
+    its classifier telemetry so the operator can answer "is the brain
+    healthy" with one HTTP call. Pin the contract."""
+
+    class _FakeClassifier:
+        def get_telemetry(self):
+            return {
+                "total_calls": 42,
+                "total_successes": 40,
+                "total_failures": 2,
+                "total_short_circuits": 0,
+                "calls_today": 42,
+                "daily_cap": 250,
+                "quota_exhausted": False,
+                "calls_by_provider": {"openai": 40},
+                "cost_usd_total": 0.021,
+            }
+
+    class _FakeReactor:
+        classifier = _FakeClassifier()
+
+    client.app.state.ctx.runtime.stocks_news_reactor = _FakeReactor()
+    body = client.get("/api/system/status").json()
+    health = body["classifier_health"]
+    assert health is not None
+    assert health["total_calls"] == 42
+    assert health["calls_by_provider"] == {"openai": 40}
+    assert health["cost_usd_total"] == 0.021
+    assert health["quota_exhausted"] is False
+
+
+def test_system_status_classifier_health_handles_telemetry_exception(client):
+    """A misbehaving classifier (e.g. attribute renamed by mistake)
+    must not 500 the entire status endpoint — degrade gracefully to
+    None so /api/system/status stays the safe always-on probe."""
+
+    class _BoomClassifier:
+        def get_telemetry(self):
+            raise RuntimeError("boom")
+
+    class _FakeReactor:
+        classifier = _BoomClassifier()
+
+    client.app.state.ctx.runtime.stocks_news_reactor = _FakeReactor()
+    r = client.get("/api/system/status")
+    assert r.status_code == 200
+    assert r.json()["classifier_health"] is None

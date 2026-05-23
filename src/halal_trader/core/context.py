@@ -54,6 +54,11 @@ class RuntimeView:
     # sentiment recent feed). The dashboard-only process leaves them None.
     ws_manager: Any = None
     sentiment_manager: Any = None
+    # Stocks news-momentum reactor — populated by the trading scheduler
+    # when the bot is co-hosted with the web app, so /api/system/status
+    # can surface classifier health (provider rotation, quota state,
+    # daily call volume) without grepping JSON logs.
+    stocks_news_reactor: Any = None
     # Broker handles for the operator-intervention endpoints
     # (force-close, cancel-orders). Only populated when the bot is
     # co-hosted with the web app.
