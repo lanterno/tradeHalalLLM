@@ -253,8 +253,17 @@ class TradingBot(BaseTradingBot):
                 )
                 watchlist = []
             if watchlist:
+                # Dedicated classifier LLM stack (independent of strategy
+                # LLM) — picks up cheap cloud providers first and falls
+                # through to Ollama floor. Decouples classifier failure
+                # modes from strategy: a quota exhaustion in one no
+                # longer takes down the other. See create_classifier_llm
+                # for the chain order rationale.
+                from halal_trader.core.llm import create_classifier_llm
+
+                classifier_llm = create_classifier_llm(self.settings)
                 classifier = GPTHeadlineClassifier(
-                    llm,
+                    classifier_llm,
                     alert_sink=self._alerts,
                     daily_classify_cap=self.settings.stocks.reactor_daily_classify_cap,
                 )

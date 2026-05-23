@@ -527,6 +527,102 @@ def test_settings_reactor_cap_is_configurable():
     assert s.reactor_daily_classify_cap == 42
 
 
+# ── Integration: breaker + FallbackLLM together ─────────────────
+
+
+@pytest.mark.asyncio
+async def test_breaker_does_not_trip_when_fallback_absorbs_quota_error():
+    """Phase B's whole point: when a FallbackLLM is wired underneath
+    the classifier, a quota error on the primary should NEVER reach the
+    classifier's breaker — the fallback provider absorbs it and returns
+    a real score. The bot keeps running on cheaper / local models.
+
+    This pins the "Phase A circuit breaker + Phase B fallback chain"
+    interaction so a future refactor can't accidentally re-introduce
+    the false-trip path."""
+
+    from halal_trader.core.llm.base import BaseLLM, CallUsage
+    from halal_trader.core.llm.fallback import FallbackLLM
+
+    class _QuotaPrimary(BaseLLM):
+        def __init__(self):
+            super().__init__("gpt-4o-mini")
+            self.calls = 0
+
+        async def generate(self, prompt, system=None):
+            self.calls += 1
+            raise RuntimeError("Error code: 429 - {'code': 'insufficient_quota'}")
+
+    class _WorkingFallback(BaseLLM):
+        def __init__(self):
+            super().__init__("claude-haiku")
+            self.calls = 0
+
+        async def generate(self, prompt, system=None):
+            self.calls += 1
+            return '{"score": 0.92, "tag": "earnings", "rationale": "strong beat"}'
+
+        async def generate_json(self, prompt, system=None):
+            self.calls += 1
+            self.last_usage = CallUsage(provider="anthropic", model="claude-haiku")
+            return {"score": 0.92, "tag": "earnings", "rationale": "strong beat"}
+
+    primary = _QuotaPrimary()
+    fallback = _WorkingFallback()
+    chain = FallbackLLM(primary, [fallback])
+
+    sink = _CountingAlertSink()
+    c = GPTHeadlineClassifier(chain, alert_sink=sink)
+
+    out = await c.classify(symbol="NVDA", headline="surprise beat")
+
+    # Primary failed, fallback served — score must reflect the fallback.
+    assert out.score == 0.92
+    assert out.tag == "earnings"
+    # The breaker MUST NOT have tripped — chain absorbed the quota error.
+    assert c._quota_exhausted is False
+    # No false-positive alert.
+    assert len(sink.calls) == 0
+    # Primary was tried, fallback served.
+    assert primary.calls == 1
+    assert fallback.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_breaker_trips_when_entire_fallback_chain_is_quota_exhausted():
+    """The opposite end: if EVERY provider in the chain is out of
+    credits, the chain re-raises the last quota error and the breaker
+    correctly trips. Operator gets one alert and the bot stops
+    pointlessly hammering all providers."""
+
+    from halal_trader.core.llm.base import BaseLLM
+    from halal_trader.core.llm.fallback import FallbackLLM
+
+    class _OutOfCredits(BaseLLM):
+        def __init__(self, name):
+            super().__init__(name)
+            self.calls = 0
+
+        async def generate(self, prompt, system=None):
+            self.calls += 1
+            raise RuntimeError(
+                f"Error from {self.model}: code: 'insufficient_quota'"
+            )
+
+    primary = _OutOfCredits("gpt-4o-mini")
+    fb1 = _OutOfCredits("claude-haiku")
+    fb2 = _OutOfCredits("llama3.2:3b")
+    chain = FallbackLLM(primary, [fb1, fb2])
+
+    sink = _CountingAlertSink()
+    c = GPTHeadlineClassifier(chain, alert_sink=sink)
+
+    out = await c.classify(symbol="NVDA", headline="x")
+    assert out.score == 0.0
+    assert c._quota_exhausted is True
+    assert len(sink.calls) == 1  # one alert, not three (one per provider)
+
+
 # ── entry_type column ──────────────────────────────────────────
 
 

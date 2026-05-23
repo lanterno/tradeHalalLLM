@@ -135,3 +135,80 @@ def test_multiple_fallbacks_all_added_in_order():
         )
     )
     assert isinstance(out, FallbackLLM)
+
+
+# ── create_classifier_llm — dedicated reactor-classifier chain ──
+
+
+def test_classifier_chain_includes_ollama_floor_always():
+    """Ollama needs no API key — the chain MUST always have a floor so
+    classifier resilience doesn't depend on cloud credentials. This is
+    the structural fix the 2026-05-22 quota incident motivated."""
+    from halal_trader.core.llm.factory import create_classifier_llm
+    from halal_trader.core.llm.ollama import OllamaLLM
+
+    # No cloud keys at all.
+    out = create_classifier_llm(_settings())
+    # With only Ollama eligible the factory returns a bare OllamaLLM
+    # (no rotation needed when there's only one provider).
+    assert isinstance(out, OllamaLLM)
+
+
+def test_classifier_chain_prefers_openai_when_configured():
+    """OpenAI is primary by design (cheapest at gpt-4o-mini, fastest
+    classification quality at the 1-line-headline scale)."""
+    from halal_trader.core.llm.factory import create_classifier_llm
+    from halal_trader.core.llm.openai import OpenAILLM
+
+    out = create_classifier_llm(_settings(openai_key="sk-test"))
+    # With two providers (OpenAI + Ollama floor) we get a FallbackLLM.
+    assert isinstance(out, FallbackLLM)
+    assert isinstance(out._primary, OpenAILLM)
+    # Ollama is the only fallback in this scenario.
+    assert len(out._fallbacks) == 1
+
+
+def test_classifier_chain_full_three_providers():
+    """All three configured → OpenAI → Anthropic → Ollama chain."""
+    from halal_trader.core.llm.anthropic import AnthropicLLM
+    from halal_trader.core.llm.factory import create_classifier_llm
+    from halal_trader.core.llm.ollama import OllamaLLM
+    from halal_trader.core.llm.openai import OpenAILLM
+
+    out = create_classifier_llm(
+        _settings(openai_key="sk-1", anthropic_key="sk-2")
+    )
+    assert isinstance(out, FallbackLLM)
+    assert isinstance(out._primary, OpenAILLM)
+    assert len(out._fallbacks) == 2
+    assert isinstance(out._fallbacks[0], AnthropicLLM)
+    assert isinstance(out._fallbacks[1], OllamaLLM)
+
+
+def test_classifier_chain_anthropic_primary_when_no_openai():
+    """OpenAI key missing → Anthropic becomes primary, Ollama floor."""
+    from halal_trader.core.llm.anthropic import AnthropicLLM
+    from halal_trader.core.llm.factory import create_classifier_llm
+    from halal_trader.core.llm.ollama import OllamaLLM
+
+    out = create_classifier_llm(_settings(anthropic_key="sk-ant"))
+    assert isinstance(out, FallbackLLM)
+    assert isinstance(out._primary, AnthropicLLM)
+    assert len(out._fallbacks) == 1
+    assert isinstance(out._fallbacks[0], OllamaLLM)
+
+
+def test_classifier_chain_uses_cheap_default_models():
+    """The classifier-specific defaults must NOT be the strategy's
+    heavyweight model — classify is a 1-line task that should burn the
+    cheapest available variant per provider."""
+    from halal_trader.core.llm.factory import create_classifier_llm
+
+    out = create_classifier_llm(
+        _settings(openai_key="sk-1", anthropic_key="sk-2")
+    )
+    assert isinstance(out, FallbackLLM)
+    # OpenAI primary: gpt-4o-mini (not gpt-4o, gpt-5, etc).
+    assert "mini" in out._primary.model.lower()
+    # Anthropic fallback: haiku (cheap), not opus/sonnet.
+    assert "haiku" in out._fallbacks[0].model.lower()
