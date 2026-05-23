@@ -571,6 +571,44 @@ class TradingBot(BaseTradingBot):
                 except Exception as exc:
                     logger.debug("Failed to enrich stocks daily summary with LLM cost: %s", exc)
 
+            # Classifier telemetry (cumulative since process start) —
+            # surfaces reactor classify volume + cost so we can answer
+            # "where did the spend go" from the daily summary without
+            # standing up dedicated persistence.
+            if self._news_reactor is not None:
+                classifier = getattr(self._news_reactor, "classifier", None)
+                if classifier is not None and hasattr(classifier, "get_telemetry"):
+                    try:
+                        telem = classifier.get_telemetry()
+                        summary["classifier_calls"] = telem.get("total_calls", 0)
+                        summary["classifier_calls_today"] = telem.get("calls_today", 0)
+                        summary["classifier_cost_usd"] = telem.get("cost_usd_total", 0.0)
+                        summary["classifier_quota_exhausted"] = telem.get(
+                            "quota_exhausted", False
+                        )
+                        summary["classifier_by_provider"] = telem.get(
+                            "calls_by_provider", {}
+                        )
+                        if telem.get("quota_exhausted"):
+                            # Surface quota exhaustion as a daily-summary
+                            # ops alert too, in case the per-trip critical
+                            # alert was missed (e.g. operator joined late).
+                            if self._alerts is not None:
+                                await self._alerts.notify(
+                                    "classifier.quota_exhausted.eod",
+                                    (
+                                        "Reactor classifier ended the day in "
+                                        "quota-exhausted state. Top up the LLM "
+                                        "provider before the next session or "
+                                        "the news-momentum reactor stays "
+                                        "offline."
+                                    ),
+                                    market="stocks",
+                                    severity="critical",
+                                )
+                    except Exception as exc:  # noqa: BLE001
+                        logger.debug("classifier telemetry roll-up failed: %s", exc)
+
             logger.info("Day summary: %s", summary)
 
             # End-of-day self-review — mirrors crypto/_daily_end. Pulls

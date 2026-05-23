@@ -588,6 +588,110 @@ async def test_breaker_does_not_trip_when_fallback_absorbs_quota_error():
     assert fallback.calls == 1
 
 
+# ── Telemetry / get_telemetry ───────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_telemetry_zeroed_on_fresh_classifier():
+    c = GPTHeadlineClassifier(_OkLLM())
+    t = c.get_telemetry()
+    assert t["total_calls"] == 0
+    assert t["total_successes"] == 0
+    assert t["total_failures"] == 0
+    assert t["total_short_circuits"] == 0
+    assert t["calls_today"] == 0
+    assert t["quota_exhausted"] is False
+    assert t["calls_by_provider"] == {}
+    assert t["cost_usd_total"] == 0.0
+
+
+@pytest.mark.asyncio
+async def test_telemetry_counts_successes_and_failures_separately():
+    """Telemetry must distinguish "called the LLM and got a score" from
+    "called the LLM and it threw" so we can see error rate at EOD."""
+
+    class _Mixed:
+        def __init__(self):
+            self.n = 0
+            self.last_usage = None
+
+        async def generate_json(self, prompt, system=None):
+            self.n += 1
+            if self.n % 2 == 0:
+                raise RuntimeError("flaky")
+            return {"score": 0.8, "tag": "other", "rationale": "x"}
+
+    c = GPTHeadlineClassifier(_Mixed())
+    for _ in range(4):
+        await c.classify(symbol="AAPL", headline="x")
+
+    t = c.get_telemetry()
+    assert t["total_calls"] == 4
+    assert t["total_successes"] == 2
+    assert t["total_failures"] == 2
+    assert t["total_short_circuits"] == 0
+
+
+@pytest.mark.asyncio
+async def test_telemetry_counts_short_circuits_separately_from_calls():
+    """Short-circuits (breaker tripped, daily cap reached) MUST NOT
+    inflate total_calls — that field is the API-spend signal. They
+    count under total_short_circuits."""
+    c = GPTHeadlineClassifier(_OkLLM(), daily_classify_cap=2)
+    for _ in range(5):
+        await c.classify(symbol="AAPL", headline="x")
+
+    t = c.get_telemetry()
+    assert t["total_calls"] == 2  # cap held at 2 actual API calls
+    assert t["total_short_circuits"] == 3  # remaining 3 were short-circuited
+    assert t["calls_today"] == 2
+
+
+@pytest.mark.asyncio
+async def test_telemetry_rolls_up_per_provider_from_last_usage():
+    """Successful calls credit the provider that served them — pulled
+    from BaseLLM.last_usage so the FallbackLLM rotation is reflected
+    correctly without coupling to FallbackLLM internals."""
+
+    from decimal import Decimal
+
+    class _UsageReportingLLM:
+        def __init__(self):
+            self.n = 0
+            # Mimic CallUsage shape with the attributes the classifier reads.
+
+            class _U:
+                provider = ""
+                cost_usd = Decimal("0")
+
+            self.last_usage = _U()
+
+        async def generate_json(self, prompt, system=None):
+            self.n += 1
+            # Alternate which provider "served" — like rotation.
+            self.last_usage.provider = "openai" if self.n % 2 == 1 else "anthropic"
+            self.last_usage.cost_usd = Decimal("0.001")
+            return {"score": 0.7, "tag": "other"}
+
+    c = GPTHeadlineClassifier(_UsageReportingLLM())
+    for _ in range(4):
+        await c.classify(symbol="AAPL", headline="x")
+
+    t = c.get_telemetry()
+    assert t["calls_by_provider"] == {"openai": 2, "anthropic": 2}
+    assert t["cost_usd_total"] == pytest.approx(0.004, rel=1e-6)
+
+
+def test_reactor_exposes_classifier_for_telemetry():
+    """The scheduler's EOD hook reads reactor.classifier — pin the
+    public accessor so a future refactor can't accidentally rename it."""
+    c = GPTHeadlineClassifier(_OkLLM())
+    r = StockNewsEventReactor(
+        api_key="k", symbols=["AAPL"], classifier=c,
+    )
+    assert r.classifier is c
+
+
 @pytest.mark.asyncio
 async def test_breaker_trips_when_entire_fallback_chain_is_quota_exhausted():
     """The opposite end: if EVERY provider in the chain is out of

@@ -149,6 +149,13 @@ class StockNewsEventReactor:
     def enabled(self) -> bool:
         return bool(self._api_key) and bool(self._symbols)
 
+    @property
+    def classifier(self) -> HeadlineClassifier:
+        """Read-only handle to the injected classifier — used by the
+        scheduler's EOD hook to pull ``get_telemetry()`` without
+        reaching into reactor internals."""
+        return self._classifier
+
     def on_event(self, callback: EventCallback) -> None:
         """Register an async callback fired once per scored event."""
         self._callbacks.append(callback)
@@ -407,6 +414,17 @@ class GPTHeadlineClassifier:
         # Day-scoped log dedup so we only emit one "cap reached" warning
         # per UTC day instead of one per skipped headline.
         self._cap_log_date = ""
+        # Telemetry — cumulative counters since process start. The
+        # 2026-05-22 quota incident proved we couldn't see classifier
+        # spend at all; this surfaces enough to answer "where did the
+        # budget go" from the EOD report without standing up a separate
+        # persistence layer for what's already a noisy stream.
+        self._total_calls = 0
+        self._total_successes = 0
+        self._total_failures = 0
+        self._total_short_circuits = 0
+        self._calls_by_provider: dict[str, int] = {}
+        self._cost_usd_total: float = 0.0
 
     def _roll_daily_counter(self) -> None:
         from datetime import UTC, datetime
@@ -464,9 +482,11 @@ class GPTHeadlineClassifier:
     ) -> HeadlineClassification:
         # Guard 1: session-level quota breaker. No API call.
         if self._quota_exhausted:
+            self._total_short_circuits += 1
             return HeadlineClassification(score=0.0)
         # Guard 2: daily ceiling. No API call.
         if self._daily_cap_reached():
+            self._total_short_circuits += 1
             return HeadlineClassification(score=0.0)
 
         prompt = f"Symbol: {symbol}\nHeadline: {headline}"
@@ -476,14 +496,33 @@ class GPTHeadlineClassifier:
         # let us burn past the cap while in flight.
         self._roll_daily_counter()
         self._daily_count += 1
+        self._total_calls += 1
         try:
             raw = await self._llm.generate_json(prompt, system=self._SYSTEM_PROMPT)
         except Exception as exc:  # noqa: BLE001
+            self._total_failures += 1
             if _is_quota_exhausted(exc):
                 await self._trip_quota_breaker(symbol=symbol, headline=headline)
             else:
                 logger.debug("LLM classify failed for %s: %s", symbol, exc)
             return HeadlineClassification(score=0.0)
+        # Success path: roll up per-provider usage from the LLM's
+        # ``last_usage`` if the provider populated it (every BaseLLM
+        # subclass calls _record_usage on success, so this is reliable
+        # for the cloud providers; Ollama populates provider="ollama"
+        # too but cost stays 0).
+        self._total_successes += 1
+        last_usage = getattr(self._llm, "last_usage", None)
+        if last_usage is not None:
+            provider = getattr(last_usage, "provider", "") or "unknown"
+            self._calls_by_provider[provider] = (
+                self._calls_by_provider.get(provider, 0) + 1
+            )
+            cost = getattr(last_usage, "cost_usd", 0)
+            try:
+                self._cost_usd_total += float(cost)
+            except (TypeError, ValueError):
+                pass
         try:
             score = float(raw.get("score", 0.0))
         except (TypeError, ValueError):
@@ -492,6 +531,27 @@ class GPTHeadlineClassifier:
         tag = str(raw.get("tag", "other"))
         rationale = str(raw.get("rationale", ""))[:200]
         return HeadlineClassification(score=score, tag=tag, rationale=rationale)
+
+    def get_telemetry(self) -> dict[str, Any]:
+        """Snapshot of classifier health + cumulative spend since start.
+
+        Read by the EOD routine to enrich the daily Telegram summary so
+        the operator can see classifier spend without grepping logs.
+        Numbers are cumulative across the bot's process lifetime —
+        bot restart resets, same as the quota breaker.
+        """
+        self._roll_daily_counter()
+        return {
+            "total_calls": self._total_calls,
+            "total_successes": self._total_successes,
+            "total_failures": self._total_failures,
+            "total_short_circuits": self._total_short_circuits,
+            "calls_today": self._daily_count,
+            "daily_cap": self._daily_cap,
+            "quota_exhausted": self._quota_exhausted,
+            "calls_by_provider": dict(self._calls_by_provider),
+            "cost_usd_total": round(self._cost_usd_total, 4),
+        }
 
 
 __all__ = [
