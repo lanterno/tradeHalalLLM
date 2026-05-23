@@ -14,17 +14,27 @@ from halal_trader.core.llm.openai import OpenAILLM
 logger = logging.getLogger(__name__)
 
 
-def _create_single_llm(provider: LLMProvider, model: str, settings: Settings) -> BaseLLM | None:
+def _create_single_llm(
+    provider: LLMProvider,
+    model: str,
+    settings: Settings,
+    *,
+    temperature: float = 0.2,
+) -> BaseLLM | None:
     """Create a single LLM instance for a given provider, or None if unconfigured."""
     match provider:
         case LLMProvider.OLLAMA:
-            return OllamaLLM(model=model, host=settings.llm.ollama.host)
+            return OllamaLLM(model=model, host=settings.llm.ollama.host, temperature=temperature)
         case LLMProvider.OPENAI:
             if settings.llm.openai.api_key:
-                return OpenAILLM(model=model, api_key=settings.llm.openai.api_key)
+                return OpenAILLM(
+                    model=model, api_key=settings.llm.openai.api_key, temperature=temperature
+                )
         case LLMProvider.ANTHROPIC:
             if settings.llm.anthropic.api_key:
-                return AnthropicLLM(model=model, api_key=settings.llm.anthropic.api_key)
+                return AnthropicLLM(
+                    model=model, api_key=settings.llm.anthropic.api_key, temperature=temperature
+                )
     return None
 
 
@@ -102,6 +112,13 @@ _CLASSIFIER_CHAIN_ORDER: list[LLMProvider] = [
     LLMProvider.OLLAMA,
 ]
 
+# Classifier scores must be reproducible: the 2026-05-22 session logged
+# the same headline scoring 0.70 on one call and 0.90 on the next, which
+# makes the 0.85 entry threshold a coin-flip near the boundary. Pin the
+# whole classifier stack to greedy decoding so a headline lands on one
+# side of the threshold deterministically.
+_CLASSIFIER_TEMPERATURE = 0.0
+
 
 def create_classifier_llm(settings: Settings | None = None) -> BaseLLM:
     """Build a dedicated LLM stack for the news-headline classifier.
@@ -138,7 +155,9 @@ def create_classifier_llm(settings: Settings | None = None) -> BaseLLM:
         if provider == LLMProvider.ANTHROPIC and not settings.llm.anthropic.api_key:
             continue
         model = _CLASSIFIER_MODEL_DEFAULTS[provider]
-        instance = _create_single_llm(provider, model, settings)
+        instance = _create_single_llm(
+            provider, model, settings, temperature=_CLASSIFIER_TEMPERATURE
+        )
         if instance is not None:
             built.append(instance)
 

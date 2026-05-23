@@ -212,3 +212,25 @@ def test_classifier_chain_uses_cheap_default_models():
     assert "mini" in out._primary.model.lower()
     # Anthropic fallback: haiku (cheap), not opus/sonnet.
     assert "haiku" in out._fallbacks[0].model.lower()
+
+
+def test_classifier_chain_pins_temperature_to_zero():
+    """Every provider in the classifier stack must use greedy decoding
+    (temperature=0.0) so the same headline scores reproducibly. The
+    strategy LLM keeps its 0.2 default — only the classifier needs to
+    be deterministic near the 0.85 entry threshold."""
+    from halal_trader.core.llm.factory import create_classifier_llm
+
+    out = create_classifier_llm(
+        _settings(openai_key="sk-1", anthropic_key="sk-2")
+    )
+    assert isinstance(out, FallbackLLM)
+    assert out._primary.temperature == 0.0
+    assert all(fb.temperature == 0.0 for fb in out._fallbacks)
+
+
+def test_strategy_llm_keeps_default_temperature():
+    """Regression guard: the determinism change must NOT bleed into the
+    strategy path — create_llm providers stay at the 0.2 default."""
+    out = create_llm(_settings(provider=LLMProvider.OLLAMA))
+    assert out.temperature == 0.2

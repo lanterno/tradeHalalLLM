@@ -78,8 +78,13 @@ class BaseLLM(ABC):
     # ``generate_json`` path with the schema-repair retry.
     supports_tool_use: bool = False
 
-    def __init__(self, model: str) -> None:
+    def __init__(self, model: str, *, temperature: float = 0.2) -> None:
         self.model = model
+        # Sampling temperature. 0.2 is the strategy default (a little
+        # variety in reasoning is fine); the headline classifier builds
+        # its stack at 0.0 so the same headline scores reproducibly
+        # instead of drifting 0.70→0.90 across calls.
+        self.temperature = temperature
         self.last_thinking: str = ""
         self.last_usage: CallUsage = CallUsage(model=model)
         self._daily_tokens: int = 0

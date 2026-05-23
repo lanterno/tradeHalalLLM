@@ -36,8 +36,8 @@ class OpenAILLM(BaseLLM):
     # prefixes also get the extended timeout.
     _REASONING_MODEL_PREFIXES = ("o1", "o3", "gpt-5")
 
-    def __init__(self, model: str, api_key: str) -> None:
-        super().__init__(model)
+    def __init__(self, model: str, api_key: str, *, temperature: float = 0.2) -> None:
+        super().__init__(model, temperature=temperature)
         self.api_key = api_key
         self._client: Any = None
 
@@ -75,7 +75,7 @@ class OpenAILLM(BaseLLM):
             "response_format": {"type": "json_object"},
         }
         if self._accepts_custom_temperature():
-            kwargs["temperature"] = 0.2
+            kwargs["temperature"] = self.temperature
 
         t0 = time.monotonic()
         response = await asyncio.wait_for(
@@ -160,7 +160,7 @@ class OpenAILLM(BaseLLM):
         if force_tool:
             kwargs["tool_choice"] = {"type": "function", "function": {"name": force_tool}}
         if self._accepts_custom_temperature():
-            kwargs["temperature"] = 0.2
+            kwargs["temperature"] = self.temperature
 
         t0 = time.monotonic()
         response = await asyncio.wait_for(

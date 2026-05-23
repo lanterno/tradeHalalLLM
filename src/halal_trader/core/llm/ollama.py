@@ -24,8 +24,10 @@ class OllamaLLM(BaseLLM):
 
     _TIMEOUT_SECONDS = 45
 
-    def __init__(self, model: str, host: str = "http://localhost:11434") -> None:
-        super().__init__(model)
+    def __init__(
+        self, model: str, host: str = "http://localhost:11434", *, temperature: float = 0.2
+    ) -> None:
+        super().__init__(model, temperature=temperature)
         self.host = host
         self._client: Any = None
 
@@ -49,7 +51,7 @@ class OllamaLLM(BaseLLM):
                 model=self.model,
                 messages=messages,
                 format="json",
-                options={"temperature": 0.2},
+                options={"temperature": self.temperature},
             ),
             timeout=self._TIMEOUT_SECONDS,
         )

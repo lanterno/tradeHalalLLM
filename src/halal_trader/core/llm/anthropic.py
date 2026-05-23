@@ -23,8 +23,15 @@ class AnthropicLLM(BaseLLM):
 
     _TIMEOUT_SECONDS = 30
 
-    def __init__(self, model: str, api_key: str, *, enable_prompt_cache: bool = True) -> None:
-        super().__init__(model)
+    def __init__(
+        self,
+        model: str,
+        api_key: str,
+        *,
+        enable_prompt_cache: bool = True,
+        temperature: float = 0.2,
+    ) -> None:
+        super().__init__(model, temperature=temperature)
         self.api_key = api_key
         self._client: Any = None
         # Caching is on by default — there is no downside on Anthropic's
@@ -65,6 +72,7 @@ class AnthropicLLM(BaseLLM):
             client.messages.create(
                 model=self.model,
                 max_tokens=4096,
+                temperature=self.temperature,
                 system=self._system_payload(system),
                 messages=[{"role": "user", "content": prompt}],
             ),
@@ -126,6 +134,7 @@ class AnthropicLLM(BaseLLM):
         kwargs: dict[str, Any] = {
             "model": self.model,
             "max_tokens": 4096,
+            "temperature": self.temperature,
             "system": self._system_payload(system),
             "messages": [{"role": "user", "content": prompt}],
             "tools": anthropic_tools,
