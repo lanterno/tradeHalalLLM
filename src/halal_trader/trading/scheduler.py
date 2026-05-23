@@ -271,6 +271,7 @@ class TradingBot(BaseTradingBot):
                     api_key=finnhub_key,
                     symbols=watchlist,
                     classifier=classifier,
+                    state_path=self.settings.resolve_data_dir() / "reactor_state.json",
                 )
                 self._news_reactor.on_event(self._on_news_event)
                 # Surface the reactor on the dashboard runtime so

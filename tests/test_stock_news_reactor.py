@@ -776,3 +776,84 @@ async def test_trade_repo_default_entry_type_is_none(engine):
         row = await session.get(Trade, trade_id)
         assert row is not None
         assert row.entry_type is None
+
+
+# ── cross-restart state persistence ─────────────────────────────
+
+
+def test_save_then_load_roundtrips_seen_and_cooldowns(tmp_path):
+    """A restart must restore both dedup set and notify cooldowns so the
+    bot doesn't re-fire the same catalyst's alert on every boot — the
+    2026-05-22 session restarted 5+ times and re-alerted each time."""
+    path = tmp_path / "reactor_state.json"
+    r1 = _reactor(_FakeClassifier({}))
+    r1._state_path = path
+    r1._seen = {("AAPL", "http://a"), ("MSFT", "http://b")}
+    r1._last_notify = {"AAPL": 1234.5}
+    r1._state_dirty = True
+    r1._save_state()
+
+    r2 = _reactor(_FakeClassifier({}))
+    r2._state_path = path
+    r2._load_state()
+    assert r2._seen == {("AAPL", "http://a"), ("MSFT", "http://b")}
+    assert r2._last_notify == {"AAPL": 1234.5}
+
+
+def test_load_missing_file_is_noop(tmp_path):
+    """No state file yet (first ever run) → empty state, no crash."""
+    r = _reactor(_FakeClassifier({}))
+    r._state_path = tmp_path / "does_not_exist.json"
+    r._load_state()
+    assert r._seen == set()
+    assert r._last_notify == {}
+
+
+def test_load_corrupt_file_starts_fresh(tmp_path):
+    """A truncated / garbage state file must not block startup."""
+    path = tmp_path / "reactor_state.json"
+    path.write_text("{not valid json")
+    r = _reactor(_FakeClassifier({}))
+    r._state_path = path
+    r._load_state()
+    assert r._seen == set()
+
+
+def test_save_is_noop_when_not_dirty(tmp_path):
+    """No new headlines / notifies since last save → no file write."""
+    path = tmp_path / "reactor_state.json"
+    r = _reactor(_FakeClassifier({}))
+    r._state_path = path
+    r._state_dirty = False
+    r._save_state()
+    assert not path.exists()
+
+
+def test_save_noop_when_persistence_disabled():
+    """state_path=None (default for tests / ad-hoc runs) → never writes."""
+    r = _reactor(_FakeClassifier({}))
+    assert r._state_path is None
+    r._seen = {("AAPL", "http://a")}
+    r._state_dirty = True
+    r._save_state()  # must not raise even with nowhere to write
+
+
+def test_load_tolerates_malformed_entries(tmp_path):
+    """Hand-edited / partially-corrupt entries are skipped, not fatal."""
+    import json
+
+    path = tmp_path / "reactor_state.json"
+    path.write_text(
+        json.dumps(
+            {
+                "seen": [["AAPL", "http://a"], ["bad"], "nope", ["X", "Y", "Z"]],
+                "last_notify": {"AAPL": 1.0, "MSFT": "not-a-number"},
+            }
+        )
+    )
+    r = _reactor(_FakeClassifier({}))
+    r._state_path = path
+    r._load_state()
+    assert ("AAPL", "http://a") in r._seen
+    assert all(len(p) == 2 for p in r._seen)
+    assert r._last_notify == {"AAPL": 1.0}

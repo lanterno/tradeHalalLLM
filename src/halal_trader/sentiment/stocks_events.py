@@ -24,8 +24,11 @@ the reactor wins for time-sensitive moves.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Awaitable, Callable, Protocol
 
 import httpx
@@ -130,6 +133,7 @@ class StockNewsEventReactor:
         score_threshold: float = _DEFAULT_SCORE_THRESHOLD,
         per_symbol_request_spacing_s: float = 0.5,
         per_symbol_notify_cooldown_s: int = _DEFAULT_NOTIFY_COOLDOWN_S,
+        state_path: Path | str | None = None,
     ) -> None:
         self._api_key = api_key
         self._symbols = [s.upper() for s in symbols]
@@ -139,11 +143,21 @@ class StockNewsEventReactor:
         self._spacing = per_symbol_request_spacing_s
         self._notify_cooldown_s = per_symbol_notify_cooldown_s
         self._seen: set[tuple[str, str]] = set()
-        # symbol → monotonic timestamp of last callback fire
+        # symbol → wall-clock epoch of last callback fire. Wall-clock
+        # (not monotonic) so the cooldown survives a restart — the
+        # 2026-05-22 session restarted 5+ times and re-fired the same
+        # catalyst's Telegram alert on every boot. 30-min cooldown vs
+        # clock skew is a non-issue on a stable host.
         self._last_notify: dict[str, float] = {}
         self._callbacks: list[EventCallback] = []
         self._running = False
         self._client: httpx.AsyncClient | None = None
+        # Optional cross-restart persistence. None disables it (tests,
+        # ad-hoc runs); the scheduler points it at data/reactor_state.json.
+        self._state_path = Path(state_path) if state_path else None
+        # Set whenever _seen / _last_notify mutate so we only rewrite the
+        # state file when there's something new to persist.
+        self._state_dirty = False
 
     @property
     def enabled(self) -> bool:
@@ -167,20 +181,74 @@ class StockNewsEventReactor:
                 "StockNewsEventReactor disabled — no Finnhub key or empty watchlist"
             )
             return
+        self._load_state()
         self._running = True
         logger.info(
-            "StockNewsEventReactor started (symbols=%d, poll=%ds, threshold=%.2f)",
+            "StockNewsEventReactor started (symbols=%d, poll=%ds, threshold=%.2f, "
+            "seen=%d, cooldowns=%d)",
             len(self._symbols),
             self._poll_interval,
             self._score_threshold,
+            len(self._seen),
+            len(self._last_notify),
         )
         try:
             await self._poll_loop()
         finally:
             self._running = False
+            self._save_state()
             if self._client is not None and not self._client.is_closed:
                 await self._client.aclose()
                 self._client = None
+
+    def _load_state(self) -> None:
+        """Restore ``_seen`` + ``_last_notify`` from disk so a restart
+        doesn't re-fire alerts for catalysts already handled this window.
+
+        Best-effort: a missing / corrupt / unreadable file resets to
+        empty state rather than blocking startup."""
+        if self._state_path is None or not self._state_path.exists():
+            return
+        try:
+            raw = json.loads(self._state_path.read_text())
+        except (OSError, ValueError) as exc:
+            logger.warning("reactor state unreadable (%s) — starting fresh", exc)
+            return
+        seen = raw.get("seen", [])
+        self._seen = {
+            (str(pair[0]), str(pair[1]))
+            for pair in seen
+            if isinstance(pair, (list, tuple)) and len(pair) == 2
+        }
+        last = raw.get("last_notify", {})
+        if isinstance(last, dict):
+            self._last_notify = {
+                str(k): float(v)
+                for k, v in last.items()
+                if isinstance(v, (int, float))
+            }
+
+    def _save_state(self) -> None:
+        """Atomically write ``_seen`` + ``_last_notify`` to disk.
+
+        Atomic (temp file + ``os.replace``) so a crash mid-write can't
+        leave a half-written file that fails ``_load_state``. No-op when
+        persistence is disabled or nothing changed since the last save."""
+        if self._state_path is None or not self._state_dirty:
+            return
+        payload = {
+            "seen": [list(pair) for pair in self._seen],
+            "last_notify": self._last_notify,
+            "saved_at": time.time(),
+        }
+        try:
+            self._state_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self._state_path.with_suffix(self._state_path.suffix + ".tmp")
+            tmp.write_text(json.dumps(payload))
+            tmp.replace(self._state_path)
+            self._state_dirty = False
+        except OSError as exc:
+            logger.debug("reactor state save failed: %s", exc)
 
     async def stop(self) -> None:
         """External cancel — sets the flag; the in-flight poll exits on
@@ -194,8 +262,6 @@ class StockNewsEventReactor:
         while self._running:
             try:
                 events = await self._scan_all_symbols()
-                import time as _t
-
                 for event in events:
                     # Audit log at DEBUG: every scored event flows
                     # through here. Operators tailing the log can
@@ -215,13 +281,14 @@ class StockNewsEventReactor:
                     # dispatch, so external watchers (Monitor, Telegram)
                     # see one signal per real catalyst.
                     last = self._last_notify.get(event.symbol, 0.0)
-                    now_t = _t.monotonic()
+                    now_t = time.time()
                     if (
                         self._notify_cooldown_s > 0
                         and (now_t - last) < self._notify_cooldown_s
                     ):
                         continue
                     self._last_notify[event.symbol] = now_t
+                    self._state_dirty = True
                     logger.info(
                         "Reactor dispatch: [%s score=%.2f tag=%s] %s — %s",
                         event.symbol,
@@ -235,6 +302,11 @@ class StockNewsEventReactor:
                             await cb(event)
                         except Exception as exc:  # noqa: BLE001
                             logger.error("StockNewsEvent callback failed: %s", exc)
+                # Persist after each full sweep so an unclean exit
+                # (SIGKILL, watchdog restart) still keeps most of the
+                # dedup + cooldown state. ``_save_state`` is a no-op when
+                # nothing changed this iteration.
+                self._save_state()
             except asyncio.CancelledError:
                 break
             except Exception as exc:  # noqa: BLE001
@@ -295,6 +367,7 @@ class StockNewsEventReactor:
         if key in self._seen:
             return None
         self._seen.add(key)
+        self._state_dirty = True
         # Bound the dedup set so a long-running reactor doesn't leak.
         if len(self._seen) > self._SEEN_CAP:
             extras = list(self._seen)[: self._SEEN_CAP // 2]
