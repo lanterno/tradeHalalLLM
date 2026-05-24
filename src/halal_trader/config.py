@@ -229,6 +229,24 @@ class StockSettings(BaseSettings):
     # 3,736 wasted 429 calls in ~9.5h.
     reactor_daily_classify_cap: int = Field(default=250, ge=0)
 
+    # News-momentum reactor: entry execution (Phase 2B / "fast in").
+    # When enabled, a high-confidence scored catalyst places a real
+    # paper BUY — gated on news+price-up confluence — instead of just
+    # logging/notifying. Enabled by default on paper; flip to False to
+    # return the reactor to observation-only.
+    reactor_entries_enabled: bool = Field(default=True)
+    # Reactor entries are reactive / higher-variance than scheduled
+    # cycle entries, so they're sized at a FRACTION of the normal
+    # per-position cap (0.5 = half of ``max_position_pct``) to cap
+    # blast radius while the signal is validated in production.
+    reactor_entry_size_fraction: float = Field(default=0.5, gt=0, le=1.0)
+    # Price-confirmation gate: a scored catalyst only fires an entry
+    # when the stock is also up at least this fraction on the session
+    # (latest vs prior close / today's open). Expresses the operator's
+    # "news + price-up confluence" rule — we don't chase a bullish
+    # headline a falling tape is already rejecting. 0 = up-or-flat only.
+    reactor_entry_min_intraday_change_pct: float = Field(default=0.002, ge=0.0, le=0.5)
+
 
 class CryptoSettings(BaseSettings):
     model_config = SettingsConfigDict(**_BASE_CONFIG, env_prefix="CRYPTO_")

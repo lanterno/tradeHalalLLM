@@ -8,7 +8,7 @@ from halal_trader.core import events
 from halal_trader.core.executor import BaseExecutor
 from halal_trader.core.fills import confirm_alpaca
 from halal_trader.db.repos import TradeRepo
-from halal_trader.domain.models import TradingPlan
+from halal_trader.domain.models import TradeAction, TradeDecision, TradingPlan
 from halal_trader.domain.ports import Broker
 from halal_trader.domain.status import TradeStatus
 
@@ -75,6 +75,8 @@ class TradeExecutor(BaseExecutor):
         recent_close_cooldown_minutes: int = 30,
         min_hold_minutes: int = 30,
         no_new_positions_minutes_before_close: int = 30,
+        reactor_entry_size_fraction: float = 0.5,
+        reactor_entry_min_intraday_change_pct: float = 0.002,
     ) -> None:
         super().__init__(
             max_position_pct=max_position_pct,
@@ -109,6 +111,133 @@ class TradeExecutor(BaseExecutor):
         self._no_new_positions_minutes_before_close = (
             no_new_positions_minutes_before_close
         )
+        # Reactor (news-momentum) entry sizing + price-confirmation gate.
+        # Reactor entries are sized at this fraction of ``max_position_pct``
+        # (default half) and only fire when the stock is up at least
+        # ``reactor_entry_min_intraday_change_pct`` on the session.
+        self._reactor_entry_size_fraction = reactor_entry_size_fraction
+        self._reactor_entry_min_intraday_change_pct = reactor_entry_min_intraday_change_pct
+
+    async def execute_reactor_entry(
+        self,
+        symbol: str,
+        *,
+        score: float,
+        reasoning: str,
+        positions: list[Any] | None = None,
+    ) -> dict[str, Any]:
+        """Place a half-size news-momentum BUY, gated on price confluence.
+
+        The "fast in" half of the operator's fast-in/slow-out strategy
+        (memory: strategy-fast-in-slow-out). Called by the scheduler's
+        reactor callback on a high-confidence scored catalyst. Flow:
+
+        1. price the symbol from a fresh snapshot;
+        2. **price-confirmation gate** — only proceed if the stock is up
+           at least ``reactor_entry_min_intraday_change_pct`` on the
+           session (news + price-up confluence; we don't chase a bullish
+           headline the tape is rejecting);
+        3. size at ``max_position_pct * reactor_entry_size_fraction`` of
+           equity (half by default);
+        4. route through ``_execute_buy`` so it inherits every existing
+           gate (close-lockout, re-entry cooldown, buying-power,
+           per-position cap, sector cap) and tags the row
+           ``entry_type='reactor_momentum'`` so the slow-out lockout
+           protects it from LLM exits.
+
+        Returns the same result dict shape as a cycle buy, with
+        ``status='skipped'`` + a ``reason`` when a gate declines.
+        """
+        symbol = symbol.upper()
+        snapshot = await self._broker.get_stock_snapshot(symbol)
+        price = self._extract_price(snapshot, symbol)
+        if price <= 0:
+            return {
+                "symbol": symbol,
+                "action": "buy",
+                "status": "skipped",
+                "reason": "reactor entry: no usable price in snapshot",
+            }
+
+        change_pct = self._extract_intraday_change_pct(snapshot, symbol)
+        if change_pct is None or change_pct < self._reactor_entry_min_intraday_change_pct:
+            shown = "unknown" if change_pct is None else f"{change_pct:.4f}"
+            return {
+                "symbol": symbol,
+                "action": "buy",
+                "status": "skipped",
+                "reason": (
+                    "reactor entry: price-confirmation failed "
+                    f"(intraday change {shown} "
+                    f"< {self._reactor_entry_min_intraday_change_pct:.4f})"
+                ),
+            }
+
+        account = await self._broker.get_account_info()
+        target_notional = (
+            account.portfolio_value
+            * self._max_position_pct
+            * self._reactor_entry_size_fraction
+        )
+        shares = int(target_notional // price)
+        if shares < 1:
+            return {
+                "symbol": symbol,
+                "action": "buy",
+                "status": "skipped",
+                "reason": (
+                    f"reactor entry: sized below 1 share "
+                    f"(target ${target_notional:,.2f} / ${price:,.2f})"
+                ),
+            }
+
+        decision = TradeDecision(
+            action=TradeAction.BUY,
+            symbol=symbol,
+            quantity=shares,
+            confidence=max(0.0, min(1.0, float(score))),
+            reasoning=f"reactor momentum entry: {reasoning}"[:500],
+            setup_type="momentum",
+        )
+        logger.info(
+            "Reactor entry: %s x%d (~$%.2f, score=%.2f, intraday +%.2f%%)",
+            symbol,
+            shares,
+            shares * price,
+            score,
+            change_pct * 100,
+        )
+        return await self._execute_buy(
+            decision,
+            entry_type="reactor_momentum",
+            positions=positions or [],
+        )
+
+    def _extract_intraday_change_pct(self, snapshot: Any, symbol: str) -> float | None:
+        """Fractional session move (latest vs prior close / today's open).
+
+        Returns None when the snapshot lacks a usable reference price —
+        the caller treats that as "can't confirm, don't enter".
+        """
+        if not isinstance(snapshot, dict):
+            return None
+        data = snapshot.get(symbol, snapshot)
+        if not isinstance(data, dict):
+            return None
+        latest = self._extract_price(snapshot, symbol)
+        if latest <= 0:
+            return None
+        ref = 0.0
+        prev = data.get("prev_daily_bar") or data.get("previous_daily_bar")
+        if isinstance(prev, dict):
+            ref = float(prev.get("close", 0) or 0)
+        if ref <= 0:
+            bar = data.get("daily_bar")
+            if isinstance(bar, dict):
+                ref = float(bar.get("open", 0) or 0)
+        if ref <= 0:
+            return None
+        return (latest - ref) / ref
 
     async def execute_plan(
         self,
@@ -138,6 +267,12 @@ class TradeExecutor(BaseExecutor):
 
     async def _execute_buy(self, decision: Any, **kwargs: Any) -> dict[str, Any]:
         """Execute a buy order."""
+        # Optional provenance tag (e.g. "reactor_momentum"). Threaded
+        # onto the recorded Trade so the slow-out lockout in
+        # ``_check_min_hold`` and downstream analytics can tell a
+        # news-reactor entry from a scheduled-cycle one. None for
+        # ordinary cycle buys.
+        entry_type = kwargs.get("entry_type")
         # Last-N-min-before-close lockout. Refuses NEW BUYs late in
         # the session because positions opened in the final minutes
         # can't be managed and become forced exits at EOD.
@@ -248,6 +383,7 @@ class TradeExecutor(BaseExecutor):
                     filled_at=None,
                     filled_price=None,
                     filled_quantity=0.0,
+                    entry_type=entry_type,
                 )
                 return {
                     "symbol": decision.symbol,
@@ -294,6 +430,7 @@ class TradeExecutor(BaseExecutor):
                     estimated_price=estimated_price,
                     filled_price=fill.filled_price,
                 ),
+                entry_type=entry_type,
             )
 
             # Stock-side ML snapshot — best-effort, never aborts the buy.

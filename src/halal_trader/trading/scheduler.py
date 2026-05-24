@@ -10,6 +10,7 @@ from typing import Any
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
+from halal_trader.core import events
 from halal_trader.core.llm import create_llm
 from halal_trader.core.scheduler import BaseTradingBot
 from halal_trader.domain.ports import Broker, ComplianceScreener
@@ -137,6 +138,10 @@ class TradingBot(BaseTradingBot):
             repo,
             max_position_pct=self.settings.stocks.max_position_pct,
             max_simultaneous_positions=self.settings.stocks.max_simultaneous_positions,
+            reactor_entry_size_fraction=self.settings.stocks.reactor_entry_size_fraction,
+            reactor_entry_min_intraday_change_pct=(
+                self.settings.stocks.reactor_entry_min_intraday_change_pct
+            ),
         )
         self.portfolio = PortfolioTracker(
             self.broker,
@@ -382,10 +387,15 @@ class TradingBot(BaseTradingBot):
         logger.info("Trading bot shut down")
 
     async def _on_news_event(self, event: Any) -> None:
-        """Phase 2A handler — log + notify only. Real entry execution
-        lands in 2B once we've seen the signal stream and validated
-        the classifier in production. Mirrors crypto's
-        ``_on_news_event`` shape so 2B is a copy-paste + adjust."""
+        """Reactor callback — the "fast in" half of the strategy.
+
+        Logs the scored catalyst, then (when
+        ``stocks.reactor_entries_enabled``) places a half-size paper BUY
+        through ``executor.execute_reactor_entry`` — gated on market
+        being open, the kill-switch being clear, and the executor's own
+        price-confirmation + risk gates. Disabled / closed-market /
+        halted falls back to observation-only.
+        """
         cls = event.classification
         logger.info(
             "Stocks news-momentum event: [%s score=%.2f tag=%s] %s — %s",
@@ -395,6 +405,9 @@ class TradingBot(BaseTradingBot):
             event.title[:80],
             cls.rationale[:120],
         )
+
+        result, status_note = await self._maybe_execute_reactor_entry(event)
+
         if self._notifier and self._notifier.enabled:
             try:
                 await self._notifier.send(
@@ -403,10 +416,85 @@ class TradingBot(BaseTradingBot):
                     f"{event.title}\n"
                     f"<i>{cls.rationale[:160]}</i>\n"
                     f"Source: {event.source}\n"
-                    f"<i>(Phase 2A — entry execution disabled, observation only)</i>"
+                    f"<i>{status_note}</i>"
                 )
             except Exception:  # noqa: BLE001
                 pass
+        if result is not None:
+            logger.info(
+                "Reactor entry result: %s → %s%s",
+                event.symbol,
+                result.get("status"),
+                f" ({result.get('reason')})" if result.get("reason") else "",
+                extra={
+                    "event": events.TRADE_BUY_PLACED,
+                    "symbol": event.symbol,
+                    "status": result.get("status"),
+                    "entry_type": "reactor_momentum",
+                },
+            )
+
+    async def _maybe_execute_reactor_entry(
+        self, event: Any
+    ) -> tuple[dict[str, Any] | None, str]:
+        """Decide whether to place a reactor entry and do so.
+
+        Returns ``(result, status_note)`` where ``result`` is the
+        executor's result dict (or None when no order was attempted) and
+        ``status_note`` is a short human string for the Telegram card.
+        """
+        if not self.settings.stocks.reactor_entries_enabled:
+            return None, "Observation only — reactor entries disabled"
+        if self.executor is None:
+            return None, "Observation only — executor not initialized"
+
+        # Kill-switch: never open new risk while halted.
+        from halal_trader.core.halt import is_halted
+
+        try:
+            if await is_halted(self._engine):
+                return None, "Observation only — kill-switch engaged"
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("reactor entry halt check failed: %s", exc)
+            return None, "Observation only — halt state unknown"
+
+        # Only trade a live session — the reactor polls around the clock.
+        try:
+            clock = await self.broker.get_clock()
+            if not getattr(clock, "is_open", False):
+                return None, "Observation only — market closed"
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("reactor entry market-clock check failed: %s", exc)
+            return None, "Observation only — market state unknown"
+
+        try:
+            positions = await self.broker.get_all_positions()
+        except Exception:  # noqa: BLE001
+            positions = []
+
+        cls = event.classification
+        try:
+            result = await self.executor.execute_reactor_entry(
+                event.symbol,
+                score=cls.score,
+                reasoning=f"{cls.tag}: {event.title[:120]} — {cls.rationale[:120]}",
+                positions=positions,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.error("reactor entry execution failed for %s: %s", event.symbol, exc)
+            return None, "Entry attempt errored — see logs"
+
+        status = str(result.get("status", ""))
+        if status in ("filled", "partially_filled"):
+            qty = result.get("quantity", "?")
+            note = f"✅ Reactor entry: BUY {qty} {event.symbol} (half-size, slow-out lockout)"
+        elif status == "skipped":
+            note = f"Skipped: {result.get('reason', 'gate declined')}"
+        elif status == "rejected":
+            note = f"Rejected: {result.get('reason', 'risk gate')}"
+        else:
+            note = f"Entry status: {status}"
+        return result, note
 
     def _require_initialized(
         self,
