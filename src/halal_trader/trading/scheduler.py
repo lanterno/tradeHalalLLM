@@ -173,6 +173,9 @@ class TradingBot(BaseTradingBot):
             reactor_trailing_stop_distance_pct=(
                 self.settings.stocks.reactor_trailing_stop_distance_pct
             ),
+            trend_break_enabled=self.settings.stocks.trend_break_enabled,
+            trend_break_ma_period=self.settings.stocks.trend_break_ma_period,
+            trend_break_timeframe=self.settings.stocks.trend_break_timeframe,
             notifier=self._notifier,
         )
 

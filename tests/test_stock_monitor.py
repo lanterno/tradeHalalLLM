@@ -336,3 +336,83 @@ async def test_non_reactor_trailing_disabled_when_activation_none():
     mon = StockPositionMonitor(MagicMock(), repo, check_interval=1)
     await mon._update_trailing_stop(_trade(id_=4, entry=200.0, sl=190.0), price=260.0)
     repo.update_stock_trade_stop_loss.assert_not_awaited()
+
+
+# ── reactor trend-break exit ────────────────────────────────────
+
+
+def _bars(closes):
+    return {"bars": [{"c": c} for c in closes]}
+
+
+async def test_trend_break_exits_winning_reactor_below_ma():
+    """A winning reactor position whose price falls below the SMA exits
+    with reason 'trend_break' instead of waiting for the wide stop."""
+    repo = MagicMock()
+    repo.close_trade = AsyncMock()
+    mcp = MagicMock()
+    # 20 closes averaging ~210; latest price 205 < SMA → break.
+    mcp.get_stock_bars = AsyncMock(return_value=_bars([210.0] * 20))
+    mcp.place_order = AsyncMock(return_value={"id": "o", "status": "filled"})
+    mon = StockPositionMonitor(
+        mcp, repo, check_interval=1, trend_break_ma_period=20, trend_break_enabled=True
+    )
+    trade = _reactor_trade(id_=11, entry=200.0, sl=184.0)
+    # price 205 > entry 200 (winner) but < SMA 210 → trend break exit.
+    exited = await mon._maybe_trend_break_exit(trade, price=205.0)
+    assert exited is True
+    repo.close_trade.assert_awaited_once()
+    assert repo.close_trade.await_args.kwargs["exit_reason"] == "trend_break"
+
+
+async def test_trend_break_skips_losing_position():
+    """A reactor position underwater rides the hard stop, not trend-break."""
+    repo = MagicMock()
+    repo.close_trade = AsyncMock()
+    mcp = MagicMock()
+    mcp.get_stock_bars = AsyncMock(return_value=_bars([210.0] * 20))
+    mon = StockPositionMonitor(mcp, repo, check_interval=1, trend_break_enabled=True)
+    trade = _reactor_trade(id_=12, entry=200.0, sl=184.0)
+    # price below entry → not a winner → no trend-break exit.
+    exited = await mon._maybe_trend_break_exit(trade, price=195.0)
+    assert exited is False
+    repo.close_trade.assert_not_awaited()
+    mcp.get_stock_bars.assert_not_awaited()  # bailed before fetching bars
+
+
+async def test_trend_break_skips_non_reactor():
+    """Cycle positions are not subject to the trend-break exit."""
+    repo = MagicMock()
+    repo.close_trade = AsyncMock()
+    mcp = MagicMock()
+    mcp.get_stock_bars = AsyncMock(return_value=_bars([210.0] * 20))
+    mon = StockPositionMonitor(mcp, repo, check_interval=1, trend_break_enabled=True)
+    plain = _trade(id_=13, entry=200.0, sl=190.0, tp=None)
+    exited = await mon._maybe_trend_break_exit(plain, price=205.0)
+    assert exited is False
+    mcp.get_stock_bars.assert_not_awaited()
+
+
+async def test_trend_break_holds_when_price_above_ma():
+    """In profit but still above the SMA → trend intact, no exit."""
+    repo = MagicMock()
+    repo.close_trade = AsyncMock()
+    mcp = MagicMock()
+    mcp.get_stock_bars = AsyncMock(return_value=_bars([200.0] * 20))  # SMA 200
+    mon = StockPositionMonitor(mcp, repo, check_interval=1, trend_break_enabled=True)
+    trade = _reactor_trade(id_=14, entry=195.0, sl=180.0)
+    exited = await mon._maybe_trend_break_exit(trade, price=210.0)  # > SMA 200
+    assert exited is False
+    repo.close_trade.assert_not_awaited()
+
+
+async def test_trend_break_disabled_is_noop():
+    repo = MagicMock()
+    repo.close_trade = AsyncMock()
+    mcp = MagicMock()
+    mcp.get_stock_bars = AsyncMock(return_value=_bars([210.0] * 20))
+    mon = StockPositionMonitor(mcp, repo, check_interval=1, trend_break_enabled=False)
+    trade = _reactor_trade(id_=15, entry=200.0, sl=184.0)
+    exited = await mon._maybe_trend_break_exit(trade, price=205.0)
+    assert exited is False
+    mcp.get_stock_bars.assert_not_awaited()

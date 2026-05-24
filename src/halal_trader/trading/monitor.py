@@ -28,9 +28,15 @@ from typing import Any
 from halal_trader.db.repos import TradeRepo
 from halal_trader.market_hours import is_market_open_local
 from halal_trader.mcp.client import AlpacaMCPClient
+from halal_trader.trading.bars import bars_to_klines
 from halal_trader.trading.bars import extract_last_price as _extract_last_price
 
 logger = logging.getLogger(__name__)
+
+# Throttle bar-based trend-break checks so a tight monitor loop doesn't
+# refetch bars every tick — structural breaks evolve over minutes, not
+# seconds. Per-trade timestamp gate in ``_maybe_trend_break_exit``.
+_TREND_BREAK_MIN_INTERVAL_S = 300.0
 
 
 class StockPositionMonitor:
@@ -45,6 +51,9 @@ class StockPositionMonitor:
         trailing_stop_activation_pct: float | None = None,
         trailing_stop_distance_pct: float = 0.005,
         reactor_trailing_stop_distance_pct: float = 0.08,
+        trend_break_enabled: bool = True,
+        trend_break_ma_period: int = 20,
+        trend_break_timeframe: str = "1Hour",
         retrainer: Any = None,
         close_recorders: object | None = None,
         notifier: Any = None,
@@ -54,6 +63,13 @@ class StockPositionMonitor:
         self._check_interval = check_interval
         self._trailing_activation_pct = trailing_stop_activation_pct
         self._trailing_distance_pct = trailing_stop_distance_pct
+        # Trend-break exit (reactor positions only) — see
+        # ``_maybe_trend_break_exit``.
+        self._trend_break_enabled = trend_break_enabled
+        self._trend_break_ma_period = trend_break_ma_period
+        self._trend_break_timeframe = trend_break_timeframe
+        # Per-trade-id last trend-break check timestamp (monotonic).
+        self._last_trend_check: dict[int, float] = {}
         # Reactor (news-momentum) positions are locked from LLM exits, so
         # the trailing stop is their main exit. It's WIDE (~8%) and
         # activates immediately (no activation gate) so a winner runs but
@@ -138,14 +154,77 @@ class StockPositionMonitor:
         return _extract_last_price(snap, symbol)
 
     async def _check_trade(self, trade: Any, price: float) -> None:
-        """Close the trade if SL or TP triggered, otherwise update trailing stop."""
+        """Close the trade if SL/TP/trend-break triggered, else trail."""
         if trade.stop_loss is not None and price <= trade.stop_loss:
             await self._exit(trade, price, "stop_loss")
             return
         if trade.target_price is not None and price >= trade.target_price:
             await self._exit(trade, price, "take_profit")
             return
+        if await self._maybe_trend_break_exit(trade, price):
+            return
         await self._update_trailing_stop(trade, price)
+
+    async def _maybe_trend_break_exit(self, trade: Any, price: float) -> bool:
+        """Exit a *winning* reactor position on a structural trend break.
+
+        The wide trailing stop alone gives back ~8% before exiting; this
+        locks in gains sooner when the price structure actually reverses
+        — defined as the latest price closing below an SMA of recent
+        bars. Scoped to reactor-momentum positions (the slow-out ones)
+        and only when already in profit, so a fresh entry dipping below
+        its MA on noise isn't force-closed (the hard stop covers losers).
+
+        Returns True when it closed the position. Best-effort: any bar /
+        broker failure returns False so the trailing stop still governs.
+        """
+        if not self._trend_break_enabled:
+            return False
+        if str(getattr(trade, "entry_type", "") or "") != "reactor_momentum":
+            return False
+        entry = trade.filled_price or trade.price
+        if not entry or price <= entry:
+            return False  # only lock in winners; losers ride the hard stop
+
+        import time as _t
+
+        now = _t.monotonic()
+        last = self._last_trend_check.get(trade.id, 0.0)
+        if (now - last) < _TREND_BREAK_MIN_INTERVAL_S:
+            return False
+        self._last_trend_check[trade.id] = now
+
+        ma = await self._trend_reference(trade.symbol)
+        if ma is None or price >= ma:
+            return False
+        logger.info(
+            "Trend-break exit on %s: price %.2f < SMA%d %.2f (entry %.2f)",
+            trade.symbol,
+            price,
+            self._trend_break_ma_period,
+            ma,
+            entry,
+        )
+        await self._exit(trade, price, "trend_break")
+        return True
+
+    async def _trend_reference(self, symbol: str) -> float | None:
+        """SMA of the last ``ma_period`` closes, or None if unavailable."""
+        try:
+            raw = await self._mcp.get_stock_bars(
+                symbol,
+                days=max(self._trend_break_ma_period, 5),
+                timeframe=self._trend_break_timeframe,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("trend-break bars fetch failed for %s: %s", symbol, exc)
+            return None
+        klines = bars_to_klines(raw)
+        closes = [float(k.close) for k in klines if getattr(k, "close", None)]
+        if len(closes) < self._trend_break_ma_period:
+            return None
+        window = closes[-self._trend_break_ma_period :]
+        return sum(window) / len(window)
 
     async def _update_trailing_stop(self, trade: Any, price: float) -> None:
         """Ratchet the SL up as the position runs.
@@ -207,6 +286,7 @@ class StockPositionMonitor:
 
         await self._repo.close_trade(trade.id, exit_price=price, exit_reason=reason)
         self._high_water.pop(trade.id, None)
+        self._last_trend_check.pop(trade.id, None)
         logger.info("Closed %s on %s at %.2f", trade.symbol, reason, price)
 
         if self._notifier and getattr(self._notifier, "enabled", False):

@@ -256,6 +256,13 @@ class StockSettings(BaseSettings):
     # winners run across days until the trailing stop / trend-break
     # exits them. Set False to force intraday-only (flatten at EOD).
     reactor_hold_overnight: bool = Field(default=True)
+    # Slow-out trend-break exit: in addition to the wide trailing stop,
+    # exit a *winning* reactor position when its price structure breaks
+    # (closes below an SMA of recent bars) — locks in gains on a real
+    # reversal instead of giving the full ~8% back to the trailing stop.
+    trend_break_enabled: bool = Field(default=True)
+    trend_break_ma_period: int = Field(default=20, ge=2, le=200)
+    trend_break_timeframe: str = Field(default="1Hour")
 
 
 class CryptoSettings(BaseSettings):
