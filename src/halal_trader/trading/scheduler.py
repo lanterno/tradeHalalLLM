@@ -64,6 +64,12 @@ class TradingBot(BaseTradingBot):
         # flowing in production.
         self._news_reactor: Any | None = None
         self._news_reactor_task: asyncio.Task[None] | None = None
+        # Intra-cycle SL/TP + trailing-stop monitor — runs between the
+        # 15-min LLM cycles. Critical for reactor positions, which are
+        # locked from LLM exits and rely on the monitor's wide trailing
+        # stop / trend-break as their only rule-based exit.
+        self._monitor: Any | None = None
+        self._monitor_task: asyncio.Task[None] | None = None
 
     async def _create_components(self) -> None:
         """Create stock-specific trading components."""
@@ -142,11 +148,32 @@ class TradingBot(BaseTradingBot):
             reactor_entry_min_intraday_change_pct=(
                 self.settings.stocks.reactor_entry_min_intraday_change_pct
             ),
+            reactor_trailing_stop_distance_pct=(
+                self.settings.stocks.reactor_trailing_stop_distance_pct
+            ),
+            reactor_hold_overnight=self.settings.stocks.reactor_hold_overnight,
         )
         self.portfolio = PortfolioTracker(
             self.broker,
             repo,
             daily_loss_limit=self.settings.stocks.daily_loss_limit,
+        )
+
+        # Intra-cycle position monitor — enforces SL/TP + trailing stops
+        # between the 15-min cycles. The reactor's slow-out positions
+        # depend on its wide trailing stop as their only rule-based exit.
+        from halal_trader.trading.monitor import StockPositionMonitor
+
+        self._monitor = StockPositionMonitor(
+            mcp=self.broker,
+            repo=repo,
+            check_interval=self.settings.stocks.monitor_interval_seconds,
+            trailing_stop_activation_pct=self.settings.stocks.trailing_stop_activation_pct,
+            trailing_stop_distance_pct=self.settings.stocks.trailing_stop_distance_pct,
+            reactor_trailing_stop_distance_pct=(
+                self.settings.stocks.reactor_trailing_stop_distance_pct
+            ),
+            notifier=self._notifier,
         )
 
         # Catalyst feed — wires whichever sources are configured. The
@@ -376,6 +403,17 @@ class TradingBot(BaseTradingBot):
             except (asyncio.CancelledError, Exception):  # noqa: BLE001
                 pass
             self._news_reactor_task = None
+        # Stop the position monitor before MCP teardown for the same
+        # reason — an in-flight exit must not touch a dead broker.
+        if self._monitor_task is not None and not self._monitor_task.done():
+            if self._monitor is not None:
+                await self._monitor.stop()
+            self._monitor_task.cancel()
+            try:
+                await self._monitor_task
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                pass
+            self._monitor_task = None
         if self._stocks_news is not None:
             try:
                 await self._stocks_news.close()
@@ -878,6 +916,17 @@ class TradingBot(BaseTradingBot):
             if self._news_reactor is not None and self._news_reactor.enabled:
                 self._news_reactor_task = asyncio.create_task(
                     self._news_reactor.run(), name="stocks-news-reactor"
+                )
+
+            # Spawn the intra-cycle position monitor (SL/TP + trailing
+            # stops). Runs alongside the scheduler; cancelled in shutdown.
+            if self._monitor is not None:
+                self._monitor_task = asyncio.create_task(
+                    self._monitor.run(), name="stock-position-monitor"
+                )
+                logger.info(
+                    "Stock position monitor spawned (check every %.0fs)",
+                    self.settings.stocks.monitor_interval_seconds,
                 )
 
             # Run pre-market once at startup to ensure cache and equity are

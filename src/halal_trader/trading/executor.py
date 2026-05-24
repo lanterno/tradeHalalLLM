@@ -77,6 +77,8 @@ class TradeExecutor(BaseExecutor):
         no_new_positions_minutes_before_close: int = 30,
         reactor_entry_size_fraction: float = 0.5,
         reactor_entry_min_intraday_change_pct: float = 0.002,
+        reactor_trailing_stop_distance_pct: float = 0.08,
+        reactor_hold_overnight: bool = True,
     ) -> None:
         super().__init__(
             max_position_pct=max_position_pct,
@@ -117,6 +119,15 @@ class TradeExecutor(BaseExecutor):
         # ``reactor_entry_min_intraday_change_pct`` on the session.
         self._reactor_entry_size_fraction = reactor_entry_size_fraction
         self._reactor_entry_min_intraday_change_pct = reactor_entry_min_intraday_change_pct
+        # Wide initial hard-stop distance for reactor entries — the
+        # position monitor ratchets a trailing stop from here. Set as a
+        # hard floor at entry so the position is never unprotected even
+        # before the monitor's first tick.
+        self._reactor_trailing_stop_distance_pct = reactor_trailing_stop_distance_pct
+        # Slow-out: keep reactor positions open through the EOD flatten so
+        # winners run across days, exited only by the monitor's trailing
+        # stop / trend-break. False = flatten them at EOD like the rest.
+        self._reactor_hold_overnight = reactor_hold_overnight
 
     async def execute_reactor_entry(
         self,
@@ -191,6 +202,11 @@ class TradeExecutor(BaseExecutor):
                 ),
             }
 
+        # Wide hard stop at entry — the monitor ratchets a trailing stop
+        # up from here. No take-profit target: this is the "slow out"
+        # side, so we let winners run and exit only on the trailing stop
+        # / trend-break, never a fixed TP.
+        initial_stop = round(price * (1 - self._reactor_trailing_stop_distance_pct), 2)
         decision = TradeDecision(
             action=TradeAction.BUY,
             symbol=symbol,
@@ -198,6 +214,7 @@ class TradeExecutor(BaseExecutor):
             confidence=max(0.0, min(1.0, float(score))),
             reasoning=f"reactor momentum entry: {reasoning}"[:500],
             setup_type="momentum",
+            stop_loss=initial_stop,
         )
         logger.info(
             "Reactor entry: %s x%d (~$%.2f, score=%.2f, intraday +%.2f%%)",
@@ -431,6 +448,8 @@ class TradeExecutor(BaseExecutor):
                     filled_price=fill.filled_price,
                 ),
                 entry_type=entry_type,
+                stop_loss=getattr(decision, "stop_loss", None),
+                target_price=getattr(decision, "target_price", None),
             )
 
             # Stock-side ML snapshot — best-effort, never aborts the buy.
@@ -1006,6 +1025,28 @@ class TradeExecutor(BaseExecutor):
             return entry_fallback
         return None
 
+    async def _flatten_except(
+        self, broker_symbols: list[str], keep: set[str]
+    ) -> dict[str, Any]:
+        """Close every broker position except those in ``keep``.
+
+        Used at EOD when reactor positions are held overnight: the
+        broker's batch ``close_all_positions`` would flatten everything,
+        so we close the non-reactor symbols one at a time and leave the
+        reactor ones running. Best-effort per symbol — a single failure
+        is logged and the rest still close.
+        """
+        closed: list[str] = []
+        for sym in broker_symbols:
+            if sym in keep:
+                continue
+            try:
+                await self._broker.close_position(sym)
+                closed.append(sym)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("EOD selective flatten failed for %s: %s", sym, exc)
+        return {"result": "closed_selective", "closed": closed, "held": sorted(keep)}
+
     async def close_all(self) -> Any:
         """Close all open positions (end of day).
 
@@ -1029,23 +1070,22 @@ class TradeExecutor(BaseExecutor):
         # rows get a meaningful exit_price. close_all_positions is
         # destructive; positions are gone after.
         price_by_symbol: dict[str, float] = {}
+        broker_symbols: list[str] = []
         try:
             pre_positions = await self._broker.get_all_positions()
             for p in pre_positions:
                 sym = str(getattr(p, "symbol", "") or "").upper()
                 cp = float(getattr(p, "current_price", 0) or 0)
+                if sym:
+                    broker_symbols.append(sym)
                 if sym and cp > 0:
                     price_by_symbol[sym] = cp
         except Exception as exc:  # noqa: BLE001
             logger.debug("EOD pre-position snapshot failed: %s", exc)
 
-        result = await self._broker.close_all_positions()
-
-        # Stamp closed_at on every open BUY. We don't know per-symbol
-        # exit_price for sure (broker may have filled at a slightly
-        # different price than the pre-snapshot), but the snapshot is
-        # accurate within the second. close_open_trades_for_symbol
-        # already handles "no open BUYs" → noop.
+        # Read open DB trades first so we know which symbols carry a
+        # reactor-momentum (slow-out) tag — those are exempt from the
+        # EOD flatten when ``reactor_hold_overnight`` is set.
         try:
             opens = await self._repo.get_open_trades()
         except Exception as exc:  # noqa: BLE001
@@ -1054,13 +1094,40 @@ class TradeExecutor(BaseExecutor):
                 "show as drift on tomorrow's first cycle",
                 exc,
             )
+            opens = []
+
+        reactor_syms: set[str] = {
+            str(getattr(t, "symbol", "") or "").upper()
+            for t in opens
+            if str(getattr(t, "entry_type", "") or "") == "reactor_momentum"
+            and getattr(t, "symbol", "")
+        }
+        holding_reactor = self._reactor_hold_overnight and bool(reactor_syms)
+
+        if holding_reactor:
+            # Can't use the broker's batch flatten — it would close the
+            # reactor positions too. Close each NON-reactor position
+            # individually and leave the reactor ones running overnight.
+            result = await self._flatten_except(broker_symbols, reactor_syms)
+            logger.info(
+                "EOD close-all: holding %d reactor position(s) overnight (%s)",
+                len(reactor_syms),
+                ", ".join(sorted(reactor_syms)),
+            )
+        else:
+            result = await self._broker.close_all_positions()
+
+        if not opens:
             return result
 
         symbols_to_close: set[str] = set()
         for trade in opens:
             sym = str(getattr(trade, "symbol", "") or "").upper()
-            if sym:
-                symbols_to_close.add(sym)
+            if not sym:
+                continue
+            if holding_reactor and sym in reactor_syms:
+                continue  # held overnight — don't stamp closed / synthesize SELL
+            symbols_to_close.add(sym)
 
         closer = getattr(self._repo, "close_open_trades_for_symbol", None)
         if closer is None:

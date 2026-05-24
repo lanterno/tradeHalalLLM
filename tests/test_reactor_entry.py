@@ -132,6 +132,10 @@ async def test_reactor_entry_places_half_size_tagged_buy():
     assert kwargs["entry_type"] == "reactor_momentum"
     assert kwargs["side"] == "buy"
     assert kwargs["quantity"] == 50
+    # Wide initial hard stop set at entry: 200 * (1 - 0.08) = 184.0.
+    # No take-profit (slow-out: let winners run).
+    assert kwargs["stop_loss"] == pytest.approx(184.0)
+    assert kwargs["target_price"] is None
 
 
 @pytest.mark.asyncio

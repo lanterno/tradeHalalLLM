@@ -44,6 +44,7 @@ class StockPositionMonitor:
         check_interval: float = 60.0,
         trailing_stop_activation_pct: float | None = None,
         trailing_stop_distance_pct: float = 0.005,
+        reactor_trailing_stop_distance_pct: float = 0.08,
         retrainer: Any = None,
         close_recorders: object | None = None,
         notifier: Any = None,
@@ -53,6 +54,11 @@ class StockPositionMonitor:
         self._check_interval = check_interval
         self._trailing_activation_pct = trailing_stop_activation_pct
         self._trailing_distance_pct = trailing_stop_distance_pct
+        # Reactor (news-momentum) positions are locked from LLM exits, so
+        # the trailing stop is their main exit. It's WIDE (~8%) and
+        # activates immediately (no activation gate) so a winner runs but
+        # is never left unprotected — the "slow out" half of the strategy.
+        self._reactor_trailing_distance_pct = reactor_trailing_stop_distance_pct
         # Optional stock-namespaced RetrainingScheduler — same shape the
         # crypto monitor uses, so closed stock trades feed the ML loop
         # without us re-implementing the labeling pipeline.
@@ -142,19 +148,33 @@ class StockPositionMonitor:
         await self._update_trailing_stop(trade, price)
 
     async def _update_trailing_stop(self, trade: Any, price: float) -> None:
-        """Ratchet the SL up once the position is comfortably in profit."""
-        if self._trailing_activation_pct is None:
-            return
+        """Ratchet the SL up as the position runs.
+
+        Reactor-momentum positions trail wide (~8%) and activate
+        immediately — the trailing stop is their only rule-based exit
+        (the LLM is locked out). Ordinary cycle positions keep the
+        opt-in activation gate + tighter distance.
+        """
+        is_reactor = str(getattr(trade, "entry_type", "") or "") == "reactor_momentum"
+        if is_reactor:
+            distance_pct = self._reactor_trailing_distance_pct
+            activation_pct = 0.0  # trail from the first tick in profit
+        else:
+            if self._trailing_activation_pct is None:
+                return
+            distance_pct = self._trailing_distance_pct
+            activation_pct = self._trailing_activation_pct
+
         entry = trade.filled_price or trade.price
         if not entry:
             return
         gain = (price - entry) / entry
-        if gain < self._trailing_activation_pct:
+        if gain < activation_pct:
             return
         prior_high = self._high_water.get(trade.id, entry)
         if price > prior_high:
             self._high_water[trade.id] = price
-        new_stop = self._high_water[trade.id] * (1 - self._trailing_distance_pct)
+        new_stop = self._high_water[trade.id] * (1 - distance_pct)
         if trade.stop_loss is None or new_stop > trade.stop_loss:
             await self._repo.update_stock_trade_stop_loss(trade.id, new_stop)
             logger.info(

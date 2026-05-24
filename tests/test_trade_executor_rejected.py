@@ -432,6 +432,95 @@ async def test_close_all_falls_back_to_entry_price_when_no_fill():
 
 
 @pytest.mark.asyncio
+async def test_close_all_holds_reactor_positions_overnight():
+    """Reactor-momentum positions are exempt from the EOD flatten — the
+    broker batch close is skipped (it would flatten them), non-reactor
+    positions are closed individually, and reactor symbols get neither a
+    closed_at stamp nor a synthetic SELL."""
+    from types import SimpleNamespace
+
+    broker = MagicMock()
+    broker.get_all_positions = AsyncMock(
+        return_value=[
+            SimpleNamespace(symbol="NVDA", qty=20, current_price=210.0),  # reactor
+            SimpleNamespace(symbol="SHOP", qty=10, current_price=42.0),  # cycle
+        ]
+    )
+    broker.close_all_positions = AsyncMock(return_value={"result": "closed"})
+    broker.close_position = AsyncMock(return_value={"id": "x"})
+
+    repo = MagicMock()
+    repo.get_open_trades = AsyncMock(
+        return_value=[
+            SimpleNamespace(
+                symbol="NVDA", side="buy", filled_quantity=20, filled_price=200.0,
+                entry_type="reactor_momentum",
+            ),
+            SimpleNamespace(
+                symbol="SHOP", side="buy", filled_quantity=10, filled_price=40.0,
+                entry_type=None,
+            ),
+        ]
+    )
+    repo.close_open_trades_for_symbol = AsyncMock(return_value=1)
+    repo.record_trade = AsyncMock(return_value=1)
+
+    executor = TradeExecutor(
+        broker, repo, max_position_pct=1.0, max_simultaneous_positions=10, max_sector_pct=0,
+        reactor_hold_overnight=True,
+    )
+
+    await executor.close_all()
+
+    # Batch flatten NOT used (would have closed NVDA too).
+    broker.close_all_positions.assert_not_awaited()
+    # Only SHOP closed individually on the broker; NVDA held.
+    closed_syms = {c.args[0] for c in broker.close_position.await_args_list}
+    assert closed_syms == {"SHOP"}
+    # DB cleanup touches SHOP only.
+    db_closed = {c.args[0] for c in repo.close_open_trades_for_symbol.await_args_list}
+    assert db_closed == {"SHOP"}
+    sold_syms = {c.kwargs["symbol"] for c in repo.record_trade.await_args_list}
+    assert "NVDA" not in sold_syms
+
+
+@pytest.mark.asyncio
+async def test_close_all_flattens_reactor_when_hold_disabled():
+    """With reactor_hold_overnight=False, reactor positions flatten at EOD
+    like everything else (batch close)."""
+    from types import SimpleNamespace
+
+    broker = MagicMock()
+    broker.get_all_positions = AsyncMock(
+        return_value=[SimpleNamespace(symbol="NVDA", qty=20, current_price=210.0)]
+    )
+    broker.close_all_positions = AsyncMock(return_value={"result": "closed"})
+
+    repo = MagicMock()
+    repo.get_open_trades = AsyncMock(
+        return_value=[
+            SimpleNamespace(
+                symbol="NVDA", side="buy", filled_quantity=20, filled_price=200.0,
+                entry_type="reactor_momentum",
+            )
+        ]
+    )
+    repo.close_open_trades_for_symbol = AsyncMock(return_value=1)
+    repo.record_trade = AsyncMock(return_value=1)
+
+    executor = TradeExecutor(
+        broker, repo, max_position_pct=1.0, max_simultaneous_positions=10, max_sector_pct=0,
+        reactor_hold_overnight=False,
+    )
+
+    await executor.close_all()
+
+    broker.close_all_positions.assert_awaited_once()
+    db_closed = {c.args[0] for c in repo.close_open_trades_for_symbol.await_args_list}
+    assert db_closed == {"NVDA"}
+
+
+@pytest.mark.asyncio
 async def test_close_position_with_order_id_uses_confirm_fill_path():
     """When close_position DOES return an order id, the normal poll path
     runs (no synthesized fill)."""

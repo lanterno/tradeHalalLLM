@@ -246,6 +246,16 @@ class StockSettings(BaseSettings):
     # "news + price-up confluence" rule — we don't chase a bullish
     # headline a falling tape is already rejecting. 0 = up-or-flat only.
     reactor_entry_min_intraday_change_pct: float = Field(default=0.002, ge=0.0, le=0.5)
+    # Slow-out: reactor (news-momentum) positions are locked from LLM
+    # exits, so the position monitor's wide trailing stop is their main
+    # exit. ~8% lets a winner run through normal intraday volatility and
+    # hold overnight, only stopping out on a real structural reversal.
+    # This doubles as the initial hard-stop distance set at entry.
+    reactor_trailing_stop_distance_pct: float = Field(default=0.08, gt=0, le=0.5)
+    # Slow-out: reactor positions are exempt from the EOD flatten so
+    # winners run across days until the trailing stop / trend-break
+    # exits them. Set False to force intraday-only (flatten at EOD).
+    reactor_hold_overnight: bool = Field(default=True)
 
 
 class CryptoSettings(BaseSettings):
