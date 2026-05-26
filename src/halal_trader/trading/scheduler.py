@@ -259,14 +259,14 @@ class TradingBot(BaseTradingBot):
         await stocks_self_review.load_from_db()
         self._self_review = stocks_self_review
 
-        # News-momentum reactor (Phase 2A). Off when Finnhub key is
-        # unset — the cron cycle keeps working. When enabled, every
-        # ~60s the reactor polls Finnhub per halal symbol, classifies
-        # each new headline through the LLM, and fires
-        # ``_on_news_event`` on score >= threshold (default 0.7).
-        # Phase 2A only LOGS + notifies on these events; actual entry
-        # execution lands in 2B once the operator has validated the
-        # signal stream in production.
+        # News-momentum reactor. Off when Finnhub key is unset — the
+        # cron cycle keeps working. When enabled, every ~60s the reactor
+        # polls Finnhub per halal symbol, classifies each new headline
+        # through the dedicated classifier chain, and fires
+        # ``_on_news_event`` on score >= threshold (0.85). The callback
+        # places a half-size, price-confirmed paper entry when
+        # ``reactor_entries_enabled`` (the "fast in" side); the position
+        # monitor then manages the slow-out exit.
         finnhub_cfg = getattr(self.settings, "finnhub", None)
         finnhub_key = getattr(finnhub_cfg, "api_key", "") if finnhub_cfg else ""
         if finnhub_key:
@@ -316,11 +316,14 @@ class TradingBot(BaseTradingBot):
                 self._runtime.stocks_news_reactor = self._news_reactor
                 logger.info(
                     "StockNewsEventReactor wired (%d symbols, threshold=%.2f, "
-                    "daily_classify_cap=%d) — event execution stays disabled "
-                    "until Phase 2B",
+                    "daily_classify_cap=%d, entries=%s, size=%.0f%% of cap, "
+                    "hold_overnight=%s)",
                     len(watchlist),
                     StockNewsEventReactor._DEFAULT_SCORE_THRESHOLD,
                     self.settings.stocks.reactor_daily_classify_cap,
+                    "ON" if self.settings.stocks.reactor_entries_enabled else "OFF",
+                    self.settings.stocks.reactor_entry_size_fraction * 100,
+                    self.settings.stocks.reactor_hold_overnight,
                 )
 
         # Cycle service — owns the intraday trading logic
