@@ -26,6 +26,7 @@ project's docker-compose is the expected target.
 from __future__ import annotations
 
 import os
+import tempfile
 import zlib
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
@@ -36,6 +37,16 @@ from pathlib import Path
 # inherit COLUMNS=80 from the captured stdout otherwise, which truncates
 # wide-table assertions.
 os.environ.setdefault("COLUMNS", "240")
+
+# Redirect log output to a throwaway dir for the whole test session.
+# A CLI test (via CliRunner) calls ``setup_logging`` with the default
+# ``LOG_DIR=logs``, which installs a root RotatingFileHandler — after
+# that, EVERY later test's log records bleed into the real
+# ``logs/halal_trader.log`` (observed: pytest "Reactor entry NVDA"
+# lines polluting the operator's prod log + EOD reviews). Pointing
+# LOG_DIR at a temp dir before any settings are read keeps the suite's
+# logging entirely out of the repo's log files.
+os.environ.setdefault("LOG_DIR", tempfile.mkdtemp(prefix="halabot-test-logs-"))
 
 import psycopg  # noqa: E402
 import pytest  # noqa: E402

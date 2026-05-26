@@ -27,6 +27,8 @@ Thumbs.db
 
 # Runtime
 halal_trader.pid
+# News-reactor cross-restart state (dedup set + notify cooldowns)
+data/reactor_state.json
 
 # Logs
 *.log
