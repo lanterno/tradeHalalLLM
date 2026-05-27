@@ -215,3 +215,80 @@ def reconcile_fix_orphans(dry_run: bool, min_age_minutes: int, no_broker: bool) 
             await engine.dispose()
 
     asyncio.run(_run())
+
+
+@reconcile.command("fix-drift")
+@click.option(
+    "--dry-run/--apply",
+    default=True,
+    show_default=True,
+    help="By default, print the proposed balancing entries without writing.",
+)
+@click.option(
+    "--threshold-shares",
+    default=0.5,
+    show_default=True,
+    help="Ignore per-symbol drift at or below this many shares.",
+)
+def reconcile_fix_drift(dry_run: bool, threshold_shares: float) -> None:
+    """Reconcile each symbol's DB net to the broker's actual position.
+
+    Cleans up accumulated historical drift (pre-fix EOD synthetic-SELL
+    over-counts, zero-fill orphan BUYs, earlier manual cleanup attempts)
+    by recording ONE clearly-tagged, P&L-neutral balancing entry per
+    drifted symbol so the DB net matches broker truth. Adjustments are
+    tagged ``entry_type='reconcile_adjustment'`` / ``order_id='RECONCILE-ADJ'``
+    and recorded closed, so they're auditable and never become managed
+    positions. Always dry-run first.
+    """
+
+    async def _run() -> None:
+        from halal_trader.config import get_settings
+        from halal_trader.core import reconcile as recon
+        from halal_trader.db.models import init_db
+        from halal_trader.mcp.client import AlpacaMCPClient
+
+        settings = get_settings()
+        engine = await init_db(settings.database_url)
+        broker = AlpacaMCPClient()
+        try:
+            await broker.connect()
+            report = await recon.reconcile_db_to_broker(
+                engine=engine,
+                broker=broker,
+                threshold_shares=threshold_shares,
+                dry_run=dry_run,
+            )
+
+            mode = "DRY RUN" if dry_run else "APPLIED"
+            console.print(
+                f"[bold]{mode}[/bold] · {len(report.fixes)} symbol(s) drifted"
+                + (f" · {report.applied_count} adjustment(s) written" if not dry_run else "")
+            )
+            if not report.fixes:
+                console.print("[green]DB net already matches broker — nothing to fix.[/green]")
+                return
+
+            tbl = Table(title=f"DB→broker reconcile ({mode})", header_style="bold cyan")
+            tbl.add_column("Symbol")
+            tbl.add_column("DB Net", justify="right")
+            tbl.add_column("Broker", justify="right")
+            tbl.add_column("Adjustment")
+            for f in report.fixes:
+                tbl.add_row(
+                    f.symbol,
+                    Text(f"{f.db_net:g}", style="red" if f.db_net != f.broker_qty else "dim"),
+                    f"{f.broker_qty:g}",
+                    Text(f"{f.side} {abs(f.delta):g}", style="green"),
+                )
+            console.print(tbl)
+            if dry_run:
+                console.print("[dim]Re-run with --apply to write these balancing entries.[/dim]")
+        finally:
+            try:
+                await broker.disconnect()
+            except Exception:  # noqa: BLE001
+                pass
+            await engine.dispose()
+
+    asyncio.run(_run())

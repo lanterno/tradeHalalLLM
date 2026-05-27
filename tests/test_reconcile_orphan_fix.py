@@ -484,6 +484,90 @@ async def test_fix_orphans_broker_import_dry_run_does_not_persist(engine):
 
 
 @pytest.mark.asyncio
+async def test_reconcile_db_to_broker_dry_run_proposes_no_write(engine):
+    """Dry-run reports the per-symbol balancing adjustment without writing."""
+    repo = Repository(engine)
+    # DB net for TXN = -5 (oversold residue); broker holds 25.
+    await repo.record_trade(
+        symbol="TXN", side="buy", quantity=20, status="filled", filled_quantity=20
+    )
+    await repo.record_trade(
+        symbol="TXN", side="sell", quantity=25, status="filled", filled_quantity=25
+    )
+
+    broker = MagicMock()
+    broker.get_all_positions = AsyncMock(
+        return_value=[SimpleNamespace(symbol="TXN", qty=25, avg_entry_price=200.0)]
+    )
+
+    report = await reconcile.reconcile_db_to_broker(
+        engine=engine, broker=broker, dry_run=True
+    )
+    assert report.applied_count == 0
+    fix = next(f for f in report.fixes if f.symbol == "TXN")
+    assert fix.db_net == -5.0
+    assert fix.broker_qty == 25.0
+    assert fix.delta == 30.0  # need +30 to reach broker truth
+    assert fix.side == "buy"
+    # nothing written
+    rows = await repo.get_recent_trades(limit=20)
+    assert all(r["order_id"] != "RECONCILE-ADJ" for r in rows)
+
+
+@pytest.mark.asyncio
+async def test_reconcile_db_to_broker_apply_balances_to_broker(engine):
+    """--apply writes a closed, P&L-neutral balancing entry that brings
+    the DB net to broker truth and leaves the reconciler clean."""
+    repo = Repository(engine)
+    await repo.record_trade(
+        symbol="TXN", side="buy", quantity=20, status="filled", filled_quantity=20
+    )
+    await repo.record_trade(
+        symbol="TXN", side="sell", quantity=25, status="filled", filled_quantity=25
+    )
+
+    broker = MagicMock()
+    broker.get_all_positions = AsyncMock(
+        return_value=[SimpleNamespace(symbol="TXN", qty=25, avg_entry_price=200.0)]
+    )
+
+    report = await reconcile.reconcile_db_to_broker(
+        engine=engine, broker=broker, dry_run=False
+    )
+    assert report.applied_count == 1
+
+    # The adjustment row is tagged, closed, and P&L-neutral.
+    rows = await repo.get_recent_trades(limit=20)
+    adj = [r for r in rows if r["order_id"] == "RECONCILE-ADJ"]
+    assert len(adj) == 1
+    assert adj[0]["entry_type"] == "reconcile_adjustment"
+    assert adj[0]["side"] == "buy"
+    assert adj[0]["filled_quantity"] == 30.0
+
+    # Reconciler now reads clean (db net == broker).
+    rpt2 = await reconcile.reconcile_stocks(engine=engine, broker=broker, threshold_pct=0.01)
+    assert not rpt2.has_drift
+
+
+@pytest.mark.asyncio
+async def test_reconcile_db_to_broker_ignores_sub_threshold(engine):
+    """Tiny fractional drift below threshold is left alone."""
+    repo = Repository(engine)
+    await repo.record_trade(
+        symbol="AAPL", side="buy", quantity=10, status="filled", filled_quantity=10
+    )
+    broker = MagicMock()
+    broker.get_all_positions = AsyncMock(
+        return_value=[SimpleNamespace(symbol="AAPL", qty=10.3, avg_entry_price=190.0)]
+    )
+    report = await reconcile.reconcile_db_to_broker(
+        engine=engine, broker=broker, threshold_shares=0.5, dry_run=False
+    )
+    assert report.fixes == []
+    assert report.applied_count == 0
+
+
+@pytest.mark.asyncio
 async def test_fix_orphans_broker_import_skips_unpriceable(engine):
     """A broker position with no cost basis (avg_entry=0, current=0) is
     NOT imported with a $0 basis — that would poison P&L the same way the

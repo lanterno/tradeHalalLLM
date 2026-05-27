@@ -784,6 +784,135 @@ async def _import_broker_only_positions(
         )
 
 
+# ── One-time DB→broker drift reconciliation ───────────────────
+
+
+@dataclass(frozen=True)
+class DriftFix:
+    """One symbol's proposed/applied balancing adjustment."""
+
+    symbol: str
+    db_net: float
+    broker_qty: float
+    delta: float  # broker_qty - db_net (the balancing amount)
+    side: str  # "buy" | "sell" — the adjustment side
+    price: float
+    applied: bool
+
+
+@dataclass
+class DriftFixReport:
+    fixes: list[DriftFix] = field(default_factory=list)
+    applied_count: int = 0
+
+
+async def reconcile_db_to_broker(
+    *,
+    engine: AsyncEngine,
+    broker: Any,
+    threshold_shares: float = 0.5,
+    dry_run: bool = True,
+) -> DriftFixReport:
+    """Bring each symbol's signed DB net into line with the broker's
+    actual position via a single P&L-neutral balancing entry.
+
+    For accumulated historical drift (e.g. the pre-fix EOD synthetic-SELL
+    over-counts and zero-fill orphan BUYs), classifying which specific
+    legacy row is bogus is unreliable — multiple bugs stack per symbol.
+    The robust fix is to treat the broker as truth: for each symbol where
+    ``broker_qty - db_net`` exceeds ``threshold_shares``, record one
+    clearly-tagged adjustment (``entry_type='reconcile_adjustment'``,
+    ``order_id='RECONCILE-ADJ'``) that nets the DB to the broker.
+
+    The adjustment is recorded ``closed`` with ``exit_price == filled_price``
+    so it is **P&L-neutral** and never appears as a managed open position.
+    It uses the exact same recent-window aggregation the live reconciler
+    uses, so after ``--apply`` the next reconcile pass reads clean.
+
+    ``dry_run=True`` (default) proposes without writing.
+    """
+    from halal_trader.db.repos import RepoBundle
+
+    repos = RepoBundle.from_engine(engine)
+    recent = await repos.trades.get_recent_trades(limit=500)
+    db_net, _ = _aggregate_stocks_positions(
+        recent, now=datetime.now(UTC), grace=timedelta(0)
+    )
+
+    broker_net: dict[str, float] = {}
+    broker_price: dict[str, float] = {}
+    try:
+        positions = await broker.get_all_positions()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("reconcile_db_to_broker: get_all_positions failed: %s", exc)
+        positions = []
+    for p in positions:
+        sym = str(getattr(p, "symbol", "") or "").upper()
+        if not sym:
+            continue
+        broker_net[sym] = float(getattr(p, "qty", 0) or 0)
+        broker_price[sym] = float(getattr(p, "avg_entry_price", 0) or 0) or float(
+            getattr(p, "current_price", 0) or 0
+        )
+
+    report = DriftFixReport()
+    for sym in sorted(set(db_net) | set(broker_net)):
+        d = db_net.get(sym, 0.0)
+        b = broker_net.get(sym, 0.0)
+        delta = b - d
+        if abs(delta) <= threshold_shares:
+            continue
+        side = "buy" if delta > 0 else "sell"
+        price = broker_price.get(sym, 0.0)
+        applied = False
+        if not dry_run:
+            await _insert_reconcile_adjustment(engine, sym, side, abs(delta), price)
+            report.applied_count += 1
+            applied = True
+        report.fixes.append(
+            DriftFix(
+                symbol=sym,
+                db_net=d,
+                broker_qty=b,
+                delta=delta,
+                side=side,
+                price=price,
+                applied=applied,
+            )
+        )
+    return report
+
+
+async def _insert_reconcile_adjustment(
+    engine: AsyncEngine, symbol: str, side: str, qty: float, price: float
+) -> None:
+    """Insert one closed, P&L-neutral balancing Trade row."""
+    from halal_trader.db.models import Trade
+
+    now = datetime.now(UTC)
+    px = price if price > 0 else None
+    row = Trade(
+        symbol=symbol,
+        side=side,
+        quantity=qty,
+        price=px,
+        order_id="RECONCILE-ADJ",
+        status=TradeStatus.FILLED.value,
+        llm_reasoning=f"one-time DB->broker reconcile {now.date().isoformat()}",
+        submitted_at=now,
+        filled_at=now,
+        filled_price=px,
+        filled_quantity=qty,
+        entry_type="reconcile_adjustment",
+        exit_price=px,
+        exit_reason="reconcile_adjustment",
+        closed_at=now,
+    )
+    async with AsyncSession(engine) as session:
+        session.add(row)
+        await session.commit()
+
+
 # ── Repository helper ─────────────────────────────────────────
 
 
