@@ -75,7 +75,13 @@ class FallbackLLM(BaseLLM):
         provider_name = type(provider).__name__
         error_str = str(error)
         is_quota_error = "429" in error_str or "insufficient_quota" in error_str
-        logger.warning("LLM provider %s failed: %s", provider_name, error)
+        # ``str(error)`` is empty for several exception types (bare
+        # timeouts / connection resets), which logged a useless
+        # "LLM provider OpenAILLM failed: " with no cause. Always surface
+        # the exception type so transient blips are diagnosable.
+        logger.warning(
+            "LLM provider %s failed: %s", provider_name, error_str or repr(error)
+        )
         if provider is self._primary:
             self._consecutive_failures += 1
             backoff_threshold = 1 if is_quota_error else 3

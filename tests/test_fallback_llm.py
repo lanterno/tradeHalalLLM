@@ -49,6 +49,29 @@ async def test_primary_fails_then_fallback_serves():
 
 
 @pytest.mark.asyncio
+async def test_empty_error_message_logs_exception_type(caplog):
+    """A provider failure whose ``str(e)`` is empty (bare timeout /
+    connection reset) must still log the exception TYPE — otherwise the
+    log was a useless 'LLM provider X failed: ' with no cause."""
+
+    class _BlankError(RuntimeError):
+        def __str__(self) -> str:  # mimics bare ConnectError/ReadTimeout
+            return ""
+
+    primary = _StubLLM("primary", fail_n=1, fail_with=_BlankError)
+    fb = _StubLLM("fallback")
+    chain = FallbackLLM(primary, fallbacks=[fb])
+
+    import logging
+
+    with caplog.at_level(logging.WARNING):
+        result = await chain.generate("hi")
+    assert result == "fallback:hi"
+    # The type name appears even though str(error) was empty.
+    assert "_BlankError" in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_primary_recovers_resets_failure_counter():
     primary = _StubLLM("primary", fail_n=2)
     fb = _StubLLM("fallback")
