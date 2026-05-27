@@ -72,11 +72,27 @@ class HalalScreener:
             target = symbols or DEFAULT_HALAL_SYMBOLS
             logger.info("Refreshing halal cache via Zoya API for %d symbols", len(target))
             results = await self._zoya.screen_bulk(target)
+            errored = 0
             for result in results:
+                # Skip transient API failures — caching them as "doubtful"
+                # poisons the cache for the full TTL, so a momentary Zoya
+                # outage during the single pre-market pass starves the
+                # universe all day (observed 2026-05-27). Leaving the prior
+                # verdict (or no row) lets the next refresh retry.
+                if result.get("error"):
+                    errored += 1
+                    continue
                 await self._repo.cache_halal_status(
                     symbol=result["symbol"],
                     compliance=result["compliance"],
                     detail=result.get("detail"),
+                )
+            if errored:
+                logger.warning(
+                    "Halal refresh: %d/%d symbols failed screening (transient) — "
+                    "not cached, prior verdicts preserved; will retry next refresh",
+                    errored,
+                    len(target),
                 )
         else:
             logger.info(
