@@ -180,6 +180,36 @@ async def test_screen_stock_http_error_returns_doubtful():
 
 
 @pytest.mark.asyncio
+async def test_screen_stock_transport_error_detail_includes_type():
+    """A transport error (e.g. ConnectError) stringifies to '' — the old
+    log/detail was a useless blank ('Zoya API error for X: '). The detail
+    must now carry the exception TYPE so the operator can diagnose the
+    outage that starved the halal universe on 2026-05-27."""
+
+    def handler(req):
+        raise httpx.ConnectError("")  # empty message, like the real outage
+
+    client = _client_with_handler(handler)
+    out = await client.screen_stock("AAPL")
+    assert out["compliance"] == "doubtful"
+    assert "ConnectError" in out["detail"]
+
+
+@pytest.mark.asyncio
+async def test_screen_stock_http_error_detail_includes_body():
+    """HTTP error detail now includes the response body, not just the code."""
+
+    def handler(req):
+        return httpx.Response(401, text="invalid api key")
+
+    client = _client_with_handler(handler)
+    out = await client.screen_stock("AAPL")
+    assert out["compliance"] == "doubtful"
+    assert "401" in out["detail"]
+    assert "invalid api key" in out["detail"]
+
+
+@pytest.mark.asyncio
 async def test_screen_stock_doubtful_status_passes_through():
     """A native `DOUBTFUL` response (rare but valid) preserves the
     doubtful flag."""

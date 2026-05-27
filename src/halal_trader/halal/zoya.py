@@ -93,18 +93,28 @@ class ZoyaClient:
                 "raw": report,
             }
         except httpx.HTTPStatusError as e:
-            logger.warning("Zoya API error for %s: %s", symbol, e)
+            # Include status + response body — a bare status code hid the
+            # actual cause (auth / rate-limit / schema) during the
+            # 2026-05-27 outage where every symbol failed with a blank message.
+            body = (e.response.text or "")[:200]
+            logger.warning(
+                "Zoya HTTP error for %s: %d %s", symbol, e.response.status_code, body
+            )
             return {
                 "symbol": symbol,
                 "compliance": "doubtful",
-                "detail": f"API error: {e.response.status_code}",
+                "detail": f"API error {e.response.status_code}: {body}",
             }
         except Exception as e:
-            logger.warning("Zoya API error for %s: %s", symbol, e)
+            # ``str(e)`` is empty for several exception types (e.g. bare
+            # httpx.ConnectError / ReadTimeout), which produced the
+            # useless "Zoya API error for X: " log. Use repr so the
+            # exception type is always visible.
+            logger.warning("Zoya API error for %s: %r", symbol, e)
             return {
                 "symbol": symbol,
                 "compliance": "doubtful",
-                "detail": str(e),
+                "detail": f"{type(e).__name__}: {e}",
             }
 
     async def screen_bulk(self, symbols: list[str]) -> list[dict[str, Any]]:
