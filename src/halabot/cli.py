@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import Any
 
 import click
 
@@ -74,9 +75,19 @@ async def _run_shadow(*, once: bool, interval: float, timeframe: str, days: int)
     async def universe() -> list[str]:
         return await repo.get_halal_symbols()
 
-    source = AlpacaBarSource(
+    from halabot.perception.sources.finnhub_news import FinnhubNewsSource
+
+    bar_source = AlpacaBarSource(
         mcp, universe, clock, timeframe=timeframe, days=days, interval_s=interval
     )
+    sources: list[Any] = [bar_source]
+    finnhub_key = getattr(getattr(settings, "finnhub", None), "api_key", "") or ""
+    news_source = None
+    if finnhub_key:
+        news_source = FinnhubNewsSource(
+            finnhub_key, universe, clock, interval_s=min(60.0, interval)
+        )
+        sources.append(news_source)
     supervisor = SourceSupervisor()
 
     try:
@@ -96,11 +107,14 @@ async def _run_shadow(*, once: bool, interval: float, timeframe: str, days: int)
                 )
             )
 
+        click.echo(f"sources: {', '.join(s.name for s in sources)}")
         if once:
-            n = await source.poll_once(engine.bus.publish)
-            click.echo(f"emitted {n} bar observations")
+            total = 0
+            for s in sources:
+                total += await s.poll_once(engine.bus.publish)
+            click.echo(f"emitted {total} observations")
         else:
-            supervisor.start([source], engine.bus.publish)
+            supervisor.start(sources, engine.bus.publish)
             click.echo(f"shadow running (poll/heartbeat every {interval:.0f}s) — Ctrl-C to stop")
             try:
                 while True:
@@ -114,6 +128,8 @@ async def _run_shadow(*, once: bool, interval: float, timeframe: str, days: int)
         await _print_summary(engine)
     finally:
         await supervisor.stop()
+        if news_source is not None:
+            await news_source.aclose()
         await mcp.disconnect()
         await engine.stop()
         await ht_engine.dispose()
