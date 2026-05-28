@@ -135,6 +135,41 @@ async def _run_shadow(*, once: bool, interval: float, timeframe: str, days: int)
         await ht_engine.dispose()
 
 
+@cli.command("ab-report")
+@click.option("--days", default=1, show_default=True, help="Look-back window (days).")
+def ab_report_cmd(days: int) -> None:
+    """Compare shadow proposals vs the live cycle's trades (Phase-3 gate)."""
+    logging.basicConfig(level=logging.WARNING)
+    asyncio.run(_run_ab_report(days=days))
+
+
+async def _run_ab_report(*, days: int) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from halabot.analysis.ab_report import ab_report
+    from halabot.platform.db import bootstrap_schema, make_engine
+    from halal_trader.config import get_settings
+
+    settings = get_settings()
+    engine = make_engine(settings.database_url)
+    await bootstrap_schema(engine)
+    until = datetime.now(UTC)
+    since = until - timedelta(days=days)
+    try:
+        rep = await ab_report(engine, since=since, until=until)
+    finally:
+        await engine.dispose()
+
+    click.echo(f"=== shadow vs live ({days}d window) ===")
+    click.echo(f"  shadow proposals: {rep.shadow_total}   live trades: {rep.live_total}")
+    if rep.churn_reduction_pct is not None:
+        click.echo(f"  churn reduction: {rep.churn_reduction_pct:+.0%} (shadow vs live count)")
+    if rep.symbols_only_live:
+        click.echo(f"  live-only symbols (churn avoided): {sorted(rep.symbols_only_live)}")
+    click.echo(f"  shadow by symbol: {dict(sorted(rep.shadow_by_symbol.items()))}")
+    click.echo(f"  live by symbol:   {dict(sorted(rep.live_by_symbol.items()))}")
+
+
 async def _print_summary(engine: object) -> None:
     beliefs = await engine.store.all_active()  # type: ignore[attr-defined]
     click.echo(f"\n=== beliefs ({len(beliefs)}) ===")

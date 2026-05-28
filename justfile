@@ -78,6 +78,19 @@ launchd-install-all:
     launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.halabot.watchdog.plist
     @echo "Installed stocks + crypto + watchdog."
 
+# Enable + start the read-only re-architecture shadow engine (halabot)
+launchd-enable-shadow:
+    @mkdir -p ~/Library/LaunchAgents logs
+    cp infra/launchd/com.halabot.shadow.plist ~/Library/LaunchAgents/
+    -launchctl bootout "gui/$(id -u)/com.halabot.shadow" 2>/dev/null
+    launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.halabot.shadow.plist
+    @echo "Shadow engine enabled (read-only; logs shadow proposals, never trades)."
+
+# Stop the shadow engine (plist stays on disk)
+launchd-disable-shadow:
+    -launchctl bootout "gui/$(id -u)/com.halabot.shadow"
+    @echo "Shadow engine disabled."
+
 # Enable + start the crypto agent (needs Binance creds in .env)
 launchd-enable-crypto:
     cp infra/launchd/com.halabot.crypto.plist ~/Library/LaunchAgents/
