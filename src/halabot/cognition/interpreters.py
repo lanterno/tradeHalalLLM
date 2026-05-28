@@ -11,6 +11,8 @@ The fitted calibrator (L8) learns each source's true weight once outcomes exist.
 
 from __future__ import annotations
 
+import statistics
+
 from halabot.belief.schema import EvidenceItem
 from halabot.cognition.bars import BarBuffer, momentum_signal, rsi
 from halabot.platform.events import Event, EventType
@@ -115,6 +117,52 @@ class TrendAlignmentInterpreter:
                 detail=f"short {short_ret:+.2%} / long {long_ret:+.2%}",
                 ts=observation.ts,
                 event_id=observation.id,
+            )
+        ]
+
+
+class AnomalyInterpreter:
+    """Emits a non-directional ``anomaly`` flag when short-window return
+    volatility spikes above its baseline — wiring up conviction_raw's anomaly
+    down-weight (×0.6), so the engine trusts a signal less in chaotic tape."""
+
+    consumes = frozenset({EventType.OBSERVATION_BAR})
+
+    def __init__(
+        self, buffer: BarBuffer, *, short: int = 5, baseline: int = 30, mult: float = 2.0
+    ) -> None:
+        self._buffer = buffer
+        self._short = short
+        self._baseline = baseline
+        self._mult = mult
+
+    async def interpret(self, observation: Event) -> list[EvidenceItem]:
+        asset = observation.asset
+        if asset is None:
+            return []
+        closes = self._buffer.closes(asset)
+        if len(closes) < self._baseline + 1:
+            return []
+        rets = [
+            (closes[i] - closes[i - 1]) / closes[i - 1]
+            for i in range(1, len(closes))
+            if closes[i - 1] > 0
+        ]
+        if len(rets) < self._baseline:
+            return []
+        short_vol = statistics.pstdev(rets[-self._short :])
+        base_vol = statistics.pstdev(rets[-self._baseline :])
+        if base_vol <= 0 or short_vol <= self._mult * base_vol:
+            return []
+        return [
+            EvidenceItem(
+                source="anomaly",
+                direction=0.0,
+                weight=1.0,
+                detail=f"vol spike {short_vol / base_vol:.1f}x baseline",
+                ts=observation.ts,
+                event_id=observation.id,
+                directional=False,  # a flag, not a directional vote
             )
         ]
 

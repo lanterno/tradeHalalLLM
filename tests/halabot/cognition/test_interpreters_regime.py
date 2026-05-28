@@ -9,6 +9,7 @@ import pytest
 from halabot.belief.schema import EvidenceItem, Regime
 from halabot.cognition.bars import Bar, BarBuffer
 from halabot.cognition.interpreters import (
+    AnomalyInterpreter,
     IndicatorInterpreter,
     NewsLexiconInterpreter,
     RsiInterpreter,
@@ -120,6 +121,28 @@ async def test_alignment_silent_when_horizons_disagree():
     _fill(buf, "NVDA", closes)
     obs = new_event(CLOCK, EventType.OBSERVATION_BAR, source="alpaca", asset="NVDA")
     assert await TrendAlignmentInterpreter(buf).interpret(obs) == []
+
+
+# ── AnomalyInterpreter ──
+@pytest.mark.asyncio
+async def test_anomaly_flag_on_volatility_spike():
+    buf = BarBuffer()
+    calm = [100 + 0.1 * i for i in range(40)]          # low-vol drift
+    spike = [104, 96, 108, 92, 110]                     # sudden chaos
+    _fill(buf, "NVDA", calm + spike)
+    obs = new_event(CLOCK, EventType.OBSERVATION_BAR, source="alpaca", asset="NVDA")
+    out = await AnomalyInterpreter(buf).interpret(obs)
+    assert len(out) == 1
+    assert out[0].source == "anomaly"
+    assert out[0].directional is False  # a flag, not a directional vote
+
+
+@pytest.mark.asyncio
+async def test_anomaly_silent_on_calm_tape():
+    buf = BarBuffer()
+    _fill(buf, "NVDA", [100 + 0.1 * i for i in range(45)])  # steady, no spike
+    obs = new_event(CLOCK, EventType.OBSERVATION_BAR, source="alpaca", asset="NVDA")
+    assert await AnomalyInterpreter(buf).interpret(obs) == []
 
 
 # ── NewsLexiconInterpreter ──

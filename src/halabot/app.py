@@ -26,6 +26,7 @@ from halabot.belief.store import PgBeliefStore
 from halabot.belief.updater import BeliefUpdater, UpdaterConfig
 from halabot.cognition.bars import BarBuffer, BufferPriceSource
 from halabot.cognition.interpreters import (
+    AnomalyInterpreter,
     IndicatorInterpreter,
     NewsLexiconInterpreter,
     RsiInterpreter,
@@ -137,6 +138,7 @@ async def build_engine(
             IndicatorInterpreter(buffer),
             RsiInterpreter(buffer),
             TrendAlignmentInterpreter(buffer),
+            AnomalyInterpreter(buffer),
             NewsLexiconInterpreter(),
         ],
     )
