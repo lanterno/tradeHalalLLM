@@ -34,12 +34,14 @@ from halabot.cognition.interpreters import (
     IndicatorInterpreter,
     MultiFrameInterpreter,
     NewsLexiconInterpreter,
+    NewsLlmInterpreter,
     RsiInterpreter,
     TrendAlignmentInterpreter,
 )
 from halabot.cognition.level_engine import BarLevelEngine
 from halabot.cognition.regime import EvidenceRegimeClassifier
 from halabot.cognition.router import CognitionRouter
+from halabot.cognition.thesis import LlmGate, LlmThesisWriter
 from halabot.cognition.worker import BeliefSink, CoalescingBeliefWorker, InlineBeliefSink
 from halabot.conviction.calibrator import FittedCalibrator
 from halabot.learning.retrain import CalibratorRetrainer
@@ -174,6 +176,17 @@ async def build_engine(
     # (no broker positions exist in shadow). An explicit `positions` overrides.
     shadow_book = ShadowPortfolio()
 
+    # Sparse LLM thesis writer (the only LLM touch — INV-1, triple-guarded by the
+    # updater). OFF by default (costs money); enable via cognition.llm_thesis_enabled,
+    # which lazily wires the legacy FallbackLLM. Explicit args override.
+    if thesis_writer is None and s.cognition.llm_thesis_enabled:
+        from halal_trader.core.llm import create_llm
+
+        _llm = create_llm()
+        thesis_writer = LlmThesisWriter(_llm)
+        if llm_gate is None:
+            llm_gate = LlmGate(_llm)
+
     # Self-activates once the learning loop (L8) accumulates leakage-free
     # outcomes and calls fit(); identity until then (cold-start safe).
     calibrator = FittedCalibrator(min_samples=s.conviction.min_samples_to_calibrate)
@@ -216,6 +229,11 @@ async def build_engine(
         interpreters.append(MultiFrameInterpreter(buffer))
     if s.cognition.forecaster_enabled:
         interpreters.append(ForecasterInterpreter(buffer))
+    if s.cognition.news_llm_enabled:
+        from halabot.cognition.thesis import LlmHeadlineScorer
+        from halal_trader.core.llm import create_llm
+
+        interpreters.append(NewsLlmInterpreter(LlmHeadlineScorer(create_llm())))
     router = CognitionRouter(
         bus=bus,
         sink=sink,

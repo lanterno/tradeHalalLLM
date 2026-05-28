@@ -11,11 +11,15 @@ The fitted calibrator (L8) learns each source's true weight once outcomes exist.
 
 from __future__ import annotations
 
+import logging
 import statistics
+from typing import Protocol
 
 from halabot.belief.schema import EvidenceItem
 from halabot.cognition.bars import BarBuffer, ema, momentum_signal, rsi
 from halabot.platform.events import Event, EventType
+
+logger = logging.getLogger(__name__)
 
 # News evidence decays fast; one headline shouldn't dominate for long. The
 # decay half-life is global, so we encode "freshness" via a modest base weight.
@@ -362,6 +366,52 @@ class NewsLexiconInterpreter:
                 direction=direction,
                 weight=_NEWS_WEIGHT,
                 detail=f"news polarity {direction:+.2f}: {headline}",
+                ts=observation.ts,
+                event_id=observation.id,
+            )
+        ]
+
+
+class HeadlineScorer(Protocol):
+    """Scores a headline to a directional polarity in [-1, 1], or None to abstain."""
+
+    async def score(self, headline: str) -> float | None: ...
+
+
+class NewsLlmInterpreter:
+    """Sparse LLM news scoring — fires ONLY when the cheap lexicon abstained
+    (``lexicon_polarity`` is None), so the LLM is spent only on the headlines the
+    free path couldn't read. LLM-down or a scorer error yields no evidence (INV-1):
+    perception already recorded "we saw news"; the directional read is best-effort."""
+
+    consumes = frozenset({EventType.OBSERVATION_NEWS})
+
+    def __init__(self, scorer: HeadlineScorer) -> None:
+        self._scorer = scorer
+
+    async def interpret(self, observation: Event) -> list[EvidenceItem]:
+        asset = observation.asset
+        if asset is None or observation.payload.get("lexicon_polarity") is not None:
+            return []  # lexicon already scored it (or no asset) → don't spend the LLM
+        headline = str(observation.payload.get("headline", "")).strip()
+        if not headline:
+            return []
+        try:
+            polarity = await self._scorer.score(headline)
+        except Exception as exc:  # noqa: BLE001 — an LLM hiccup yields no evidence (INV-1)
+            logger.warning("news LLM scoring failed: %r", exc)
+            return []
+        if polarity is None:
+            return []
+        direction = max(-1.0, min(1.0, float(polarity)))
+        if direction == 0.0:
+            return []
+        return [
+            EvidenceItem(
+                source="news",
+                direction=direction,
+                weight=_NEWS_WEIGHT,
+                detail=f"news(llm) {direction:+.2f}: {headline[:80]}",
                 ts=observation.ts,
                 event_id=observation.id,
             )

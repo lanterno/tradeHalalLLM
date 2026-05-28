@@ -41,6 +41,9 @@ class CognitionSettings(BaseModel):
     # the same interpreter seam.
     forecaster_enabled: bool = False
     multiframe_enabled: bool = True
+    # Sparse LLM headline scoring: only fires when the cheap lexicon abstains.
+    # Off by default (per-headline LLM cost); the lexicon path always runs.
+    news_llm_enabled: bool = False
 
 
 class ConvictionSettings(BaseModel):

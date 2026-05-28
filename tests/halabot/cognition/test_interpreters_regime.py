@@ -15,6 +15,7 @@ from halabot.cognition.interpreters import (
     IndicatorInterpreter,
     MultiFrameInterpreter,
     NewsLexiconInterpreter,
+    NewsLlmInterpreter,
     RsiInterpreter,
     TrendAlignmentInterpreter,
 )
@@ -250,3 +251,45 @@ async def test_news_interpreter_silent_when_lexicon_abstains():
         payload={"lexicon_polarity": None, "headline": "ambiguous"},
     )
     assert await NewsLexiconInterpreter().interpret(obs) == []
+
+
+# ── NewsLlmInterpreter (sparse: only when the lexicon abstained) ──
+class _Scorer:
+    def __init__(self, polarity, *, raises=False):
+        self.polarity, self.raises, self.calls = polarity, raises, 0
+
+    async def score(self, headline):
+        self.calls += 1
+        if self.raises:
+            raise RuntimeError("llm down")
+        return self.polarity
+
+
+@pytest.mark.asyncio
+async def test_news_llm_scores_when_lexicon_abstained():
+    obs = new_event(
+        CLOCK, EventType.OBSERVATION_NEWS, source="finnhub", asset="NVDA",
+        payload={"lexicon_polarity": None, "headline": "surprise FDA approval"},
+    )
+    out = await NewsLlmInterpreter(_Scorer(0.7)).interpret(obs)
+    assert len(out) == 1 and out[0].source == "news" and out[0].direction == 0.7
+
+
+@pytest.mark.asyncio
+async def test_news_llm_skips_when_lexicon_already_scored():
+    scorer = _Scorer(0.7)
+    obs = new_event(
+        CLOCK, EventType.OBSERVATION_NEWS, source="finnhub", asset="NVDA",
+        payload={"lexicon_polarity": 0.5, "headline": "x"},  # lexicon scored it
+    )
+    assert await NewsLlmInterpreter(scorer).interpret(obs) == []
+    assert scorer.calls == 0  # LLM never spent (sparse)
+
+
+@pytest.mark.asyncio
+async def test_news_llm_silent_on_scorer_error():
+    obs = new_event(
+        CLOCK, EventType.OBSERVATION_NEWS, source="finnhub", asset="NVDA",
+        payload={"lexicon_polarity": None, "headline": "x"},
+    )
+    assert await NewsLlmInterpreter(_Scorer(None, raises=True)).interpret(obs) == []  # INV-1
