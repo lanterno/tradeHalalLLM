@@ -11,6 +11,7 @@ stable belief produces no proposal (the anti-churn property, observable).
 from __future__ import annotations
 
 import logging
+from datetime import timedelta
 from typing import Protocol
 
 from halabot.belief.store import BeliefStore
@@ -40,6 +41,7 @@ class ShadowPolicyRunner:
         clock: Clock,
         prices: PriceSource | None = None,
         nominal_equity: float = 100_000.0,
+        compliance_ttl: timedelta | None = None,
     ) -> None:
         self._bus = bus
         self._store = store
@@ -49,12 +51,18 @@ class ShadowPolicyRunner:
         self._clock = clock
         self._prices = prices
         self._nominal = nominal_equity
+        self._compliance_ttl = compliance_ttl
         self._subs: list[Subscription] = []
         self.proposals_count = 0  # for the A/B (proposed trades over a session)
         self.last_proposals: list[TradeProposal] = []
 
     def start(self) -> None:
         self._subs.append(self._bus.subscribe({EventType.BELIEF_UPDATED}, self._on_belief))
+        # Force-exits (INV-7 compliance_lapsed, price-break invalidation) bypass
+        # the conviction path — a held belief turning invalid must close now.
+        self._subs.append(
+            self._bus.subscribe({EventType.BELIEF_INVALIDATED}, self._on_invalidated)
+        )
 
     def stop(self) -> None:
         for sub in self._subs:
@@ -73,13 +81,55 @@ class ShadowPolicyRunner:
             gross_exposure=self._portfolio.gross_exposure(),
         )
 
+    async def _on_invalidated(self, event: Event) -> None:
+        """A held belief was invalidated → propose a force-exit to weight 0.
+
+        Models the live monitor's force-exit (Appendix H rung 1–2) in the
+        shadow book: bypasses conviction/halal gates because exits always
+        reduce risk. No-op if the shadow book doesn't hold the asset.
+        """
+        asset = event.asset
+        if asset is None or not self._portfolio.holds(asset):
+            return
+        cur = self._portfolio.weight(asset)
+        reason = str(event.payload.get("reason", "invalidated"))
+        self._portfolio.set_weight(asset, 0.0)
+        self.proposals_count += 1
+        price = self._prices.last_price(asset) if self._prices is not None else None
+        await self._bus.publish(
+            new_event(
+                self._clock,
+                EventType.POLICY_TRADE_PROPOSED,
+                source="policy.shadow",
+                asset=asset,
+                payload={
+                    "side": "sell",
+                    "target_weight": 0.0,
+                    "current_weight": round(cur, 4),
+                    "weight_delta": round(-cur, 4),
+                    "price": price,
+                    "reason": reason,
+                    "belief_version": int(event.payload.get("version", 0)),
+                    "shadow": True,
+                    "forced_exit": True,
+                },
+                causation=event,
+            )
+        )
+        logger.info("SHADOW force-exit: sell %s → 0 (%s)", asset, reason)
+
     async def _on_belief(self, event: Event) -> None:
         beliefs = await self._store.all_active()
         by_asset = {b.asset: b for b in beliefs}
         risk = self._risk.evaluate(self._snapshot())
         targets = self._policy.targets(beliefs, self._portfolio, risk)
         proposals = self._policy.deltas(
-            targets, self._portfolio, beliefs_by_asset=by_asset, risk=risk
+            targets,
+            self._portfolio,
+            beliefs_by_asset=by_asset,
+            risk=risk,
+            now=event.ts,
+            compliance_ttl=self._compliance_ttl,
         )
         self.last_proposals = proposals
         for p in proposals:

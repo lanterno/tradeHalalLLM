@@ -10,6 +10,7 @@ rebalance threshold (anti-churn) and the gates pass (exits always allowed).
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 
 from halabot.belief.schema import BeliefState
 from halabot.policy.gates import GateContext, evaluate_gates
@@ -72,6 +73,8 @@ class Policy:
         beliefs_by_asset: dict[str, BeliefState],
         risk: RiskState,
         kill_switch: bool = False,
+        now: datetime | None = None,
+        compliance_ttl: timedelta | None = None,
     ) -> list[TradeProposal]:
         out: list[TradeProposal] = []
         for t in targets:
@@ -92,6 +95,8 @@ class Policy:
                         current_weight=cur,
                         risk=risk,
                         kill_switch=kill_switch,
+                        now=now,
+                        compliance_ttl=compliance_ttl,
                     )
                 )
                 if gate_reason is not None:

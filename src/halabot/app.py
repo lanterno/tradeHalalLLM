@@ -67,11 +67,6 @@ class _NoThesis:
         return ""
 
 
-class _NoPositions:
-    def has_position(self, asset: str) -> bool:
-        return False
-
-
 @dataclass
 class Engine:
     """A running read-only engine: its bus is the ingress for observations."""
@@ -140,6 +135,10 @@ async def build_engine(
     store = PgBeliefStore(db_engine)
     buffer = BarBuffer()
     prices = BufferPriceSource(buffer)
+    # One shadow book, shared as the updater's PositionSource so the engine's
+    # INV-7 lapsed-compliance force-exit path keys off what the shadow "holds"
+    # (no broker positions exist in shadow). An explicit `positions` overrides.
+    shadow_book = ShadowPortfolio()
 
     updater = BeliefUpdater(
         store=store,
@@ -151,7 +150,7 @@ async def build_engine(
         calibrator=IdentityCalibrator(),
         thesis_writer=thesis_writer or _NoThesis(),
         prices=prices,
-        positions=positions or _NoPositions(),
+        positions=positions or shadow_book,
         llm=llm_gate or _DisabledLLM(),
         config=updater_config,
     )
@@ -171,10 +170,11 @@ async def build_engine(
         bus=bus,
         store=store,
         policy=Policy(policy_config),
-        portfolio=ShadowPortfolio(),
+        portfolio=shadow_book,
         risk_engine=BasicRiskEngine(risk_config),
         clock=clock,
         prices=prices,
+        compliance_ttl=timedelta(hours=s.halal.cache_ttl_h),
     )
     outcomes = ShadowOutcomeTracker(bus=bus, engine=db_engine, store=store)
     router.start()

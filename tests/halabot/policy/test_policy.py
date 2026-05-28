@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 import pytest
 
 from halabot.belief.schema import BeliefState, ComplianceVerdict, Direction
@@ -72,6 +74,65 @@ def test_halal_gate_blocks_buy():
     targets = policy.targets([b], ShadowPortfolio(), RISK)
     props = policy.deltas(targets, ShadowPortfolio(), beliefs_by_asset={"NVDA": b}, risk=RISK)
     assert props == []  # non-halal → no buy (INV-7)
+
+
+# ── INV-7 entry freshness: a stale positive verdict fails closed ──
+def _b_screened(asset, *, screened_at, conviction=0.9):
+    return BeliefState(
+        asset=asset,
+        direction=Direction.LONG_BIAS,
+        conviction=conviction,
+        halal=ComplianceVerdict(asset, "halal", screened_at=screened_at),
+        version=1,
+    )
+
+
+def test_fresh_verdict_allows_buy():
+    policy = Policy(CFG)
+    now = datetime(2026, 5, 28, 12, 0, tzinfo=UTC)
+    b = _b_screened("NVDA", screened_at=now - timedelta(hours=1))
+    targets = policy.targets([b], ShadowPortfolio(), RISK)
+    props = policy.deltas(
+        targets,
+        ShadowPortfolio(),
+        beliefs_by_asset={"NVDA": b},
+        risk=RISK,
+        now=now,
+        compliance_ttl=timedelta(hours=24),
+    )
+    assert len(props) == 1 and props[0].side == "buy"
+
+
+def test_stale_verdict_blocks_buy():
+    policy = Policy(CFG)
+    now = datetime(2026, 5, 28, 12, 0, tzinfo=UTC)
+    b = _b_screened("NVDA", screened_at=now - timedelta(hours=48))  # older than TTL
+    targets = policy.targets([b], ShadowPortfolio(), RISK)
+    props = policy.deltas(
+        targets,
+        ShadowPortfolio(),
+        beliefs_by_asset={"NVDA": b},
+        risk=RISK,
+        now=now,
+        compliance_ttl=timedelta(hours=24),
+    )
+    assert props == []  # stale verdict → fail-closed (INV-7 entry freshness)
+
+
+def test_missing_screened_at_blocks_buy_under_ttl():
+    policy = Policy(CFG)
+    now = datetime(2026, 5, 28, 12, 0, tzinfo=UTC)
+    b = _b("NVDA", conviction=0.9, status="halal")  # screened_at=None
+    targets = policy.targets([b], ShadowPortfolio(), RISK)
+    props = policy.deltas(
+        targets,
+        ShadowPortfolio(),
+        beliefs_by_asset={"NVDA": b},
+        risk=RISK,
+        now=now,
+        compliance_ttl=timedelta(hours=24),
+    )
+    assert props == []  # no screened_at + TTL enforced → not fresh
 
 
 def test_risk_halt_blocks_buy_but_allows_sell():

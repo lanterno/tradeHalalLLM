@@ -36,6 +36,12 @@ class ShadowPortfolio:
     def holds(self, asset: str) -> bool:
         return self.weight(asset) > 0.0
 
+    def has_position(self, asset: str) -> bool:
+        # PositionSource alias for holds — lets the belief updater treat the
+        # hypothetical book as "held" so the shadow exercises the live INV-7
+        # lapsed-compliance forced-exit path (set_compliance reads this).
+        return self.holds(asset)
+
     def has_open_order(self, asset: str) -> bool:
         return False
 

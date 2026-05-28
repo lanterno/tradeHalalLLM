@@ -92,6 +92,43 @@ async def test_conviction_decay_to_neutral_proposes_an_exit():
 
 
 @pytest.mark.asyncio
+async def test_belief_invalidated_forces_exit_of_held_position():
+    """INV-7: a compliance_lapsed invalidation on a held name flattens it,
+    bypassing the conviction path (the shadow analogue of the monitor's exit)."""
+    store, bus, runner, proposed = await _build()
+    await _signal_belief_update(bus, store, _bullish())  # buy in
+    assert runner._portfolio.weight("NVDA") > 0
+    await bus.publish(
+        new_event(
+            CLOCK,
+            EventType.BELIEF_INVALIDATED,
+            source="belief.compliance",
+            asset="NVDA",
+            payload={"reason": "compliance_lapsed", "version": 2},
+        )
+    )
+    assert runner._portfolio.weight("NVDA") == 0.0  # force-exited
+    sells = [p for p in proposed if p.payload["side"] == "sell"]
+    assert sells and sells[-1].payload["reason"] == "compliance_lapsed"
+    assert sells[-1].payload["forced_exit"] is True
+
+
+@pytest.mark.asyncio
+async def test_belief_invalidated_on_unheld_asset_is_noop():
+    store, bus, runner, proposed = await _build()
+    await bus.publish(
+        new_event(
+            CLOCK,
+            EventType.BELIEF_INVALIDATED,
+            source="belief.compliance",
+            asset="TSLA",
+            payload={"reason": "compliance_lapsed", "version": 1},
+        )
+    )
+    assert runner.proposals_count == 0  # nothing held → nothing to exit
+
+
+@pytest.mark.asyncio
 async def test_runner_only_emits_policy_events_never_orders():
     store, bus, runner, _ = await _build()
     all_events: list[Event] = []

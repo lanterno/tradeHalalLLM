@@ -140,6 +140,12 @@ class BeliefUpdater:
         real prior verdict — a screening outage must not flip a belief. Persists
         a new version and publishes ``belief.updated`` so downstream (policy)
         re-evaluates tradeability.
+
+        Lapsed compliance (INV-7, fix R-05): when a *real* (non-transient)
+        ``not_halal``/``doubtful`` verdict lands on a position we currently hold,
+        emit ``belief.invalidated(compliance_lapsed)`` BEFORE the update so the
+        policy drives target→0 and the position is force-exited regardless of
+        conviction or P&L. A transient error never triggers this (INV-2).
         """
         b = await self.store.get(asset) or BeliefState.neutral(asset)
         if verdict.transient_error and b.halal is not None and not b.halal.transient_error:
@@ -148,6 +154,32 @@ class BeliefUpdater:
         b.last_updated = now
         version = await self.store.put(b)
         b.version = version
+
+        lapsed = (
+            not verdict.transient_error
+            and verdict.status in ("not_halal", "doubtful")
+            and self.positions.has_position(asset)
+        )
+        if lapsed:
+            logger.warning(
+                "compliance lapsed on HELD %s: status=%s — forcing exit (INV-7)",
+                asset,
+                verdict.status,
+            )
+            await self.bus.publish(
+                new_event(
+                    self.clock,
+                    EventType.BELIEF_INVALIDATED,
+                    source="belief.compliance",
+                    asset=asset,
+                    payload={
+                        "version": version,
+                        "reason": "compliance_lapsed",
+                        "status": verdict.status,
+                        "detail": verdict.detail,
+                    },
+                )
+            )
         await self.bus.publish(
             new_event(
                 self.clock,

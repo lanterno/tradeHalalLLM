@@ -12,6 +12,7 @@ carries its compliance verdict (INV-7).
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 
 from halabot.belief.schema import BeliefState, Direction
 from halabot.risk.engine import RiskState
@@ -25,6 +26,11 @@ class GateContext:
     current_weight: float
     risk: RiskState
     kill_switch: bool = False
+    # INV-7 entry-freshness: a positive verdict is only tradeable while fresh. When
+    # both are supplied the halal gate also rejects a verdict older than the TTL
+    # (fail-closed). Left None in unit fixtures that aren't exercising freshness.
+    now: datetime | None = None
+    compliance_ttl: timedelta | None = None
 
 
 def evaluate_gates(ctx: GateContext) -> str | None:
@@ -38,19 +44,31 @@ def evaluate_gates(ctx: GateContext) -> str | None:
         return f"risk halt: {ctx.risk.reason}"
     if ctx.belief.direction != Direction.LONG_BIAS:
         return "belief not long-biased"
-    if not _is_tradeable(ctx.belief):
-        return f"halal gate: {_halal_reason(ctx.belief)}"
+    if not _is_tradeable(ctx.belief, now=ctx.now, ttl=ctx.compliance_ttl):
+        return f"halal gate: {_halal_reason(ctx.belief, now=ctx.now, ttl=ctx.compliance_ttl)}"
     return None
 
 
-def _is_tradeable(b: BeliefState) -> bool:
+def _is_tradeable(
+    b: BeliefState, *, now: datetime | None = None, ttl: timedelta | None = None
+) -> bool:
     v = b.halal
-    return v is not None and v.status == "halal" and not v.transient_error
+    if v is None or v.status != "halal" or v.transient_error:
+        return False
+    if ttl is not None and now is not None:
+        if v.screened_at is None or (now - v.screened_at) > ttl:
+            return False  # stale verdict → fail-closed (INV-7 entry freshness)
+    return True
 
 
-def _halal_reason(b: BeliefState) -> str:
+def _halal_reason(
+    b: BeliefState, *, now: datetime | None = None, ttl: timedelta | None = None
+) -> str:
     if b.halal is None:
         return "no verdict"
     if b.halal.transient_error:
         return "screening transient error"
+    if b.halal.status == "halal" and ttl is not None and now is not None:
+        if b.halal.screened_at is None or (now - b.halal.screened_at) > ttl:
+            return "verdict stale"
     return f"status={b.halal.status}"

@@ -279,3 +279,43 @@ async def test_real_not_halal_verdict_does_overwrite():
     b = await store.get("NVDA")
     assert b is not None and b.halal is not None
     assert b.halal.status == "not_halal"  # a REAL verdict does update
+
+
+# ── lapsed compliance on HELD positions (INV-7, fix R-05) ──
+@pytest.mark.asyncio
+async def test_lapsed_compliance_on_held_position_forces_exit():
+    from halabot.belief.schema import ComplianceVerdict
+
+    updater, _, events = _build(positions=FakePositions(held={"NVDA"}))
+    await updater.set_compliance(
+        "NVDA", ComplianceVerdict("NVDA", "not_halal", screened_at=T0), T0
+    )
+    inval = [e for e in events if e.type == EventType.BELIEF_INVALIDATED]
+    assert len(inval) == 1
+    assert inval[0].payload["reason"] == "compliance_lapsed"
+
+
+@pytest.mark.asyncio
+async def test_lapsed_compliance_not_held_does_not_force_exit():
+    from halabot.belief.schema import ComplianceVerdict
+
+    updater, _, events = _build(positions=FakePositions(held=set()))  # not held
+    await updater.set_compliance(
+        "NVDA", ComplianceVerdict("NVDA", "not_halal", screened_at=T0), T0
+    )
+    assert not any(e.type == EventType.BELIEF_INVALIDATED for e in events)
+
+
+@pytest.mark.asyncio
+async def test_transient_error_on_held_does_not_force_exit():
+    """INV-2: a screening outage on a held name never triggers a forced exit."""
+    from halabot.belief.schema import ComplianceVerdict
+
+    updater, _, events = _build(positions=FakePositions(held={"NVDA"}))
+    await updater.set_compliance("NVDA", ComplianceVerdict("NVDA", "halal", screened_at=T0), T0)
+    await updater.set_compliance(
+        "NVDA",
+        ComplianceVerdict("NVDA", "doubtful", transient_error=True, screened_at=T0),
+        T0 + timedelta(minutes=1),
+    )
+    assert not any(e.type == EventType.BELIEF_INVALIDATED for e in events)
