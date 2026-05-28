@@ -89,7 +89,9 @@ class Executor:
             order = await self._size_buy(p, ctx) if p.side == "buy" else self._size_sell(p, ctx)
             if order is None:
                 return None  # infeasible — not an error
-            await self._publish(EventType.ORDER_SUBMITTED, p, ctx, qty=order.quantity)
+            await self._publish(
+                EventType.ORDER_SUBMITTED, p, ctx, qty=order.quantity, client_id=order.client_id
+            )
             result = await self._venue.place(order)
         except VenueError as exc:
             opened = self._breaker.record_error(p.asset, now, rejection=exc.rejection)
@@ -133,7 +135,14 @@ class Executor:
         )
 
     async def _publish(
-        self, t: EventType, p: TradeProposal, ctx: ExecutionContext, *, qty: float, detail: str = ""
+        self,
+        t: EventType,
+        p: TradeProposal,
+        ctx: ExecutionContext,
+        *,
+        qty: float,
+        detail: str = "",
+        client_id: str = "",
     ) -> None:
         await self._bus.publish(
             new_event(
@@ -146,6 +155,7 @@ class Executor:
                     "quantity": qty,
                     "belief_version": p.belief_version,
                     "engine_owner": ctx.engine_owner,
+                    "client_id": client_id,
                     "detail": detail,
                 },
             )

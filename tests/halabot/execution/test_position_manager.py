@@ -63,6 +63,22 @@ def test_target_zero_exits_when_nothing_else_fires():
     assert d.action == "exit" and d.reason == "target_zero"
 
 
+def test_target_zero_not_starved_by_trailing_ratchet():
+    # A decayed-conviction position making new highs must still exit on
+    # target_zero, not ratchet forever (audit #2).
+    d = decide_exit(
+        _ctx(price=130.0, trailing_high=130.0, trailing_pct=0.05, target_weight=0.0)
+    )
+    assert d.action == "exit" and d.reason == "target_zero"
+
+
+def test_trailing_ratchet_still_active_when_target_positive():
+    d = decide_exit(
+        _ctx(price=130.0, trailing_high=130.0, trailing_pct=0.05, target_weight=0.2)
+    )
+    assert d.action == "tighten"  # policy still wants it → slow-out via trailing
+
+
 def test_healthy_hold_holds():
     d = decide_exit(_ctx(price=100.0, stop=90.0, target_weight=0.2))
     assert d.action == "hold"

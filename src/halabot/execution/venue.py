@@ -90,6 +90,7 @@ class FakeVenue:
     fail_assets: set[str] = field(default_factory=set)
     clock_ts: datetime | None = None
     placed: list[Order] = field(default_factory=list)
+    _by_client_id: dict[str, OrderResult] = field(default_factory=dict)
 
     def _now(self) -> datetime:
         if self.clock_ts is None:
@@ -113,6 +114,11 @@ class FakeVenue:
         return [p for p in self._positions.values() if abs(p.quantity) > 1e-12]
 
     async def place(self, order: Order) -> OrderResult:
+        # Idempotency on client_id (the real adapters MUST honor this too): a
+        # duplicate submission returns the prior result without re-placing, so a
+        # retry/overlapping tick can't double-fill (audit finding #4).
+        if order.client_id in self._by_client_id:
+            return self._by_client_id[order.client_id]
         self.placed.append(order)
         px = self._price(order.asset)  # raises on fail_assets — no fabricated fill
         signed = order.quantity if order.side == "buy" else -order.quantity
@@ -124,7 +130,7 @@ class FakeVenue:
             new_qty = prev.quantity + signed
             avg = px if (prev.quantity == 0) else prev.avg_price
         self._positions[order.asset] = Position(order.asset, new_qty, avg)
-        return OrderResult(
+        result = OrderResult(
             asset=order.asset,
             side=order.side,
             requested_qty=order.quantity,
@@ -135,13 +141,23 @@ class FakeVenue:
             submitted_at=self._now(),
             filled_at=self._now(),
         )
+        self._by_client_id[order.client_id] = result
+        return result
 
     async def close(self, asset: str) -> OrderResult:
         pos = self._positions.get(asset)
         qty = abs(pos.quantity) if pos else 0.0
         px = self._price(asset)  # raises on fail — never a $0 synthetic close (INV-2)
         if pos is None or qty <= 0:
-            return OrderResult(asset, "sell", 0.0, 0.0, px, "filled", f"fake-close-{asset}")
+            return OrderResult(
+                asset=asset,
+                side="sell",
+                requested_qty=0.0,
+                filled_qty=0.0,
+                filled_price=px,
+                status="filled",
+                order_id=f"fake-close-{asset}",
+            )
         side: Side = "sell" if pos.quantity > 0 else "buy"
         self._positions[asset] = Position(asset, 0.0, pos.avg_price)
         return OrderResult(

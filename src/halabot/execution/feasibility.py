@@ -44,8 +44,10 @@ def feasible_buy(
 ) -> Feasibility:
     """Largest lot-step-legal buy at ``price`` for ``notional_usd``, capped by
     buying power and floored at the min-notional. Rejects (ok=False) otherwise."""
-    if price <= 0:
-        return Feasibility(False, 0.0, 0.0, "non-positive price")
+    if not math.isfinite(price) or price <= 0:
+        return Feasibility(False, 0.0, 0.0, "non-positive or non-finite price")
+    if not math.isfinite(notional_usd) or not math.isfinite(buying_power):
+        return Feasibility(False, 0.0, 0.0, "non-finite notional/buying-power")
     target = min(notional_usd, buying_power)
     if target < cfg.min_notional_usd:
         return Feasibility(False, 0.0, 0.0, f"below min notional ${cfg.min_notional_usd:.0f}")

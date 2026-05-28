@@ -48,14 +48,15 @@ def reconcile_plan(
     """Compute the reconcile action per asset across broker ∪ DB.
 
     ``owner_of(asset)`` returns the engine that owns the position (from the trade
-    rows), or None if unknown/unowned. A position owned by a DIFFERENT engine is
-    skipped (fix R-02)."""
+    rows), or None if unknown/unowned. The engine acts ONLY on positions it
+    explicitly owns: a different-engine OR unknown-owner position is skipped
+    (fail-safe — never adopt/adjust shares we can't prove are ours, fix R-02)."""
     out: list[ReconcileAction] = []
     for asset in sorted(set(broker_qty) | set(db_net)):
         bq = broker_qty.get(asset, 0.0)
         dq = db_net.get(asset, 0.0)
         owner = owner_of(asset)
-        if owner is not None and owner != engine_owner:
+        if owner != engine_owner:
             out.append(ReconcileAction(asset, dq, bq, "skip_other_engine", 0.0))
             continue
         if abs(bq - dq) < _EPS:

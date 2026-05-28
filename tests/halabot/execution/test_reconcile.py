@@ -50,6 +50,15 @@ def test_plan_skips_other_engine_positions():
     assert plan["NVDA"].adjustment_qty == 0.0
 
 
+def test_plan_skips_unknown_owner_positions():
+    # Fail-safe: never adopt/adjust a position we can't prove is ours (audit #9).
+    plan = {
+        a.asset: a
+        for a in reconcile_plan({"NVDA": 5.0}, {}, lambda a: None, engine_owner="belief")
+    }
+    assert plan["NVDA"].action == "skip_other_engine"
+
+
 @pytest.mark.asyncio
 async def test_reconciler_emits_events_for_actions():
     venue = FakeVenue(clock_ts=T0, prices={"NVDA": 100.0})

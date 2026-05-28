@@ -67,8 +67,11 @@ def decide_exit(ctx: HoldContext) -> ExitDecision:
         return ExitDecision("exit", "stop_loss")
     if ctx.is_winner and ctx.sma is not None and ctx.price < ctx.sma:
         return ExitDecision("exit", "trend_break")
-    # Trailing ratchet: tighten (never loosen) the stop toward the high-water mark.
-    if ctx.trailing_pct > 0.0:
+    # Trailing ratchet: tighten (never loosen) the stop toward the high-water
+    # mark — but ONLY while the policy still wants the position. A fully
+    # decayed-conviction position (target <= 0) must fall through to the
+    # target_zero exit rather than ratchet forever on new highs (audit #2).
+    if ctx.trailing_pct > 0.0 and ctx.target_weight > 0.0:
         high = max(ctx.trailing_high, ctx.price)
         candidate = high * (1.0 - ctx.trailing_pct)
         if ctx.stop is None or candidate > ctx.stop:
