@@ -12,6 +12,7 @@ dropped) — acceptable for the shadow; the durable record is the closed outcome
 from __future__ import annotations
 
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -44,11 +45,15 @@ class ShadowOutcomeTracker:
         engine: AsyncEngine,
         store: BeliefStore,
         win_threshold_pct: float = 0.002,
+        on_close: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         self._bus = bus
         self._engine = engine
         self._store = store
         self._win_threshold = win_threshold_pct
+        # Called after each closed outcome is written (the calibrator retrainer
+        # hooks here to refit off accumulated outcomes — L8).
+        self._on_close = on_close
         self._positions: dict[str, _Position] = {}
         self._subs: list[Subscription] = []
         self.closed_count = 0
@@ -105,6 +110,11 @@ class ShadowOutcomeTracker:
         pos.weight -= closed
         if pos.weight <= _EPS:
             self._positions.pop(asset, None)
+        if self._on_close is not None:
+            try:
+                await self._on_close()
+            except Exception as exc:  # noqa: BLE001 — a retrain failure must not break the tracker
+                logger.warning("on_close hook failed: %r", exc)
 
     async def _write_outcome(
         self,

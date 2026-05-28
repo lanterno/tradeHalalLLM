@@ -16,6 +16,11 @@ from datetime import datetime
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from halabot.analysis.significance import (
+    PromotionVerdict,
+    promotion_gate,
+    variance,
+)
 from halabot.platform.db import event_log as _event_log
 from halabot.platform.db import outcome as _outcome
 from halabot.platform.events import EventType
@@ -34,6 +39,11 @@ class ABReport:
     shadow_avg_return_pct: float | None = None
     shadow_win_rate: float | None = None
     shadow_weighted_return: float = 0.0  # Σ return_pct × closed_weight (book-level proxy)
+    shadow_return_std: float | None = None
+    # Live realized per-trade returns (regret_records.pnl_pct) + the promotion gate.
+    live_closed: int = 0
+    live_avg_return_pct: float | None = None
+    promotion: PromotionVerdict | None = None
 
     @property
     def churn_reduction_pct(self) -> float | None:
@@ -83,32 +93,71 @@ async def ab_report(engine: AsyncEngine, *, since: datetime, until: datetime) ->
         for symbol, n in live_rows:
             live_by_symbol[symbol or "?"] = int(n)
 
-        # Shadow hypothetical P&L from closed outcomes in the window.
+        # Shadow hypothetical per-trade returns from closed outcomes in the window.
         o = _outcome
-        agg = (
-            await conn.execute(
-                sa.select(
-                    sa.func.count(),
-                    sa.func.avg(o.c.return_pct),
-                    sa.func.avg(sa.cast(o.c.label, sa.Float)),
-                    sa.func.coalesce(sa.func.sum(o.c.return_pct * o.c.closed_weight), 0.0),
-                ).where(o.c.exit_ts >= since, o.c.exit_ts <= until)
+        shadow_returns = [
+            float(r[0])
+            for r in await conn.execute(
+                sa.select(o.c.return_pct).where(o.c.exit_ts >= since, o.c.exit_ts <= until)
             )
-        ).one()
-        closed = int(agg[0] or 0)
-        avg_ret = float(agg[1]) if agg[1] is not None else None
-        win_rate = float(agg[2]) if agg[2] is not None else None
-        weighted_ret = float(agg[3] or 0.0)
+        ]
+        weighted_ret = float(
+            (
+                await conn.execute(
+                    sa.select(
+                        sa.func.coalesce(sa.func.sum(o.c.return_pct * o.c.closed_weight), 0.0)
+                    ).where(o.c.exit_ts >= since, o.c.exit_ts <= until)
+                )
+            ).scalar_one()
+            or 0.0
+        )
+        labels = [
+            int(r[0])
+            for r in await conn.execute(
+                sa.select(o.c.label).where(o.c.exit_ts >= since, o.c.exit_ts <= until)
+            )
+        ]
+
+        # Live realized per-trade returns from the legacy regret_records (raw SQL,
+        # avoids importing the legacy SQLModel). Empty/missing → no live P&L data
+        # (the gate stays "insufficient samples" until it accrues — data-gated).
+        live_returns: list[float] = []
+        try:
+            live_rows2 = await conn.execute(
+                sa.text(
+                    "SELECT pnl_pct FROM regret_records "
+                    "WHERE closed_at >= :since AND closed_at <= :until"
+                ),
+                {"since": since, "until": until},
+            )
+            live_returns = [float(r[0]) for r in live_rows2 if r[0] is not None]
+        except Exception:  # noqa: BLE001 — table may not exist in a fresh/test DB
+            live_returns = []
+
+    closed = len(shadow_returns)
+    avg_ret = sum(shadow_returns) / closed if closed else None
+    win_rate = (sum(labels) / len(labels)) if labels else None
+    ret_std = variance(shadow_returns) ** 0.5 if closed >= 2 else None
+
+    shadow_total = sum(shadow_by_symbol.values())
+    live_total = sum(live_by_symbol.values())
+    churn_reduction = None if live_total <= 0 else 1.0 - (shadow_total / live_total)
+    live_avg = sum(live_returns) / len(live_returns) if live_returns else None
+    promotion = promotion_gate(shadow_returns, live_returns, churn_reduction=churn_reduction)
 
     return ABReport(
         since=since,
         until=until,
-        shadow_total=sum(shadow_by_symbol.values()),
-        live_total=sum(live_by_symbol.values()),
+        shadow_total=shadow_total,
+        live_total=live_total,
         shadow_by_symbol=shadow_by_symbol,
         live_by_symbol=live_by_symbol,
         shadow_closed=closed,
         shadow_avg_return_pct=avg_ret,
         shadow_win_rate=win_rate,
         shadow_weighted_return=weighted_ret,
+        shadow_return_std=ret_std,
+        live_closed=len(live_returns),
+        live_avg_return_pct=live_avg,
+        promotion=promotion,
     )

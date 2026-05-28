@@ -226,6 +226,21 @@ async def _run_ab_report(*, days: int) -> None:
         click.echo(f"  live-only symbols (churn avoided): {sorted(rep.symbols_only_live)}")
     click.echo(f"  shadow by symbol: {dict(sorted(rep.shadow_by_symbol.items()))}")
     click.echo(f"  live by symbol:   {dict(sorted(rep.live_by_symbol.items()))}")
+    if rep.live_closed:
+        click.echo(
+            f"  live realized P&L: {rep.live_closed} closed, avg {rep.live_avg_return_pct:+.2%}"
+        )
+    if rep.promotion is not None:
+        g = rep.promotion
+        verdict = "PROMOTE ✅" if g.promote else "HOLD ⛔"
+        es = f"{g.effect_size:+.2f}" if g.effect_size is not None else "n/a"
+        p = f"{g.p_two_sided:.3f}" if g.p_two_sided is not None else "n/a"
+        click.echo(
+            f"  Phase-3 gate: {verdict}  (shadow n={g.n_shadow}, live n={g.n_live}, "
+            f"effect d={es}, p={p})"
+        )
+        for r in g.reasons:
+            click.echo(f"    - {r}")
 
 
 async def _print_summary(engine: object) -> None:

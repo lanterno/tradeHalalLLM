@@ -116,3 +116,15 @@ async def test_no_live_trades_gives_none_churn(halabot_engine):
     )
     assert rep.live_total == 0
     assert rep.churn_reduction_pct is None  # undefined with no live baseline
+
+
+@pytest.mark.asyncio
+async def test_promotion_gate_holds_on_thin_data(halabot_engine):
+    """With few outcomes + no live P&L, the Phase-3 gate stays HOLD (data-gated)."""
+    await _seed_outcomes(halabot_engine, [("NVDA", 0.10), ("NOW", 0.05)], at=NOW)
+    rep = await ab_report(
+        halabot_engine, since=NOW - timedelta(hours=1), until=NOW + timedelta(hours=1)
+    )
+    assert rep.promotion is not None
+    assert rep.promotion.promote is False  # not enough samples to promote
+    assert rep.shadow_return_std is not None  # variance reported

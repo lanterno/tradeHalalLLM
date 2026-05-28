@@ -42,6 +42,7 @@ from halabot.cognition.regime import EvidenceRegimeClassifier
 from halabot.cognition.router import CognitionRouter
 from halabot.cognition.worker import BeliefSink, CoalescingBeliefWorker, InlineBeliefSink
 from halabot.conviction.calibrator import FittedCalibrator
+from halabot.learning.retrain import CalibratorRetrainer
 from halabot.learning.shadow_outcomes import ShadowOutcomeTracker
 from halabot.learning.telemetry import ConvictionScoreWriter, TargetWeightWriter
 from halabot.platform.bus import InProcessEventBus
@@ -87,6 +88,7 @@ class Engine:
     worker: CoalescingBeliefWorker | None = None
     conviction_writer: ConvictionScoreWriter | None = None
     target_writer: TargetWeightWriter | None = None
+    retrainer: CalibratorRetrainer | None = None
 
     async def stop(self) -> None:
         self.router.stop()
@@ -157,6 +159,9 @@ async def build_engine(
     # (no broker positions exist in shadow). An explicit `positions` overrides.
     shadow_book = ShadowPortfolio()
 
+    # Self-activates once the learning loop (L8) accumulates leakage-free
+    # outcomes and calls fit(); identity until then (cold-start safe).
+    calibrator = FittedCalibrator(min_samples=s.conviction.min_samples_to_calibrate)
     updater = BeliefUpdater(
         store=store,
         bus=bus,
@@ -164,9 +169,7 @@ async def build_engine(
         calendar=ContinuousCalendar(),
         regime=EvidenceRegimeClassifier(),
         levels=BarLevelEngine(buffer),
-        # Self-activates once the learning loop (L8) accumulates leakage-free
-        # outcomes and calls fit(); identity until then (cold-start safe).
-        calibrator=FittedCalibrator(min_samples=s.conviction.min_samples_to_calibrate),
+        calibrator=calibrator,
         thesis_writer=thesis_writer or _NoThesis(),
         prices=prices,
         positions=positions or shadow_book,
@@ -216,7 +219,15 @@ async def build_engine(
         history=buffer,  # closes() feed the risk engine's correlation pass
         compliance_ttl=timedelta(hours=s.halal.cache_ttl_h),
     )
-    outcomes = ShadowOutcomeTracker(bus=bus, engine=db_engine, store=store)
+    # Learning loop (L8): refit the calibrator off closed outcomes every N closes.
+    retrainer = CalibratorRetrainer(
+        engine=db_engine,
+        calibrator=calibrator,
+        retrain_every=s.conviction.min_samples_to_calibrate // 2 or 10,
+    )
+    outcomes = ShadowOutcomeTracker(
+        bus=bus, engine=db_engine, store=store, on_close=retrainer.on_outcome_closed
+    )
     conviction_writer = ConvictionScoreWriter(bus=bus, engine=db_engine)
     target_writer = TargetWeightWriter(bus=bus, engine=db_engine)
     # Bootstrap warm-start (Appendix F): replay recent observations to warm
@@ -249,4 +260,5 @@ async def build_engine(
         worker=worker,
         conviction_writer=conviction_writer,
         target_writer=target_writer,
+        retrainer=retrainer,
     )
