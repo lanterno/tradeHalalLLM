@@ -107,6 +107,7 @@ async def build_engine(
     llm_gate: Any | None = None,
     positions: Any | None = None,
     coalesce: bool = False,
+    bootstrap: bool = False,
 ) -> Engine:
     """Assemble + start the read-only engine. Provide ``db_engine`` (tests) or
     ``database_url``. Configs default from ``settings`` (or ``get_settings()``);
@@ -191,6 +192,7 @@ async def build_engine(
     router = CognitionRouter(
         bus=bus,
         sink=sink,
+        updater=updater,  # gives the router an inline path for bootstrap replay
         buffer=buffer,
         interpreters=interpreters,
     )
@@ -205,6 +207,13 @@ async def build_engine(
         compliance_ttl=timedelta(hours=s.halal.cache_ttl_h),
     )
     outcomes = ShadowOutcomeTracker(bus=bus, engine=db_engine, store=store)
+    # Bootstrap warm-start (Appendix F): replay recent observations to warm
+    # beliefs BEFORE subscribing to the live stream + starting the worker, so
+    # replay completes in isolation and event_id dedup absorbs any overlap.
+    if bootstrap and s.belief.bootstrap_window_min > 0:
+        now = clock.now()
+        since = now - timedelta(minutes=s.belief.bootstrap_window_min)
+        await router.bootstrap(since=since, until=now, now=now)
     if worker is not None:
         worker.start()
     router.start()

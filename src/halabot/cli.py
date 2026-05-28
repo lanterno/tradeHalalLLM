@@ -87,8 +87,9 @@ async def _run_shadow(
     # closed outcomes map raw → P(win). The two systems share one DATABASE_URL.
     # Coalesce belief writes in the continuous loop (per-asset ts-ordering,
     # Appendix F); inline + synchronous for --once so the summary is immediate.
+    # Bootstrap warms beliefs from the event log before the live stream starts.
     engine = await build_engine(
-        database_url=settings.database_url, settings=hb, coalesce=not once
+        database_url=settings.database_url, settings=hb, coalesce=not once, bootstrap=True
     )
     ht_engine = await init_db(settings.database_url)  # legacy DB, for the halal universe
     repo = Repository(ht_engine)

@@ -24,6 +24,12 @@ from halabot.platform.events import Event, EventType
 
 logger = logging.getLogger(__name__)
 
+# Observation event types replayed during bootstrap (compliance is re-established
+# live by the seed / Zoya source, not replayed).
+_OBSERVATION_TYPES = frozenset(
+    {EventType.OBSERVATION_BAR, EventType.OBSERVATION_NEWS, EventType.OBSERVATION_PRICE}
+)
+
 
 class CognitionRouter:
     def __init__(
@@ -41,6 +47,11 @@ class CognitionRouter:
             sink = InlineBeliefSink(updater)
         self._bus = bus
         self._sink = sink
+        # Bootstrap replay must apply synchronously to completion before the live
+        # stream starts (Appendix F), even when the live sink is the async worker.
+        # An inline sink over the updater guarantees that; fall back to the live
+        # sink when no updater was injected.
+        self._replay_sink: BeliefSink = InlineBeliefSink(updater) if updater else sink
         self._buffer = buffer
         self._by_type: dict[EventType, list[Interpreter]] = {}
         for itp in interpreters:
@@ -65,6 +76,48 @@ class CognitionRouter:
     @property
     def known_assets(self) -> frozenset[str]:
         return frozenset(self._known_assets)
+
+    async def bootstrap(
+        self, *, since: datetime, until: datetime, now: datetime
+    ) -> frozenset[str]:
+        """Warm beliefs by replaying ``observation.*`` from the event log (Appendix F).
+
+        Each event is interpreted at its OWN ts (event-time) with ``is_replay=True``
+        so decay ages it relative to *then* and NO invalidation/order side-effects
+        fire (replay must never trade against historical prices). After the window
+        replays, each warmed belief is decayed forward to ``now``. Applied inline
+        and synchronously, so it completes before the live stream is subscribed;
+        ``merge``'s event_id dedup absorbs any overlap with buffered live events.
+
+        Call BEFORE :meth:`start`. Returns the set of warmed assets.
+        """
+        warmed: set[str] = set()
+        count = 0
+        async for event in self._bus.replay(since=since, until=until):
+            if event.type not in _OBSERVATION_TYPES or event.asset is None:
+                continue
+            asset = event.asset
+            if event.type == EventType.OBSERVATION_BAR:
+                self._buffer.append(asset, _parse_bar(event))
+            self._known_assets.add(asset)
+            warmed.add(asset)
+            evidence: list[EvidenceItem] = []
+            for itp in self._by_type.get(event.type, []):
+                try:
+                    evidence.extend(await itp.interpret(event))
+                except Exception as exc:  # noqa: BLE001 — a bad interpreter yields no evidence
+                    logger.error("replay interpreter %s failed: %r", type(itp).__name__, exc)
+            if evidence or event.type == EventType.OBSERVATION_BAR:
+                await self._replay_sink.evidence(asset, event.ts, evidence, is_replay=True)
+            count += 1
+        # Bring each warmed belief to the present (decay-only, still suppressed).
+        for asset in sorted(warmed):
+            await self._replay_sink.evidence(asset, now, [], is_replay=True)
+        if warmed:
+            logger.info(
+                "bootstrap warmed %d assets from %d replayed observations", len(warmed), count
+            )
+        return frozenset(warmed)
 
     async def _on_event(self, event: Event) -> None:
         if event.type == EventType.SYSTEM_HEARTBEAT:
