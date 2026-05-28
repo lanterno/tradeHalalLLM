@@ -1,0 +1,96 @@
+"""Regime classifier + cheap interpreters."""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+
+import pytest
+
+from halabot.belief.schema import EvidenceItem, Regime
+from halabot.cognition.bars import Bar, BarBuffer
+from halabot.cognition.interpreters import IndicatorInterpreter, NewsLexiconInterpreter
+from halabot.cognition.regime import EvidenceRegimeClassifier
+from halabot.platform.clock import FakeClock
+from halabot.platform.events import EventType, new_event
+
+T0 = datetime(2026, 5, 28, 12, 0, tzinfo=UTC)
+CLOCK = FakeClock(T0)
+
+
+def _ev(direction, weight=1.0, *, source="x", directional=True):
+    return EvidenceItem(
+        source=source, direction=direction, weight=weight, ts=T0, directional=directional
+    )
+
+
+# ── regime ──
+def test_regime_empty_is_ranging():
+    assert EvidenceRegimeClassifier().classify([])[0] == Regime.RANGING
+
+
+def test_regime_strong_bullish_is_trending_up():
+    regime, conf = EvidenceRegimeClassifier().classify([_ev(1.0), _ev(0.9)])
+    assert regime == Regime.TRENDING_UP
+    assert conf > 0
+
+
+def test_regime_strong_bearish_is_trending_down():
+    regime, _ = EvidenceRegimeClassifier().classify([_ev(-1.0), _ev(-0.8)])
+    assert regime == Regime.TRENDING_DOWN
+
+
+def test_regime_weak_signal_is_ranging():
+    regime, _ = EvidenceRegimeClassifier().classify([_ev(0.1, 0.2)])
+    assert regime == Regime.RANGING
+
+
+def test_regime_anomaly_flag_is_volatile():
+    regime, _ = EvidenceRegimeClassifier().classify(
+        [_ev(1.0), _ev(0.0, source="anomaly", directional=False)]
+    )
+    assert regime == Regime.VOLATILE
+
+
+# ── IndicatorInterpreter ──
+@pytest.mark.asyncio
+async def test_indicator_interpreter_emits_on_uptrend():
+    buf = BarBuffer()
+    for i in range(30):
+        c = 100 + i
+        buf.append("NVDA", Bar(o=c, h=c + 1, low=c - 1, c=c, v=1.0, ts=T0))
+    obs = new_event(CLOCK, EventType.OBSERVATION_BAR, source="alpaca", asset="NVDA")
+    out = await IndicatorInterpreter(buf).interpret(obs)
+    assert len(out) == 1
+    assert out[0].source == "indicator.momentum"
+    assert out[0].direction > 0
+    assert out[0].event_id == obs.id  # provenance
+
+
+@pytest.mark.asyncio
+async def test_indicator_interpreter_silent_without_history():
+    buf = BarBuffer()
+    buf.append("NVDA", Bar(o=1, h=1, low=1, c=1, v=1.0, ts=T0))
+    obs = new_event(CLOCK, EventType.OBSERVATION_BAR, source="alpaca", asset="NVDA")
+    assert await IndicatorInterpreter(buf).interpret(obs) == []
+
+
+# ── NewsLexiconInterpreter ──
+@pytest.mark.asyncio
+async def test_news_interpreter_emits_polarity_evidence():
+    obs = new_event(
+        CLOCK, EventType.OBSERVATION_NEWS, source="finnhub", asset="NVDA",
+        payload={"lexicon_polarity": 0.8, "headline": "blowout earnings"},
+    )
+    out = await NewsLexiconInterpreter().interpret(obs)
+    assert len(out) == 1
+    assert out[0].source == "news"
+    assert out[0].direction == 0.8
+
+
+@pytest.mark.asyncio
+async def test_news_interpreter_silent_when_lexicon_abstains():
+    obs = new_event(
+        CLOCK, EventType.OBSERVATION_NEWS, source="finnhub", asset="NVDA",
+        payload={"lexicon_polarity": None, "headline": "ambiguous"},
+    )
+    assert await NewsLexiconInterpreter().interpret(obs) == []
