@@ -45,8 +45,11 @@ class FinnhubNewsSource(PollingSource):
         interval_s: float = 60.0,
         client: httpx.AsyncClient | None = None,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        dedup_store: Any | None = None,
     ) -> None:
-        super().__init__("finnhub-news", interval_s=interval_s, sleep=sleep)
+        super().__init__(
+            "finnhub-news", interval_s=interval_s, sleep=sleep, dedup_store=dedup_store
+        )
         self._api_key = api_key
         self._universe = universe
         self._clock = clock

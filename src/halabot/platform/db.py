@@ -98,12 +98,26 @@ outcome = Table(
     Column("created_at", DateTime(timezone=True), nullable=False),
 )
 
+# Perception dedup: persisted (namespace, key) the source has already emitted,
+# so a restart doesn't re-emit recent news (which would get fresh event_ids and
+# bypass merge's event_id dedup — INV-2 idempotency across restarts). `seen_at`
+# bounds the working set (load filters by retention) and lets a prune expire it.
+perception_seen = Table(
+    "hb_perception_seen",
+    metadata,
+    Column("namespace", Text, nullable=False),
+    Column("key", Text, nullable=False),
+    Column("seen_at", DateTime(timezone=True), nullable=False),
+    UniqueConstraint("namespace", "key", name="uq_hb_perception_seen"),
+)
+
 # Replay + lookup indexes (created by create_all alongside the tables).
 Index("ix_hb_event_type_ts", event_log.c.type, event_log.c.ts)
 Index("ix_hb_event_asset_ts", event_log.c.asset, event_log.c.ts)
 Index("ix_hb_event_corr", event_log.c.correlation_id)
 Index("ix_hb_belief_asset_version", belief_state.c.asset, belief_state.c.version.desc())
 Index("ix_hb_outcome_asset_ts", outcome.c.asset, outcome.c.exit_ts)
+Index("ix_hb_perception_seen_ns_ts", perception_seen.c.namespace, perception_seen.c.seen_at)
 
 
 async def bootstrap_schema(engine: AsyncEngine) -> None:
@@ -126,6 +140,7 @@ __all__ = [
     "event_log",
     "belief_state",
     "outcome",
+    "perception_seen",
     "bootstrap_schema",
     "make_engine",
 ]

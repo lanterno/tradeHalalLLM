@@ -99,7 +99,11 @@ async def _run_shadow(
     async def universe() -> list[str]:
         return await repo.get_halal_symbols()
 
+    from halabot.perception.dedup import PgDedupStore
     from halabot.perception.sources.finnhub_news import FinnhubNewsSource
+
+    # Persisted dedup so a restart doesn't re-emit the last day of headlines.
+    dedup = PgDedupStore(engine.db_engine)
 
     bar_source = AlpacaBarSource(
         mcp, universe, clock, timeframe=timeframe, days=days, interval_s=interval
@@ -109,7 +113,7 @@ async def _run_shadow(
     news_source = None
     if finnhub_key:
         news_source = FinnhubNewsSource(
-            finnhub_key, universe, clock, interval_s=min(60.0, interval)
+            finnhub_key, universe, clock, interval_s=min(60.0, interval), dedup_store=dedup
         )
         sources.append(news_source)
 
