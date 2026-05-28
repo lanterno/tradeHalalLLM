@@ -41,8 +41,9 @@ from halabot.cognition.level_engine import BarLevelEngine
 from halabot.cognition.regime import EvidenceRegimeClassifier
 from halabot.cognition.router import CognitionRouter
 from halabot.cognition.worker import BeliefSink, CoalescingBeliefWorker, InlineBeliefSink
-from halabot.conviction.raw import IdentityCalibrator
+from halabot.conviction.calibrator import FittedCalibrator
 from halabot.learning.shadow_outcomes import ShadowOutcomeTracker
+from halabot.learning.telemetry import ConvictionScoreWriter, TargetWeightWriter
 from halabot.platform.bus import InProcessEventBus
 from halabot.platform.clock import Clock, SystemClock
 from halabot.platform.config import HalabotSettings, get_settings
@@ -84,6 +85,8 @@ class Engine:
     outcomes: ShadowOutcomeTracker
     db_engine: AsyncEngine
     worker: CoalescingBeliefWorker | None = None
+    conviction_writer: ConvictionScoreWriter | None = None
+    target_writer: TargetWeightWriter | None = None
 
     async def stop(self) -> None:
         self.router.stop()
@@ -91,6 +94,10 @@ class Engine:
             await self.worker.stop()  # flush queued belief writes before teardown
         self.shadow.stop()
         self.outcomes.stop()
+        if self.conviction_writer is not None:
+            self.conviction_writer.stop()
+        if self.target_writer is not None:
+            self.target_writer.stop()
         await self.db_engine.dispose()
 
 
@@ -157,7 +164,9 @@ async def build_engine(
         calendar=ContinuousCalendar(),
         regime=EvidenceRegimeClassifier(),
         levels=BarLevelEngine(buffer),
-        calibrator=IdentityCalibrator(),
+        # Self-activates once the learning loop (L8) accumulates leakage-free
+        # outcomes and calls fit(); identity until then (cold-start safe).
+        calibrator=FittedCalibrator(min_samples=s.conviction.min_samples_to_calibrate),
         thesis_writer=thesis_writer or _NoThesis(),
         prices=prices,
         positions=positions or shadow_book,
@@ -207,6 +216,8 @@ async def build_engine(
         compliance_ttl=timedelta(hours=s.halal.cache_ttl_h),
     )
     outcomes = ShadowOutcomeTracker(bus=bus, engine=db_engine, store=store)
+    conviction_writer = ConvictionScoreWriter(bus=bus, engine=db_engine)
+    target_writer = TargetWeightWriter(bus=bus, engine=db_engine)
     # Bootstrap warm-start (Appendix F): replay recent observations to warm
     # beliefs BEFORE subscribing to the live stream + starting the worker, so
     # replay completes in isolation and event_id dedup absorbs any overlap.
@@ -219,6 +230,9 @@ async def build_engine(
     router.start()
     shadow.start()
     outcomes.start()
+    # Telemetry writers subscribe AFTER bootstrap so replay scores aren't logged.
+    conviction_writer.start()
+    target_writer.start()
     logger.info(
         "halabot engine assembled (read-only shadow); coalesce=%s, LLM thesis off by default",
         coalesce,
@@ -232,4 +246,6 @@ async def build_engine(
         outcomes=outcomes,
         db_engine=db_engine,
         worker=worker,
+        conviction_writer=conviction_writer,
+        target_writer=target_writer,
     )

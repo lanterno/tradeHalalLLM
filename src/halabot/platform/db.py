@@ -98,6 +98,34 @@ outcome = Table(
     Column("created_at", DateTime(timezone=True), nullable=False),
 )
 
+# Conviction telemetry: one row per scoring (INV-5). NOT a calibration input —
+# the calibrator trains only on outcome.entry_belief (no mid-trade leakage, fix R).
+conviction_score = Table(
+    "hb_conviction_score",
+    metadata,
+    Column("id", BigInteger, primary_key=True, autoincrement=True),
+    Column("asset", Text, nullable=False),
+    Column("ts", DateTime(timezone=True), nullable=False),
+    Column("raw_score", Float, nullable=False),
+    Column("calibrated", Float, nullable=False),
+    Column("features", JSONB, nullable=False),
+    Column("belief_version", Integer, nullable=False),
+)
+
+# Policy output history: the target weight per asset over time (telemetry + the
+# decision-stream's policy.target_changed link, INV-5).
+target_weight = Table(
+    "hb_target_weight",
+    metadata,
+    Column("id", BigInteger, primary_key=True, autoincrement=True),
+    Column("asset", Text, nullable=False),
+    Column("ts", DateTime(timezone=True), nullable=False),
+    Column("target_weight", Float, nullable=False),
+    Column("current_weight", Float, nullable=False),
+    Column("reason", Text, nullable=False),
+    Column("belief_version", Integer, nullable=False),
+)
+
 # Perception dedup: persisted (namespace, key) the source has already emitted,
 # so a restart doesn't re-emit recent news (which would get fresh event_ids and
 # bypass merge's event_id dedup — INV-2 idempotency across restarts). `seen_at`
@@ -118,6 +146,8 @@ Index("ix_hb_event_corr", event_log.c.correlation_id)
 Index("ix_hb_belief_asset_version", belief_state.c.asset, belief_state.c.version.desc())
 Index("ix_hb_outcome_asset_ts", outcome.c.asset, outcome.c.exit_ts)
 Index("ix_hb_perception_seen_ns_ts", perception_seen.c.namespace, perception_seen.c.seen_at)
+Index("ix_hb_conv_asset_ts", conviction_score.c.asset, conviction_score.c.ts)
+Index("ix_hb_target_asset_ts", target_weight.c.asset, target_weight.c.ts)
 
 
 async def bootstrap_schema(engine: AsyncEngine) -> None:
@@ -141,6 +171,8 @@ __all__ = [
     "belief_state",
     "outcome",
     "perception_seen",
+    "conviction_score",
+    "target_weight",
     "bootstrap_schema",
     "make_engine",
 ]

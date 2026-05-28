@@ -18,7 +18,7 @@ from halabot.belief.store import BeliefStore
 from halabot.platform.bus import EventBus, Subscription
 from halabot.platform.clock import Clock
 from halabot.platform.events import Event, EventType, new_event
-from halabot.policy.policy import Policy, TradeProposal
+from halabot.policy.policy import Policy, TargetWeight, TradeProposal
 from halabot.policy.portfolio import ShadowPortfolio
 from halabot.risk.engine import PortfolioSnapshot, RiskEngine
 
@@ -53,6 +53,7 @@ class ShadowPolicyRunner:
         self._nominal = nominal_equity
         self._compliance_ttl = compliance_ttl
         self._subs: list[Subscription] = []
+        self._last_target: dict[str, float] = {}  # for target_changed dedup
         self.proposals_count = 0  # for the A/B (proposed trades over a session)
         self.last_proposals: list[TradeProposal] = []
 
@@ -118,11 +119,37 @@ class ShadowPolicyRunner:
         )
         logger.info("SHADOW force-exit: sell %s → 0 (%s)", asset, reason)
 
+    async def _emit_target_changes(self, targets: list[TargetWeight], event: Event) -> None:
+        """Emit ``policy.target_changed`` for each target that moved materially —
+        the policy output history (telemetry), independent of whether the change
+        clears the rebalance threshold to actually trade."""
+        for t in targets:
+            prev = self._last_target.get(t.asset, 0.0)
+            if abs(t.weight - prev) < 1e-6:
+                continue
+            self._last_target[t.asset] = t.weight
+            await self._bus.publish(
+                new_event(
+                    self._clock,
+                    EventType.POLICY_TARGET_CHANGED,
+                    source="policy.shadow",
+                    asset=t.asset,
+                    payload={
+                        "target_weight": round(t.weight, 4),
+                        "current_weight": round(self._portfolio.effective_weight(t.asset), 4),
+                        "reason": t.reason,
+                        "belief_version": t.belief_version,
+                    },
+                    causation=event,
+                )
+            )
+
     async def _on_belief(self, event: Event) -> None:
         beliefs = await self._store.all_active()
         by_asset = {b.asset: b for b in beliefs}
         risk = self._risk.evaluate(self._snapshot())
         targets = self._policy.targets(beliefs, self._portfolio, risk)
+        await self._emit_target_changes(targets, event)
         proposals = self._policy.deltas(
             targets,
             self._portfolio,

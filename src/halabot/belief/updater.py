@@ -246,7 +246,8 @@ class BeliefUpdater:
             anomaly_flag=has_flag(b.evidence, "anomaly"),
         )
         b.conviction_raw = raw
-        b.conviction = await self.calibrator.calibrate(asset, raw, features=_feature_vec(b))
+        features = _feature_vec(b)
+        b.conviction = await self.calibrator.calibrate(asset, raw, features=features)
 
         # 4. thesis refresh — material shift AND a healthy LLM (triple-guarded)
         if (
@@ -302,6 +303,24 @@ class BeliefUpdater:
                 source="belief.updater",
                 asset=asset,
                 payload=_summary(b),
+            )
+        )
+        # Conviction telemetry (INV-5): every scoring is logged with the features
+        # used, so the decision stream is replayable and the learning loop can
+        # study scoring behavior (NOT a calibration input — leakage-free training
+        # uses outcome.entry_belief only).
+        await self.bus.publish(
+            new_event(
+                self.clock,
+                EventType.CONVICTION_SCORED,
+                source="belief.updater",
+                asset=asset,
+                payload={
+                    "raw": round(raw, 6),
+                    "calibrated": round(b.conviction, 6),
+                    "belief_version": version,
+                    "features": features,
+                },
             )
         )
         return b
