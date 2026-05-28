@@ -101,6 +101,10 @@ class HalabotSettings(BaseSettings):
     # Phase-4 gate: which markets trade LIVE. Empty = shadow only (default).
     # The execution path is not even instantiated unless this names a market.
     live: str = Field(default="", validation_alias="ENGINE_LIVE")
+    # Operator arming token (INV-9). Live mode also requires a DATED token that
+    # expires daily (format "LIVE-YYYY-MM-DD"), forcing a deliberate daily re-arm
+    # — a stale env var can't silently keep the engine live.
+    live_token: str = Field(default="", validation_alias="ENGINE_LIVE_TOKEN")
 
     engine: EngineSettings = Field(default_factory=EngineSettings)
     belief: BeliefSettings = Field(default_factory=BeliefSettings)
