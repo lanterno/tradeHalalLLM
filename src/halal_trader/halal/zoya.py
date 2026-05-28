@@ -104,6 +104,10 @@ class ZoyaClient:
                 "symbol": symbol,
                 "compliance": "doubtful",
                 "detail": f"API error {e.response.status_code}: {body}",
+                # Transient/infra failure, NOT a compliance verdict — the
+                # cache layer must not persist this (a momentary outage
+                # otherwise poisons the 24h cache and kills a trading day).
+                "error": True,
             }
         except Exception as e:
             # ``str(e)`` is empty for several exception types (e.g. bare
@@ -115,6 +119,7 @@ class ZoyaClient:
                 "symbol": symbol,
                 "compliance": "doubtful",
                 "detail": f"{type(e).__name__}: {e}",
+                "error": True,
             }
 
     async def screen_bulk(self, symbols: list[str]) -> list[dict[str, Any]]:

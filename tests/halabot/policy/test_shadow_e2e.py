@@ -1,0 +1,103 @@
+"""ShadowPolicyRunner — belief.updated → log-only proposals, anti-churn, no execution."""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+
+import pytest
+
+from halabot.belief.schema import BeliefState, ComplianceVerdict, Direction
+from halabot.belief.store import InMemoryBeliefStore
+from halabot.platform.bus import InProcessEventBus
+from halabot.platform.clock import FakeClock
+from halabot.platform.event_log import InMemoryEventLog
+from halabot.platform.events import Event, EventType, new_event
+from halabot.policy.policy import Policy
+from halabot.policy.portfolio import ShadowPortfolio
+from halabot.policy.shadow import ShadowPolicyRunner
+from halabot.policy.sizing import PolicyConfig
+from halabot.risk.engine import BasicRiskEngine
+
+CLOCK = FakeClock(datetime(2026, 5, 28, 12, 0, tzinfo=UTC))
+
+
+def _bullish(asset="NVDA", conviction=0.9, *, status="halal", direction=Direction.LONG_BIAS):
+    return BeliefState(
+        asset=asset, direction=direction, conviction=conviction,
+        halal=ComplianceVerdict(asset, status),  # type: ignore[arg-type]
+    )
+
+
+async def _build():
+    store = InMemoryBeliefStore()
+    bus = InProcessEventBus(InMemoryEventLog())
+    runner = ShadowPolicyRunner(
+        bus=bus, store=store, policy=Policy(PolicyConfig()),
+        portfolio=ShadowPortfolio(), risk_engine=BasicRiskEngine(), clock=CLOCK,
+    )
+    runner.start()
+    proposed: list[Event] = []
+    bus.subscribe({EventType.POLICY_TRADE_PROPOSED}, lambda e: _cap(proposed, e))
+    return store, bus, runner, proposed
+
+
+async def _cap(sink, e):
+    sink.append(e)
+
+
+async def _signal_belief_update(bus, store, belief):
+    await store.put(belief)
+    await bus.publish(new_event(CLOCK, EventType.BELIEF_UPDATED, source="test", asset=belief.asset))
+
+
+@pytest.mark.asyncio
+async def test_bullish_halal_belief_yields_a_buy_proposal():
+    store, bus, runner, proposed = await _build()
+    await _signal_belief_update(bus, store, _bullish())
+    assert runner.proposals_count == 1
+    assert len(proposed) == 1
+    assert proposed[0].payload["side"] == "buy"
+    assert proposed[0].payload["shadow"] is True   # never executed
+    assert runner._portfolio.weight("NVDA") > 0    # hypothetical book moved
+
+
+@pytest.mark.asyncio
+async def test_stable_belief_produces_no_second_proposal():
+    """The anti-churn property, observable: re-asserting the same belief moves
+    nothing because the shadow book is already at target."""
+    store, bus, runner, proposed = await _build()
+    await _signal_belief_update(bus, store, _bullish())
+    await _signal_belief_update(bus, store, _bullish())  # same conviction again
+    assert runner.proposals_count == 1  # no churn
+
+
+@pytest.mark.asyncio
+async def test_non_halal_belief_yields_no_proposal():
+    store, bus, runner, proposed = await _build()
+    await _signal_belief_update(bus, store, _bullish(status="not_halal"))
+    assert runner.proposals_count == 0  # INV-7
+
+
+@pytest.mark.asyncio
+async def test_conviction_decay_to_neutral_proposes_an_exit():
+    store, bus, runner, proposed = await _build()
+    await _signal_belief_update(bus, store, _bullish())          # buy in
+    assert runner._portfolio.weight("NVDA") > 0
+    # belief turns neutral (conviction gone) → target 0 → exit proposal
+    await _signal_belief_update(
+        bus, store, _bullish(conviction=0.0, direction=Direction.NEUTRAL)
+    )
+    assert any(p.side == "sell" for p in runner.last_proposals)
+    assert runner._portfolio.weight("NVDA") == 0.0  # flattened in the shadow book
+
+
+@pytest.mark.asyncio
+async def test_runner_only_emits_policy_events_never_orders():
+    store, bus, runner, _ = await _build()
+    all_events: list[Event] = []
+    bus.subscribe(set(EventType), lambda e: _cap(all_events, e))
+    await _signal_belief_update(bus, store, _bullish())
+    kinds = {e.type for e in all_events}
+    assert EventType.ORDER_SUBMITTED not in kinds
+    assert EventType.ORDER_FILLED not in kinds
+    assert EventType.POLICY_TRADE_PROPOSED in kinds
