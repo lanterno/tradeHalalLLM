@@ -222,6 +222,22 @@ async def test_replay_suppresses_invalidation():
     assert any(e.type == EventType.BELIEF_UPDATED for e in events)  # belief still warmed
 
 
+# ── monotonic per-asset time (Appendix F / INV-5) ──
+@pytest.mark.asyncio
+async def test_out_of_order_event_does_not_rewind_decay():
+    """An older-ts event arriving after a newer one must not amplify evidence —
+    `now` is clamped forward to the belief's last_updated (decay never < 0)."""
+    updater, store, _ = _build(config=UpdaterConfig(evidence_decay_halflife_min=60))
+    await updater.apply_evidence("NVDA", [_ev(1.0)], T0 + timedelta(minutes=120))
+    conv_newer = (await store.get("NVDA")).conviction
+    # A late, OLDER event (ts in the past) must not increase conviction by
+    # "un-decaying" — last_updated stays at the newer time.
+    await updater.apply_evidence("NVDA", [], T0)  # backwards now
+    b = await store.get("NVDA")
+    assert b.last_updated == T0 + timedelta(minutes=120)  # clamped forward
+    assert b.conviction <= conv_newer
+
+
 # ── heartbeat decay-only (R-08) ──
 @pytest.mark.asyncio
 async def test_decay_only_update_fades_conviction():

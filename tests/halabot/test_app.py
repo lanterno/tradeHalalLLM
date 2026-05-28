@@ -91,5 +91,42 @@ async def test_engine_blocks_buy_for_non_halal_asset(halabot_engine):
         await engine.stop()
 
 
+@pytest.mark.asyncio
+async def test_engine_coalesce_mode_forms_belief_end_to_end(halabot_engine):
+    """The live coalescing worker path: belief writes drain through one worker
+    task; after draining, the belief is formed and a buy is proposed."""
+    clock = FakeClock(T0)
+    engine = await build_engine(db_engine=halabot_engine, clock=clock, coalesce=True)
+    proposed: list[Event] = []
+    engine.bus.subscribe({EventType.POLICY_TRADE_PROPOSED}, lambda e: _cap(proposed, e))
+    try:
+        await engine.bus.publish(
+            new_event(
+                clock, EventType.COMPLIANCE_VERDICT, source="zoya", asset="NVDA",
+                payload={"status": "halal", "detail": "ok", "screening_id": 1,
+                         "transient_error": False},
+            )
+        )
+        for i in range(30):
+            clock.advance(timedelta(minutes=1))
+            c = 100.0 + i
+            await engine.bus.publish(
+                new_event(
+                    clock, EventType.OBSERVATION_BAR, source="alpaca", asset="NVDA",
+                    payload={"o": c, "h": c + 1, "low": c - 1, "c": c, "v": 1000.0},
+                )
+            )
+        assert engine.worker is not None
+        await engine.worker.drain()  # flush queued belief writes
+
+        belief = await engine.store.get("NVDA")
+        assert belief is not None and belief.direction == Direction.LONG_BIAS
+        assert belief.conviction > 0.0
+        assert engine.shadow.proposals_count >= 1
+        assert proposed and proposed[0].payload["side"] == "buy"
+    finally:
+        await engine.stop()
+
+
 async def _cap(sink: list, e: Event) -> None:
     sink.append(e)

@@ -208,6 +208,14 @@ class BeliefUpdater:
         prices (fix R, bootstrap).
         """
         b = await self.store.get(asset) or BeliefState.neutral(asset)
+        # Monotonic per-asset time (Appendix F, INV-5): an out-of-order older
+        # event must never rewind `now`, or decay would *amplify* existing
+        # evidence (negative age). Each item still carries its own ts, so the
+        # batch's contents are unchanged — only the decay reference time is
+        # clamped forward. The coalescing worker applies batches latest-ts-first;
+        # this guards the inline path and any residual reordering.
+        if b.last_updated is not None and now < b.last_updated:
+            now = b.last_updated
         prev = deepcopy(b)  # ★ snapshot BEFORE mutation (R-11)
 
         # 1. decay (trading-time) + merge (event_id dedup)

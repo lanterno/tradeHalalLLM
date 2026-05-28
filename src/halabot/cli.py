@@ -85,7 +85,11 @@ async def _run_shadow(
     # Engine configs (cold-start bands, decay, risk) derive from HalabotSettings —
     # the fitted calibrator (L4/L8) replaces the cold-start bands once enough
     # closed outcomes map raw → P(win). The two systems share one DATABASE_URL.
-    engine = await build_engine(database_url=settings.database_url, settings=hb)
+    # Coalesce belief writes in the continuous loop (per-asset ts-ordering,
+    # Appendix F); inline + synchronous for --once so the summary is immediate.
+    engine = await build_engine(
+        database_url=settings.database_url, settings=hb, coalesce=not once
+    )
     ht_engine = await init_db(settings.database_url)  # legacy DB, for the halal universe
     repo = Repository(ht_engine)
     mcp = AlpacaMCPClient()

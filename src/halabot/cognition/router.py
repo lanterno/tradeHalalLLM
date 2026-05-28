@@ -18,6 +18,7 @@ from halabot.belief.schema import ComplianceVerdict, EvidenceItem
 from halabot.belief.updater import BeliefUpdater
 from halabot.cognition.bars import Bar, BarBuffer
 from halabot.cognition.base import Interpreter
+from halabot.cognition.worker import BeliefSink, InlineBeliefSink
 from halabot.platform.bus import EventBus, Subscription
 from halabot.platform.events import Event, EventType
 
@@ -29,12 +30,17 @@ class CognitionRouter:
         self,
         *,
         bus: EventBus,
-        updater: BeliefUpdater,
         buffer: BarBuffer,
         interpreters: list[Interpreter],
+        updater: BeliefUpdater | None = None,
+        sink: BeliefSink | None = None,
     ) -> None:
+        if sink is None:
+            if updater is None:
+                raise ValueError("CognitionRouter requires a sink or an updater")
+            sink = InlineBeliefSink(updater)
         self._bus = bus
-        self._updater = updater
+        self._sink = sink
         self._buffer = buffer
         self._by_type: dict[EventType, list[Interpreter]] = {}
         for itp in interpreters:
@@ -89,13 +95,13 @@ class CognitionRouter:
 
         # Update on new evidence, or on any bar (the buffer + levels changed).
         if asset is not None and (evidence or event.type == EventType.OBSERVATION_BAR):
-            await self._updater.apply_evidence(asset, evidence, now=event.ts)
+            await self._sink.evidence(asset, event.ts, evidence)
 
     async def _on_heartbeat(self, event: Event) -> None:
         # Decay-only pass for every known asset so conviction fades on the
         # passage of time even with no new data (fix R-08).
         for asset in sorted(self._known_assets):
-            await self._updater.apply_evidence(asset, [], now=event.ts)
+            await self._sink.evidence(asset, event.ts, [])
 
     async def _on_compliance(self, event: Event) -> None:
         asset = event.asset
@@ -111,7 +117,7 @@ class CognitionRouter:
             screening_id=p.get("screening_id"),
             transient_error=bool(p.get("transient_error", False)),
         )
-        await self._updater.set_compliance(asset, verdict, now=event.ts)
+        await self._sink.compliance(asset, verdict, now=event.ts)
 
 
 def _parse_bar(event: Event) -> Bar:

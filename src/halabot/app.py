@@ -40,6 +40,7 @@ from halabot.cognition.interpreters import (
 from halabot.cognition.level_engine import BarLevelEngine
 from halabot.cognition.regime import EvidenceRegimeClassifier
 from halabot.cognition.router import CognitionRouter
+from halabot.cognition.worker import BeliefSink, CoalescingBeliefWorker, InlineBeliefSink
 from halabot.conviction.raw import IdentityCalibrator
 from halabot.learning.shadow_outcomes import ShadowOutcomeTracker
 from halabot.platform.bus import InProcessEventBus
@@ -82,9 +83,12 @@ class Engine:
     shadow: ShadowPolicyRunner
     outcomes: ShadowOutcomeTracker
     db_engine: AsyncEngine
+    worker: CoalescingBeliefWorker | None = None
 
     async def stop(self) -> None:
         self.router.stop()
+        if self.worker is not None:
+            await self.worker.stop()  # flush queued belief writes before teardown
         self.shadow.stop()
         self.outcomes.stop()
         await self.db_engine.dispose()
@@ -102,6 +106,7 @@ async def build_engine(
     thesis_writer: Any | None = None,
     llm_gate: Any | None = None,
     positions: Any | None = None,
+    coalesce: bool = False,
 ) -> Engine:
     """Assemble + start the read-only engine. Provide ``db_engine`` (tests) or
     ``database_url``. Configs default from ``settings`` (or ``get_settings()``);
@@ -158,6 +163,17 @@ async def build_engine(
         llm=llm_gate or _DisabledLLM(),
         config=updater_config,
     )
+    # Belief-write sink: single-worker ts-coalescing for the live loop, inline
+    # (synchronous) for --once/tests. The worker preserves global write order so
+    # the shadow's whole-portfolio recompute can't race (Appendix F).
+    worker: CoalescingBeliefWorker | None = None
+    sink: BeliefSink
+    if coalesce:
+        worker = CoalescingBeliefWorker(updater)
+        sink = worker
+    else:
+        sink = InlineBeliefSink(updater)
+
     # Cheap, always-on interpreters (LLM-free, INV-1). drift wires up
     # conviction_raw's drift down-weight; multiframe/forecaster are flag-gated.
     interpreters: list[Interpreter] = [
@@ -174,7 +190,7 @@ async def build_engine(
         interpreters.append(ForecasterInterpreter(buffer))
     router = CognitionRouter(
         bus=bus,
-        updater=updater,
+        sink=sink,
         buffer=buffer,
         interpreters=interpreters,
     )
@@ -189,10 +205,15 @@ async def build_engine(
         compliance_ttl=timedelta(hours=s.halal.cache_ttl_h),
     )
     outcomes = ShadowOutcomeTracker(bus=bus, engine=db_engine, store=store)
+    if worker is not None:
+        worker.start()
     router.start()
     shadow.start()
     outcomes.start()
-    logger.info("halabot engine assembled (read-only shadow); LLM thesis off by default")
+    logger.info(
+        "halabot engine assembled (read-only shadow); coalesce=%s, LLM thesis off by default",
+        coalesce,
+    )
     return Engine(
         bus=bus,
         store=store,
@@ -201,4 +222,5 @@ async def build_engine(
         shadow=shadow,
         outcomes=outcomes,
         db_engine=db_engine,
+        worker=worker,
     )
