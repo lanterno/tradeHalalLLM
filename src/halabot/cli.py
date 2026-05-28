@@ -164,6 +164,13 @@ async def _run_ab_report(*, days: int) -> None:
     click.echo(f"  shadow proposals: {rep.shadow_total}   live trades: {rep.live_total}")
     if rep.churn_reduction_pct is not None:
         click.echo(f"  churn reduction: {rep.churn_reduction_pct:+.0%} (shadow vs live count)")
+    if rep.shadow_closed:
+        avg = rep.shadow_avg_return_pct or 0.0
+        win = rep.shadow_win_rate or 0.0
+        click.echo(
+            f"  shadow hypothetical P&L: {rep.shadow_closed} closed, "
+            f"avg {avg:+.2%}, win {win:.0%}, book-weighted {rep.shadow_weighted_return:+.4f}"
+        )
     if rep.symbols_only_live:
         click.echo(f"  live-only symbols (churn avoided): {sorted(rep.symbols_only_live)}")
     click.echo(f"  shadow by symbol: {dict(sorted(rep.shadow_by_symbol.items()))}")

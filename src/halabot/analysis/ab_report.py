@@ -17,6 +17,7 @@ import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from halabot.platform.db import event_log as _event_log
+from halabot.platform.db import outcome as _outcome
 from halabot.platform.events import EventType
 
 
@@ -28,6 +29,11 @@ class ABReport:
     live_total: int
     shadow_by_symbol: dict[str, int] = field(default_factory=dict)
     live_by_symbol: dict[str, int] = field(default_factory=dict)
+    # Shadow hypothetical P&L (from closed hb_outcome rows in the window).
+    shadow_closed: int = 0
+    shadow_avg_return_pct: float | None = None
+    shadow_win_rate: float | None = None
+    shadow_weighted_return: float = 0.0  # Σ return_pct × closed_weight (book-level proxy)
 
     @property
     def churn_reduction_pct(self) -> float | None:
@@ -77,6 +83,23 @@ async def ab_report(engine: AsyncEngine, *, since: datetime, until: datetime) ->
         for symbol, n in live_rows:
             live_by_symbol[symbol or "?"] = int(n)
 
+        # Shadow hypothetical P&L from closed outcomes in the window.
+        o = _outcome
+        agg = (
+            await conn.execute(
+                sa.select(
+                    sa.func.count(),
+                    sa.func.avg(o.c.return_pct),
+                    sa.func.avg(sa.cast(o.c.label, sa.Float)),
+                    sa.func.coalesce(sa.func.sum(o.c.return_pct * o.c.closed_weight), 0.0),
+                ).where(o.c.exit_ts >= since, o.c.exit_ts <= until)
+            )
+        ).one()
+        closed = int(agg[0] or 0)
+        avg_ret = float(agg[1]) if agg[1] is not None else None
+        win_rate = float(agg[2]) if agg[2] is not None else None
+        weighted_ret = float(agg[3] or 0.0)
+
     return ABReport(
         since=since,
         until=until,
@@ -84,4 +107,8 @@ async def ab_report(engine: AsyncEngine, *, since: datetime, until: datetime) ->
         live_total=sum(live_by_symbol.values()),
         shadow_by_symbol=shadow_by_symbol,
         live_by_symbol=live_by_symbol,
+        shadow_closed=closed,
+        shadow_avg_return_pct=avg_ret,
+        shadow_win_rate=win_rate,
+        shadow_weighted_return=weighted_ret,
     )

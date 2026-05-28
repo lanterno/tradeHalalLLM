@@ -30,6 +30,7 @@ from halabot.cognition.level_engine import BarLevelEngine
 from halabot.cognition.regime import EvidenceRegimeClassifier
 from halabot.cognition.router import CognitionRouter
 from halabot.conviction.raw import IdentityCalibrator
+from halabot.learning.shadow_outcomes import ShadowOutcomeTracker
 from halabot.platform.bus import InProcessEventBus
 from halabot.platform.clock import Clock, SystemClock
 from halabot.platform.db import bootstrap_schema, make_engine
@@ -72,11 +73,13 @@ class Engine:
     updater: BeliefUpdater
     router: CognitionRouter
     shadow: ShadowPolicyRunner
+    outcomes: ShadowOutcomeTracker
     db_engine: AsyncEngine
 
     async def stop(self) -> None:
         self.router.stop()
         self.shadow.stop()
+        self.outcomes.stop()
         await self.db_engine.dispose()
 
 
@@ -105,6 +108,7 @@ async def build_engine(
     bus = InProcessEventBus(PgEventLog(db_engine))
     store = PgBeliefStore(db_engine)
     buffer = BarBuffer()
+    prices = BufferPriceSource(buffer)
 
     updater = BeliefUpdater(
         store=store,
@@ -115,7 +119,7 @@ async def build_engine(
         levels=BarLevelEngine(buffer),
         calibrator=IdentityCalibrator(),
         thesis_writer=thesis_writer or _NoThesis(),
-        prices=BufferPriceSource(buffer),
+        prices=prices,
         positions=positions or _NoPositions(),
         llm=llm_gate or _DisabledLLM(),
         config=updater_config or UpdaterConfig(),
@@ -133,10 +137,19 @@ async def build_engine(
         portfolio=ShadowPortfolio(),
         risk_engine=BasicRiskEngine(risk_config or RiskConfig()),
         clock=clock,
+        prices=prices,
     )
+    outcomes = ShadowOutcomeTracker(bus=bus, engine=db_engine, store=store)
     router.start()
     shadow.start()
+    outcomes.start()
     logger.info("halabot engine assembled (read-only shadow); LLM thesis off by default")
     return Engine(
-        bus=bus, store=store, updater=updater, router=router, shadow=shadow, db_engine=db_engine
+        bus=bus,
+        store=store,
+        updater=updater,
+        router=router,
+        shadow=shadow,
+        outcomes=outcomes,
+        db_engine=db_engine,
     )

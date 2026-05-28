@@ -76,11 +76,34 @@ belief_state = Table(
     UniqueConstraint("asset", "version", name="uq_hb_belief_asset_version"),
 )
 
+# Hypothetical (shadow) outcomes — one row per closed/reduced shadow position,
+# marked to price. Feeds the A/B P&L comparison and the conviction calibrator
+# (entry_belief is the at-entry snapshot — no mid-trade leakage).
+outcome = Table(
+    "hb_outcome",
+    metadata,
+    Column("id", BigInteger, primary_key=True, autoincrement=True),
+    Column("asset", Text, nullable=False),
+    Column("entry_ts", DateTime(timezone=True), nullable=False),
+    Column("exit_ts", DateTime(timezone=True), nullable=False),
+    Column("entry_price", Float, nullable=False),
+    Column("exit_price", Float, nullable=False),
+    Column("closed_weight", Float, nullable=False),
+    Column("return_pct", Float, nullable=False),
+    Column("hold_seconds", Integer, nullable=False),
+    Column("belief_version", Integer, nullable=False),
+    Column("entry_belief", JSONB, nullable=True),
+    Column("label", Integer, nullable=False),  # win=1 if return_pct > threshold else 0
+    Column("reason", Text, nullable=True),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+)
+
 # Replay + lookup indexes (created by create_all alongside the tables).
 Index("ix_hb_event_type_ts", event_log.c.type, event_log.c.ts)
 Index("ix_hb_event_asset_ts", event_log.c.asset, event_log.c.ts)
 Index("ix_hb_event_corr", event_log.c.correlation_id)
 Index("ix_hb_belief_asset_version", belief_state.c.asset, belief_state.c.version.desc())
+Index("ix_hb_outcome_asset_ts", outcome.c.asset, outcome.c.exit_ts)
 
 
 async def bootstrap_schema(engine: AsyncEngine) -> None:
@@ -98,4 +121,11 @@ def make_engine(database_url: str) -> AsyncEngine:
     return create_async_engine(database_url)
 
 
-__all__ = ["metadata", "event_log", "belief_state", "bootstrap_schema", "make_engine"]
+__all__ = [
+    "metadata",
+    "event_log",
+    "belief_state",
+    "outcome",
+    "bootstrap_schema",
+    "make_engine",
+]

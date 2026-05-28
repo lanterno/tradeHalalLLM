@@ -11,6 +11,7 @@ stable belief produces no proposal (the anti-churn property, observable).
 from __future__ import annotations
 
 import logging
+from typing import Protocol
 
 from halabot.belief.store import BeliefStore
 from halabot.platform.bus import EventBus, Subscription
@@ -19,6 +20,10 @@ from halabot.platform.events import Event, EventType, new_event
 from halabot.policy.policy import Policy, TradeProposal
 from halabot.policy.portfolio import ShadowPortfolio
 from halabot.risk.engine import PortfolioSnapshot, RiskEngine
+
+
+class PriceSource(Protocol):
+    def last_price(self, asset: str) -> float | None: ...
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +38,7 @@ class ShadowPolicyRunner:
         portfolio: ShadowPortfolio,
         risk_engine: RiskEngine,
         clock: Clock,
+        prices: PriceSource | None = None,
         nominal_equity: float = 100_000.0,
     ) -> None:
         self._bus = bus
@@ -41,6 +47,7 @@ class ShadowPolicyRunner:
         self._portfolio = portfolio
         self._risk = risk_engine
         self._clock = clock
+        self._prices = prices
         self._nominal = nominal_equity
         self._subs: list[Subscription] = []
         self.proposals_count = 0  # for the A/B (proposed trades over a session)
@@ -78,6 +85,7 @@ class ShadowPolicyRunner:
         for p in proposals:
             self._portfolio.set_weight(p.asset, p.target_weight)  # hypothetical book moves
             self.proposals_count += 1
+            price = self._prices.last_price(p.asset) if self._prices is not None else None
             await self._bus.publish(
                 new_event(
                     self._clock,
@@ -89,6 +97,7 @@ class ShadowPolicyRunner:
                         "target_weight": round(p.target_weight, 4),
                         "current_weight": round(p.current_weight, 4),
                         "weight_delta": round(p.weight_delta, 4),
+                        "price": price,  # decision/fill price for hypothetical P&L
                         "reason": p.reason,
                         "belief_version": p.belief_version,
                         "shadow": True,  # never executed

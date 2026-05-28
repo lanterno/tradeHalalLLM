@@ -81,6 +81,33 @@ async def test_window_excludes_out_of_range(halabot_engine):
     assert rep.live_total == 1
 
 
+async def _seed_outcomes(engine, returns: list[tuple[str, float]], *, at: datetime):
+    from halabot.platform.db import outcome as o
+
+    async with engine.begin() as conn:
+        for asset, ret in returns:
+            await conn.execute(
+                sa.insert(o).values(
+                    asset=asset, entry_ts=at, exit_ts=at, entry_price=100.0,
+                    exit_price=100.0 * (1 + ret), closed_weight=0.1, return_pct=ret,
+                    hold_seconds=3600, belief_version=1, entry_belief=None,
+                    label=1 if ret > 0.002 else 0, reason="test", created_at=at,
+                )
+            )
+
+
+@pytest.mark.asyncio
+async def test_report_includes_shadow_hypothetical_pnl(halabot_engine):
+    await _seed_outcomes(halabot_engine, [("NVDA", 0.10), ("NOW", 0.05), ("SHOP", -0.04)], at=NOW)
+    rep = await ab_report(
+        halabot_engine, since=NOW - timedelta(hours=1), until=NOW + timedelta(hours=1)
+    )
+    assert rep.shadow_closed == 3
+    assert rep.shadow_avg_return_pct == pytest.approx((0.10 + 0.05 - 0.04) / 3)
+    assert rep.shadow_win_rate == pytest.approx(2 / 3)  # 2 of 3 above threshold
+    assert rep.shadow_weighted_return == pytest.approx((0.10 + 0.05 - 0.04) * 0.1)
+
+
 @pytest.mark.asyncio
 async def test_no_live_trades_gives_none_churn(halabot_engine):
     await _seed_shadow(halabot_engine, [("NVDA", "buy")], at=NOW)
