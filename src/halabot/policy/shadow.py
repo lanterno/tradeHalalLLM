@@ -11,6 +11,7 @@ stable belief produces no proposal (the anti-churn property, observable).
 from __future__ import annotations
 
 import logging
+from collections.abc import Awaitable, Callable
 from datetime import timedelta
 from typing import Protocol
 
@@ -58,6 +59,7 @@ class ShadowPolicyRunner:
         history: PriceHistory | None = None,
         nominal_equity: float = 100_000.0,
         compliance_ttl: timedelta | None = None,
+        halt_check: Callable[[], Awaitable[bool]] | None = None,
     ) -> None:
         self._bus = bus
         self._store = store
@@ -67,6 +69,7 @@ class ShadowPolicyRunner:
         self._clock = clock
         self._prices = prices
         self._history = history
+        self._halt_check = halt_check  # operator kill-switch (hb_control via API)
         self._halted = False  # for risk.halt edge-emission
         self._nominal = nominal_equity
         self._compliance_ttl = compliance_ttl
@@ -204,6 +207,7 @@ class ShadowPolicyRunner:
         await self._emit_risk_state(risk, event)
         targets = self._policy.targets(beliefs, self._portfolio, risk)
         await self._emit_target_changes(targets, event)
+        kill_switch = await self._halt_check() if self._halt_check is not None else False
         proposals = self._policy.deltas(
             targets,
             self._portfolio,
@@ -211,6 +215,7 @@ class ShadowPolicyRunner:
             risk=risk,
             now=event.ts,
             compliance_ttl=self._compliance_ttl,
+            kill_switch=kill_switch,
         )
         self.last_proposals = proposals
         for p in proposals:

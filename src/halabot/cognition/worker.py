@@ -26,6 +26,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
+from uuid import UUID
 
 from halabot.belief.schema import ComplianceVerdict, EvidenceItem
 from halabot.belief.updater import BeliefUpdater
@@ -35,9 +36,22 @@ logger = logging.getLogger(__name__)
 
 class BeliefSink(Protocol):
     async def evidence(
-        self, asset: str, now: datetime, items: list[EvidenceItem], *, is_replay: bool = False
+        self,
+        asset: str,
+        now: datetime,
+        items: list[EvidenceItem],
+        *,
+        is_replay: bool = False,
+        correlation_id: UUID | None = None,
     ) -> None: ...
-    async def compliance(self, asset: str, verdict: ComplianceVerdict, now: datetime) -> None: ...
+    async def compliance(
+        self,
+        asset: str,
+        verdict: ComplianceVerdict,
+        now: datetime,
+        *,
+        correlation_id: UUID | None = None,
+    ) -> None: ...
 
 
 class InlineBeliefSink:
@@ -47,12 +61,27 @@ class InlineBeliefSink:
         self._u = updater
 
     async def evidence(
-        self, asset: str, now: datetime, items: list[EvidenceItem], *, is_replay: bool = False
+        self,
+        asset: str,
+        now: datetime,
+        items: list[EvidenceItem],
+        *,
+        is_replay: bool = False,
+        correlation_id: UUID | None = None,
     ) -> None:
-        await self._u.apply_evidence(asset, items, now, is_replay=is_replay)
+        await self._u.apply_evidence(
+            asset, items, now, is_replay=is_replay, correlation_id=correlation_id
+        )
 
-    async def compliance(self, asset: str, verdict: ComplianceVerdict, now: datetime) -> None:
-        await self._u.set_compliance(asset, verdict, now)
+    async def compliance(
+        self,
+        asset: str,
+        verdict: ComplianceVerdict,
+        now: datetime,
+        *,
+        correlation_id: UUID | None = None,
+    ) -> None:
+        await self._u.set_compliance(asset, verdict, now, correlation_id=correlation_id)
 
 
 @dataclass
@@ -61,6 +90,7 @@ class _Ev:
     now: datetime
     items: list[EvidenceItem]
     is_replay: bool = False
+    correlation_id: UUID | None = None
 
 
 @dataclass
@@ -68,6 +98,7 @@ class _Co:
     asset: str
     verdict: ComplianceVerdict
     now: datetime
+    correlation_id: UUID | None = None
 
 
 class CoalescingBeliefWorker:
@@ -82,12 +113,25 @@ class CoalescingBeliefWorker:
         self._lock = asyncio.Lock()
 
     async def evidence(
-        self, asset: str, now: datetime, items: list[EvidenceItem], *, is_replay: bool = False
+        self,
+        asset: str,
+        now: datetime,
+        items: list[EvidenceItem],
+        *,
+        is_replay: bool = False,
+        correlation_id: UUID | None = None,
     ) -> None:
-        await self._q.put(_Ev(asset, now, items, is_replay))
+        await self._q.put(_Ev(asset, now, items, is_replay, correlation_id))
 
-    async def compliance(self, asset: str, verdict: ComplianceVerdict, now: datetime) -> None:
-        await self._q.put(_Co(asset, verdict, now))
+    async def compliance(
+        self,
+        asset: str,
+        verdict: ComplianceVerdict,
+        now: datetime,
+        *,
+        correlation_id: UUID | None = None,
+    ) -> None:
+        await self._q.put(_Co(asset, verdict, now, correlation_id))
 
     def start(self) -> None:
         self._task = asyncio.create_task(self._run(), name="belief-worker")
@@ -142,9 +186,19 @@ class CoalescingBeliefWorker:
                     run.append(jobs[i])  # type: ignore[arg-type]
                     i += 1
                 items = [it for j in run for it in j.items]
-                now = max(j.now for j in run)
+                latest = max(run, key=lambda j: j.now)
                 is_replay = all(j.is_replay for j in run)
-                await self._u.apply_evidence(asset, items, now, is_replay=is_replay)
+                # Coalesced batch carries the latest event's correlation_id (the
+                # dominant chain — coalescing is a perf optimization, INV-5 best-effort).
+                await self._u.apply_evidence(
+                    asset,
+                    items,
+                    latest.now,
+                    is_replay=is_replay,
+                    correlation_id=latest.correlation_id,
+                )
             else:
-                await self._u.set_compliance(job.asset, job.verdict, job.now)
+                await self._u.set_compliance(
+                    job.asset, job.verdict, job.now, correlation_id=job.correlation_id
+                )
                 i += 1

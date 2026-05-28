@@ -147,8 +147,12 @@ class CognitionRouter:
                 )
 
         # Update on new evidence, or on any bar (the buffer + levels changed).
+        # Thread the observation's correlation_id so the whole chain (news →
+        # belief → conviction → policy → order) shares one id for replay (INV-5).
         if asset is not None and (evidence or event.type == EventType.OBSERVATION_BAR):
-            await self._sink.evidence(asset, event.ts, evidence)
+            await self._sink.evidence(
+                asset, event.ts, evidence, correlation_id=event.correlation_id
+            )
 
     async def _on_heartbeat(self, event: Event) -> None:
         # Decay-only pass for every known asset so conviction fades on the
@@ -170,7 +174,9 @@ class CognitionRouter:
             screening_id=p.get("screening_id"),
             transient_error=bool(p.get("transient_error", False)),
         )
-        await self._sink.compliance(asset, verdict, now=event.ts)
+        await self._sink.compliance(
+            asset, verdict, now=event.ts, correlation_id=event.correlation_id
+        )
 
 
 def _parse_bar(event: Event) -> Bar:

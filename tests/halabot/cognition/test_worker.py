@@ -20,10 +20,10 @@ class FakeUpdater:
         self.evidence_calls: list[tuple[str, datetime, int, bool]] = []
         self.compliance_calls: list[tuple[str, str, datetime]] = []
 
-    async def apply_evidence(self, asset, items, now, *, is_replay=False):
+    async def apply_evidence(self, asset, items, now, *, is_replay=False, correlation_id=None):
         self.evidence_calls.append((asset, now, len(items), is_replay))
 
-    async def set_compliance(self, asset, verdict, now):
+    async def set_compliance(self, asset, verdict, now, *, correlation_id=None):
         self.compliance_calls.append((asset, verdict.status, now))
 
 

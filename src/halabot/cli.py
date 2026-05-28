@@ -194,6 +194,36 @@ def ab_report_cmd(days: int) -> None:
     asyncio.run(_run_ab_report(days=days))
 
 
+@cli.command("dashboard")
+@click.option("--host", default="127.0.0.1", show_default=True)
+@click.option("--port", default=8083, show_default=True, help="HTTP port (legacy uses 8082).")
+def dashboard(host: str, port: int) -> None:
+    """Serve the read-first understanding API (beliefs / decisions / risk / controls)."""
+    from halabot.platform.observability import setup_logging
+
+    setup_logging(logging.INFO)
+    try:
+        import uvicorn
+    except ImportError:
+        raise click.ClickException(
+            "uvicorn not installed — install the dashboard extra: uv sync --extra dashboard"
+        ) from None
+
+    from halabot.api.app import create_api
+    from halabot.platform.db import bootstrap_schema, make_engine
+    from halal_trader.config import get_settings
+
+    engine = make_engine(get_settings().database_url)
+    app = create_api(engine)
+
+    @app.on_event("startup")  # type: ignore[untyped-decorator]
+    async def _bootstrap() -> None:  # ensure hb_* tables exist before serving
+        await bootstrap_schema(engine)
+
+    click.echo(f"halabot API on http://{host}:{port}  (GET /beliefs, /decisions, /risk, /health)")
+    uvicorn.run(app, host=host, port=port, log_level="info")
+
+
 async def _run_ab_report(*, days: int) -> None:
     from datetime import UTC, datetime, timedelta
 

@@ -74,6 +74,21 @@ class _NoThesis:
         return ""
 
 
+def _make_halt_check(db_engine: AsyncEngine) -> Any:
+    """A coroutine the policy calls to read the operator kill-switch (hb_control).
+    Defined here (not via the api package) to avoid a composition→api dependency."""
+    import sqlalchemy as sa
+
+    from halabot.platform.db import control
+
+    async def halted() -> bool:
+        async with db_engine.connect() as conn:
+            row = (await conn.execute(sa.select(control.c.halted).where(control.c.id == 1))).first()
+        return bool(row[0]) if row is not None else False
+
+    return halted
+
+
 @dataclass
 class Engine:
     """A running read-only engine: its bus is the ingress for observations."""
@@ -218,6 +233,7 @@ async def build_engine(
         prices=prices,
         history=buffer,  # closes() feed the risk engine's correlation pass
         compliance_ttl=timedelta(hours=s.halal.cache_ttl_h),
+        halt_check=_make_halt_check(db_engine),  # operator kill-switch (hb_control)
     )
     # Learning loop (L8): refit the calibrator off closed outcomes every N closes.
     retrainer = CalibratorRetrainer(

@@ -101,15 +101,18 @@ def new_event(
     asset: str | None = None,
     payload: dict[str, Any] | None = None,
     causation: Event | None = None,
+    correlation_id: UUID | None = None,
 ) -> Event:
     """Construct an :class:`Event`, stamping ``id`` and ``ts`` from the clock.
 
     When ``causation`` is supplied, the new event inherits its
     ``correlation_id`` (continuing the causal chain) and records it as
-    ``causation_id``; otherwise it starts a fresh chain with a new
-    ``correlation_id``.
+    ``causation_id``. Otherwise, an explicit ``correlation_id`` continues a chain
+    without a direct parent event (the belief path threads the triggering
+    observation's id so news → belief → conviction → policy share one id — INV-5);
+    failing both, a fresh chain is started.
     """
-    correlation_id = causation.correlation_id if causation is not None else None
+    corr = causation.correlation_id if causation is not None else correlation_id
     return Event(
         id=uuid4(),
         type=type,
@@ -118,6 +121,6 @@ def new_event(
         asset=asset,
         payload=payload or {},
         causation_id=causation.id if causation is not None else None,
-        correlation_id=correlation_id or uuid4(),
+        correlation_id=corr or uuid4(),
         schema_version=SCHEMA_VERSION,
     )

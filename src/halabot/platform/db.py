@@ -21,6 +21,7 @@ from __future__ import annotations
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     Column,
     DateTime,
     Float,
@@ -126,6 +127,18 @@ target_weight = Table(
     Column("belief_version", Integer, nullable=False),
 )
 
+# Operator kill-switch (singleton row id=1). The API toggles it; the policy reads
+# it as a hard gate (halted ⇒ no new entries; exits still allowed). Cross-process
+# safe — the API and the engine share this one row.
+control = Table(
+    "hb_control",
+    metadata,
+    Column("id", Integer, primary_key=True),  # always 1
+    Column("halted", Boolean, nullable=False),
+    Column("reason", Text, nullable=True),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+)
+
 # Perception dedup: persisted (namespace, key) the source has already emitted,
 # so a restart doesn't re-emit recent news (which would get fresh event_ids and
 # bypass merge's event_id dedup — INV-2 idempotency across restarts). `seen_at`
@@ -173,6 +186,7 @@ __all__ = [
     "perception_seen",
     "conviction_score",
     "target_weight",
+    "control",
     "bootstrap_schema",
     "make_engine",
 ]

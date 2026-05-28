@@ -20,6 +20,7 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Protocol
+from uuid import UUID
 
 from halabot.belief.evidence import Calendar, decay, has_flag, merge, weighted_sum
 from halabot.belief.levels import update_levels  # noqa: F401  (re-exported for default engine)
@@ -132,7 +133,12 @@ class BeliefUpdater:
     config: UpdaterConfig = field(default_factory=UpdaterConfig)
 
     async def set_compliance(
-        self, asset: str, verdict: ComplianceVerdict, now: datetime
+        self,
+        asset: str,
+        verdict: ComplianceVerdict,
+        now: datetime,
+        *,
+        correlation_id: UUID | None = None,
     ) -> BeliefState:
         """Stamp a halal verdict onto the asset's belief (INV-7 ingestion).
 
@@ -178,6 +184,7 @@ class BeliefUpdater:
                         "status": verdict.status,
                         "detail": verdict.detail,
                     },
+                    correlation_id=correlation_id,
                 )
             )
         await self.bus.publish(
@@ -187,6 +194,7 @@ class BeliefUpdater:
                 source="belief.compliance",
                 asset=asset,
                 payload=_summary(b),
+                correlation_id=correlation_id,
             )
         )
         return b
@@ -198,6 +206,7 @@ class BeliefUpdater:
         now: datetime,
         *,
         is_replay: bool = False,
+        correlation_id: UUID | None = None,
     ) -> BeliefState:
         """Fold ``items`` into ``asset``'s belief, persist, and publish.
 
@@ -294,6 +303,7 @@ class BeliefUpdater:
                         "invalidation_level": b.levels.invalidation,
                         "last_price": self.prices.last_price(asset),
                     },
+                    correlation_id=correlation_id,
                 )
             )
         await self.bus.publish(
@@ -303,6 +313,7 @@ class BeliefUpdater:
                 source="belief.updater",
                 asset=asset,
                 payload=_summary(b),
+                correlation_id=correlation_id,
             )
         )
         # Conviction telemetry (INV-5): every scoring is logged with the features
@@ -321,6 +332,7 @@ class BeliefUpdater:
                     "belief_version": version,
                     "features": features,
                 },
+                correlation_id=correlation_id,
             )
         )
         return b
