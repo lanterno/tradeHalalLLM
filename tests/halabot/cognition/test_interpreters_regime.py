@@ -10,7 +10,10 @@ from halabot.belief.schema import EvidenceItem, Regime
 from halabot.cognition.bars import Bar, BarBuffer
 from halabot.cognition.interpreters import (
     AnomalyInterpreter,
+    DriftInterpreter,
+    ForecasterInterpreter,
     IndicatorInterpreter,
+    MultiFrameInterpreter,
     NewsLexiconInterpreter,
     RsiInterpreter,
     TrendAlignmentInterpreter,
@@ -143,6 +146,88 @@ async def test_anomaly_silent_on_calm_tape():
     _fill(buf, "NVDA", [100 + 0.1 * i for i in range(45)])  # steady, no spike
     obs = new_event(CLOCK, EventType.OBSERVATION_BAR, source="alpaca", asset="NVDA")
     assert await AnomalyInterpreter(buf).interpret(obs) == []
+
+
+# ── DriftInterpreter ──
+@pytest.mark.asyncio
+async def test_drift_flag_on_distribution_shift():
+    buf = BarBuffer()
+    # 50 bars of tiny calm drift, then a persistent strong-up regime (mean shift).
+    calm = [100 + 0.05 * i for i in range(50)]
+    shifted = [calm[-1] + 3.0 * (i + 1) for i in range(12)]
+    _fill(buf, "NVDA", calm + shifted)
+    obs = new_event(CLOCK, EventType.OBSERVATION_BAR, source="alpaca", asset="NVDA")
+    out = await DriftInterpreter(buf).interpret(obs)
+    assert len(out) == 1
+    assert out[0].source == "drift"
+    assert out[0].directional is False  # widens uncertainty, not a directional vote
+
+
+@pytest.mark.asyncio
+async def test_drift_silent_on_stable_distribution():
+    buf = BarBuffer()
+    _fill(buf, "NVDA", [100 + i for i in range(70)])  # steady, constant-slope trend
+    obs = new_event(CLOCK, EventType.OBSERVATION_BAR, source="alpaca", asset="NVDA")
+    assert await DriftInterpreter(buf).interpret(obs) == []
+
+
+@pytest.mark.asyncio
+async def test_drift_silent_without_history():
+    buf = BarBuffer()
+    _fill(buf, "NVDA", [100, 101, 102])
+    obs = new_event(CLOCK, EventType.OBSERVATION_BAR, source="alpaca", asset="NVDA")
+    assert await DriftInterpreter(buf).interpret(obs) == []
+
+
+# ── MultiFrameInterpreter ──
+@pytest.mark.asyncio
+async def test_multiframe_bullish_when_emas_stacked_up():
+    buf = BarBuffer()
+    _fill(buf, "NVDA", [100 + i for i in range(70)])  # clean uptrend → ef>em>es
+    obs = new_event(CLOCK, EventType.OBSERVATION_BAR, source="alpaca", asset="NVDA")
+    out = await MultiFrameInterpreter(buf).interpret(obs)
+    assert len(out) == 1
+    assert out[0].source == "indicator.multiframe"
+    assert out[0].direction > 0
+
+
+@pytest.mark.asyncio
+async def test_multiframe_bearish_when_emas_stacked_down():
+    buf = BarBuffer()
+    _fill(buf, "NVDA", [170 - i for i in range(70)])  # clean downtrend
+    obs = new_event(CLOCK, EventType.OBSERVATION_BAR, source="alpaca", asset="NVDA")
+    out = await MultiFrameInterpreter(buf).interpret(obs)
+    assert len(out) == 1 and out[0].direction < 0
+
+
+@pytest.mark.asyncio
+async def test_multiframe_silent_without_enough_history():
+    buf = BarBuffer()
+    _fill(buf, "NVDA", [100 + i for i in range(20)])  # < slow(55) EMA window
+    obs = new_event(CLOCK, EventType.OBSERVATION_BAR, source="alpaca", asset="NVDA")
+    assert await MultiFrameInterpreter(buf).interpret(obs) == []
+
+
+# ── ForecasterInterpreter ──
+@pytest.mark.asyncio
+async def test_forecaster_projects_uptrend():
+    buf = BarBuffer()
+    _fill(buf, "NVDA", [100 + 2 * i for i in range(30)])  # clean linear up → high R²
+    obs = new_event(CLOCK, EventType.OBSERVATION_BAR, source="alpaca", asset="NVDA")
+    out = await ForecasterInterpreter(buf).interpret(obs)
+    assert len(out) == 1
+    assert out[0].source == "forecaster"
+    assert out[0].direction > 0
+    assert 0.0 < out[0].weight <= 0.6
+
+
+@pytest.mark.asyncio
+async def test_forecaster_silent_on_noisy_series():
+    buf = BarBuffer()
+    _fill(buf, "NVDA", [100, 90, 110, 88, 112, 91, 109, 95, 105, 92,
+                        108, 94, 106, 93, 107, 96, 104, 97, 103, 99])  # low R²
+    obs = new_event(CLOCK, EventType.OBSERVATION_BAR, source="alpaca", asset="NVDA")
+    assert await ForecasterInterpreter(buf).interpret(obs) == []
 
 
 # ── NewsLexiconInterpreter ──

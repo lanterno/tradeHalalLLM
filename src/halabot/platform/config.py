@@ -36,7 +36,10 @@ class BeliefSettings(BaseModel):
 
 class CognitionSettings(BaseModel):
     llm_thesis_enabled: bool = False  # sparse LLM thesis off by default (cheap shadow)
-    forecaster_enabled: bool = False  # needs the [ml] extra
+    # The built-in forecaster is a cheap deterministic OLS-slope projection (no
+    # [ml] extra). Off by default; a richer model (Chronos) can replace it behind
+    # the same interpreter seam.
+    forecaster_enabled: bool = False
     multiframe_enabled: bool = True
 
 

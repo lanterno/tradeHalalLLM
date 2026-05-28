@@ -26,9 +26,13 @@ from halabot.belief.schema import BeliefState
 from halabot.belief.store import PgBeliefStore
 from halabot.belief.updater import BeliefUpdater, UpdaterConfig
 from halabot.cognition.bars import BarBuffer, BufferPriceSource
+from halabot.cognition.base import Interpreter
 from halabot.cognition.interpreters import (
     AnomalyInterpreter,
+    DriftInterpreter,
+    ForecasterInterpreter,
     IndicatorInterpreter,
+    MultiFrameInterpreter,
     NewsLexiconInterpreter,
     RsiInterpreter,
     TrendAlignmentInterpreter,
@@ -154,17 +158,25 @@ async def build_engine(
         llm=llm_gate or _DisabledLLM(),
         config=updater_config,
     )
+    # Cheap, always-on interpreters (LLM-free, INV-1). drift wires up
+    # conviction_raw's drift down-weight; multiframe/forecaster are flag-gated.
+    interpreters: list[Interpreter] = [
+        IndicatorInterpreter(buffer),
+        RsiInterpreter(buffer),
+        TrendAlignmentInterpreter(buffer),
+        AnomalyInterpreter(buffer),
+        DriftInterpreter(buffer),
+        NewsLexiconInterpreter(),
+    ]
+    if s.cognition.multiframe_enabled:
+        interpreters.append(MultiFrameInterpreter(buffer))
+    if s.cognition.forecaster_enabled:
+        interpreters.append(ForecasterInterpreter(buffer))
     router = CognitionRouter(
         bus=bus,
         updater=updater,
         buffer=buffer,
-        interpreters=[
-            IndicatorInterpreter(buffer),
-            RsiInterpreter(buffer),
-            TrendAlignmentInterpreter(buffer),
-            AnomalyInterpreter(buffer),
-            NewsLexiconInterpreter(),
-        ],
+        interpreters=interpreters,
     )
     shadow = ShadowPolicyRunner(
         bus=bus,
