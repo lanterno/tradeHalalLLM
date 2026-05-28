@@ -81,7 +81,13 @@ async def test_bus_durably_persists_then_replays(halabot_engine):
     bus = InProcessEventBus(PgEventLog(halabot_engine))
     seen: list[Event] = []
     bus.subscribe({EventType.OBSERVATION_BAR}, lambda e: _record(seen, e))
-    e = new_event(_at(0), EventType.OBSERVATION_BAR, source="alpaca", asset="NVDA")
+    e = new_event(
+        _at(0),
+        EventType.OBSERVATION_BAR,
+        source="alpaca",
+        asset="NVDA",
+        payload={"o": 1.0, "h": 1.0, "low": 1.0, "c": 1.0},
+    )
     await bus.publish(e)
     assert len(seen) == 1                       # dispatched
     replayed = [x async for x in bus.replay(types={EventType.OBSERVATION_BAR})]

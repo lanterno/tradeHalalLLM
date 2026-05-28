@@ -31,6 +31,8 @@ from typing import Protocol
 
 from halabot.platform.event_log import EventLog
 from halabot.platform.events import Event, EventType
+from halabot.platform.observability import correlation_scope
+from halabot.schemas import validate_payload
 
 logger = logging.getLogger(__name__)
 
@@ -102,6 +104,20 @@ class InProcessEventBus:
             pass
 
     async def publish(self, event: Event) -> None:
+        # Ingress payload validation (INV-4, fail-closed): a malformed feed
+        # event is logged with its type and dropped — never persisted or
+        # dispatched. Internal (trusted) event types pass.
+        err = validate_payload(event)
+        if err is not None:
+            logger.warning(
+                "dropping malformed %s event (%s) from %s: %s",
+                event.type,
+                event.id,
+                event.source,
+                err,
+            )
+            return
+
         if event.is_control:
             # Best-effort durability: attempt the append, but dispatch
             # regardless so exits/halts/heartbeat flow during a DB outage.
@@ -133,21 +149,24 @@ class InProcessEventBus:
         await self._dispatch(event)
 
     async def _dispatch(self, event: Event) -> None:
-        # Snapshot the subscriber list so a handler that (un)subscribes during
-        # dispatch doesn't mutate the list we're iterating.
-        for sub in list(self._subs):
-            if not sub.active or event.type not in sub.types:
-                continue
-            try:
-                await sub.handler(event)
-            except Exception as exc:  # noqa: BLE001 — handler isolation (INV-1)
-                logger.error(
-                    "subscriber %r failed handling %s (%s): %r",
-                    getattr(sub.handler, "__qualname__", sub.handler),
-                    event.type,
-                    event.id,
-                    exc,
-                )
+        # Bind the event's correlation id for the duration of dispatch so every
+        # log line a handler emits carries the causal chain (INV-5).
+        with correlation_scope(str(event.correlation_id) if event.correlation_id else None):
+            # Snapshot the subscriber list so a handler that (un)subscribes
+            # during dispatch doesn't mutate the list we're iterating.
+            for sub in list(self._subs):
+                if not sub.active or event.type not in sub.types:
+                    continue
+                try:
+                    await sub.handler(event)
+                except Exception as exc:  # noqa: BLE001 — handler isolation (INV-1)
+                    logger.error(
+                        "subscriber %r failed handling %s (%s): %r",
+                        getattr(sub.handler, "__qualname__", sub.handler),
+                        event.type,
+                        event.id,
+                        exc,
+                    )
 
     # ── replay ──
     def replay(

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -39,6 +40,7 @@ from halabot.conviction.raw import IdentityCalibrator
 from halabot.learning.shadow_outcomes import ShadowOutcomeTracker
 from halabot.platform.bus import InProcessEventBus
 from halabot.platform.clock import Clock, SystemClock
+from halabot.platform.config import HalabotSettings, get_settings
 from halabot.platform.db import bootstrap_schema, make_engine
 from halabot.platform.event_log import PgEventLog
 from halabot.policy.policy import Policy
@@ -94,6 +96,7 @@ async def build_engine(
     database_url: str | None = None,
     db_engine: AsyncEngine | None = None,
     clock: Clock | None = None,
+    settings: HalabotSettings | None = None,
     updater_config: UpdaterConfig | None = None,
     policy_config: PolicyConfig | None = None,
     risk_config: RiskConfig | None = None,
@@ -102,13 +105,35 @@ async def build_engine(
     positions: Any | None = None,
 ) -> Engine:
     """Assemble + start the read-only engine. Provide ``db_engine`` (tests) or
-    ``database_url``. Subscriptions are live on return; feed ``observation.*``
-    events into ``engine.bus`` to drive it."""
+    ``database_url``. Configs default from ``settings`` (or ``get_settings()``);
+    explicit ``*_config`` args override. Subscriptions are live on return; feed
+    ``observation.*`` events into ``engine.bus`` to drive it."""
     if db_engine is None:
         if database_url is None:
             raise ValueError("build_engine requires db_engine or database_url")
         db_engine = make_engine(database_url)
     await bootstrap_schema(db_engine)
+
+    s = settings or get_settings()
+    updater_config = updater_config or UpdaterConfig(
+        long_threshold=s.belief.long_threshold,
+        evidence_decay_halflife_min=s.belief.evidence_decay_halflife_min,
+        catalyst_impact_threshold=s.belief.catalyst_impact_threshold,
+        max_thesis_age=timedelta(hours=s.belief.thesis_max_age_h),
+        llm_thesis_enabled=s.cognition.llm_thesis_enabled,
+    )
+    policy_config = policy_config or PolicyConfig(
+        conviction_entry_band=s.policy.conviction_entry_band,
+        conviction_exit_band=s.policy.conviction_exit_band,
+        max_weight_per_asset=s.policy.max_weight_per_asset,
+        max_gross_exposure=s.policy.max_gross_exposure,
+        target_rebalance_threshold=s.policy.target_rebalance_threshold,
+    )
+    risk_config = risk_config or RiskConfig(
+        max_portfolio_heat_pct=s.risk.max_portfolio_heat_pct,
+        max_drawdown_pct=s.risk.max_drawdown_pct,
+        daily_loss_limit=s.risk.daily_loss_limit,
+    )
 
     clock = clock or SystemClock()
     bus = InProcessEventBus(PgEventLog(db_engine))
@@ -128,7 +153,7 @@ async def build_engine(
         prices=prices,
         positions=positions or _NoPositions(),
         llm=llm_gate or _DisabledLLM(),
-        config=updater_config or UpdaterConfig(),
+        config=updater_config,
     )
     router = CognitionRouter(
         bus=bus,
@@ -145,9 +170,9 @@ async def build_engine(
     shadow = ShadowPolicyRunner(
         bus=bus,
         store=store,
-        policy=Policy(policy_config or PolicyConfig()),
+        policy=Policy(policy_config),
         portfolio=ShadowPortfolio(),
-        risk_engine=BasicRiskEngine(risk_config or RiskConfig()),
+        risk_engine=BasicRiskEngine(risk_config),
         clock=clock,
         prices=prices,
     )

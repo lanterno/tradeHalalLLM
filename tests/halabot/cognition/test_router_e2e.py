@@ -135,7 +135,7 @@ async def test_bullish_news_raises_conviction_and_adds_evidence():
     await bus.publish(
         new_event(
             clock, EventType.OBSERVATION_NEWS, source="finnhub", asset="NVDA",
-            payload={"lexicon_polarity": 0.9, "headline": "surprise beat"},
+            payload={"lexicon_polarity": 0.9, "headline": "surprise beat", "url": "http://n"},
         )
     )
     after = await store.get("NVDA")

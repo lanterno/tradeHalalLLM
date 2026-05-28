@@ -27,46 +27,43 @@ def cli() -> None:
 
 @cli.command("shadow")
 @click.option("--once", is_flag=True, default=False, help="One poll then exit (else run forever).")
-@click.option("--interval", default=900.0, show_default=True, help="Poll/heartbeat seconds.")
+@click.option(
+    "--interval", default=None, type=float, help="Poll/heartbeat seconds (default: from settings)."
+)
 @click.option("--timeframe", default="1Hour", show_default=True, help="Bar timeframe.")
 @click.option("--days", default=5, show_default=True, help="Bar lookback window (days).")
-def shadow(once: bool, interval: float, timeframe: str, days: int) -> None:
+def shadow(once: bool, interval: float | None, timeframe: str, days: int) -> None:
     """Run the read-only engine on live Alpaca data, logging shadow proposals."""
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    from halabot.platform.observability import setup_logging
+
+    setup_logging(logging.INFO)
     asyncio.run(_run_shadow(once=once, interval=interval, timeframe=timeframe, days=days))
 
 
-async def _run_shadow(*, once: bool, interval: float, timeframe: str, days: int) -> None:
+async def _run_shadow(
+    *, once: bool, interval: float | None, timeframe: str, days: int
+) -> None:
     # Lazy imports — legacy config/MCP/DB only loaded when actually running.
     from halabot.app import build_engine
     from halabot.perception.base import SourceSupervisor
     from halabot.perception.sources.alpaca_bars import AlpacaBarSource
     from halabot.platform.clock import SystemClock
+    from halabot.platform.config import get_settings as get_hb_settings
     from halabot.platform.events import EventType, new_event
-    from halabot.policy.sizing import PolicyConfig
+    from halabot.platform.supervisor import Supervisor, heartbeat_loop
     from halal_trader.config import get_settings
     from halal_trader.db.models import init_db
     from halal_trader.db.repository import Repository
     from halal_trader.mcp.client import AlpacaMCPClient
 
-    settings = get_settings()
+    settings = get_settings()  # legacy: MCP, halal universe, finnhub key
+    hb = get_hb_settings()  # engine config: bands, heartbeat, thresholds
     clock = SystemClock()
-    # Cold-start bands tuned to the observed raw-conviction scale (a single
-    # momentum signal tops ~0.35 in a normal tape — see the shadow's own output).
-    # Deliberately calibrated to the scale per REARCHITECTURE B.2's cold-start
-    # note; replaced by the fitted calibrator (L4/L8) once enough closed outcomes
-    # exist to map raw → P(win). Until then the shadow proposes on the genuinely
-    # trending names so the Phase-3 A/B has signal.
-    cold_start_policy = PolicyConfig(
-        conviction_entry_band=0.25,
-        conviction_exit_band=0.15,
-        max_weight_per_asset=0.20,
-        max_gross_exposure=1.0,
-        target_rebalance_threshold=0.03,
-    )
-    engine = await build_engine(
-        database_url=settings.database_url, policy_config=cold_start_policy
-    )
+    interval = interval if interval is not None else hb.engine.heartbeat_interval_s
+    # Engine configs (cold-start bands, decay, risk) derive from HalabotSettings —
+    # the fitted calibrator (L4/L8) replaces the cold-start bands once enough
+    # closed outcomes map raw → P(win). The two systems share one DATABASE_URL.
+    engine = await build_engine(database_url=settings.database_url, settings=hb)
     ht_engine = await init_db(settings.database_url)  # legacy DB, for the halal universe
     repo = Repository(ht_engine)
     mcp = AlpacaMCPClient()
@@ -89,6 +86,7 @@ async def _run_shadow(*, once: bool, interval: float, timeframe: str, days: int)
         )
         sources.append(news_source)
     supervisor = SourceSupervisor()
+    heartbeat = Supervisor()
 
     try:
         syms = await universe()
@@ -115,18 +113,22 @@ async def _run_shadow(*, once: bool, interval: float, timeframe: str, days: int)
             click.echo(f"emitted {total} observations")
         else:
             supervisor.start(sources, engine.bus.publish)
+            # The heartbeat drives time-decay (R-08) so conviction fades on the
+            # passage of time even with no new data; supervised so a transient
+            # publish failure restarts it rather than silently stopping decay.
+            heartbeat.spawn(
+                "heartbeat", lambda: heartbeat_loop(engine.bus, clock, interval)
+            )
             click.echo(f"shadow running (poll/heartbeat every {interval:.0f}s) — Ctrl-C to stop")
             try:
-                while True:
-                    await asyncio.sleep(interval)
-                    await engine.bus.publish(
-                        new_event(clock, EventType.SYSTEM_HEARTBEAT, source="halabot.cli")
-                    )
+                stop = asyncio.Event()
+                await stop.wait()
             except (KeyboardInterrupt, asyncio.CancelledError):
                 click.echo("stopping…")
 
         await _print_summary(engine)
     finally:
+        await heartbeat.shutdown()
         await supervisor.stop()
         if news_source is not None:
             await news_source.aclose()

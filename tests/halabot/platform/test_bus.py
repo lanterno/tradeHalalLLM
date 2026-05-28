@@ -21,8 +21,18 @@ class _FailingLog(InMemoryEventLog):
         raise RuntimeError("db down")
 
 
+# Minimal well-formed payloads so the bus's ingress validation (fail-closed)
+# doesn't drop these mechanics-focused fixtures.
+_PAYLOADS: dict[EventType, dict] = {
+    EventType.OBSERVATION_BAR: {"o": 1.0, "h": 1.0, "low": 1.0, "c": 1.0},
+    EventType.OBSERVATION_NEWS: {"headline": "x", "url": "http://x"},
+    EventType.OBSERVATION_PRICE: {"price": 1.0},
+    EventType.COMPLIANCE_VERDICT: {"status": "halal"},
+}
+
+
 def _ev(t: EventType, asset: str | None = None):
-    return new_event(CLOCK, t, source="test", asset=asset)
+    return new_event(CLOCK, t, source="test", asset=asset, payload=_PAYLOADS.get(t, {}))
 
 
 @pytest.mark.asyncio
