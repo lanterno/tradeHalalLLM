@@ -31,6 +31,7 @@ from halabot.belief.schema import (
     Levels,
     Regime,
     band_index,
+    regime_support,
 )
 from halabot.belief.store import BeliefStore
 from halabot.conviction.raw import Calibrator, conviction_raw
@@ -194,10 +195,13 @@ class BeliefUpdater:
         b.regime, b.regime_confidence = self.regime.classify(b.evidence)
         b.levels = await self.levels.levels_for(asset, prev.levels)
 
-        # 3. raw conviction (LLM-free) with drift/anomaly flags wired (R-12)
+        # 3. raw conviction (LLM-free) with drift/anomaly flags wired (R-12).
+        #    The regime factor is categorical LONG support (regime_support),
+        #    not the classifier's confidence — so a trend outranks a range for a
+        #    long bet rather than the reverse (live-data fix, 2026-05-28).
         raw = conviction_raw(
             b.evidence,
-            b.regime_confidence,
+            regime_support(b.regime),
             drift_flag=has_flag(b.evidence, "drift"),
             anomaly_flag=has_flag(b.evidence, "anomaly"),
         )

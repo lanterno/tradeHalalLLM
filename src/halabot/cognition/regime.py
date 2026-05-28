@@ -8,7 +8,7 @@ that fold in later; this gets the belief loop running with a sensible regime.
 from __future__ import annotations
 
 from halabot.belief.evidence import fraction_same_sign, has_flag, weighted_sum
-from halabot.belief.schema import EvidenceItem, Regime
+from halabot.belief.schema import EvidenceItem, Regime, regime_support  # noqa: F401 (re-export)
 
 # net |signed| at/above which we call it a trend (vs ranging)
 _TREND_THRESHOLD = 0.25

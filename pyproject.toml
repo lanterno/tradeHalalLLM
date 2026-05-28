@@ -71,6 +71,7 @@ dev = [
 
 [project.scripts]
 halal-trader = "halal_trader.cli:cli"
+halabot = "halabot.cli:cli"
 
 [build-system]
 requires = ["hatchling"]

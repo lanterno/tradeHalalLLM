@@ -150,3 +150,23 @@ def band_index(raw: float) -> int:
         if x < upper or (i == len(_CONVICTION_BANDS) - 2 and x <= upper):
             return i
     return len(_CONVICTION_BANDS) - 2
+
+
+# How much each regime SUPPORTS a long-bias conviction — a categorical factor
+# (NOT classifier confidence). Live data (2026-05-28) showed feeding regime
+# *confidence* into conviction let "confidently ranging" assets outrank
+# trending-up ones for a long, which is backwards: an uptrend supports a long;
+# a range / downtrend / chaos does not.
+_REGIME_SUPPORT: dict[Regime, float] = {
+    Regime.TRENDING_UP: 1.0,
+    Regime.BREAKOUT: 1.0,
+    Regime.RANGING: 0.5,
+    Regime.VOLATILE: 0.3,
+    Regime.TRENDING_DOWN: 0.1,
+}
+
+
+def regime_support(regime: Regime) -> float:
+    """Long-bias support factor in [0, 1] — passed to ``conviction_raw`` in
+    place of raw regime confidence so trends outrank ranges for a long."""
+    return _REGIME_SUPPORT.get(regime, 0.3)
