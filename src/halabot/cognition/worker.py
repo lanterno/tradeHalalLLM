@@ -77,6 +77,9 @@ class CoalescingBeliefWorker:
         self._u = updater
         self._q: asyncio.Queue[_Ev | _Co] = asyncio.Queue()
         self._task: asyncio.Task[None] | None = None
+        # Serializes batch application so a concurrent drain() (e.g. --once flush
+        # or a test) never races the background _run on the same belief version.
+        self._lock = asyncio.Lock()
 
     async def evidence(
         self, asset: str, now: datetime, items: list[EvidenceItem], *, is_replay: bool = False
@@ -92,29 +95,35 @@ class CoalescingBeliefWorker:
     async def stop(self) -> None:
         if self._task is None:
             return
-        await self.drain()  # flush queued writes before tearing down
+        # Cancel the background consumer FIRST, then drain the remainder with no
+        # concurrent consumer — so the final flush can't race _run.
         self._task.cancel()
         await asyncio.gather(self._task, return_exceptions=True)
         self._task = None
+        await self.drain()
 
     async def drain(self) -> None:
         """Process everything currently queued (for ``--once`` and shutdown)."""
         while not self._q.empty():
-            first = self._q.get_nowait()
-            await self._apply(self._drain_after(first))
+            async with self._lock:
+                if self._q.empty():
+                    break
+                await self._apply(self._drain_batch())
 
     async def _run(self) -> None:
         while True:
             try:
-                first = await self._q.get()
-                await self._apply(self._drain_after(first))
+                first = await self._q.get()  # block for the first item (no lock held)
+                async with self._lock:
+                    await self._apply([first, *self._drain_batch()])
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001 — one bad batch never kills the worker (INV-1)
                 logger.error("belief worker batch failed: %r", exc)
 
-    def _drain_after(self, first: _Ev | _Co) -> list[_Ev | _Co]:
-        jobs: list[_Ev | _Co] = [first]
+    def _drain_batch(self) -> list[_Ev | _Co]:
+        """Pop everything currently queued (non-blocking). Caller holds the lock."""
+        jobs: list[_Ev | _Co] = []
         while True:
             try:
                 jobs.append(self._q.get_nowait())

@@ -20,13 +20,28 @@ from halabot.platform.clock import Clock
 from halabot.platform.events import Event, EventType, new_event
 from halabot.policy.policy import Policy, TargetWeight, TradeProposal
 from halabot.policy.portfolio import ShadowPortfolio
-from halabot.risk.engine import PortfolioSnapshot, RiskEngine
+from halabot.risk.engine import PortfolioSnapshot, RiskEngine, RiskState
 
 
 class PriceSource(Protocol):
     def last_price(self, asset: str) -> float | None: ...
 
+
+class PriceHistory(Protocol):
+    """Closing-price history per asset (for the risk engine's correlation pass)."""
+
+    def closes(self, asset: str) -> list[float]: ...
+
+
 logger = logging.getLogger(__name__)
+
+
+def _returns(closes: list[float]) -> list[float]:
+    return [
+        (closes[i] - closes[i - 1]) / closes[i - 1]
+        for i in range(1, len(closes))
+        if closes[i - 1] > 0
+    ]
 
 
 class ShadowPolicyRunner:
@@ -40,6 +55,7 @@ class ShadowPolicyRunner:
         risk_engine: RiskEngine,
         clock: Clock,
         prices: PriceSource | None = None,
+        history: PriceHistory | None = None,
         nominal_equity: float = 100_000.0,
         compliance_ttl: timedelta | None = None,
     ) -> None:
@@ -50,6 +66,8 @@ class ShadowPolicyRunner:
         self._risk = risk_engine
         self._clock = clock
         self._prices = prices
+        self._history = history
+        self._halted = False  # for risk.halt edge-emission
         self._nominal = nominal_equity
         self._compliance_ttl = compliance_ttl
         self._subs: list[Subscription] = []
@@ -119,6 +137,38 @@ class ShadowPolicyRunner:
         )
         logger.info("SHADOW force-exit: sell %s → 0 (%s)", asset, reason)
 
+    async def _emit_risk_state(self, risk: RiskState, event: Event) -> None:
+        """Publish risk.state each cycle (telemetry, INV-5) + risk.halt on the
+        edge into a halted state (so the dashboard/operator sees the trigger)."""
+        await self._bus.publish(
+            new_event(
+                self._clock,
+                EventType.RISK_STATE,
+                source="risk.shadow",
+                payload={
+                    "portfolio_heat_pct": round(risk.portfolio_heat_pct, 6),
+                    "drawdown_pct": round(risk.drawdown_pct, 6),
+                    "realized_loss_today_pct": round(risk.realized_loss_today_pct, 6),
+                    "gross_exposure": round(risk.gross_exposure, 6),
+                    "halted": risk.halted,
+                    "reason": risk.reason,
+                },
+                causation=event,
+            )
+        )
+        if risk.halted and not self._halted:
+            await self._bus.publish(
+                new_event(
+                    self._clock,
+                    EventType.RISK_HALT,
+                    source="risk.shadow",
+                    payload={"reason": risk.reason},
+                    causation=event,
+                )
+            )
+            logger.warning("SHADOW risk halt: %s", risk.reason)
+        self._halted = risk.halted
+
     async def _emit_target_changes(self, targets: list[TargetWeight], event: Event) -> None:
         """Emit ``policy.target_changed`` for each target that moved materially —
         the policy output history (telemetry), independent of whether the change
@@ -147,7 +197,11 @@ class ShadowPolicyRunner:
     async def _on_belief(self, event: Event) -> None:
         beliefs = await self._store.all_active()
         by_asset = {b.asset: b for b in beliefs}
-        risk = self._risk.evaluate(self._snapshot())
+        returns = None
+        if self._history is not None:
+            returns = {b.asset: _returns(self._history.closes(b.asset)) for b in beliefs}
+        risk = self._risk.evaluate(self._snapshot(), beliefs=beliefs, returns_by_asset=returns)
+        await self._emit_risk_state(risk, event)
         targets = self._policy.targets(beliefs, self._portfolio, risk)
         await self._emit_target_changes(targets, event)
         proposals = self._policy.deltas(

@@ -213,6 +213,7 @@ async def build_engine(
         risk_engine=BasicRiskEngine(risk_config),
         clock=clock,
         prices=prices,
+        history=buffer,  # closes() feed the risk engine's correlation pass
         compliance_ttl=timedelta(hours=s.halal.cache_ttl_h),
     )
     outcomes = ShadowOutcomeTracker(bus=bus, engine=db_engine, store=store)

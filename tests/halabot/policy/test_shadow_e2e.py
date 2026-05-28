@@ -129,6 +129,16 @@ async def test_belief_invalidated_on_unheld_asset_is_noop():
 
 
 @pytest.mark.asyncio
+async def test_risk_state_emitted_on_belief_update():
+    store, bus, runner, _ = await _build()
+    risk_states: list[Event] = []
+    bus.subscribe({EventType.RISK_STATE}, lambda e: _cap(risk_states, e))
+    await _signal_belief_update(bus, store, _bullish())
+    assert risk_states  # risk telemetry published each cycle (INV-5)
+    assert "gross_exposure" in risk_states[0].payload
+
+
+@pytest.mark.asyncio
 async def test_runner_only_emits_policy_events_never_orders():
     store, bus, runner, _ = await _build()
     all_events: list[Event] = []
