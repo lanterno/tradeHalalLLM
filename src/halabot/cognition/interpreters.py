@@ -1,20 +1,26 @@
-"""Cheap, continuous interpreters: bar momentum + news lexicon (REARCHITECTURE L2).
+"""Cheap, continuous interpreters (REARCHITECTURE L2) — all LLM-free.
 
-Both are LLM-free. The momentum interpreter reads the rolling buffer (the router
-appends the new bar before invoking it); the news interpreter uses the cheap
-lexicon polarity that perception already attached, leaving LLM headline scoring
-to the sparse cognition path.
+Bar-driven (momentum, RSI, multi-horizon trend alignment) read the rolling
+buffer the router fills; the news interpreter uses the cheap lexicon polarity
+perception attached. Multiple bar interpreters from the same series are
+correlated, so they don't add *independent* information — but they raise
+conviction mass when they agree and, via the agreement/dispersion penalty,
+*dampen* it when they disagree (e.g. price momentum up but RSI rolling over).
+The fitted calibrator (L8) learns each source's true weight once outcomes exist.
 """
 
 from __future__ import annotations
 
 from halabot.belief.schema import EvidenceItem
-from halabot.cognition.bars import BarBuffer, momentum_signal
+from halabot.cognition.bars import BarBuffer, momentum_signal, rsi
 from halabot.platform.events import Event, EventType
 
 # News evidence decays fast; one headline shouldn't dominate for long. The
 # decay half-life is global, so we encode "freshness" via a modest base weight.
 _NEWS_WEIGHT = 0.8
+# Secondary confirmations carry less weight than the primary trend signal.
+_RSI_WEIGHT = 0.5
+_ALIGN_WEIGHT = 0.6
 
 
 class IndicatorInterpreter:
@@ -38,6 +44,75 @@ class IndicatorInterpreter:
                 direction=direction,
                 weight=weight,
                 detail=f"fast/slow EMA momentum {direction:+.2f}",
+                ts=observation.ts,
+                event_id=observation.id,
+            )
+        ]
+
+
+class RsiInterpreter:
+    """Emits an RSI momentum-confirmation signal (RSI>50 bullish, <50 bearish)."""
+
+    consumes = frozenset({EventType.OBSERVATION_BAR})
+
+    def __init__(self, buffer: BarBuffer, *, period: int = 14) -> None:
+        self._buffer = buffer
+        self._period = period
+
+    async def interpret(self, observation: Event) -> list[EvidenceItem]:
+        asset = observation.asset
+        if asset is None:
+            return []
+        r = rsi(self._buffer.closes(asset), period=self._period)
+        if r is None:
+            return []
+        direction = max(-1.0, min(1.0, (r - 50.0) / 25.0))  # 50→0, 75→+1, 25→-1
+        if abs(direction) < 0.04:
+            return []  # ~neutral — no signal
+        return [
+            EvidenceItem(
+                source="indicator.rsi",
+                direction=direction,
+                weight=_RSI_WEIGHT,
+                detail=f"RSI {r:.0f}",
+                ts=observation.ts,
+                event_id=observation.id,
+            )
+        ]
+
+
+class TrendAlignmentInterpreter:
+    """Multi-horizon alignment: short- AND long-window returns agreeing is a
+    stronger directional signal than either alone; mixed → no signal."""
+
+    consumes = frozenset({EventType.OBSERVATION_BAR})
+
+    def __init__(self, buffer: BarBuffer, *, short: int = 10, long: int = 40) -> None:
+        self._buffer = buffer
+        self._short = short
+        self._long = long
+
+    async def interpret(self, observation: Event) -> list[EvidenceItem]:
+        asset = observation.asset
+        if asset is None:
+            return []
+        closes = self._buffer.closes(asset)
+        if len(closes) < self._long or closes[-self._short] <= 0 or closes[-self._long] <= 0:
+            return []
+        short_ret = (closes[-1] - closes[-self._short]) / closes[-self._short]
+        long_ret = (closes[-1] - closes[-self._long]) / closes[-self._long]
+        if short_ret > 0 and long_ret > 0:
+            direction = 0.8
+        elif short_ret < 0 and long_ret < 0:
+            direction = -0.8
+        else:
+            return []  # horizons disagree → no alignment signal
+        return [
+            EvidenceItem(
+                source="indicator.alignment",
+                direction=direction,
+                weight=_ALIGN_WEIGHT,
+                detail=f"short {short_ret:+.2%} / long {long_ret:+.2%}",
                 ts=observation.ts,
                 event_id=observation.id,
             )

@@ -25,7 +25,12 @@ from halabot.belief.schema import BeliefState
 from halabot.belief.store import PgBeliefStore
 from halabot.belief.updater import BeliefUpdater, UpdaterConfig
 from halabot.cognition.bars import BarBuffer, BufferPriceSource
-from halabot.cognition.interpreters import IndicatorInterpreter, NewsLexiconInterpreter
+from halabot.cognition.interpreters import (
+    IndicatorInterpreter,
+    NewsLexiconInterpreter,
+    RsiInterpreter,
+    TrendAlignmentInterpreter,
+)
 from halabot.cognition.level_engine import BarLevelEngine
 from halabot.cognition.regime import EvidenceRegimeClassifier
 from halabot.cognition.router import CognitionRouter
@@ -128,7 +133,12 @@ async def build_engine(
         bus=bus,
         updater=updater,
         buffer=buffer,
-        interpreters=[IndicatorInterpreter(buffer), NewsLexiconInterpreter()],
+        interpreters=[
+            IndicatorInterpreter(buffer),
+            RsiInterpreter(buffer),
+            TrendAlignmentInterpreter(buffer),
+            NewsLexiconInterpreter(),
+        ],
     )
     shadow = ShadowPolicyRunner(
         bus=bus,

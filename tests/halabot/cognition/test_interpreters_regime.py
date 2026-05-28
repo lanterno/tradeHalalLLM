@@ -8,7 +8,12 @@ import pytest
 
 from halabot.belief.schema import EvidenceItem, Regime
 from halabot.cognition.bars import Bar, BarBuffer
-from halabot.cognition.interpreters import IndicatorInterpreter, NewsLexiconInterpreter
+from halabot.cognition.interpreters import (
+    IndicatorInterpreter,
+    NewsLexiconInterpreter,
+    RsiInterpreter,
+    TrendAlignmentInterpreter,
+)
 from halabot.cognition.regime import EvidenceRegimeClassifier
 from halabot.platform.clock import FakeClock
 from halabot.platform.events import EventType, new_event
@@ -72,6 +77,49 @@ async def test_indicator_interpreter_silent_without_history():
     buf.append("NVDA", Bar(o=1, h=1, low=1, c=1, v=1.0, ts=T0))
     obs = new_event(CLOCK, EventType.OBSERVATION_BAR, source="alpaca", asset="NVDA")
     assert await IndicatorInterpreter(buf).interpret(obs) == []
+
+
+# ── RsiInterpreter ──
+def _fill(buf, asset, closes):
+    for i, c in enumerate(closes):
+        buf.append(asset, Bar(o=c, h=c + 1, low=c - 1, c=c, v=1.0, ts=T0))
+
+
+@pytest.mark.asyncio
+async def test_rsi_interpreter_bullish_on_rising():
+    buf = BarBuffer()
+    _fill(buf, "NVDA", [100 + i for i in range(20)])  # all gains → RSI ~100
+    obs = new_event(CLOCK, EventType.OBSERVATION_BAR, source="alpaca", asset="NVDA")
+    out = await RsiInterpreter(buf).interpret(obs)
+    assert len(out) == 1 and out[0].source == "indicator.rsi" and out[0].direction > 0
+
+
+@pytest.mark.asyncio
+async def test_rsi_interpreter_silent_without_history():
+    buf = BarBuffer()
+    _fill(buf, "NVDA", [100, 101, 102])
+    obs = new_event(CLOCK, EventType.OBSERVATION_BAR, source="alpaca", asset="NVDA")
+    assert await RsiInterpreter(buf).interpret(obs) == []
+
+
+# ── TrendAlignmentInterpreter ──
+@pytest.mark.asyncio
+async def test_alignment_bullish_when_both_horizons_up():
+    buf = BarBuffer()
+    _fill(buf, "NVDA", [100 + i for i in range(50)])  # steadily up
+    obs = new_event(CLOCK, EventType.OBSERVATION_BAR, source="alpaca", asset="NVDA")
+    out = await TrendAlignmentInterpreter(buf).interpret(obs)
+    assert len(out) == 1 and out[0].source == "indicator.alignment" and out[0].direction > 0
+
+
+@pytest.mark.asyncio
+async def test_alignment_silent_when_horizons_disagree():
+    buf = BarBuffer()
+    # long-window up overall, but last 10 bars down → mixed → no signal
+    closes = [100 + i for i in range(40)] + [139 - i for i in range(10)]
+    _fill(buf, "NVDA", closes)
+    obs = new_event(CLOCK, EventType.OBSERVATION_BAR, source="alpaca", asset="NVDA")
+    assert await TrendAlignmentInterpreter(buf).interpret(obs) == []
 
 
 # ── NewsLexiconInterpreter ──
