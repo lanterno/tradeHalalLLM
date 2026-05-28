@@ -49,6 +49,20 @@ class BarBuffer:
         return [b.low for b in self._bars.get(asset, ())]
 
 
+class BufferPriceSource:
+    """Last-close price source over the buffer (the updater's ``PriceSource``).
+
+    A real, free price feed for the invalidation check: the latest bar close.
+    Returns None for an asset with no bars yet (no spurious invalidation)."""
+
+    def __init__(self, buffer: "BarBuffer") -> None:
+        self._buffer = buffer
+
+    def last_price(self, asset: str) -> float | None:
+        closes = self._buffer.closes(asset)
+        return closes[-1] if closes else None
+
+
 def ema(values: list[float], period: int) -> float | None:
     if len(values) < period or period <= 0:
         return None

@@ -61,3 +61,10 @@ class OnchainObservation(TypedDict):
     signal: str  # "whale_inflow" | "whale_outflow" | "basis"
     magnitude: float
     detail: str
+
+
+class ComplianceVerdictPayload(TypedDict):
+    status: str  # "halal" | "not_halal" | "doubtful"
+    detail: str
+    screening_id: int | None
+    transient_error: bool  # True ⇒ NO-VERDICT (outage); never overwrites a real verdict (INV-2)

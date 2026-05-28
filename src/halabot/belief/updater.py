@@ -25,6 +25,7 @@ from halabot.belief.evidence import Calendar, decay, has_flag, merge, weighted_s
 from halabot.belief.levels import update_levels  # noqa: F401  (re-exported for default engine)
 from halabot.belief.schema import (
     BeliefState,
+    ComplianceVerdict,
     Direction,
     EvidenceItem,
     Levels,
@@ -128,6 +129,34 @@ class BeliefUpdater:
     positions: PositionSource
     llm: LLMGate
     config: UpdaterConfig = field(default_factory=UpdaterConfig)
+
+    async def set_compliance(
+        self, asset: str, verdict: ComplianceVerdict, now: datetime
+    ) -> BeliefState:
+        """Stamp a halal verdict onto the asset's belief (INV-7 ingestion).
+
+        Transient-safe (INV-2): a ``transient_error`` verdict never overwrites a
+        real prior verdict — a screening outage must not flip a belief. Persists
+        a new version and publishes ``belief.updated`` so downstream (policy)
+        re-evaluates tradeability.
+        """
+        b = await self.store.get(asset) or BeliefState.neutral(asset)
+        if verdict.transient_error and b.halal is not None and not b.halal.transient_error:
+            return b  # keep the good prior verdict (INV-2)
+        b.halal = verdict
+        b.last_updated = now
+        version = await self.store.put(b)
+        b.version = version
+        await self.bus.publish(
+            new_event(
+                self.clock,
+                EventType.BELIEF_UPDATED,
+                source="belief.compliance",
+                asset=asset,
+                payload=_summary(b),
+            )
+        )
+        return b
 
     async def apply_evidence(
         self,

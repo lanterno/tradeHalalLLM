@@ -14,7 +14,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 
-from halabot.belief.schema import EvidenceItem
+from halabot.belief.schema import ComplianceVerdict, EvidenceItem
 from halabot.belief.updater import BeliefUpdater
 from halabot.cognition.bars import Bar, BarBuffer
 from halabot.cognition.base import Interpreter
@@ -47,6 +47,7 @@ class CognitionRouter:
         types = set(self._by_type) | {
             EventType.OBSERVATION_BAR,
             EventType.SYSTEM_HEARTBEAT,
+            EventType.COMPLIANCE_VERDICT,
         }
         self._subs.append(self._bus.subscribe(types, self._on_event))
 
@@ -62,6 +63,9 @@ class CognitionRouter:
     async def _on_event(self, event: Event) -> None:
         if event.type == EventType.SYSTEM_HEARTBEAT:
             await self._on_heartbeat(event)
+            return
+        if event.type == EventType.COMPLIANCE_VERDICT:
+            await self._on_compliance(event)
             return
 
         asset = event.asset
@@ -92,6 +96,22 @@ class CognitionRouter:
         # passage of time even with no new data (fix R-08).
         for asset in sorted(self._known_assets):
             await self._updater.apply_evidence(asset, [], now=event.ts)
+
+    async def _on_compliance(self, event: Event) -> None:
+        asset = event.asset
+        if asset is None:
+            return
+        self._known_assets.add(asset)
+        p = event.payload
+        verdict = ComplianceVerdict(
+            asset=asset,
+            status=p.get("status", "doubtful"),
+            detail=str(p.get("detail", "")),
+            screened_at=event.ts,
+            screening_id=p.get("screening_id"),
+            transient_error=bool(p.get("transient_error", False)),
+        )
+        await self._updater.set_compliance(asset, verdict, now=event.ts)
 
 
 def _parse_bar(event: Event) -> Bar:

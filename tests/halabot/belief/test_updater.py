@@ -234,3 +234,48 @@ async def test_decay_only_update_fades_conviction():
     await updater.apply_evidence("NVDA", [], T0 + timedelta(minutes=120))
     after = (await store.get("NVDA")).conviction
     assert after < before
+
+
+# ── compliance ingestion (INV-2 / INV-7) ──
+@pytest.mark.asyncio
+async def test_set_compliance_stamps_verdict():
+    from halabot.belief.schema import ComplianceVerdict
+
+    updater, store, _ = _build()
+    await updater.set_compliance(
+        "NVDA", ComplianceVerdict("NVDA", "halal", screening_id=7, screened_at=T0), T0
+    )
+    b = await store.get("NVDA")
+    assert b is not None and b.halal is not None
+    assert b.halal.status == "halal" and b.halal.screening_id == 7
+
+
+@pytest.mark.asyncio
+async def test_transient_error_does_not_overwrite_good_verdict():
+    """INV-2: a screening outage must never flip a real prior verdict."""
+    from halabot.belief.schema import ComplianceVerdict
+
+    updater, store, _ = _build()
+    await updater.set_compliance("NVDA", ComplianceVerdict("NVDA", "halal", screened_at=T0), T0)
+    await updater.set_compliance(
+        "NVDA",
+        ComplianceVerdict("NVDA", "doubtful", transient_error=True, screened_at=T0),
+        T0 + timedelta(minutes=1),
+    )
+    b = await store.get("NVDA")
+    assert b is not None and b.halal is not None
+    assert b.halal.status == "halal"  # prior good verdict preserved
+
+
+@pytest.mark.asyncio
+async def test_real_not_halal_verdict_does_overwrite():
+    from halabot.belief.schema import ComplianceVerdict
+
+    updater, store, _ = _build()
+    await updater.set_compliance("NVDA", ComplianceVerdict("NVDA", "halal", screened_at=T0), T0)
+    await updater.set_compliance(
+        "NVDA", ComplianceVerdict("NVDA", "not_halal", screened_at=T0), T0 + timedelta(minutes=1)
+    )
+    b = await store.get("NVDA")
+    assert b is not None and b.halal is not None
+    assert b.halal.status == "not_halal"  # a REAL verdict does update
