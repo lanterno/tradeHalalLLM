@@ -40,7 +40,7 @@ def _decision(symbol: str = "CSCO", quantity: int = 100):
     )
 
 
-def _executor(repo, *, cooldown_minutes: int = 30) -> TradeExecutor:
+def _executor(repo, *, cooldown_minutes: int = 30, sl_cooldown_minutes: int = 120) -> TradeExecutor:
     broker = MagicMock()
     broker.get_account_info = AsyncMock(return_value=_account())
     broker.get_stock_snapshot = AsyncMock(return_value={"latest_trade": {"price": 100.0}})
@@ -61,6 +61,7 @@ def _executor(repo, *, cooldown_minutes: int = 30) -> TradeExecutor:
         max_simultaneous_positions=10,
         max_sector_pct=0,
         recent_close_cooldown_minutes=cooldown_minutes,
+        stop_loss_reentry_cooldown_minutes=sl_cooldown_minutes,
     )
 
 
@@ -132,14 +133,16 @@ async def test_cooldown_zero_disables_check():
         ]
     )
     repo.record_trade = AsyncMock(return_value=44)
-    executor = _executor(repo, cooldown_minutes=0)
+    # Disable BOTH re-entry gates (recent-close + stop-loss) for the
+    # full escape-hatch behaviour.
+    executor = _executor(repo, cooldown_minutes=0, sl_cooldown_minutes=0)
 
     result = await executor._execute_buy(_decision("CSCO"), positions=[])
 
     # Cooldown disabled → not rejected by cooldown (may still be rejected
     # by other gates, but the cooldown is bypassed).
     assert "cooldown" not in result.get("reason", "")
-    # The repo lookup is skipped entirely when cooldown <= 0.
+    # The repo lookup is skipped entirely when both gates are <= 0.
     repo.get_recently_closed.assert_not_called()
 
 
@@ -242,3 +245,108 @@ async def test_picks_most_recent_close_when_symbol_appears_twice():
     assert "cooldown" in result["reason"].lower()
     # Reported gap should reflect the LATEST close (10 min), not the 45-min one.
     assert "10 min ago" in result["reason"] or "11 min ago" in result["reason"]
+
+
+# ── stop-loss re-entry gate (falling-knife guard) ───────────────
+
+
+@pytest.mark.asyncio
+async def test_stop_loss_reentry_blocked_past_normal_cooldown():
+    """A symbol stopped out 60 min ago is PAST the 30-min recent-close
+    cooldown but still inside the 120-min stop-loss gate → blocked.
+    This is the MSFT falling-knife loop the gate exists to stop."""
+    repo = MagicMock()
+    repo.get_recently_closed = AsyncMock(
+        return_value=[
+            {
+                "symbol": "MSFT",
+                "exit_reason": "stop_loss",
+                "closed_at": datetime.now(UTC) - timedelta(minutes=60),
+            },
+        ]
+    )
+    repo.get_recent_sells = AsyncMock(return_value=[])
+    repo.record_trade = AsyncMock()
+    executor = _executor(repo)  # default stop_loss_reentry_cooldown=120
+
+    result = await executor._execute_buy(_decision("MSFT"), positions=[])
+
+    assert result["status"] == "rejected"
+    assert "stop-loss re-entry gate" in result["reason"]
+    executor._broker.place_order.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_stop_loss_reentry_allowed_after_gate_window():
+    """Past the 120-min gate → re-entry allowed again."""
+    repo = MagicMock()
+    repo.get_recently_closed = AsyncMock(
+        return_value=[
+            {
+                "symbol": "MSFT",
+                "exit_reason": "stop_loss",
+                "closed_at": datetime.now(UTC) - timedelta(minutes=130),
+            },
+        ]
+    )
+    repo.get_recent_sells = AsyncMock(return_value=[])
+    repo.record_trade = AsyncMock(return_value=1)
+    executor = _executor(repo)
+
+    result = await executor._execute_buy(_decision("MSFT"), positions=[])
+    assert "stop-loss re-entry gate" not in result.get("reason", "")
+
+
+@pytest.mark.asyncio
+async def test_llm_sell_does_not_trigger_stop_loss_gate():
+    """An LLM-chosen sell (not a stop-out) only gets the short reason-
+    agnostic cooldown — past 30 min it's allowed, the 120-min gate does
+    NOT apply."""
+    repo = MagicMock()
+    repo.get_recently_closed = AsyncMock(
+        return_value=[
+            {
+                "symbol": "GOOG",
+                "exit_reason": "llm_sell",
+                "closed_at": datetime.now(UTC) - timedelta(minutes=45),
+            },
+        ]
+    )
+    repo.get_recent_sells = AsyncMock(return_value=[])
+    repo.record_trade = AsyncMock(return_value=1)
+    executor = _executor(repo)
+
+    result = await executor._execute_buy(_decision("GOOG"), positions=[])
+    assert "stop-loss re-entry gate" not in result.get("reason", "")
+
+
+@pytest.mark.asyncio
+async def test_stop_loss_reentry_zero_disables_gate():
+    """stop_loss_reentry_cooldown=0 disables the gate (escape hatch)."""
+    repo = MagicMock()
+    repo.get_recently_closed = AsyncMock(
+        return_value=[
+            {
+                "symbol": "MSFT",
+                "exit_reason": "stop_loss",
+                "closed_at": datetime.now(UTC) - timedelta(minutes=5),
+            },
+        ]
+    )
+    repo.get_recent_sells = AsyncMock(return_value=[])
+    repo.record_trade = AsyncMock(return_value=1)
+    broker = MagicMock()
+    broker.get_account_info = AsyncMock(return_value=_account())
+    broker.get_stock_snapshot = AsyncMock(return_value={"latest_trade": {"price": 100.0}})
+    broker.place_order = AsyncMock(return_value={"id": "x", "status": "filled"})
+    broker.get_order_by_id = AsyncMock(
+        return_value={"id": "x", "status": "filled", "filled_qty": "100", "filled_avg_price": "100"}
+    )
+    executor = TradeExecutor(
+        broker, repo, max_position_pct=1.0, max_simultaneous_positions=10,
+        max_sector_pct=0, recent_close_cooldown_minutes=0,
+        stop_loss_reentry_cooldown_minutes=0,
+    )
+
+    result = await executor._execute_buy(_decision("MSFT"), positions=[])
+    assert "stop-loss re-entry gate" not in result.get("reason", "")

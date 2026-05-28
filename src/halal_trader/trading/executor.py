@@ -73,6 +73,7 @@ class TradeExecutor(BaseExecutor):
         max_simultaneous_positions: int,
         max_sector_pct: float = 0.40,
         recent_close_cooldown_minutes: int = 30,
+        stop_loss_reentry_cooldown_minutes: int = 120,
         min_hold_minutes: int = 30,
         no_new_positions_minutes_before_close: int = 30,
         reactor_entry_size_fraction: float = 0.5,
@@ -97,6 +98,9 @@ class TradeExecutor(BaseExecutor):
         # 4 transactions in 90 min on the same symbol despite three
         # escalating prompt warnings). Set to 0 to disable.
         self._recent_close_cooldown_minutes = recent_close_cooldown_minutes
+        # Longer re-entry block specifically for monitor stop-loss exits
+        # (see ``_check_stop_loss_reentry``). Falling-knife guard.
+        self._stop_loss_reentry_cooldown_minutes = stop_loss_reentry_cooldown_minutes
         # Symmetric hold-time gate on the SELL side: refuse an LLM-
         # initiated SELL when the youngest open BUY for the symbol is
         # younger than this. Monitor-driven SL/TP exits go through a
@@ -657,6 +661,72 @@ class TradeExecutor(BaseExecutor):
                 "reason": str(e),
             }
 
+    async def _check_stop_loss_reentry(self, symbol: str) -> str | None:
+        """Block re-buying a symbol the monitor STOPPED OUT recently.
+
+        A stop-loss exit is a stronger "stay away" signal than an
+        LLM-chosen sell: the price broke the risk level, so re-entering
+        on the same session is chasing a falling knife. This gate uses a
+        longer window than the reason-agnostic recent-close cooldown
+        (observed 2026-05-27: MSFT stopped out 411.99 then 411.88 with an
+        LLM re-buy between, once the 30-min cooldown elapsed — a −$32
+        loop). ``<= 0`` disables; a DB error degrades to "allow".
+        """
+        if self._stop_loss_reentry_cooldown_minutes <= 0:
+            return None
+        from datetime import UTC, datetime
+
+        wanted = symbol.upper()
+        now = datetime.now(UTC)
+        try:
+            rows = await self._repo.get_recently_closed(
+                minutes=self._stop_loss_reentry_cooldown_minutes
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("stop-loss re-entry lookup failed for %s: %s", symbol, exc)
+            return None
+
+        latest_sl: datetime | None = None
+        for row in rows:
+            if str(row.get("symbol") or "").upper() != wanted:
+                continue
+            if str(row.get("exit_reason") or "") != "stop_loss":
+                continue
+            ts_raw = row.get("closed_at")
+            if isinstance(ts_raw, str):
+                try:
+                    ts = datetime.fromisoformat(ts_raw.replace("Z", "+00:00"))
+                except ValueError:
+                    continue
+            elif isinstance(ts_raw, datetime):
+                ts = ts_raw
+            else:
+                continue
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=UTC)
+            if latest_sl is None or ts > latest_sl:
+                latest_sl = ts
+
+        if latest_sl is None:
+            return None
+        gap_min = (now - latest_sl).total_seconds() / 60.0
+        if gap_min >= self._stop_loss_reentry_cooldown_minutes:
+            return None
+
+        reason = (
+            f"stop-loss re-entry gate: {symbol} was stopped out {gap_min:.0f} min "
+            f"ago (gate {self._stop_loss_reentry_cooldown_minutes} min). Don't chase "
+            "a position the monitor just stopped — wait for a fresh structural setup "
+            "or a new catalyst, not the same thesis that already failed its stop."
+        )
+        logger.warning(
+            "BUY rejected by stop-loss re-entry gate: %s (stopped %.0f min ago, gate %d)",
+            symbol,
+            gap_min,
+            self._stop_loss_reentry_cooldown_minutes,
+        )
+        return reason
+
     async def _check_recent_close_cooldown(self, symbol: str) -> str | None:
         """Return a rejection reason if ``symbol`` had any exit (closed
         BUY OR recent SELL) within the cooldown window. ``None`` allows
@@ -673,6 +743,11 @@ class TradeExecutor(BaseExecutor):
         trade on a DB blip. Cooldown <= 0 disables the check entirely
         (operator escape hatch).
         """
+        # Falling-knife guard first: a monitor stop-out gets a LONGER
+        # re-entry block than a plain recent close.
+        sl_reason = await self._check_stop_loss_reentry(symbol)
+        if sl_reason is not None:
+            return sl_reason
         if self._recent_close_cooldown_minutes <= 0:
             return None
         from datetime import UTC, datetime

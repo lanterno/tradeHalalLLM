@@ -263,6 +263,13 @@ class StockSettings(BaseSettings):
     trend_break_enabled: bool = Field(default=True)
     trend_break_ma_period: int = Field(default=20, ge=2, le=200)
     trend_break_timeframe: str = Field(default="1Hour")
+    # Stop-loss re-entry gate: a position the monitor STOPPED OUT is a
+    # stronger "stay away" signal than an LLM-chosen sell, so it gets a
+    # longer re-entry block than the reason-agnostic recent-close
+    # cooldown. Stops the falling-knife loop of re-buying a downtrending
+    # stock each time the 30-min cooldown elapses (observed 2026-05-27:
+    # MSFT stopped out twice with an LLM re-buy between). 0 disables.
+    stop_loss_reentry_cooldown_minutes: int = Field(default=120, ge=0)
 
 
 class CryptoSettings(BaseSettings):

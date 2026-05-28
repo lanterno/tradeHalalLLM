@@ -144,6 +144,9 @@ class TradingBot(BaseTradingBot):
             repo,
             max_position_pct=self.settings.stocks.max_position_pct,
             max_simultaneous_positions=self.settings.stocks.max_simultaneous_positions,
+            stop_loss_reentry_cooldown_minutes=(
+                self.settings.stocks.stop_loss_reentry_cooldown_minutes
+            ),
             reactor_entry_size_fraction=self.settings.stocks.reactor_entry_size_fraction,
             reactor_entry_min_intraday_change_pct=(
                 self.settings.stocks.reactor_entry_min_intraday_change_pct
