@@ -116,6 +116,49 @@ async def test_exit_ladder_off_is_a_noop():
 
 
 @pytest.mark.asyncio
+async def test_book_segments_closed_trades_by_entry_regime():
+    # Two trades opened in different regimes; the book buckets realized P&L by the
+    # entry regime carried on the buy proposal payload.
+    book = _book()
+    await book.on_proposal(
+        SimpleNamespace(
+            asset="UP", ts=T0,
+            payload={"price": 100.0, "weight_delta": 0.2, "regime": "trending_up"},
+        )
+    )
+    await book.on_proposal(
+        SimpleNamespace(
+            asset="FLAT", ts=T0,
+            payload={"price": 100.0, "weight_delta": 0.2, "regime": "ranging"},
+        )
+    )
+    # close UP at +10%, FLAT at -5%
+    await book.on_proposal(
+        SimpleNamespace(asset="UP", ts=T0, payload={"price": 110.0, "weight_delta": -0.2})
+    )
+    await book.on_proposal(
+        SimpleNamespace(asset="FLAT", ts=T0, payload={"price": 95.0, "weight_delta": -0.2})
+    )
+    res = book.result()
+    by = {r.regime: r for r in res.by_regime}
+    assert set(by) == {"trending_up", "ranging"}
+    assert by["trending_up"].avg_return_pct == pytest.approx(0.10)
+    assert by["ranging"].avg_return_pct == pytest.approx(-0.05)
+    assert by["trending_up"].n == 1 and by["ranging"].n == 1
+
+
+@pytest.mark.asyncio
+async def test_backtest_populates_by_regime_on_real_pipeline():
+    # End-to-end: a clean uptrend produces closed trades, each tagged with the
+    # entry regime the engine believed (the proposal payload carries it).
+    up = _bars([100.0 + i for i in range(80)])
+    res = await Backtester(policy_config=CFG, trading_hours=False).run({"NVDA": up})
+    assert res.closed >= 1
+    assert sum(r.n for r in res.by_regime) == res.closed  # every trade is bucketed
+    assert all(r.regime != "unknown" for r in res.by_regime)  # regime was carried
+
+
+@pytest.mark.asyncio
 async def test_exit_ladder_locks_gains_on_a_reversal_vs_off():
     # Up then a sharp reversal: the slow-out ladder cuts the winner on the
     # trend-break/trailing stop, so it never gives back as much as the

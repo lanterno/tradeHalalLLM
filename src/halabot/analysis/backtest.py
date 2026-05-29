@@ -72,6 +72,28 @@ class _Pos:
     weight: float
     vwap: float
     open_ts: datetime
+    regime: str = "unknown"  # entry regime, for per-regime P&L segmentation
+
+
+@dataclass
+class RegimeStats:
+    """Per-entry-regime closed-trade P&L (the regime-attribution view)."""
+
+    regime: str
+    n: int = 0
+    win_rate: float | None = None
+    avg_return_pct: float | None = None
+    profit_factor: float | None = None
+    total_return: float = 0.0  # Σ return_pct × closed_weight for this regime
+
+    def line(self) -> str:
+        wr = f"{self.win_rate:.0%}" if self.win_rate is not None else "n/a"
+        avg = f"{self.avg_return_pct:+.2%}" if self.avg_return_pct is not None else "n/a"
+        pf = f"{self.profit_factor:.2f}" if self.profit_factor is not None else "n/a"
+        return (
+            f"{self.regime:<14} n={self.n:<3} win={wr:<4} avg={avg:<8} "
+            f"profit_factor={pf:<5} total={self.total_return:+.4f}"
+        )
 
 
 @dataclass
@@ -84,6 +106,7 @@ class BacktestResult:
     total_return: float = 0.0  # Σ return_pct × closed_weight (book-weighted)
     max_drawdown: float = 0.0  # peak-to-trough of the realized-equity curve
     returns: list[float] = field(default_factory=list)
+    by_regime: list[RegimeStats] = field(default_factory=list)  # entry-regime split
 
     def summary(self) -> str:
         wr = f"{self.win_rate:.0%}" if self.win_rate is not None else "n/a"
@@ -93,6 +116,12 @@ class BacktestResult:
             f"proposals={self.proposals} closed={self.closed} win={wr} avg={avg} "
             f"profit_factor={pf} total={self.total_return:+.4f} max_dd={self.max_drawdown:.2%}"
         )
+
+    def regime_summary(self) -> str:
+        """Multi-line per-entry-regime breakdown (most-traded regime first)."""
+        if not self.by_regime:
+            return "  (no closed trades)"
+        return "\n".join("  " + r.line() for r in self.by_regime)
 
 
 class _Book:
@@ -131,6 +160,7 @@ class _Book:
         self._pos: dict[str, _Pos] = {}
         self.returns: list[float] = []  # per-closed-trade NET return_pct (after costs)
         self.weights: list[float] = []  # closed_weight, parallel to returns
+        self.regimes: list[str] = []  # entry regime, parallel to returns
         self.proposals = 0
         self._cum = 0.0
         self._peak = 0.0
@@ -149,7 +179,10 @@ class _Book:
         if delta > 0:  # open / add → fill worse by the cost, blend VWAP
             fill = price * (1.0 + self._cost)
             if pos is None or pos.weight <= _EPS:
-                self._pos[asset] = _Pos(weight=delta, vwap=fill, open_ts=ts)
+                self._pos[asset] = _Pos(
+                    weight=delta, vwap=fill, open_ts=ts,
+                    regime=str(p.get("regime", "unknown")),
+                )
             else:
                 total = pos.weight + delta
                 pos.vwap = (pos.vwap * pos.weight + fill * delta) / total
@@ -165,6 +198,7 @@ class _Book:
         ret = (exit_fill - pos.vwap) / pos.vwap if pos.vwap > 0 else 0.0
         self.returns.append(ret)
         self.weights.append(closed)
+        self.regimes.append(pos.regime)
         self._cum += ret * closed
         self._peak = max(self._peak, self._cum)
         self.max_dd = max(self.max_dd, self._peak - self._cum)
@@ -208,6 +242,30 @@ class _Book:
             if last is not None and last > 0:
                 self._realize(asset, pos, pos.weight, last)
 
+    def _regime_stats(self) -> list[RegimeStats]:
+        """Bucket closed trades by entry regime, most-traded first."""
+        buckets: dict[str, list[tuple[float, float]]] = {}
+        for r, w, reg in zip(self.returns, self.weights, self.regimes):
+            buckets.setdefault(reg, []).append((r, w))
+        out: list[RegimeStats] = []
+        for reg, rows in buckets.items():
+            rets = [r for r, _ in rows]
+            n = len(rets)
+            gw = sum(r for r in rets if r > 0)
+            gl = -sum(r for r in rets if r < 0)
+            out.append(
+                RegimeStats(
+                    regime=reg,
+                    n=n,
+                    win_rate=(sum(1 for r in rets if r > self._win) / n) if n else None,
+                    avg_return_pct=(sum(rets) / n) if n else None,
+                    profit_factor=(gw / gl) if gl > _EPS else None,
+                    total_return=sum(r * w for r, w in rows),
+                )
+            )
+        out.sort(key=lambda s: s.n, reverse=True)
+        return out
+
     def result(self) -> BacktestResult:
         n = len(self.returns)
         wins = [r for r in self.returns if r > self._win]
@@ -222,6 +280,7 @@ class _Book:
             total_return=sum(r * w for r, w in zip(self.returns, self.weights)),
             max_drawdown=self.max_dd,
             returns=list(self.returns),
+            by_regime=self._regime_stats(),
         )
 
 

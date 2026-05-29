@@ -252,6 +252,13 @@ class ShadowPolicyRunner:
                         "price": price,  # decision/fill price for hypothetical P&L
                         "reason": p.reason,
                         "belief_version": p.belief_version,
+                        # Entry regime (telemetry + backtest per-regime P&L
+                        # segmentation): which regime the engine believed it was
+                        # entering into, so we can measure whether the labels
+                        # correlate with realized edge.
+                        "regime": str(by_asset[p.asset].regime)
+                        if p.asset in by_asset
+                        else "unknown",
                         "shadow": True,  # never executed
                     },
                     causation=event,

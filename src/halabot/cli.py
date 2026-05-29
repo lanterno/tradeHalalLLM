@@ -353,6 +353,8 @@ async def _run_backtest(
                 hb.policy.conviction_entry_band, hb.policy.conviction_exit_band
             ).run(bars_by_symbol, benchmark=bench)
             click.echo(f"=== backtest result ===\n  {res.summary()}")
+            click.echo("=== by entry regime ===")
+            click.echo(res.regime_summary())
     finally:
         await mcp.disconnect()
         await ht_engine.dispose()
