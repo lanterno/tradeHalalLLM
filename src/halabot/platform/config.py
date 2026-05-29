@@ -62,7 +62,12 @@ class ConvictionSettings(BaseModel):
 class PolicySettings(BaseModel):
     # Cold-start bands tuned to the observed raw-conviction scale (B.2 note);
     # the fitted calibrator replaces these once outcomes accumulate.
-    conviction_entry_band: float = Field(default=0.25, ge=0, lt=1)
+    # Re-tuned to 0.35 after the merge-dedup fix activated the FULL signal stack
+    # (conviction is richer/higher with all interpreters live, so a higher bar is
+    # right): backtest sweep (15d, 5bps) showed 0.35 dominates 0.25 on profit
+    # factor (3.45 vs 2.46), total return, AND drawdown. Single-window — revisit
+    # as outcomes accumulate and the fitted calibrator takes over.
+    conviction_entry_band: float = Field(default=0.35, ge=0, lt=1)
     conviction_exit_band: float = Field(default=0.15, ge=0, lt=1)
     max_weight_per_asset: float = Field(default=0.20, gt=0, le=1)
     max_gross_exposure: float = Field(default=1.0, gt=0, le=1)
