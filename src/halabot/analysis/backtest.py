@@ -39,6 +39,7 @@ from halabot.cognition.level_engine import BarLevelEngine
 from halabot.cognition.regime import EvidenceRegimeClassifier
 from halabot.cognition.router import CognitionRouter
 from halabot.conviction.raw import IdentityCalibrator
+from halabot.execution.position_manager import HoldContext, decide_exit
 from halabot.platform.bus import InProcessEventBus
 from halabot.platform.clock import FakeClock
 from halabot.platform.event_log import InMemoryEventLog
@@ -100,7 +101,13 @@ class _Book:
     Mirrors ShadowOutcomeTracker's VWAP logic without touching the DB."""
 
     def __init__(
-        self, *, win_threshold_pct: float, prices: BufferPriceSource, cost_frac: float = 0.0
+        self,
+        *,
+        win_threshold_pct: float,
+        prices: BufferPriceSource,
+        cost_frac: float = 0.0,
+        exit_ladder: bool = False,
+        trailing_pct: float = 0.05,
     ) -> None:
         self._win = win_threshold_pct
         self._prices = prices
@@ -108,6 +115,19 @@ class _Book:
         # notional: a buy fills slightly HIGHER, a sell slightly LOWER, so each
         # round-trip pays ~2× — which is exactly what penalizes churn honestly.
         self._cost = cost_frac
+        # Optional Appendix-H slow-out exits (trend-break + trailing stop) via the
+        # dormant decide_exit, evaluated per bar — measures the slow-out offline.
+        # EMPIRICAL VERDICT (2026-05-29, controlled same-bars A/B, 15d + 30d, 1H,
+        # 5bps): the ladder is flat-to-WORSE than the conviction-decay-only exit
+        # at every trailing distance (and trend-break alone) — on 30d it cut PF
+        # 1.33→1.07, total +0.99%→+0.71%, AND raised drawdown 0.83%→0.98%. The
+        # conviction-decay path (policy target→0 as belief fades) IS the slow-out;
+        # a trailing/trend stop just exits winners early and pays extra cost. So
+        # this ships DEFAULT-OFF — kept as a measurable knob for other timeframes.
+        self._ladder = exit_ladder
+        self._trailing_pct = trailing_pct
+        self._trail_high: dict[str, float] = {}
+        self._trail_stop: dict[str, float] = {}
         self._pos: dict[str, _Pos] = {}
         self.returns: list[float] = []  # per-closed-trade NET return_pct (after costs)
         self.weights: list[float] = []  # closed_weight, parallel to returns
@@ -151,6 +171,35 @@ class _Book:
         pos.weight -= closed
         if pos.weight <= _EPS:
             self._pos.pop(asset, None)
+            self._trail_high.pop(asset, None)
+            self._trail_stop.pop(asset, None)
+
+    def tick(self, asset: str, price: float, sma: float | None) -> None:
+        """Per-bar slow-out evaluation (Appendix-H rungs 4–6 via decide_exit):
+        ratchet a trailing stop and exit on a trend-break or a trailing-stop hit.
+        No-op unless the exit ladder is enabled and the asset is held."""
+        if not self._ladder or price <= 0:
+            return
+        pos = self._pos.get(asset)
+        if pos is None or pos.weight <= _EPS:
+            return
+        high = max(self._trail_high.get(asset, pos.vwap), price)
+        self._trail_high[asset] = high
+        ctx = HoldContext(
+            asset=asset,
+            price=price,
+            stop=self._trail_stop.get(asset),
+            sma=sma,
+            is_winner=price > pos.vwap,
+            trailing_high=high,
+            trailing_pct=self._trailing_pct,
+            target_weight=1.0,  # conviction-decay (rung 7) stays on the proposal path
+        )
+        decision = decide_exit(ctx)
+        if decision.action == "tighten" and decision.new_stop is not None:
+            self._trail_stop[asset] = decision.new_stop
+        elif decision.action == "exit":
+            self._realize(asset, pos, pos.weight, price)
 
     def finalize(self) -> None:
         """Mark any still-open positions to their last price (close the book)."""
@@ -188,6 +237,9 @@ class Backtester:
         trading_hours: bool = True,
         win_threshold_pct: float = 0.002,
         cost_bps: float = 5.0,
+        exit_ladder: bool = False,
+        trailing_pct: float = 0.05,
+        sma_window: int = 20,
         interpreters: list[Interpreter] | None = None,
     ) -> None:
         self._policy_config = policy_config or PolicyConfig()
@@ -196,6 +248,9 @@ class Backtester:
         self._cost_frac = max(0.0, cost_bps) / 10_000.0  # one-way cost as a fraction
         self._trading_hours = trading_hours
         self._win = win_threshold_pct
+        self._exit_ladder = exit_ladder
+        self._trailing_pct = trailing_pct
+        self._sma_window = sma_window
         self._interpreters = interpreters
 
     async def run(
@@ -243,7 +298,10 @@ class Backtester:
             portfolio=ShadowPortfolio(), risk_engine=BasicRiskEngine(self._risk_config),
             clock=clock, prices=prices, history=buffer,
         )
-        book = _Book(win_threshold_pct=self._win, prices=prices, cost_frac=self._cost_frac)
+        book = _Book(
+            win_threshold_pct=self._win, prices=prices, cost_frac=self._cost_frac,
+            exit_ladder=self._exit_ladder, trailing_pct=self._trailing_pct,
+        )
         bus.subscribe({EventType.POLICY_TRADE_PROPOSED}, book.on_proposal)
         router.start()
         shadow.start()
@@ -265,6 +323,15 @@ class Backtester:
                 new_event(clock, EventType.OBSERVATION_BAR, source="backtest", asset=sym,
                           payload={"o": bar.o, "h": bar.h, "low": bar.low, "c": bar.c, "v": bar.v})
             )
+            # Slow-out exit pass for this bar's asset (after its belief updated).
+            if self._exit_ladder and sym != benchmark:
+                closes = buffer.closes(sym)
+                sma = (
+                    sum(closes[-self._sma_window:]) / min(len(closes), self._sma_window)
+                    if closes
+                    else None
+                )
+                book.tick(sym, bar.c, sma)
 
         book.finalize()
         router.stop()
