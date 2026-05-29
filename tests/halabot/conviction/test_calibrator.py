@@ -59,6 +59,21 @@ def test_platt_fit_slope_nonnegative():
 
 
 @pytest.mark.asyncio
+async def test_flat_or_inverted_fit_is_rejected_keeps_ranking():
+    # Regression: inverted data (high raw loses) → Platt slope clamps to ~0, which
+    # would flatten every conviction to a constant and destroy the policy's ranking.
+    # The slope guard must REJECT it and keep identity (raw passes through, ranking
+    # preserved).
+    pairs = [(0.9, False)] * 40 + [(0.1, True)] * 40
+    cal = FittedCalibrator(min_samples=20, min_slope=0.05)
+    assert cal.fit(_samples(pairs)) is False
+    assert cal.fitted is False
+    hi = await cal.calibrate("X", 0.9, features={})
+    lo = await cal.calibrate("X", 0.1, features={})
+    assert hi == 0.9 and lo == 0.1  # identity → ranking intact
+
+
+@pytest.mark.asyncio
 async def test_failed_refit_keeps_prior_model():
     cal = FittedCalibrator(min_samples=20)
     cal.fit(_samples([(0.8, True)] * 30 + [(0.2, False)] * 30))

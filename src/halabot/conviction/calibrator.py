@@ -82,8 +82,12 @@ class FittedCalibrator:
     (``calibrate``). Holds a single global model (per-asset models are a later
     refinement once per-asset outcomes are dense enough)."""
 
-    def __init__(self, *, min_samples: int = 50) -> None:
+    def __init__(self, *, min_samples: int = 50, min_slope: float = 0.05) -> None:
         self._min_samples = min_samples
+        # A near-flat slope maps every raw score to ~the same probability, which
+        # DESTROYS the ranking the long-only policy sizes on (worse than identity).
+        # Reject it and keep the prior/identity model.
+        self._min_slope = min_slope
         self._model: tuple[float, float] | None = None
         self.fitted = False
 
@@ -103,6 +107,14 @@ class FittedCalibrator:
         model = platt_fit(samples)
         if model is None:
             logger.warning("calibrator fit produced no model (degenerate data); keeping prior")
+            return False
+        if model[0] < self._min_slope:
+            logger.warning(
+                "calibrator fit slope a=%.3f < %.3f (non-discriminating, would flatten "
+                "conviction); keeping prior/identity",
+                model[0],
+                self._min_slope,
+            )
             return False
         self._model = model
         self.fitted = True

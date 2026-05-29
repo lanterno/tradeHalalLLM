@@ -85,6 +85,24 @@ async def test_retrainer_fits_after_enough_closes(halabot_engine):
 
 
 @pytest.mark.asyncio
+async def test_retrainer_does_not_activate_on_nonpredictive_data(halabot_engine):
+    # Regression for the live collapse: when raw does NOT predict wins (here
+    # inverted — high raw loses), the calibrator must stay identity rather than
+    # activate a flat/constant model that destroys conviction ranking.
+    cal = FittedCalibrator(min_samples=20)
+    retrainer = CalibratorRetrainer(engine=halabot_engine, calibrator=cal, retrain_every=60)
+    for i in range(60):
+        raw, label = (0.9, 0) if i % 2 == 0 else (0.1, 1)  # inverted
+        await _insert_outcome(
+            halabot_engine, raw=raw, label=label, exit_ts=T0 + timedelta(minutes=i)
+        )
+    for _ in range(60):
+        await retrainer.on_outcome_closed()
+    assert cal.fitted is False  # never activated — identity preserved
+    assert retrainer.refits == 0
+
+
+@pytest.mark.asyncio
 async def test_retrainer_noop_below_min_samples(halabot_engine):
     cal = FittedCalibrator(min_samples=100)  # higher than what we seed
     retrainer = CalibratorRetrainer(engine=halabot_engine, calibrator=cal, retrain_every=5)

@@ -101,16 +101,25 @@ class CalibratorRetrainer:
             await self.retrain()
 
     async def retrain(self) -> bool:
+        """Refit ONLY when walk-forward log-loss shows the fitted calibrator
+        genuinely beats the identity baseline (fix: the chicken-and-egg / collapse
+        guard — a non-predictive fit that flattens conviction to a constant is
+        WORSE than identity for a ranking policy, so we keep identity until the
+        data earns the calibrator)."""
         samples = await load_calibration_samples(self.engine)
         wf = walk_forward_logloss(samples)
-        if wf is not None:
-            fitted_ll, identity_ll = wf
-            logger.info(
-                "walk-forward log-loss: fitted=%.4f identity=%.4f (%s)",
-                fitted_ll,
-                identity_ll,
-                "improved" if fitted_ll < identity_ll else "no improvement",
-            )
+        if wf is None:
+            return False  # not enough held-out data to judge — stay identity
+        fitted_ll, identity_ll = wf
+        improved = fitted_ll < identity_ll
+        logger.info(
+            "walk-forward log-loss: fitted=%.4f identity=%.4f (%s)",
+            fitted_ll,
+            identity_ll,
+            "improved → activating" if improved else "no improvement → keeping identity",
+        )
+        if not improved:
+            return False  # do NOT activate a calibrator that doesn't beat identity
         ok = self.calibrator.fit(samples)
         if ok:
             self.refits += 1
