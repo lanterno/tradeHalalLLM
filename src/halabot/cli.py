@@ -204,7 +204,13 @@ def ab_report_cmd(days: int) -> None:
     default="",
     help="Comma-separated entry bands to compare (fetch once, replay each), e.g. 0.15,0.25,0.35.",
 )
-def backtest(symbols: str, days: int, timeframe: str, continuous: bool, sweep_bands: str) -> None:
+@click.option(
+    "--cost-bps", default=5.0, show_default=True,
+    help="One-way transaction cost (slippage+commission) in basis points.",
+)
+def backtest(
+    symbols: str, days: int, timeframe: str, continuous: bool, sweep_bands: str, cost_bps: float
+) -> None:
     """Replay historical bars through the engine and report hypothetical P&L."""
     from halabot.platform.observability import setup_logging
 
@@ -212,13 +218,14 @@ def backtest(symbols: str, days: int, timeframe: str, continuous: bool, sweep_ba
     asyncio.run(
         _run_backtest(
             symbols=symbols, days=days, timeframe=timeframe, continuous=continuous,
-            sweep_bands=sweep_bands,
+            sweep_bands=sweep_bands, cost_bps=cost_bps,
         )
     )
 
 
 async def _run_backtest(
-    *, symbols: str, days: int, timeframe: str, continuous: bool, sweep_bands: str = ""
+    *, symbols: str, days: int, timeframe: str, continuous: bool, sweep_bands: str = "",
+    cost_bps: float = 5.0,
 ) -> None:
     from halabot.analysis.backtest import Backtester
     from halabot.belief.updater import UpdaterConfig
@@ -291,6 +298,7 @@ async def _run_backtest(
                 ),
                 trading_hours=not continuous,
                 win_threshold_pct=hb.conviction.win_threshold_pct,
+                cost_bps=cost_bps,
             )
 
         bands = [float(b) for b in sweep_bands.split(",") if b.strip()]

@@ -53,6 +53,17 @@ async def test_backtest_downtrend_stays_mostly_flat():
 
 
 @pytest.mark.asyncio
+async def test_transaction_costs_reduce_returns():
+    # The same run with a high cost should net a lower total return (churn penalty).
+    up = _bars([100.0 + i for i in range(80)])
+    free = await Backtester(policy_config=CFG, trading_hours=False, cost_bps=0.0).run({"NVDA": up})
+    costly = await Backtester(
+        policy_config=CFG, trading_hours=False, cost_bps=50.0
+    ).run({"NVDA": up})
+    assert costly.total_return < free.total_return  # costs bite each round-trip
+
+
+@pytest.mark.asyncio
 async def test_backtest_result_summary_renders():
     up = _bars([100.0 + i for i in range(60)])
     res = await Backtester(policy_config=CFG, trading_hours=False).run({"NVDA": up})

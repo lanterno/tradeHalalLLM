@@ -98,11 +98,17 @@ class _Book:
     records realized returns on reductions, and tracks a realized-equity curve.
     Mirrors ShadowOutcomeTracker's VWAP logic without touching the DB."""
 
-    def __init__(self, *, win_threshold_pct: float, prices: BufferPriceSource) -> None:
+    def __init__(
+        self, *, win_threshold_pct: float, prices: BufferPriceSource, cost_frac: float = 0.0
+    ) -> None:
         self._win = win_threshold_pct
         self._prices = prices
+        # One-way transaction cost (slippage + commission) as a fraction of
+        # notional: a buy fills slightly HIGHER, a sell slightly LOWER, so each
+        # round-trip pays ~2× — which is exactly what penalizes churn honestly.
+        self._cost = cost_frac
         self._pos: dict[str, _Pos] = {}
-        self.returns: list[float] = []  # per-closed-trade return_pct
+        self.returns: list[float] = []  # per-closed-trade NET return_pct (after costs)
         self.weights: list[float] = []  # closed_weight, parallel to returns
         self.proposals = 0
         self._cum = 0.0
@@ -119,12 +125,13 @@ class _Book:
         delta = float(p.get("weight_delta", 0.0))
         ts = event.ts
         pos = self._pos.get(asset)
-        if delta > 0:  # open / add → blend VWAP
+        if delta > 0:  # open / add → fill worse by the cost, blend VWAP
+            fill = price * (1.0 + self._cost)
             if pos is None or pos.weight <= _EPS:
-                self._pos[asset] = _Pos(weight=delta, vwap=price, open_ts=ts)
+                self._pos[asset] = _Pos(weight=delta, vwap=fill, open_ts=ts)
             else:
                 total = pos.weight + delta
-                pos.vwap = (pos.vwap * pos.weight + price * delta) / total
+                pos.vwap = (pos.vwap * pos.weight + fill * delta) / total
                 pos.weight = total
             return
         if pos is None or pos.weight <= _EPS:  # reduce with nothing held
@@ -133,7 +140,8 @@ class _Book:
 
     def _realize(self, asset: str, pos: _Pos, qty: float, price: float) -> None:
         closed = min(qty, pos.weight)
-        ret = (price - pos.vwap) / pos.vwap if pos.vwap > 0 else 0.0
+        exit_fill = price * (1.0 - self._cost)  # sell fills worse (lower) by the cost
+        ret = (exit_fill - pos.vwap) / pos.vwap if pos.vwap > 0 else 0.0
         self.returns.append(ret)
         self.weights.append(closed)
         self._cum += ret * closed
@@ -178,11 +186,13 @@ class Backtester:
         risk_config: RiskConfig | None = None,
         trading_hours: bool = True,
         win_threshold_pct: float = 0.002,
+        cost_bps: float = 5.0,
         interpreters: list[Interpreter] | None = None,
     ) -> None:
         self._policy_config = policy_config or PolicyConfig()
         self._updater_config = updater_config or UpdaterConfig(llm_thesis_enabled=False)
         self._risk_config = risk_config or RiskConfig()
+        self._cost_frac = max(0.0, cost_bps) / 10_000.0  # one-way cost as a fraction
         self._trading_hours = trading_hours
         self._win = win_threshold_pct
         self._interpreters = interpreters
@@ -225,7 +235,7 @@ class Backtester:
             portfolio=ShadowPortfolio(), risk_engine=BasicRiskEngine(self._risk_config),
             clock=clock, prices=prices, history=buffer,
         )
-        book = _Book(win_threshold_pct=self._win, prices=prices)
+        book = _Book(win_threshold_pct=self._win, prices=prices, cost_frac=self._cost_frac)
         bus.subscribe({EventType.POLICY_TRADE_PROPOSED}, book.on_proposal)
         router.start()
         shadow.start()
