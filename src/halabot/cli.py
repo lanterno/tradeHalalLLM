@@ -310,6 +310,34 @@ async def _run_backtest(
         await ht_engine.dispose()
 
 
+@cli.command("attribution")
+@click.option("--min-n", default=1, show_default=True, help="Min closed trades per bucket.")
+def attribution_cmd(min_n: int) -> None:
+    """Per-regime / per-source win-rate + avg-return over closed outcomes."""
+    logging.basicConfig(level=logging.WARNING)
+    asyncio.run(_run_attribution(min_n=min_n))
+
+
+async def _run_attribution(*, min_n: int) -> None:
+    from halabot.analysis.attribution import attribution
+    from halabot.platform.db import bootstrap_schema, make_engine
+    from halal_trader.config import get_settings
+
+    engine = make_engine(get_settings().database_url)
+    await bootstrap_schema(engine)
+    try:
+        attr = await attribution(engine, min_n=min_n)
+    finally:
+        await engine.dispose()
+    click.echo(f"=== outcome attribution ({attr.total} closed) ===")
+    click.echo("by regime:")
+    for b in attr.by_regime:
+        click.echo(f"  {b.line()}")
+    click.echo("by evidence source:")
+    for b in attr.by_source:
+        click.echo(f"  {b.line()}")
+
+
 @cli.command("dashboard")
 @click.option("--host", default="127.0.0.1", show_default=True)
 @click.option("--port", default=8083, show_default=True, help="HTTP port (legacy uses 8082).")

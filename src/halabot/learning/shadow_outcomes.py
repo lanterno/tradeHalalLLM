@@ -156,10 +156,13 @@ class ShadowOutcomeTracker:
         if b is None:
             return None
         # Compact entry-time features (the full belief is recoverable by version).
+        # `sources` enables per-source outcome attribution (which evidence predicts
+        # wins) without re-reading the full belief.
         return {
             "regime": str(b.regime),
             "regime_confidence": b.regime_confidence,
             "direction": str(b.direction),
             "conviction": b.conviction,
             "conviction_raw": b.conviction_raw,
+            "sources": sorted({e.source for e in b.evidence}),
         }
