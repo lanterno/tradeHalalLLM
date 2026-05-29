@@ -80,6 +80,16 @@ def test_gate_promotes_lower_churn_at_parity_pnl():
     assert any("PASS" in r for r in v.reasons)
 
 
+def test_gate_holds_on_zero_variance_uniformly_worse_shadow():
+    # Regression: both sides constant (t-test undefined) but live strictly beats
+    # shadow → must NOT be treated as "not worse".
+    shadow = [0.01] * 40  # constant
+    live = [0.05] * 40  # constant, strictly higher
+    v = promotion_gate(shadow, live, churn_reduction=0.5, min_n=30)
+    assert v.promote is False
+    assert any("uniformly worse" in r for r in v.reasons)
+
+
 def test_gate_holds_when_shadow_significantly_worse():
     # Realistic spread so the t-test is defined; shadow mean clearly below live.
     shadow = [0.001 + 0.0006 * (i % 5 - 2) for i in range(50)]  # ~0.001

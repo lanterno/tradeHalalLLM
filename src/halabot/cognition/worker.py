@@ -111,6 +111,9 @@ class CoalescingBeliefWorker:
         # Serializes batch application so a concurrent drain() (e.g. --once flush
         # or a test) never races the background _run on the same belief version.
         self._lock = asyncio.Lock()
+        # _run waits on this rather than blocking on queue.get(), so it never
+        # dequeues outside the lock (ordering safety).
+        self._signal = asyncio.Event()
 
     async def evidence(
         self,
@@ -122,6 +125,7 @@ class CoalescingBeliefWorker:
         correlation_id: UUID | None = None,
     ) -> None:
         await self._q.put(_Ev(asset, now, items, is_replay, correlation_id))
+        self._signal.set()
 
     async def compliance(
         self,
@@ -132,6 +136,7 @@ class CoalescingBeliefWorker:
         correlation_id: UUID | None = None,
     ) -> None:
         await self._q.put(_Co(asset, verdict, now, correlation_id))
+        self._signal.set()
 
     def start(self) -> None:
         self._task = asyncio.create_task(self._run(), name="belief-worker")
@@ -139,31 +144,39 @@ class CoalescingBeliefWorker:
     async def stop(self) -> None:
         if self._task is None:
             return
-        # Cancel the background consumer FIRST, then drain the remainder with no
-        # concurrent consumer — so the final flush can't race _run.
         self._task.cancel()
         await asyncio.gather(self._task, return_exceptions=True)
         self._task = None
         await self.drain()
 
     async def drain(self) -> None:
-        """Process everything currently queued (for ``--once`` and shutdown)."""
+        """Process everything currently queued (for ``--once`` and shutdown).
+
+        Shares the same locked drain-and-apply as :meth:`_run`, so a concurrent
+        drain() can never reorder writes — nothing is dequeued outside the lock
+        (fixes the get-before-lock ordering hazard)."""
         while not self._q.empty():
-            async with self._lock:
-                if self._q.empty():
-                    break
-                await self._apply(self._drain_batch())
+            await self._drain_locked()
 
     async def _run(self) -> None:
         while True:
             try:
-                first = await self._q.get()  # block for the first item (no lock held)
-                async with self._lock:
-                    await self._apply([first, *self._drain_batch()])
+                await self._signal.wait()  # woken by a put (no item dequeued here)
+                await self._drain_locked()
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001 — one bad batch never kills the worker (INV-1)
                 logger.error("belief worker batch failed: %r", exc)
+
+    async def _drain_locked(self) -> None:
+        """Atomically (under the lock) clear the wake signal, dequeue everything
+        currently queued, and apply it in FIFO order. Dequeue happens ONLY here,
+        so _run and drain() never interleave dequeues → no reordering."""
+        async with self._lock:
+            self._signal.clear()  # a put during/after apply re-sets it → next pass
+            jobs = self._drain_batch()
+            if jobs:
+                await self._apply(jobs)
 
     def _drain_batch(self) -> list[_Ev | _Co]:
         """Pop everything currently queued (non-blocking). Caller holds the lock."""

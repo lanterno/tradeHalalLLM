@@ -7,9 +7,9 @@ wires an executor/venue/monitor into the read-only engine."""
 
 from __future__ import annotations
 
-import inspect
+import subprocess
+import sys
 
-from halabot import app
 from halabot.app import Engine
 
 
@@ -20,12 +20,19 @@ def test_engine_has_no_execution_fields():
     assert field_names.isdisjoint(forbidden), f"execution leaked into Engine: {field_names}"
 
 
-def test_build_engine_source_does_not_import_execution():
-    # build_engine's module must not reference the execution package (dormant).
-    src = inspect.getsource(app)
-    assert "halabot.execution" not in src, "app.py wired the dormant execution layer"
-    assert "Executor(" not in src
-    assert "PositionMonitor(" not in src
+def test_importing_app_does_not_transitively_import_execution():
+    # Transitive (not lexical) guard: in a FRESH interpreter, importing the
+    # composition root must not pull in ANY halabot.execution.* module — proving
+    # the dormant layer is never reachable from build_engine's import graph.
+    code = (
+        "import halabot.app, sys; "
+        "leaked = sorted(m for m in sys.modules if m.startswith('halabot.execution')); "
+        "assert not leaked, leaked; print('clean')"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, timeout=60
+    )
+    assert result.returncode == 0, f"execution leaked into app import graph: {result.stderr}"
 
 
 def test_live_defaults_off():

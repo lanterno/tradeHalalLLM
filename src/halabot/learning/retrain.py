@@ -21,7 +21,12 @@ from dataclasses import dataclass, field
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from halabot.conviction.calibrator import CalibrationSample, FittedCalibrator, platt_fit
+from halabot.conviction.calibrator import (
+    CalibrationSample,
+    FittedCalibrator,
+    _sigmoid,
+    platt_fit,
+)
 from halabot.platform.db import outcome as _outcome
 
 logger = logging.getLogger(__name__)
@@ -71,14 +76,11 @@ def walk_forward_logloss(
     model = platt_fit(train)
     base_rate = sum(1 for s in train if s.won) / len(train)
 
-    def _sig(z: float) -> float:
-        return 1.0 / (1.0 + math.exp(-z)) if z >= 0 else math.exp(z) / (1.0 + math.exp(z))
-
     if model is None:
         fitted_probs = [base_rate for _ in test]
     else:
         a, b = model
-        fitted_probs = [min(1.0, max(0.0, _sig(a * s.raw + b))) for s in test]
+        fitted_probs = [min(1.0, max(0.0, _sigmoid(a * s.raw + b))) for s in test]
     # Identity baseline maps raw (already in [0,1]) straight to a probability.
     identity_probs = [min(1.0, max(0.0, s.raw)) for s in test]
     return log_loss(test, fitted_probs), log_loss(test, identity_probs)

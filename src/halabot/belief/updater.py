@@ -23,7 +23,6 @@ from typing import Any, Protocol
 from uuid import UUID
 
 from halabot.belief.evidence import Calendar, decay, has_flag, merge, weighted_sum
-from halabot.belief.levels import update_levels  # noqa: F401  (re-exported for default engine)
 from halabot.belief.schema import (
     BeliefState,
     ComplianceVerdict,
@@ -99,6 +98,9 @@ def material_shift(
         return True  # regime flip
     if band_index(prev.conviction_raw) != band_index(new_raw):
         return True  # crossed a raw-conviction band edge
+    # NOTE: catalyst-driven refresh is a wired-but-dormant SEAM — no current
+    # interpreter/source populates catalysts_pending (a macro→Catalyst producer
+    # consuming OBSERVATION_MACRO lands later), so this branch is inert today.
     if any(
         c.is_imminent(now) and c.expected_impact >= catalyst_impact_threshold
         for c in prev.catalysts_pending

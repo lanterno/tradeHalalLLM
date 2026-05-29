@@ -196,6 +196,18 @@ def test_kill_switch_still_allows_exit():
     assert len(props) == 1 and props[0].side == "sell"
 
 
+def test_targets_zeroed_on_risk_halt():
+    # Regression: a risk halt overrides conviction — all targets collapse to 0 so
+    # the book de-risks and telemetry reflects zero intended exposure.
+    from halabot.risk.engine import RiskState
+
+    policy = Policy(CFG)
+    halted = RiskState(halted=True, reason="drawdown 9% > 8%")
+    targets = policy.targets([_b("NVDA", conviction=0.9)], ShadowPortfolio(), halted)
+    assert all(t.weight == 0.0 for t in targets)
+    assert "risk halt" in targets[0].reason
+
+
 def test_max_open_positions_caps_new_entries():
     cfg = PolicyConfig(
         conviction_entry_band=0.60, conviction_exit_band=0.45,

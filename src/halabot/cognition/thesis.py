@@ -43,8 +43,9 @@ def _prompt(b: BeliefState) -> str:
 
 
 class LlmThesisWriter:
-    """Writes a concise thesis via an injected LLM. Never raises into the updater
-    (the updater already guards LLM failures, but we keep output bounded)."""
+    """Writes a concise thesis via an injected LLM. An LLM error propagates — the
+    BeliefUpdater wraps the write() call in try/except so a failure stales the
+    narrative but never the belief (INV-1). Output is length-bounded."""
 
     def __init__(self, llm: Generator, *, max_chars: int = 400) -> None:
         self._llm = llm

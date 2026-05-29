@@ -1,12 +1,13 @@
 """Per-asset circuit breaker (REARCHITECTURE L6, carried from the executors).
 
-N consecutive *unexpected* order errors on one asset within a window open a
-per-asset breaker for a cooldown, quarantining a malfunctioning symbol (bad
-filter, venue glitch) instead of letting the continuous target loop retry it
-forever. Clean rejections (bad quantity / insufficient funds — Binance -1013 /
--2010) are NOT breaker trips; they're expected outcomes that reset nothing.
+N *consecutive* unexpected order errors on one asset open a per-asset breaker for
+a cooldown, quarantining a malfunctioning symbol (bad filter, venue glitch)
+instead of letting the continuous target loop retry it forever. The count is by
+consecutive failures (any success resets it), NOT a sliding time window. Clean
+rejections (bad quantity / insufficient funds — Binance -1013 / -2010) are NOT
+breaker trips; they're expected outcomes that reset nothing.
 
-Clock-injected: callers pass ``now`` so the breaker is deterministic + testable.
+Clock-injected: callers pass ``now`` so the cooldown expiry is deterministic.
 """
 
 from __future__ import annotations

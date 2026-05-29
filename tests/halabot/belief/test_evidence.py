@@ -154,3 +154,12 @@ def test_has_flag_detects_nondirectional_source():
     items = [_ev("a", 1.0, 1.0), _ev("drift", 0.0, 1.0, directional=False)]
     assert has_flag(items, "drift")
     assert not has_flag(items, "anomaly")
+
+
+def test_has_flag_ignores_stale_decayed_flag():
+    # Regression: a flag whose weight has decayed below the presence threshold no
+    # longer suppresses conviction (was presence-only → suppressed for ~2 days).
+    fresh = _ev("anomaly", 0.0, 1.0, directional=False)
+    stale = _ev("anomaly", 0.0, 0.3, directional=False)  # decayed under 0.5
+    assert has_flag([fresh], "anomaly") is True
+    assert has_flag([stale], "anomaly") is False

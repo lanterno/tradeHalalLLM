@@ -14,7 +14,7 @@ import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from halabot.belief.store import PgBeliefStore
-from halabot.platform.db import control, conviction_score, event_log, outcome, target_weight
+from halabot.platform.db import control, conviction_score, event_log, outcome
 from halabot.platform.events import EventType
 
 
@@ -123,17 +123,15 @@ async def conviction_history(
 async def system_health(engine: AsyncEngine) -> dict[str, Any]:
     async with engine.connect() as conn:
         n_events = (await conn.execute(sa.select(sa.func.count()).select_from(event_log))).scalar()
-        n_beliefs = (
-            await conn.execute(
-                sa.select(sa.func.count(sa.distinct(target_weight.c.asset)))
-            )
-        ).scalar()
         n_outcomes = (await conn.execute(sa.select(sa.func.count()).select_from(outcome))).scalar()
         last_ts = (await conn.execute(sa.select(sa.func.max(event_log.c.ts)))).scalar()
+    # CURRENT active beliefs (latest version per asset) — not the all-time count
+    # of every asset that ever had a target change (which only grows).
+    active_beliefs = len(await PgBeliefStore(engine).all_active())
     halt = await get_halt(engine)
     return {
         "events": int(n_events or 0),
-        "assets_with_targets": int(n_beliefs or 0),
+        "active_beliefs": active_beliefs,
         "outcomes": int(n_outcomes or 0),
         "last_event_ts": last_ts.isoformat() if last_ts else None,
         "halted": halt["halted"],

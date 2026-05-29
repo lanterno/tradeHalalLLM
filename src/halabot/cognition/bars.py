@@ -68,6 +68,15 @@ class BufferPriceSource:
         return closes[-1] if closes else None
 
 
+def returns(closes: list[float]) -> list[float]:
+    """Simple per-bar returns from a close series (skips non-positive prior closes)."""
+    return [
+        (closes[i] - closes[i - 1]) / closes[i - 1]
+        for i in range(1, len(closes))
+        if closes[i - 1] > 0
+    ]
+
+
 def ema(values: list[float], period: int) -> float | None:
     if len(values) < period or period <= 0:
         return None

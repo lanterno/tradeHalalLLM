@@ -51,16 +51,22 @@ def evaluate_gates(ctx: GateContext) -> str | None:
     return None
 
 
+def _verdict_stale(b: BeliefState, now: datetime | None, ttl: timedelta | None) -> bool:
+    """True if a freshness window is enforced and the verdict is missing/older
+    than it. Shared by the gate decision and its reason string (one source)."""
+    if ttl is None or now is None:
+        return False
+    sa = b.halal.screened_at if b.halal else None
+    return sa is None or (now - sa) > ttl
+
+
 def _is_tradeable(
     b: BeliefState, *, now: datetime | None = None, ttl: timedelta | None = None
 ) -> bool:
     v = b.halal
     if v is None or v.status != "halal" or v.transient_error:
         return False
-    if ttl is not None and now is not None:
-        if v.screened_at is None or (now - v.screened_at) > ttl:
-            return False  # stale verdict → fail-closed (INV-7 entry freshness)
-    return True
+    return not _verdict_stale(b, now, ttl)  # stale → fail-closed (INV-7 entry freshness)
 
 
 def _halal_reason(
@@ -70,7 +76,6 @@ def _halal_reason(
         return "no verdict"
     if b.halal.transient_error:
         return "screening transient error"
-    if b.halal.status == "halal" and ttl is not None and now is not None:
-        if b.halal.screened_at is None or (now - b.halal.screened_at) > ttl:
-            return "verdict stale"
+    if b.halal.status == "halal" and _verdict_stale(b, now, ttl):
+        return "verdict stale"
     return f"status={b.halal.status}"

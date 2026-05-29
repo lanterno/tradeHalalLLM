@@ -53,6 +53,12 @@ class Policy:
     def targets(
         self, beliefs: list[BeliefState], portfolio: PortfolioState, risk: RiskState
     ) -> list[TargetWeight]:
+        # A risk halt overrides all conviction: every target collapses to 0 so the
+        # book de-risks and the telemetry reflects zero intended exposure while
+        # halted (spec L5/L7; exits are still allowed via deltas' sell bypass).
+        if risk.halted:
+            reason = f"risk halt: {risk.reason}"
+            return [TargetWeight(b.asset, 0.0, reason, b.version) for b in beliefs]
         raw: dict[str, float] = {}
         version: dict[str, int] = {}
         for b in beliefs:

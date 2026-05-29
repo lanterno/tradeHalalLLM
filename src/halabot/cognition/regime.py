@@ -8,14 +8,21 @@ that fold in later; this gets the belief loop running with a sensible regime.
 from __future__ import annotations
 
 from halabot.belief.evidence import fraction_same_sign, has_flag, weighted_sum
-from halabot.belief.schema import EvidenceItem, Regime, regime_support  # noqa: F401 (re-export)
+from halabot.belief.schema import EvidenceItem, Regime
 
 # net |signed| at/above which we call it a trend (vs ranging)
 _TREND_THRESHOLD = 0.25
 
 
 class EvidenceRegimeClassifier:
-    """Regime from net signed evidence, agreement, and volatility flags."""
+    """Regime from net signed evidence, agreement, and volatility flags.
+
+    NOTE on ``regime_confidence`` semantics: it reads as *certainty of the called
+    regime* (high RANGING confidence = "confidently flat", high trending
+    confidence = "strong trend"), so it is NOT a single cross-regime scalar — read
+    it together with the regime label, not as a comparable number across regimes.
+    Conviction sizing does NOT use it (it uses the categorical ``regime_support``);
+    it is telemetry/feature only."""
 
     def classify(self, evidence: list[EvidenceItem]) -> tuple[Regime, float]:
         if not evidence:

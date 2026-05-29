@@ -16,7 +16,7 @@ import statistics
 from typing import Protocol
 
 from halabot.belief.schema import EvidenceItem
-from halabot.cognition.bars import BarBuffer, ema, momentum_signal, rsi
+from halabot.cognition.bars import BarBuffer, ema, momentum_signal, returns, rsi
 from halabot.platform.events import Event, EventType
 
 logger = logging.getLogger(__name__)
@@ -151,11 +151,7 @@ class AnomalyInterpreter:
         closes = self._buffer.closes(asset)
         if len(closes) < self._baseline + 1:
             return []
-        rets = [
-            (closes[i] - closes[i - 1]) / closes[i - 1]
-            for i in range(1, len(closes))
-            if closes[i - 1] > 0
-        ]
+        rets = returns(closes)
         if len(rets) < self._baseline:
             return []
         short_vol = statistics.pstdev(rets[-self._short :])
@@ -202,11 +198,7 @@ class DriftInterpreter:
         closes = self._buffer.closes(asset)
         if len(closes) < self._baseline + 1:
             return []
-        rets = [
-            (closes[i] - closes[i - 1]) / closes[i - 1]
-            for i in range(1, len(closes))
-            if closes[i - 1] > 0
-        ]
+        rets = returns(closes)
         if len(rets) < self._baseline:
             return []
         base = rets[-self._baseline : -self._recent]

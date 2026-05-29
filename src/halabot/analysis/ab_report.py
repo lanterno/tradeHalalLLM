@@ -26,6 +26,14 @@ from halabot.platform.db import outcome as _outcome
 from halabot.platform.events import EventType
 
 
+def churn_reduction(shadow_total: int, live_total: int) -> float | None:
+    """Fraction fewer trades the shadow proposed vs the live cycle (None if the
+    live cycle made no trades). Single source of truth for the churn metric."""
+    if live_total <= 0:
+        return None
+    return 1.0 - (shadow_total / live_total)
+
+
 @dataclass
 class ABReport:
     since: datetime
@@ -49,9 +57,7 @@ class ABReport:
     def churn_reduction_pct(self) -> float | None:
         """Fraction fewer trades the shadow proposed vs the live cycle, or None
         if the live cycle made no trades in the window."""
-        if self.live_total <= 0:
-            return None
-        return 1.0 - (self.shadow_total / self.live_total)
+        return churn_reduction(self.shadow_total, self.live_total)
 
     @property
     def symbols_only_live(self) -> set[str]:
@@ -141,9 +147,9 @@ async def ab_report(engine: AsyncEngine, *, since: datetime, until: datetime) ->
 
     shadow_total = sum(shadow_by_symbol.values())
     live_total = sum(live_by_symbol.values())
-    churn_reduction = None if live_total <= 0 else 1.0 - (shadow_total / live_total)
+    churn = churn_reduction(shadow_total, live_total)
     live_avg = sum(live_returns) / len(live_returns) if live_returns else None
-    promotion = promotion_gate(shadow_returns, live_returns, churn_reduction=churn_reduction)
+    promotion = promotion_gate(shadow_returns, live_returns, churn_reduction=churn)
 
     return ABReport(
         since=since,

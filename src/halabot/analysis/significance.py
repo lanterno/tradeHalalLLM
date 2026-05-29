@@ -184,6 +184,12 @@ def promotion_gate(
         if p_live_greater < alpha:
             not_worse = False
             reasons.append(f"shadow significantly worse on P&L (p={p_live_greater:.3f} < {alpha})")
+    elif tt is None and l_mean > s_mean:
+        # Both sides zero-variance (the t-test is undefined) but live's mean
+        # strictly beats shadow's → that is uniformly worse, NOT "not worse".
+        # Don't conflate an undefined test with parity (fix, gate edge case).
+        not_worse = False
+        reasons.append("shadow uniformly worse on P&L (zero-variance, live mean higher)")
 
     promote = bool(enough and churn_ok and not_worse)
     if promote:

@@ -85,6 +85,9 @@ async def test_system_health_counts(halabot_engine):
     await bus.publish(
         new_event(FakeClock(T0), EventType.SYSTEM_HEARTBEAT, source="hb")
     )
+    await _seed_belief(halabot_engine, "NVDA", 0.6)
     health = await queries.system_health(halabot_engine)
     assert health["events"] >= 1
     assert health["halted"] is False
+    # active_beliefs counts current beliefs (not the all-time target-change count).
+    assert health["active_beliefs"] == 1

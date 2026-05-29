@@ -170,9 +170,23 @@ def fraction_same_sign(items: list[EvidenceItem]) -> float:
     return agree / len(directional)
 
 
-def has_flag(items: list[EvidenceItem], source: str) -> bool:
-    """True when a non-directional flag from ``source`` (e.g. "anomaly",
-    "drift") is present in the evidence."""
+_FLAG_PRESENCE_WEIGHT = 0.5  # a flag below this decayed weight no longer suppresses
+
+
+def has_flag(
+    items: list[EvidenceItem], source: str, *, min_weight: float = _FLAG_PRESENCE_WEIGHT
+) -> bool:
+    """True when a non-directional flag from ``source`` (e.g. "anomaly", "drift")
+    is present AND still fresh enough to matter.
+
+    Gated on the flag's DECAYED weight (not mere presence): flags are emitted at
+    weight 1.0 and decay like all evidence, but the conviction down-weight is a
+    flat multiplier, so a presence-only check kept a one-off vol spike suppressing
+    conviction for ~2 days until the EPS prune. Requiring weight >= min_weight
+    fades the flag's effect in ~one half-life, in step with the rest of decay."""
     return any(
-        e.source == source and (not e.directional or e.source in FLAG_SOURCES) for e in items
+        e.source == source
+        and (not e.directional or e.source in FLAG_SOURCES)
+        and e.weight >= min_weight
+        for e in items
     )
