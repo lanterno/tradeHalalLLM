@@ -99,6 +99,27 @@ def test_correlation_aligns_by_timestamp_not_position():
     assert mults["A"] == 1.0 and mults["B"] == 1.0
 
 
+def test_vol_targeting_downsizes_high_vol_names():
+    # Opt-in (default off): with a per-bar vol target set, a high-vol name (big
+    # swings) is haircut toward equal risk; a calm name is left at full size.
+    eng = BasicRiskEngine(RiskConfig(target_vol_per_bar=0.01, vol_size_floor=0.3))
+    base = datetime(2026, 5, 28, tzinfo=UTC)
+    calm = [(base + timedelta(minutes=i), 0.0005 * ((i % 2) * 2 - 1)) for i in range(20)]
+    wild = [(base + timedelta(minutes=i), 0.05 * ((i % 2) * 2 - 1)) for i in range(20)]
+    s = eng.evaluate(_snap(), returns_by_asset={"CALM": calm, "WILD": wild})
+    assert s.volatility_multiplier("WILD") < 1.0  # downsized for its risk
+    assert s.volatility_multiplier("CALM") == 1.0  # calm → full size (no upsize)
+    assert s.volatility_multiplier("WILD") >= 0.3  # floored
+
+
+def test_vol_targeting_off_by_default():
+    # Default config (target_vol_per_bar=0) leaves every name at full size.
+    base = datetime(2026, 5, 28, tzinfo=UTC)
+    wild = [(base + timedelta(minutes=i), 0.05 * ((i % 2) * 2 - 1)) for i in range(20)]
+    s = ENGINE.evaluate(_snap(), returns_by_asset={"WILD": wild})
+    assert s.volatility_multiplier("WILD") == 1.0  # inert unless opted in
+
+
 def test_correlation_multiplier_applied_in_evaluate():
     up = _timed([float(i) for i in range(20)])
     same = _timed([3.0 * i for i in range(20)])

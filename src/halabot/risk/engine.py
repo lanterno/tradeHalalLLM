@@ -11,6 +11,7 @@ no-leverage normalization (R-03).
 from __future__ import annotations
 
 import math
+import statistics
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Protocol
@@ -30,6 +31,12 @@ class RiskConfig:
     daily_loss_limit: float = 0.02  # realized intraday loss floor (R-10)
     correlation_threshold: float = 0.7  # |corr| above which two names are "clustered"
     volatile_size_mult: float = 0.6  # size haircut for a VOLATILE-regime name
+    # Per-bar realized-vol target for risk-parity sizing. 0 = DISABLED (default):
+    # a single-window backtest was inconclusive (PF up but total flat + variance up),
+    # so it ships as an opt-in knob pending multi-window validation. Set > 0 to
+    # downsize high-vol names toward equal risk.
+    target_vol_per_bar: float = 0.0
+    vol_size_floor: float = 0.3  # floor on the vol-targeting haircut (don't zero a name)
 
 
 @dataclass(frozen=True)
@@ -159,13 +166,27 @@ class BasicRiskEngine:
             reason = f"daily realized loss {realized_loss:.1%} >= {self._cfg.daily_loss_limit:.1%}"
 
         # Belief-aware size haircuts (sizing reads these per asset).
+        # Volatility targeting (rank 3): scale each name toward EQUAL risk by its
+        # own realized vol — high-vol names are downsized so one ATR move doesn't
+        # blow an outsized hole (capped at 1.0 → downsize-only, never adds leverage).
+        # Combined (min) with the categorical VOLATILE-regime haircut.
         vol_mult: dict[str, float] = {}
+        if returns_by_asset and self._cfg.target_vol_per_bar > 0:
+            for asset, tr in returns_by_asset.items():
+                rets = [r for _, r in tr]
+                if len(rets) >= 10:
+                    rvol = statistics.pstdev(rets)
+                    if rvol > 0:
+                        m = self._cfg.target_vol_per_bar / rvol
+                        vol_mult[asset] = max(self._cfg.vol_size_floor, min(1.0, m))
         if beliefs:
             from halabot.belief.schema import Regime
 
             for b in beliefs:
                 if b.regime == Regime.VOLATILE:
-                    vol_mult[b.asset] = self._cfg.volatile_size_mult
+                    vol_mult[b.asset] = min(
+                        vol_mult.get(b.asset, 1.0), self._cfg.volatile_size_mult
+                    )
         corr_mult: dict[str, float] = {}
         if returns_by_asset:
             corr_mult = correlation_multipliers(
