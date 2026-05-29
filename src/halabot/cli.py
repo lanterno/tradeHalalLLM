@@ -199,17 +199,27 @@ def ab_report_cmd(days: int) -> None:
 @click.option("--days", default=10, show_default=True, help="History window to fetch.")
 @click.option("--timeframe", default="1Hour", show_default=True)
 @click.option("--continuous", is_flag=True, default=False, help="24/7 decay (else RTH).")
-def backtest(symbols: str, days: int, timeframe: str, continuous: bool) -> None:
+@click.option(
+    "--sweep-bands",
+    default="",
+    help="Comma-separated entry bands to compare (fetch once, replay each), e.g. 0.15,0.25,0.35.",
+)
+def backtest(symbols: str, days: int, timeframe: str, continuous: bool, sweep_bands: str) -> None:
     """Replay historical bars through the engine and report hypothetical P&L."""
     from halabot.platform.observability import setup_logging
 
     setup_logging(logging.WARNING)  # quiet — the result line is the output
     asyncio.run(
-        _run_backtest(symbols=symbols, days=days, timeframe=timeframe, continuous=continuous)
+        _run_backtest(
+            symbols=symbols, days=days, timeframe=timeframe, continuous=continuous,
+            sweep_bands=sweep_bands,
+        )
     )
 
 
-async def _run_backtest(*, symbols: str, days: int, timeframe: str, continuous: bool) -> None:
+async def _run_backtest(
+    *, symbols: str, days: int, timeframe: str, continuous: bool, sweep_bands: str = ""
+) -> None:
     from halabot.analysis.backtest import Backtester
     from halabot.belief.updater import UpdaterConfig
     from halabot.cognition.bars import Bar
@@ -259,30 +269,42 @@ async def _run_backtest(*, symbols: str, days: int, timeframe: str, continuous: 
         click.echo(
             f"backtest: {len(bars_by_symbol)} symbols, {total_bars} bars ({timeframe}, {days}d)"
         )
-        bt = Backtester(
-            policy_config=PolicyConfig(
-                conviction_entry_band=hb.policy.conviction_entry_band,
-                conviction_exit_band=hb.policy.conviction_exit_band,
-                max_weight_per_asset=hb.policy.max_weight_per_asset,
-                max_gross_exposure=hb.policy.max_gross_exposure,
-                target_rebalance_threshold=hb.policy.target_rebalance_threshold,
-                max_open_positions=hb.engine.max_open_positions,
-            ),
-            updater_config=UpdaterConfig(
-                long_threshold=hb.belief.long_threshold,
-                evidence_decay_halflife_min=hb.belief.evidence_decay_halflife_min,
-                llm_thesis_enabled=False,
-            ),
-            risk_config=RiskConfig(
-                max_portfolio_heat_pct=hb.risk.max_portfolio_heat_pct,
-                max_drawdown_pct=hb.risk.max_drawdown_pct,
-                daily_loss_limit=hb.risk.daily_loss_limit,
-            ),
-            trading_hours=not continuous,
-            win_threshold_pct=hb.conviction.win_threshold_pct,
-        )
-        result = await bt.run(bars_by_symbol)
-        click.echo(f"=== backtest result ===\n  {result.summary()}")
+        def _make(entry_band: float, exit_band: float) -> Backtester:
+            return Backtester(
+                policy_config=PolicyConfig(
+                    conviction_entry_band=entry_band,
+                    conviction_exit_band=exit_band,
+                    max_weight_per_asset=hb.policy.max_weight_per_asset,
+                    max_gross_exposure=hb.policy.max_gross_exposure,
+                    target_rebalance_threshold=hb.policy.target_rebalance_threshold,
+                    max_open_positions=hb.engine.max_open_positions,
+                ),
+                updater_config=UpdaterConfig(
+                    long_threshold=hb.belief.long_threshold,
+                    evidence_decay_halflife_min=hb.belief.evidence_decay_halflife_min,
+                    llm_thesis_enabled=False,
+                ),
+                risk_config=RiskConfig(
+                    max_portfolio_heat_pct=hb.risk.max_portfolio_heat_pct,
+                    max_drawdown_pct=hb.risk.max_drawdown_pct,
+                    daily_loss_limit=hb.risk.daily_loss_limit,
+                ),
+                trading_hours=not continuous,
+                win_threshold_pct=hb.conviction.win_threshold_pct,
+            )
+
+        bands = [float(b) for b in sweep_bands.split(",") if b.strip()]
+        if bands:
+            click.echo("=== entry-band sweep ===")
+            for band in bands:
+                exit_band = min(band - 1e-6, hb.policy.conviction_exit_band)
+                res = await _make(band, max(0.0, exit_band)).run(bars_by_symbol)
+                click.echo(f"  entry={band:.2f}: {res.summary()}")
+        else:
+            res = await _make(
+                hb.policy.conviction_entry_band, hb.policy.conviction_exit_band
+            ).run(bars_by_symbol)
+            click.echo(f"=== backtest result ===\n  {res.summary()}")
     finally:
         await mcp.disconnect()
         await ht_engine.dispose()
