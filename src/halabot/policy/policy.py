@@ -9,6 +9,7 @@ rebalance threshold (anti-churn) and the gates pass (exits always allowed).
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from uuid import UUID
@@ -86,6 +87,7 @@ class Policy:
         now: datetime | None = None,
         compliance_ttl: timedelta | None = None,
         market_risk_off: bool = False,
+        on_reject: Callable[[str, str], None] | None = None,
     ) -> list[TradeProposal]:
         out: list[TradeProposal] = []
         # Concurrent-position cap (anti-over-diversification): count currently-held
@@ -107,6 +109,8 @@ class Policy:
                 # Fail-closed (INV-7): with no belief there is no halal verdict, so
                 # a BUY must never proceed. A SELL is a risk-reducing exit → allowed.
                 if side == "buy":
+                    if on_reject is not None:
+                        on_reject(t.asset, "no belief (fail-closed)")
                     continue
             else:
                 gate_reason = evaluate_gates(
@@ -124,7 +128,11 @@ class Policy:
                     )
                 )
                 if gate_reason is not None:
-                    continue  # gated out (logged by the shadow runner via no proposal)
+                    # Surface WHY a buy was suppressed (telemetry) — gated proposals
+                    # are otherwise invisible (no event emitted).
+                    if on_reject is not None:
+                        on_reject(t.asset, gate_reason)
+                    continue
             if side == "buy" and not portfolio.holds(t.asset):
                 open_count += 1  # this buy opens a new name — counts toward the cap
             out.append(

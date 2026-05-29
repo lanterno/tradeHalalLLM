@@ -111,6 +111,20 @@ def test_market_gate_off_allows_buy():
     assert len(props) == 1 and props[0].side == "buy"
 
 
+def test_on_reject_reports_gated_buy_reason():
+    # A suppressed buy is otherwise invisible — on_reject surfaces (asset, reason).
+    policy = Policy(CFG)
+    b = _b("NVDA", conviction=0.9)
+    targets = policy.targets([b], ShadowPortfolio(), RISK)
+    seen: list[tuple[str, str]] = []
+    props = policy.deltas(
+        targets, ShadowPortfolio(), beliefs_by_asset={"NVDA": b}, risk=RISK,
+        market_risk_off=True, on_reject=lambda a, r: seen.append((a, r)),
+    )
+    assert props == []
+    assert len(seen) == 1 and seen[0][0] == "NVDA" and "market regime" in seen[0][1]
+
+
 # ── INV-7 entry freshness: a stale positive verdict fails closed ──
 def _b_screened(asset, *, screened_at, conviction=0.9):
     return BeliefState(

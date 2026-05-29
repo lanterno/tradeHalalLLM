@@ -89,6 +89,7 @@ class ShadowPolicyRunner:
         self._last_target: dict[str, float] = {}  # for target_changed dedup
         self.proposals_count = 0  # for the A/B (proposed trades over a session)
         self.last_proposals: list[TradeProposal] = []
+        self.last_rejections: list[tuple[str, str]] = []  # (asset, gate reason) last cycle
 
     def start(self) -> None:
         self._subs.append(self._bus.subscribe({EventType.BELIEF_UPDATED}, self._on_belief))
@@ -242,6 +243,7 @@ class ShadowPolicyRunner:
         targets = self._policy.targets(beliefs, self._portfolio, risk)
         await self._emit_target_changes(targets, event)
         kill_switch = await self._halt_check() if self._halt_check is not None else False
+        rejections: list[tuple[str, str]] = []
         proposals = self._policy.deltas(
             targets,
             self._portfolio,
@@ -251,7 +253,19 @@ class ShadowPolicyRunner:
             compliance_ttl=self._compliance_ttl,
             kill_switch=kill_switch,
             market_risk_off=self._market_is_risk_off(),
+            on_reject=lambda asset, reason: rejections.append((asset, reason)),
         )
+        self.last_rejections = rejections
+        if rejections:
+            # Gated buys are otherwise invisible — log a per-cycle summary by reason
+            # so the operator can SEE the gates (e.g. the market-regime gate) work.
+            by_reason: dict[str, list[str]] = {}
+            for asset, reason in rejections:
+                by_reason.setdefault(reason, []).append(asset)
+            summary = "; ".join(
+                f"{reason}: {', '.join(sorted(assets))}" for reason, assets in by_reason.items()
+            )
+            logger.info("SHADOW gated %d buy(s) — %s", len(rejections), summary)
         self.last_proposals = proposals
         for p in proposals:
             self._portfolio.set_weight(p.asset, p.target_weight)  # hypothetical book moves
