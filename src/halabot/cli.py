@@ -486,6 +486,8 @@ async def _run_backtest(
             click.echo(res.structure_summary())
             click.echo("=== by entry market-regime (benchmark vs SMA) ===")
             click.echo(res.market_summary())
+            click.echo("=== by entry evidence source (multi-label) ===")
+            click.echo(res.source_summary())
 
     if cache_read:
         bars_by_symbol = _load_bars_cache(cache_read)

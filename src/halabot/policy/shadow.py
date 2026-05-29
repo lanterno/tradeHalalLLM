@@ -292,6 +292,12 @@ class ShadowPolicyRunner:
                         "regime": str(by_asset[p.asset].regime)
                         if p.asset in by_asset
                         else "unknown",
+                        # Evidence sources present at entry (telemetry + backtest
+                        # per-source attribution): which signals were behind this
+                        # entry, so we can measure which interpreters predict wins.
+                        "sources": sorted({e.source for e in by_asset[p.asset].evidence})
+                        if p.asset in by_asset
+                        else [],
                         "shadow": True,  # never executed
                     },
                     causation=event,

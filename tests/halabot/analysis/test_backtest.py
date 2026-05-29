@@ -170,6 +170,36 @@ async def test_backtest_populates_by_structure_on_real_pipeline():
 
 
 @pytest.mark.asyncio
+async def test_book_attributes_outcomes_to_entry_sources_multilabel():
+    # Two trades with overlapping source sets; each trade counts toward every
+    # source present at its entry (multi-label). WIN carries {rsi, forecaster},
+    # LOSS carries {rsi, volume} → forecaster is 1/1 win, volume 0/1, rsi 1/2.
+    book = _book()
+    await book.on_proposal(
+        SimpleNamespace(
+            asset="WIN", ts=T0,
+            payload={"price": 100.0, "weight_delta": 0.2, "sources": ["rsi", "forecaster"]},
+        )
+    )
+    await book.on_proposal(
+        SimpleNamespace(
+            asset="LOSS", ts=T0,
+            payload={"price": 100.0, "weight_delta": 0.2, "sources": ["rsi", "volume"]},
+        )
+    )
+    await book.on_proposal(
+        SimpleNamespace(asset="WIN", ts=T0, payload={"price": 110.0, "weight_delta": -0.2})
+    )
+    await book.on_proposal(
+        SimpleNamespace(asset="LOSS", ts=T0, payload={"price": 95.0, "weight_delta": -0.2})
+    )
+    by = {s.regime: s for s in book.result().by_source}
+    assert by["forecaster"].n == 1 and by["forecaster"].win_rate == 1.0
+    assert by["volume"].n == 1 and by["volume"].win_rate == 0.0
+    assert by["rsi"].n == 2 and by["rsi"].win_rate == 0.5
+
+
+@pytest.mark.asyncio
 async def test_book_tags_entry_structure_from_buffer():
     # With a buffer pre-warmed with a clean uptrend, an entry is tagged with a
     # non-"unknown" structural label (breakout/trend) read from price geometry.

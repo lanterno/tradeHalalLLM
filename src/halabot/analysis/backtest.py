@@ -77,6 +77,7 @@ class _Pos:
     regime: str = "unknown"  # entry regime, for per-regime P&L segmentation
     structural: str = "unknown"  # entry price-structure label (rank 5)
     market: str = "unknown"  # entry market-regime label (benchmark vs its SMA)
+    sources: tuple[str, ...] = ()  # evidence sources present at entry (attribution)
 
 
 @dataclass
@@ -113,6 +114,7 @@ class BacktestResult:
     by_regime: list[RegimeStats] = field(default_factory=list)  # entry-regime split
     by_structure: list[RegimeStats] = field(default_factory=list)  # price-structure split
     by_market: list[RegimeStats] = field(default_factory=list)  # market-regime split
+    by_source: list[RegimeStats] = field(default_factory=list)  # per evidence source (multi-label)
 
     def summary(self) -> str:
         wr = f"{self.win_rate:.0%}" if self.win_rate is not None else "n/a"
@@ -140,6 +142,13 @@ class BacktestResult:
         if not self.by_market:
             return "  (no closed trades)"
         return "\n".join("  " + r.line() for r in self.by_market)
+
+    def source_summary(self) -> str:
+        """Multi-line per-evidence-source breakdown (multi-label: a trade counts
+        toward each source present at entry). Which interpreters predict wins."""
+        if not self.by_source:
+            return "  (no closed trades)"
+        return "\n".join("  " + r.line() for r in self.by_source)
 
 
 class _Book:
@@ -197,6 +206,7 @@ class _Book:
         self.regimes: list[str] = []  # entry regime, parallel to returns
         self.structurals: list[str] = []  # entry structural label, parallel to returns
         self.markets: list[str] = []  # entry market-regime label, parallel to returns
+        self.source_sets: list[tuple[str, ...]] = []  # entry evidence sources, parallel
         self.proposals = 0
         self._cum = 0.0
         self._peak = 0.0
@@ -220,6 +230,7 @@ class _Book:
                     regime=str(p.get("regime", "unknown")),
                     structural=self._structural_at_entry(asset),
                     market=self._market_at_entry(),
+                    sources=tuple(p.get("sources", ())),
                 )
             else:
                 total = pos.weight + delta
@@ -239,6 +250,7 @@ class _Book:
         self.regimes.append(pos.regime)
         self.structurals.append(pos.structural)
         self.markets.append(pos.market)
+        self.source_sets.append(pos.sources)
         self._cum += ret * closed
         self._peak = max(self._peak, self._cum)
         self.max_dd = max(self.max_dd, self._peak - self._cum)
@@ -327,6 +339,36 @@ class _Book:
         out.sort(key=lambda s: s.n, reverse=True)
         return out
 
+    def _source_stats(self) -> list[RegimeStats]:
+        """MULTI-LABEL: each closed trade carries several evidence sources, so a
+        trade contributes to every source present at its entry. Tells us which
+        interpreters predict wins (a source present on winners but not losers
+        earns its keep). Most-frequent source first."""
+        sources = sorted({s for ss in self.source_sets for s in ss})
+        out: list[RegimeStats] = []
+        for src in sources:
+            rows = [
+                (r, w)
+                for r, w, ss in zip(self.returns, self.weights, self.source_sets)
+                if src in ss
+            ]
+            rets = [r for r, _ in rows]
+            n = len(rets)
+            gw = sum(r for r in rets if r > 0)
+            gl = -sum(r for r in rets if r < 0)
+            out.append(
+                RegimeStats(
+                    regime=src,
+                    n=n,
+                    win_rate=(sum(1 for r in rets if r > self._win) / n) if n else None,
+                    avg_return_pct=(sum(rets) / n) if n else None,
+                    profit_factor=(gw / gl) if gl > _EPS else None,
+                    total_return=sum(r * w for r, w in rows),
+                )
+            )
+        out.sort(key=lambda s: s.n, reverse=True)
+        return out
+
     def result(self) -> BacktestResult:
         n = len(self.returns)
         wins = [r for r in self.returns if r > self._win]
@@ -344,6 +386,7 @@ class _Book:
             by_regime=self._bucket_stats(self.regimes),
             by_structure=self._bucket_stats(self.structurals),
             by_market=self._bucket_stats(self.markets),
+            by_source=self._source_stats(),
         )
 
 
