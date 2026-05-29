@@ -159,6 +159,35 @@ async def test_backtest_populates_by_regime_on_real_pipeline():
 
 
 @pytest.mark.asyncio
+async def test_backtest_populates_by_structure_on_real_pipeline():
+    # The book reads price geometry from the shared buffer at entry and tags each
+    # trade with a structural label (independent of the conviction evidence).
+    up = _bars([100.0 + i for i in range(80)])
+    res = await Backtester(policy_config=CFG, trading_hours=False).run({"NVDA": up})
+    assert res.closed >= 1
+    assert sum(s.n for s in res.by_structure) == res.closed  # every trade bucketed
+    assert {s.regime for s in res.by_structure} <= {"breakout", "trend", "chop", "unknown"}
+
+
+@pytest.mark.asyncio
+async def test_book_tags_entry_structure_from_buffer():
+    # With a buffer pre-warmed with a clean uptrend, an entry is tagged with a
+    # non-"unknown" structural label (breakout/trend) read from price geometry.
+    buf = BarBuffer()
+    for i in range(40):
+        c = 100.0 + i
+        buf.append("UP", Bar(o=c, h=c + 0.3, low=c - 0.3, c=c, v=1000.0, ts=T0))
+    book = _Book(win_threshold_pct=0.002, prices=BufferPriceSource(buf), buffer=buf)
+    await book.on_proposal(
+        SimpleNamespace(asset="UP", ts=T0, payload={"price": 139.0, "weight_delta": 0.2})
+    )
+    await book.on_proposal(
+        SimpleNamespace(asset="UP", ts=T0, payload={"price": 150.0, "weight_delta": -0.2})
+    )
+    assert book.structurals == ["trend"] or book.structurals == ["breakout"]
+
+
+@pytest.mark.asyncio
 async def test_exit_ladder_locks_gains_on_a_reversal_vs_off():
     # Up then a sharp reversal: the slow-out ladder cuts the winner on the
     # trend-break/trailing stop, so it never gives back as much as the

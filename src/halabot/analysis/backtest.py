@@ -38,6 +38,7 @@ from halabot.cognition.interpreters import (
 from halabot.cognition.level_engine import BarLevelEngine
 from halabot.cognition.regime import EvidenceRegimeClassifier
 from halabot.cognition.router import CognitionRouter
+from halabot.cognition.structure import structural_label
 from halabot.conviction.raw import IdentityCalibrator
 from halabot.execution.position_manager import HoldContext, decide_exit
 from halabot.platform.bus import InProcessEventBus
@@ -73,6 +74,7 @@ class _Pos:
     vwap: float
     open_ts: datetime
     regime: str = "unknown"  # entry regime, for per-regime P&L segmentation
+    structural: str = "unknown"  # entry price-structure label (rank 5)
 
 
 @dataclass
@@ -107,6 +109,7 @@ class BacktestResult:
     max_drawdown: float = 0.0  # peak-to-trough of the realized-equity curve
     returns: list[float] = field(default_factory=list)
     by_regime: list[RegimeStats] = field(default_factory=list)  # entry-regime split
+    by_structure: list[RegimeStats] = field(default_factory=list)  # price-structure split
 
     def summary(self) -> str:
         wr = f"{self.win_rate:.0%}" if self.win_rate is not None else "n/a"
@@ -123,6 +126,12 @@ class BacktestResult:
             return "  (no closed trades)"
         return "\n".join("  " + r.line() for r in self.by_regime)
 
+    def structure_summary(self) -> str:
+        """Multi-line per-entry price-structure breakdown (rank 5)."""
+        if not self.by_structure:
+            return "  (no closed trades)"
+        return "\n".join("  " + r.line() for r in self.by_structure)
+
 
 class _Book:
     """In-memory hypothetical book: marks shadow proposals to their decision price,
@@ -137,9 +146,19 @@ class _Book:
         cost_frac: float = 0.0,
         exit_ladder: bool = False,
         trailing_pct: float = 0.05,
+        buffer: BarBuffer | None = None,
+        structure_window: int = 20,
+        structure_er_trend: float = 0.5,
     ) -> None:
         self._win = win_threshold_pct
         self._prices = prices
+        # Shared bar buffer (the engine's own) so the book can read price
+        # GEOMETRY at entry for the structural-regime tag (rank 5) — a label
+        # independent of the conviction evidence, used only to MEASURE whether
+        # structure discriminates P&L (it does not feed conviction here).
+        self._buffer = buffer
+        self._structure_window = structure_window
+        self._structure_er_trend = structure_er_trend
         # One-way transaction cost (slippage + commission) as a fraction of
         # notional: a buy fills slightly HIGHER, a sell slightly LOWER, so each
         # round-trip pays ~2× — which is exactly what penalizes churn honestly.
@@ -161,6 +180,7 @@ class _Book:
         self.returns: list[float] = []  # per-closed-trade NET return_pct (after costs)
         self.weights: list[float] = []  # closed_weight, parallel to returns
         self.regimes: list[str] = []  # entry regime, parallel to returns
+        self.structurals: list[str] = []  # entry structural label, parallel to returns
         self.proposals = 0
         self._cum = 0.0
         self._peak = 0.0
@@ -182,6 +202,7 @@ class _Book:
                 self._pos[asset] = _Pos(
                     weight=delta, vwap=fill, open_ts=ts,
                     regime=str(p.get("regime", "unknown")),
+                    structural=self._structural_at_entry(asset),
                 )
             else:
                 total = pos.weight + delta
@@ -199,6 +220,7 @@ class _Book:
         self.returns.append(ret)
         self.weights.append(closed)
         self.regimes.append(pos.regime)
+        self.structurals.append(pos.structural)
         self._cum += ret * closed
         self._peak = max(self._peak, self._cum)
         self.max_dd = max(self.max_dd, self._peak - self._cum)
@@ -242,20 +264,33 @@ class _Book:
             if last is not None and last > 0:
                 self._realize(asset, pos, pos.weight, last)
 
-    def _regime_stats(self) -> list[RegimeStats]:
-        """Bucket closed trades by entry regime, most-traded first."""
+    def _structural_at_entry(self, asset: str) -> str:
+        """Price-structure label from the shared buffer at the entry bar."""
+        if self._buffer is None:
+            return "unknown"
+        return structural_label(
+            self._buffer.highs(asset),
+            self._buffer.lows(asset),
+            self._buffer.closes(asset),
+            window=self._structure_window,
+            er_trend=self._structure_er_trend,
+        )
+
+    def _bucket_stats(self, keys: list[str]) -> list[RegimeStats]:
+        """Group closed trades by a per-trade key (regime / structure), most-traded
+        first. ``keys`` is parallel to ``returns``/``weights``."""
         buckets: dict[str, list[tuple[float, float]]] = {}
-        for r, w, reg in zip(self.returns, self.weights, self.regimes):
-            buckets.setdefault(reg, []).append((r, w))
+        for r, w, key in zip(self.returns, self.weights, keys):
+            buckets.setdefault(key, []).append((r, w))
         out: list[RegimeStats] = []
-        for reg, rows in buckets.items():
+        for key, rows in buckets.items():
             rets = [r for r, _ in rows]
             n = len(rets)
             gw = sum(r for r in rets if r > 0)
             gl = -sum(r for r in rets if r < 0)
             out.append(
                 RegimeStats(
-                    regime=reg,
+                    regime=key,
                     n=n,
                     win_rate=(sum(1 for r in rets if r > self._win) / n) if n else None,
                     avg_return_pct=(sum(rets) / n) if n else None,
@@ -280,7 +315,8 @@ class _Book:
             total_return=sum(r * w for r, w in zip(self.returns, self.weights)),
             max_drawdown=self.max_dd,
             returns=list(self.returns),
-            by_regime=self._regime_stats(),
+            by_regime=self._bucket_stats(self.regimes),
+            by_structure=self._bucket_stats(self.structurals),
         )
 
 
@@ -299,6 +335,8 @@ class Backtester:
         exit_ladder: bool = False,
         trailing_pct: float = 0.05,
         sma_window: int = 20,
+        structure_window: int = 20,
+        structure_er_trend: float = 0.5,
         interpreters: list[Interpreter] | None = None,
     ) -> None:
         self._policy_config = policy_config or PolicyConfig()
@@ -310,6 +348,8 @@ class Backtester:
         self._exit_ladder = exit_ladder
         self._trailing_pct = trailing_pct
         self._sma_window = sma_window
+        self._structure_window = structure_window
+        self._structure_er_trend = structure_er_trend
         self._interpreters = interpreters
 
     async def run(
@@ -360,6 +400,8 @@ class Backtester:
         book = _Book(
             win_threshold_pct=self._win, prices=prices, cost_frac=self._cost_frac,
             exit_ladder=self._exit_ladder, trailing_pct=self._trailing_pct,
+            buffer=buffer, structure_window=self._structure_window,
+            structure_er_trend=self._structure_er_trend,
         )
         bus.subscribe({EventType.POLICY_TRADE_PROPOSED}, book.on_proposal)
         router.start()

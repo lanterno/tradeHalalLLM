@@ -355,6 +355,8 @@ async def _run_backtest(
             click.echo(f"=== backtest result ===\n  {res.summary()}")
             click.echo("=== by entry regime ===")
             click.echo(res.regime_summary())
+            click.echo("=== by entry price-structure ===")
+            click.echo(res.structure_summary())
     finally:
         await mcp.disconnect()
         await ht_engine.dispose()
