@@ -411,6 +411,7 @@ class Backtester:
         market_sma_window: int = 50,
         forecaster: str = "",  # "" | "ols" | "chronos" — append to the default stack
         chronos_model: str = "amazon/chronos-bolt-small",
+        chronos_max_weight: float = 0.6,
         interpreters: list[Interpreter] | None = None,
     ) -> None:
         self._policy_config = policy_config or PolicyConfig()
@@ -428,6 +429,7 @@ class Backtester:
         self._market_sma_window = market_sma_window
         self._forecaster = forecaster
         self._chronos_model = chronos_model
+        self._chronos_max_weight = chronos_max_weight
         self._interpreters = interpreters
 
     def _build_forecaster(self, buffer: BarBuffer) -> Interpreter:
@@ -439,7 +441,10 @@ class Backtester:
                 load_chronos_pipeline,
             )
 
-            return ChronosForecasterInterpreter(buffer, load_chronos_pipeline(self._chronos_model))
+            return ChronosForecasterInterpreter(
+                buffer, load_chronos_pipeline(self._chronos_model),
+                max_weight=self._chronos_max_weight,
+            )
         return ForecasterInterpreter(buffer)  # "ols" (default for any non-chronos value)
 
     async def run(

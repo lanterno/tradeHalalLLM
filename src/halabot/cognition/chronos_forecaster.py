@@ -59,6 +59,7 @@ class ChronosForecasterInterpreter:
         horizon: int = 5,
         scale: float = 50.0,
         min_direction: float = 0.05,
+        max_weight: float = _FORECASTER_MAX_WEIGHT,
     ) -> None:
         self._buffer = buffer
         self._forecaster = forecaster
@@ -66,6 +67,7 @@ class ChronosForecasterInterpreter:
         self._horizon = horizon
         self._scale = scale
         self._min_direction = min_direction
+        self._max_weight = max_weight
 
     async def interpret(self, observation: Event) -> list[EvidenceItem]:
         asset = observation.asset
@@ -88,7 +90,7 @@ class ChronosForecasterInterpreter:
         # as fractions of price. A confident forecast (move >> band) → weight≈max.
         band = (hi - lo) / last
         snr = abs(projected_ret) / (0.5 * band + _EPS)
-        weight = _FORECASTER_MAX_WEIGHT * max(0.0, min(1.0, snr))
+        weight = self._max_weight * max(0.0, min(1.0, snr))
         if weight <= 0.0:
             return []
         return [

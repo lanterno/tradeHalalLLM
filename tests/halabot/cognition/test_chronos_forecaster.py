@@ -84,3 +84,18 @@ async def test_abstains_on_near_zero_move():
 async def test_abstains_on_degenerate_band():
     out = await _run(_FakeForecaster(lo=102.0, mid=102.0, hi=102.0), last=100.0)
     assert out == []  # hi <= lo → no usable signal
+
+
+@pytest.mark.asyncio
+async def test_max_weight_scales_emitted_weight():
+    # Same forecast, higher max_weight → proportionally higher vote weight. (A
+    # backtest A/B showed raising it above the 0.6 default HURTS — overweighting
+    # the forecaster unbalances the ensemble — so it ships at 0.6; the knob exists
+    # for future tuning.)
+    buf = BarBuffer()
+    _fill(buf, "NVDA", 70, last=100.0)
+    fc = _FakeForecaster(lo=101.0, mid=102.0, hi=103.0)
+    lo_w = await ChronosForecasterInterpreter(buf, fc, window=64, max_weight=0.6).interpret(_obs())
+    hi_w = await ChronosForecasterInterpreter(buf, fc, window=64, max_weight=1.0).interpret(_obs())
+    assert hi_w[0].weight > lo_w[0].weight
+    assert hi_w[0].weight / lo_w[0].weight == pytest.approx(1.0 / 0.6, rel=1e-6)
