@@ -249,7 +249,21 @@ async def build_engine(
             RelativeStrengthInterpreter(buffer, benchmark=s.cognition.benchmark_symbol)
         )
     if s.cognition.forecaster_enabled:
-        interpreters.append(ForecasterInterpreter(buffer))
+        if s.cognition.forecaster_model == "chronos":
+            # Chronos foundation-model forecaster ([ml] extra). Both forecasters
+            # emit source="forecaster", so exactly one is active.
+            from halabot.cognition.chronos_forecaster import (
+                ChronosForecasterInterpreter,
+                load_chronos_pipeline,
+            )
+
+            interpreters.append(
+                ChronosForecasterInterpreter(
+                    buffer, load_chronos_pipeline(s.cognition.forecaster_chronos_model)
+                )
+            )
+        else:
+            interpreters.append(ForecasterInterpreter(buffer))
     if s.cognition.news_llm_enabled:
         from halabot.cognition.thesis import LlmHeadlineScorer
         from halal_trader.core.llm import create_llm

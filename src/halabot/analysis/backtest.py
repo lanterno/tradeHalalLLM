@@ -26,6 +26,7 @@ from halabot.cognition.base import Interpreter
 from halabot.cognition.interpreters import (
     AnomalyInterpreter,
     DriftInterpreter,
+    ForecasterInterpreter,
     IndicatorInterpreter,
     MultiFrameInterpreter,
     NewsLexiconInterpreter,
@@ -365,6 +366,8 @@ class Backtester:
         structure_er_trend: float = 0.5,
         market_gate: bool = False,
         market_sma_window: int = 50,
+        forecaster: str = "",  # "" | "ols" | "chronos" — append to the default stack
+        chronos_model: str = "amazon/chronos-bolt-small",
         interpreters: list[Interpreter] | None = None,
     ) -> None:
         self._policy_config = policy_config or PolicyConfig()
@@ -380,7 +383,21 @@ class Backtester:
         self._structure_er_trend = structure_er_trend
         self._market_gate = market_gate
         self._market_sma_window = market_sma_window
+        self._forecaster = forecaster
+        self._chronos_model = chronos_model
         self._interpreters = interpreters
+
+    def _build_forecaster(self, buffer: BarBuffer) -> Interpreter:
+        """Construct the configured forecaster interpreter (both emit
+        source="forecaster", so at most one is active)."""
+        if self._forecaster == "chronos":
+            from halabot.cognition.chronos_forecaster import (
+                ChronosForecasterInterpreter,
+                load_chronos_pipeline,
+            )
+
+            return ChronosForecasterInterpreter(buffer, load_chronos_pipeline(self._chronos_model))
+        return ForecasterInterpreter(buffer)  # "ols" (default for any non-chronos value)
 
     async def run(
         self,
@@ -421,6 +438,8 @@ class Backtester:
         ]
         if benchmark and relstrength and self._interpreters is None:
             interpreters.append(RelativeStrengthInterpreter(buffer, benchmark=benchmark))
+        if self._forecaster and self._interpreters is None:
+            interpreters.append(self._build_forecaster(buffer))
         router = CognitionRouter(bus=bus, updater=updater, buffer=buffer, interpreters=interpreters)
         shadow = ShadowPolicyRunner(
             bus=bus, store=store, policy=Policy(self._policy_config),

@@ -248,10 +248,19 @@ def ab_report_cmd(days: int) -> None:
     "--oos-splits", default=1, show_default=True,
     help="Partition the bars into N disjoint time windows and report each (out-of-sample).",
 )
+@click.option(
+    "--forecaster", type=click.Choice(["", "ols", "chronos"]), default="",
+    help="Append a forecaster interpreter to the stack (ols = cheap slope; chronos = [ml]).",
+)
+@click.option(
+    "--forecaster-ab", is_flag=True, default=False,
+    help="Controlled A/B: replay the SAME bars with no forecaster vs the Chronos forecaster.",
+)
 def backtest(
     symbols: str, days: int, timeframe: str, continuous: bool, sweep_bands: str,
     cost_bps: float, exit_ladder: bool, ladder_ab: bool, market_gate_ab: bool,
     trailing_pct: float, cache_write: str, cache_read: str, oos_splits: int,
+    forecaster: str, forecaster_ab: bool,
 ) -> None:
     """Replay historical bars through the engine and report hypothetical P&L."""
     from halabot.platform.observability import setup_logging
@@ -263,7 +272,7 @@ def backtest(
             sweep_bands=sweep_bands, cost_bps=cost_bps,
             exit_ladder=exit_ladder, ladder_ab=ladder_ab, market_gate_ab=market_gate_ab,
             trailing_pct=trailing_pct, cache_write=cache_write, cache_read=cache_read,
-            oos_splits=oos_splits,
+            oos_splits=oos_splits, forecaster=forecaster, forecaster_ab=forecaster_ab,
         )
     )
 
@@ -380,6 +389,7 @@ async def _run_backtest(
     cost_bps: float = 5.0, exit_ladder: bool = False, ladder_ab: bool = False,
     market_gate_ab: bool = False, trailing_pct: float = 0.05,
     cache_read: str = "", cache_write: str = "", oos_splits: int = 1,
+    forecaster: str = "", forecaster_ab: bool = False,
 ) -> None:
     from halabot.analysis.backtest import Backtester
     from halabot.belief.updater import UpdaterConfig
@@ -390,10 +400,16 @@ async def _run_backtest(
     hb = get_hb_settings()
     # The benchmark (SPY) is fed for relative strength + the market gate, never traded.
     bench = hb.cognition.benchmark_symbol if hb.cognition.relstrength_enabled else None
+    # Default the backtest forecaster to the live config (so the headline backtest
+    # mirrors live behavior); an explicit --forecaster overrides.
+    eff_forecaster = forecaster or (
+        hb.cognition.forecaster_model if hb.cognition.forecaster_enabled else ""
+    )
 
     def _make(
         entry_band: float, exit_band: float, *,
         ladder: bool = exit_ladder, market_gate: bool = hb.policy.market_gate_enabled,
+        fcast: str = eff_forecaster,
     ) -> Backtester:
         return Backtester(
             policy_config=PolicyConfig(
@@ -421,6 +437,7 @@ async def _run_backtest(
             exit_ladder=ladder,
             trailing_pct=trailing_pct,
             market_gate=market_gate,
+            forecaster=fcast,
         )
 
     async def _run_and_report(bbs: dict[str, list[Bar]], *, label: str = "") -> None:
@@ -445,6 +462,13 @@ async def _run_backtest(
             on = await _make(eb, xb, market_gate=True).run(bbs, benchmark=bench)
             click.echo(f"  OFF: {off.summary()}")
             click.echo(f"  ON : {on.summary()}")
+        elif forecaster_ab:
+            # Controlled A/B: same bars, NO forecaster vs the Chronos forecaster (B1).
+            click.echo("=== forecaster A/B (same bars, none vs chronos) ===")
+            off = await _make(eb, xb, fcast="").run(bbs, benchmark=bench)
+            on = await _make(eb, xb, fcast="chronos").run(bbs, benchmark=bench)
+            click.echo(f"  none   : {off.summary()}")
+            click.echo(f"  chronos: {on.summary()}")
         elif bands:
             click.echo("=== entry-band sweep ===")
             for band in bands:

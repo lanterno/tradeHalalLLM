@@ -36,10 +36,17 @@ class BeliefSettings(BaseModel):
 
 class CognitionSettings(BaseModel):
     llm_thesis_enabled: bool = False  # sparse LLM thesis off by default (cheap shadow)
-    # The built-in forecaster is a cheap deterministic OLS-slope projection (no
-    # [ml] extra). Off by default; a richer model (Chronos) can replace it behind
-    # the same interpreter seam.
-    forecaster_enabled: bool = False
+    # Forecaster interpreter (votes source="forecaster"). Default ON with Chronos
+    # (B1, greenlit): Amazon's pretrained time-series transformer. A controlled
+    # same-bars A/B (2026-05-29, cached bars) showed Chronos vs no-forecaster
+    # helps in aggregate (full window PF 1.27->1.96; larger disjoint window
+    # 1.13->1.58, lower drawdown) and NEVER hurts on any disjoint window (neutral
+    # on fine splits + the bad window). Loads lazily + degrades to a no-op if the
+    # [ml] extra/weights are unavailable, so enabling it can't crash the engine.
+    # Set forecaster_model="ols" for the cheap deterministic slope (no [ml]).
+    forecaster_enabled: bool = True
+    forecaster_model: str = "chronos"  # "chronos" ([ml] extra) | "ols" (cheap, no extra)
+    forecaster_chronos_model: str = "amazon/chronos-bolt-small"
     multiframe_enabled: bool = True
     # Cheap, always-on structural signals the engine otherwise ignores (B3):
     # volume-confirmed moves and swing support/resistance proximity.
