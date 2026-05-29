@@ -22,6 +22,7 @@ class PolicyConfig:
     max_weight_per_asset: float = 0.20
     max_gross_exposure: float = 1.0  # no implicit leverage (INV-10)
     target_rebalance_threshold: float = 0.05  # min weight change to trade (R-14 / anti-churn)
+    max_open_positions: int = 0  # cap on concurrent positions; 0 = unlimited
 
     def __post_init__(self) -> None:
         if not (0.0 <= self.conviction_exit_band < self.conviction_entry_band < 1.0):

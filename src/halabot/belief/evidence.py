@@ -14,8 +14,10 @@ B.1/B.2). Two correctness fixes from the spec review are baked in here:
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta
+from datetime import time as dt_time
 from typing import Protocol
+from zoneinfo import ZoneInfo
 
 from halabot.belief.schema import EvidenceItem
 
@@ -39,6 +41,38 @@ class ContinuousCalendar:
 
     def minutes_between(self, start: datetime, end: datetime) -> float:
         return max(0.0, (end - start).total_seconds() / 60.0)
+
+
+_ET = ZoneInfo("America/New_York")
+_RTH_OPEN = dt_time(9, 30)
+_RTH_CLOSE = dt_time(16, 0)
+
+
+class RegularHoursCalendar:
+    """US equity regular trading hours (Mon–Fri 09:30–16:00 ET), DST-aware via
+    zoneinfo. This is the ``evidence_decay_trading_time=True`` calendar for stocks:
+    a Friday-close belief does NOT decay over the weekend/overnight, so the engine
+    doesn't force a Monday-open mass-exit (R-09). Market holidays are ignored — a
+    minor over-count of a few closed days, far safer than the weekend annihilation
+    a continuous calendar causes."""
+
+    def minutes_between(self, start: datetime, end: datetime) -> float:
+        if end <= start:
+            return 0.0
+        s = start.astimezone(_ET)
+        e = end.astimezone(_ET)
+        total = 0.0
+        day = s.date()
+        while day <= e.date():
+            if day.weekday() < 5:  # Mon–Fri
+                open_dt = datetime.combine(day, _RTH_OPEN, tzinfo=_ET)
+                close_dt = datetime.combine(day, _RTH_CLOSE, tzinfo=_ET)
+                lo = max(s, open_dt)
+                hi = min(e, close_dt)
+                if hi > lo:
+                    total += (hi - lo).total_seconds() / 60.0
+            day += timedelta(days=1)
+        return total
 
 
 def decay(

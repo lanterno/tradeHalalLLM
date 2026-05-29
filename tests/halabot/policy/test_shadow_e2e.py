@@ -51,6 +51,21 @@ async def _signal_belief_update(bus, store, belief):
 
 
 @pytest.mark.asyncio
+async def test_decay_only_update_skips_recompute_heartbeat_does_it_once():
+    # Perf fix: a decay_only belief.updated must NOT trigger a per-asset recompute;
+    # a single SYSTEM_HEARTBEAT recomputes the whole book once.
+    store, bus, runner, proposed = await _build()
+    await store.put(_bullish())
+    await bus.publish(
+        new_event(CLOCK, EventType.BELIEF_UPDATED, source="belief.updater", asset="NVDA",
+                  payload={"decay_only": True})
+    )
+    assert runner.proposals_count == 0  # decay_only → skipped, no proposal
+    await bus.publish(new_event(CLOCK, EventType.SYSTEM_HEARTBEAT, source="heartbeat"))
+    assert runner.proposals_count == 1  # one recompute on the heartbeat → the buy
+
+
+@pytest.mark.asyncio
 async def test_bullish_halal_belief_yields_a_buy_proposal():
     store, bus, runner, proposed = await _build()
     await _signal_belief_update(bus, store, _bullish())

@@ -88,6 +88,9 @@ class ShadowPolicyRunner:
         self._subs.append(
             self._bus.subscribe({EventType.BELIEF_INVALIDATED}, self._on_invalidated)
         )
+        # One recompute per heartbeat covers the decay-only updates (which skip
+        # their per-asset recompute) so a tick is O(N), not O(N^2).
+        self._subs.append(self._bus.subscribe({EventType.SYSTEM_HEARTBEAT}, self._recompute))
 
     def stop(self) -> None:
         for sub in self._subs:
@@ -201,6 +204,14 @@ class ShadowPolicyRunner:
             )
 
     async def _on_belief(self, event: Event) -> None:
+        # A decay-only (heartbeat / no-new-evidence) update skips the per-asset
+        # whole-portfolio recompute; the SYSTEM_HEARTBEAT handler recomputes ONCE
+        # for the whole decay tick (avoids O(N^2) per heartbeat — perf fix).
+        if event.payload.get("decay_only"):
+            return
+        await self._recompute(event)
+
+    async def _recompute(self, event: Event) -> None:
         beliefs = await self._store.all_active()
         by_asset = {b.asset: b for b in beliefs}
         returns = None

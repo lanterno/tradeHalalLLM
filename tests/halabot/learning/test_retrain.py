@@ -18,6 +18,12 @@ from halabot.platform.db import outcome as _outcome
 T0 = datetime(2026, 5, 28, 12, 0, tzinfo=UTC)
 
 
+async def _flush(retrainer):
+    """Await the retrainer's in-flight background retrain task (test determinism)."""
+    if retrainer._task is not None:
+        await retrainer._task
+
+
 def _samples(pairs):
     return [CalibrationSample(raw=r, won=w) for r, w in pairs]
 
@@ -77,9 +83,11 @@ async def test_retrainer_fits_after_enough_closes(halabot_engine):
         await _insert_outcome(
             halabot_engine, raw=raw, label=label, exit_ts=T0 + timedelta(minutes=i)
         )
-    # 40 on_outcome_closed calls → one refit at the threshold.
+    # 40 on_outcome_closed calls → one refit at the threshold (now a background
+    # task — await it to completion before asserting).
     for _ in range(40):
         await retrainer.on_outcome_closed()
+    await _flush(retrainer)
     assert retrainer.refits == 1
     assert cal.fitted is True
 
@@ -98,8 +106,26 @@ async def test_retrainer_does_not_activate_on_nonpredictive_data(halabot_engine)
         )
     for _ in range(60):
         await retrainer.on_outcome_closed()
+    await _flush(retrainer)
     assert cal.fitted is False  # never activated — identity preserved
     assert retrainer.refits == 0
+
+
+@pytest.mark.asyncio
+async def test_on_outcome_closed_does_not_block_on_retrain(halabot_engine):
+    # Regression: the retrain must run OFF the hot path. on_outcome_closed should
+    # return without the scan/fit having run yet (it's a background task).
+    cal = FittedCalibrator(min_samples=20)
+    retrainer = CalibratorRetrainer(engine=halabot_engine, calibrator=cal, retrain_every=1)
+    for i in range(40):
+        raw, label = (0.8, 1) if i % 2 == 0 else (0.2, 0)
+        await _insert_outcome(
+            halabot_engine, raw=raw, label=label, exit_ts=T0 + timedelta(minutes=i)
+        )
+    await retrainer.on_outcome_closed()  # threshold=1 → spawns a task, doesn't await
+    assert retrainer._task is not None and not retrainer._task.done()  # still backgrounded
+    await _flush(retrainer)
+    assert retrainer.refits == 1  # completed once awaited
 
 
 @pytest.mark.asyncio
@@ -112,4 +138,5 @@ async def test_retrainer_noop_below_min_samples(halabot_engine):
         )
     for _ in range(5):
         await retrainer.on_outcome_closed()
+    await _flush(retrainer)
     assert cal.fitted is False  # never reached min_samples

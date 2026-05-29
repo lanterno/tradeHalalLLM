@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
+import pytest
+
 from halabot.belief.evidence import (
     ContinuousCalendar,
     decay,
@@ -47,6 +49,20 @@ def test_decay_continuous_calendar_uses_wall_clock():
     items = [_ev("news", 1.0, 1.0, ts=T0)]
     out = decay(items, T0 + timedelta(minutes=120), halflife_min=60, calendar=CAL)
     assert out[0].weight == 0.25  # two half-lives
+
+
+def test_regular_hours_calendar_freezes_weekend():
+    from halabot.belief.evidence import RegularHoursCalendar
+
+    cal = RegularHoursCalendar()
+    # Fri 16:00 ET (= 20:00 UTC during EDT) → Mon 09:30 ET: zero RTH minutes.
+    fri_close = datetime(2026, 5, 29, 20, 0, tzinfo=UTC)
+    mon_open = datetime(2026, 6, 1, 13, 30, tzinfo=UTC)  # Mon 09:30 EDT
+    assert cal.minutes_between(fri_close, mon_open) == 0.0
+    # A 1-hour RTH stretch on a single weekday counts ~60 minutes.
+    wed_10 = datetime(2026, 5, 27, 14, 0, tzinfo=UTC)  # 10:00 EDT
+    wed_11 = datetime(2026, 5, 27, 15, 0, tzinfo=UTC)  # 11:00 EDT
+    assert cal.minutes_between(wed_10, wed_11) == pytest.approx(60.0)
 
 
 def test_decay_trading_calendar_freezes_closed_gaps():

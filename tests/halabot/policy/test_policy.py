@@ -196,6 +196,22 @@ def test_kill_switch_still_allows_exit():
     assert len(props) == 1 and props[0].side == "sell"
 
 
+def test_max_open_positions_caps_new_entries():
+    cfg = PolicyConfig(
+        conviction_entry_band=0.60, conviction_exit_band=0.45,
+        max_weight_per_asset=0.20, max_gross_exposure=1.0,
+        target_rebalance_threshold=0.05, max_open_positions=2,
+    )
+    policy = Policy(cfg)
+    beliefs = [_b(f"A{i}", conviction=1.0) for i in range(5)]  # 5 want in
+    by_asset = {b.asset: b for b in beliefs}
+    pf = ShadowPortfolio()
+    props = policy.deltas(
+        policy.targets(beliefs, pf, RISK), pf, beliefs_by_asset=by_asset, risk=RISK
+    )
+    assert len([p for p in props if p.side == "buy"]) == 2  # capped at 2 new opens
+
+
 def test_buy_with_missing_belief_is_failed_closed():
     # INV-7 regression: a target whose belief is absent from the map must NOT buy.
     policy = Policy(CFG)

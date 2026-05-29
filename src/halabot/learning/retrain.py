@@ -13,9 +13,10 @@ doesn't fit is a no-op that keeps the prior model (INV-1).
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -92,13 +93,33 @@ class CalibratorRetrainer:
     retrain_every: int = 20
     _since_last: int = 0
     refits: int = 0
+    _task: asyncio.Task[bool] | None = field(default=None, repr=False)
 
     async def on_outcome_closed(self) -> None:
-        """Hook the outcome tracker calls on each close; refits every N closes."""
+        """Hook the outcome tracker calls on each close; refits every N closes.
+
+        Off the hot path: the retrain (a full hb_outcome scan + Platt fit) runs as
+        a BACKGROUND task with a single-flight guard, NOT awaited inline — otherwise
+        it would execute on the belief-worker's critical path (under its lock),
+        stalling EVERY asset's belief update while the table is scanned. Calibrator
+        model swap is an atomic reference assignment, so concurrent calibrate() is
+        safe."""
         self._since_last += 1
-        if self._since_last >= self.retrain_every:
-            self._since_last = 0
-            await self.retrain()
+        if self._since_last < self.retrain_every:
+            return
+        self._since_last = 0
+        if self._task is not None and not self._task.done():
+            return  # a retrain is already running — don't stack scans
+        self._task = asyncio.create_task(self.retrain())
+
+    async def aclose(self) -> None:
+        """Cancel + await any in-flight retrain (engine shutdown)."""
+        if self._task is not None and not self._task.done():
+            self._task.cancel()
+            try:
+                await self._task
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                pass
 
     async def retrain(self) -> bool:
         """Refit ONLY when walk-forward log-loss shows the fitted calibrator

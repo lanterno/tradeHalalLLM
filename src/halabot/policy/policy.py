@@ -81,11 +81,17 @@ class Policy:
         compliance_ttl: timedelta | None = None,
     ) -> list[TradeProposal]:
         out: list[TradeProposal] = []
+        # Concurrent-position cap (anti-over-diversification): count currently-held
+        # names, then refuse a BUY that would OPEN a new one beyond the cap.
+        open_count = sum(1 for t in targets if portfolio.holds(t.asset))
+        cap = self._cfg.max_open_positions
         for t in targets:
             cur = portfolio.effective_weight(t.asset)  # filled + pending (R-14)
             gap = t.weight - cur
             if abs(gap) < self._cfg.target_rebalance_threshold:
                 continue  # belief didn't move the target enough → NO TRADE (anti-churn)
+            if cap and gap > 0 and not portfolio.holds(t.asset) and open_count >= cap:
+                continue  # at the max-open-positions cap → don't open a new name
             if portfolio.has_open_order(t.asset):
                 continue  # one working order per asset; reconcile next tick (R-14)
             side = "buy" if gap > 0 else "sell"
@@ -110,6 +116,8 @@ class Policy:
                 )
                 if gate_reason is not None:
                     continue  # gated out (logged by the shadow runner via no proposal)
+            if side == "buy" and not portfolio.holds(t.asset):
+                open_count += 1  # this buy opens a new name — counts toward the cap
             out.append(
                 TradeProposal(
                     asset=t.asset,

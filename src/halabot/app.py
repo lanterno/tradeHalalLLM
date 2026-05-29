@@ -21,7 +21,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from halabot.belief.evidence import ContinuousCalendar
+from halabot.belief.evidence import ContinuousCalendar, RegularHoursCalendar
 from halabot.belief.schema import BeliefState
 from halabot.belief.store import PgBeliefStore
 from halabot.belief.updater import BeliefUpdater, UpdaterConfig
@@ -113,6 +113,8 @@ class Engine:
             await self.worker.stop()  # flush queued belief writes before teardown
         self.shadow.stop()
         self.outcomes.stop()
+        if self.retrainer is not None:
+            await self.retrainer.aclose()  # cancel any in-flight background retrain
         if self.conviction_writer is not None:
             self.conviction_writer.stop()
         if self.target_writer is not None:
@@ -159,6 +161,7 @@ async def build_engine(
         max_weight_per_asset=s.policy.max_weight_per_asset,
         max_gross_exposure=s.policy.max_gross_exposure,
         target_rebalance_threshold=s.policy.target_rebalance_threshold,
+        max_open_positions=s.engine.max_open_positions,
     )
     risk_config = risk_config or RiskConfig(
         max_portfolio_heat_pct=s.risk.max_portfolio_heat_pct,
@@ -190,11 +193,17 @@ async def build_engine(
     # Self-activates once the learning loop (L8) accumulates leakage-free
     # outcomes and calls fit(); identity until then (cold-start safe).
     calibrator = FittedCalibrator(min_samples=s.conviction.min_samples_to_calibrate)
+    # Trading-time decay (R-09): stocks use RTH minutes so a Friday-close belief
+    # doesn't decay over the weekend (→ Monday mass-exit). Continuous = 24/7 venues
+    # or evidence_decay_trading_time=False.
+    calendar = (
+        RegularHoursCalendar() if s.belief.evidence_decay_trading_time else ContinuousCalendar()
+    )
     updater = BeliefUpdater(
         store=store,
         bus=bus,
         clock=clock,
-        calendar=ContinuousCalendar(),
+        calendar=calendar,
         regime=EvidenceRegimeClassifier(),
         levels=BarLevelEngine(buffer),
         calibrator=calibrator,
@@ -260,7 +269,11 @@ async def build_engine(
         retrain_every=s.conviction.min_samples_to_calibrate // 2 or 10,
     )
     outcomes = ShadowOutcomeTracker(
-        bus=bus, engine=db_engine, store=store, on_close=retrainer.on_outcome_closed
+        bus=bus,
+        engine=db_engine,
+        store=store,
+        win_threshold_pct=s.conviction.win_threshold_pct,
+        on_close=retrainer.on_outcome_closed,
     )
     conviction_writer = ConvictionScoreWriter(bus=bus, engine=db_engine)
     target_writer = TargetWeightWriter(bus=bus, engine=db_engine)

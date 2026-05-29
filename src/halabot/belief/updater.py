@@ -312,7 +312,10 @@ class BeliefUpdater:
                 EventType.BELIEF_UPDATED,
                 source="belief.updater",
                 asset=asset,
-                payload=_summary(b),
+                # decay_only marks a heartbeat/no-new-evidence pass so the shadow
+                # can skip its per-asset whole-portfolio recompute and instead
+                # recompute ONCE per heartbeat (avoids O(N^2) per tick — perf fix).
+                payload={**_summary(b), "decay_only": not items},
                 correlation_id=correlation_id,
             )
         )
