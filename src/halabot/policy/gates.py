@@ -36,6 +36,10 @@ class GateContext:
     # beta-only names. 0 disables. As a co-equal vote it's inert against the
     # momentum stack (conviction saturates); as a gate it actually filters.
     relstrength_gate: float = 0.0
+    # Market-regime ("don't fight the tape") filter: reject a BUY when the market
+    # benchmark is risk-off (below its SMA). A single global flag the policy
+    # runner computes from the benchmark; exits are unaffected (sell bypass).
+    market_risk_off: bool = False
 
 
 def _relstrength_direction(b: BeliefState) -> float | None:
@@ -64,6 +68,8 @@ def evaluate_gates(ctx: GateContext) -> str | None:
         rs = _relstrength_direction(ctx.belief)
         if rs is not None and rs <= -ctx.relstrength_gate:
             return f"relative-strength gate: lagging benchmark ({rs:+.2f})"
+    if ctx.market_risk_off:
+        return "market regime: risk-off (benchmark below SMA)"
     return None
 
 

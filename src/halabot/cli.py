@@ -226,12 +226,17 @@ def ab_report_cmd(days: int) -> None:
     help="Controlled A/B: replay the SAME fetched bars with the exit ladder off vs on.",
 )
 @click.option(
+    "--market-gate-ab", is_flag=True, default=False,
+    help="Controlled A/B: replay the SAME bars with the market-regime gate off vs on.",
+)
+@click.option(
     "--trailing-pct", default=0.05, show_default=True,
     help="Trailing-stop ratchet distance for --exit-ladder (fraction of the high-water mark).",
 )
 def backtest(
     symbols: str, days: int, timeframe: str, continuous: bool, sweep_bands: str,
-    cost_bps: float, exit_ladder: bool, ladder_ab: bool, trailing_pct: float,
+    cost_bps: float, exit_ladder: bool, ladder_ab: bool, market_gate_ab: bool,
+    trailing_pct: float,
 ) -> None:
     """Replay historical bars through the engine and report hypothetical P&L."""
     from halabot.platform.observability import setup_logging
@@ -241,7 +246,8 @@ def backtest(
         _run_backtest(
             symbols=symbols, days=days, timeframe=timeframe, continuous=continuous,
             sweep_bands=sweep_bands, cost_bps=cost_bps,
-            exit_ladder=exit_ladder, ladder_ab=ladder_ab, trailing_pct=trailing_pct,
+            exit_ladder=exit_ladder, ladder_ab=ladder_ab, market_gate_ab=market_gate_ab,
+            trailing_pct=trailing_pct,
         )
     )
 
@@ -249,7 +255,7 @@ def backtest(
 async def _run_backtest(
     *, symbols: str, days: int, timeframe: str, continuous: bool, sweep_bands: str = "",
     cost_bps: float = 5.0, exit_ladder: bool = False, ladder_ab: bool = False,
-    trailing_pct: float = 0.05,
+    market_gate_ab: bool = False, trailing_pct: float = 0.05,
 ) -> None:
     from halabot.analysis.backtest import Backtester
     from halabot.belief.updater import UpdaterConfig
@@ -303,7 +309,10 @@ async def _run_backtest(
         click.echo(
             f"backtest: {len(bars_by_symbol)} symbols, {total_bars} bars ({timeframe}, {days}d)"
         )
-        def _make(entry_band: float, exit_band: float, *, ladder: bool = exit_ladder) -> Backtester:
+        def _make(
+            entry_band: float, exit_band: float, *,
+            ladder: bool = exit_ladder, market_gate: bool = hb.policy.market_gate_enabled,
+        ) -> Backtester:
             return Backtester(
                 policy_config=PolicyConfig(
                     conviction_entry_band=entry_band,
@@ -329,17 +338,25 @@ async def _run_backtest(
                 cost_bps=cost_bps,
                 exit_ladder=ladder,
                 trailing_pct=trailing_pct,
+                market_gate=market_gate,
             )
 
         bands = [float(b) for b in sweep_bands.split(",") if b.strip()]
+        eb = hb.policy.conviction_entry_band
+        xb = hb.policy.conviction_exit_band
         if ladder_ab:
             # Controlled A/B: same fetched bars, ladder OFF vs ON. (Comparing
             # across separate invocations is invalid — each re-fetches live bars.)
             click.echo(f"=== exit-ladder A/B (same bars, trailing={trailing_pct:.0%}) ===")
-            eb = hb.policy.conviction_entry_band
-            xb = hb.policy.conviction_exit_band
             off = await _make(eb, xb, ladder=False).run(bars_by_symbol, benchmark=bench)
             on = await _make(eb, xb, ladder=True).run(bars_by_symbol, benchmark=bench)
+            click.echo(f"  OFF: {off.summary()}")
+            click.echo(f"  ON : {on.summary()}")
+        elif market_gate_ab:
+            # Controlled A/B: same fetched bars, market-regime gate OFF vs ON.
+            click.echo("=== market-regime gate A/B (same bars, benchmark vs SMA) ===")
+            off = await _make(eb, xb, market_gate=False).run(bars_by_symbol, benchmark=bench)
+            on = await _make(eb, xb, market_gate=True).run(bars_by_symbol, benchmark=bench)
             click.echo(f"  OFF: {off.summary()}")
             click.echo(f"  ON : {on.summary()}")
         elif bands:

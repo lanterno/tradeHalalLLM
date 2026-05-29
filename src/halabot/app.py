@@ -273,6 +273,11 @@ async def build_engine(
         history=buffer,  # closes() feed the risk engine's correlation pass
         compliance_ttl=timedelta(hours=s.halal.cache_ttl_h),
         halt_check=_make_halt_check(db_engine),  # operator kill-switch (hb_control)
+        # Market-regime gate ("don't fight the tape"): reuses the benchmark bars
+        # already fed for relative strength. Inert unless that benchmark is fed.
+        benchmark=s.cognition.benchmark_symbol if s.cognition.relstrength_enabled else None,
+        market_gate=s.policy.market_gate_enabled and s.cognition.relstrength_enabled,
+        market_sma_window=s.policy.market_sma_window,
     )
     # Learning loop (L8): refit the calibrator off closed outcomes every N closes.
     retrainer = CalibratorRetrainer(

@@ -16,6 +16,7 @@ from datetime import datetime, timedelta
 from typing import Protocol
 
 from halabot.belief.store import BeliefStore
+from halabot.cognition.structure import sma_trend_state
 from halabot.platform.bus import EventBus, Subscription
 from halabot.platform.clock import Clock
 from halabot.platform.events import Event, EventType, new_event
@@ -63,6 +64,9 @@ class ShadowPolicyRunner:
         nominal_equity: float = 100_000.0,
         compliance_ttl: timedelta | None = None,
         halt_check: Callable[[], Awaitable[bool]] | None = None,
+        benchmark: str | None = None,
+        market_gate: bool = False,
+        market_sma_window: int = 50,
     ) -> None:
         self._bus = bus
         self._store = store
@@ -73,6 +77,11 @@ class ShadowPolicyRunner:
         self._prices = prices
         self._history = history
         self._halt_check = halt_check  # operator kill-switch (hb_control via API)
+        # Market-regime ("don't fight the tape") gate: when enabled, BUYs are
+        # blocked while the benchmark is below its SMA. Off by default.
+        self._benchmark = benchmark
+        self._market_gate = market_gate
+        self._market_sma_window = market_sma_window
         self._halted = False  # for risk.halt edge-emission
         self._nominal = nominal_equity
         self._compliance_ttl = compliance_ttl
@@ -211,6 +220,15 @@ class ShadowPolicyRunner:
             return
         await self._recompute(event)
 
+    def _market_is_risk_off(self) -> bool:
+        """True when the market gate is enabled and the benchmark sits below its
+        SMA (risk-off). Reads the benchmark's closing history; safe (False) when
+        the gate is off, no benchmark is set, or there is too little history."""
+        if not self._market_gate or self._benchmark is None or self._history is None:
+            return False
+        closes = [c for _, c in self._history.timestamped_closes(self._benchmark)]
+        return sma_trend_state(closes, self._market_sma_window) == "below"
+
     async def _recompute(self, event: Event) -> None:
         beliefs = await self._store.all_active()
         by_asset = {b.asset: b for b in beliefs}
@@ -232,6 +250,7 @@ class ShadowPolicyRunner:
             now=event.ts,
             compliance_ttl=self._compliance_ttl,
             kill_switch=kill_switch,
+            market_risk_off=self._market_is_risk_off(),
         )
         self.last_proposals = proposals
         for p in proposals:

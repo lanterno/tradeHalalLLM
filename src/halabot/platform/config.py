@@ -74,6 +74,14 @@ class PolicySettings(BaseModel):
     target_rebalance_threshold: float = Field(default=0.03, gt=0, le=1)
     # Veto buys lagging the benchmark by this relstrength magnitude; 0 = off.
     relstrength_gate: float = Field(default=0.5, ge=0, le=1)
+    # Market-regime ("don't fight the tape") gate: block BUYs while the benchmark
+    # sits below its SMA. Default ON — a controlled same-bars backtest A/B
+    # (2026-05-29, 5 windows, 1H, 5bps) showed it improves profit factor and
+    # ~halves drawdown in every window where it fires (20d/45d/90d) and is
+    # identical where the market stays risk-on (30d/60d) — it never hurts.
+    # Needs the benchmark fed (relstrength_enabled); inert otherwise.
+    market_gate_enabled: bool = True
+    market_sma_window: int = Field(default=50, ge=2)
 
 
 class RiskSettings(BaseModel):

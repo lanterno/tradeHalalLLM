@@ -85,6 +85,7 @@ class Policy:
         kill_switch: bool = False,
         now: datetime | None = None,
         compliance_ttl: timedelta | None = None,
+        market_risk_off: bool = False,
     ) -> list[TradeProposal]:
         out: list[TradeProposal] = []
         # Concurrent-position cap (anti-over-diversification): count currently-held
@@ -119,6 +120,7 @@ class Policy:
                         now=now,
                         compliance_ttl=compliance_ttl,
                         relstrength_gate=self._cfg.relstrength_gate,
+                        market_risk_off=market_risk_off,
                     )
                 )
                 if gate_reason is not None:

@@ -76,6 +76,41 @@ def test_halal_gate_blocks_buy():
     assert props == []  # non-halal → no buy (INV-7)
 
 
+def test_market_gate_blocks_buy_when_risk_off():
+    policy = Policy(CFG)
+    b = _b("NVDA", conviction=0.9)
+    targets = policy.targets([b], ShadowPortfolio(), RISK)
+    props = policy.deltas(
+        targets, ShadowPortfolio(), beliefs_by_asset={"NVDA": b}, risk=RISK,
+        market_risk_off=True,
+    )
+    assert props == []  # market risk-off → don't fight the tape
+
+
+def test_market_gate_allows_sell_when_risk_off():
+    # Exits are risk-reducing → the market gate must NOT suppress a sell.
+    policy = Policy(CFG)
+    b = _b("NVDA", conviction=0.0, direction=Direction.NEUTRAL)
+    pf = ShadowPortfolio()
+    pf.set_weight("NVDA", 0.20)  # currently long; conviction gone → target 0 → sell
+    targets = policy.targets([b], pf, RISK)
+    props = policy.deltas(
+        targets, pf, beliefs_by_asset={"NVDA": b}, risk=RISK, market_risk_off=True,
+    )
+    assert len(props) == 1 and props[0].side == "sell"
+
+
+def test_market_gate_off_allows_buy():
+    policy = Policy(CFG)
+    b = _b("NVDA", conviction=0.9)
+    targets = policy.targets([b], ShadowPortfolio(), RISK)
+    props = policy.deltas(
+        targets, ShadowPortfolio(), beliefs_by_asset={"NVDA": b}, risk=RISK,
+        market_risk_off=False,
+    )
+    assert len(props) == 1 and props[0].side == "buy"
+
+
 # ── INV-7 entry freshness: a stale positive verdict fails closed ──
 def _b_screened(asset, *, screened_at, conviction=0.9):
     return BeliefState(

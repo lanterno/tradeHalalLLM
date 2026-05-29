@@ -363,6 +363,8 @@ class Backtester:
         sma_window: int = 20,
         structure_window: int = 20,
         structure_er_trend: float = 0.5,
+        market_gate: bool = False,
+        market_sma_window: int = 50,
         interpreters: list[Interpreter] | None = None,
     ) -> None:
         self._policy_config = policy_config or PolicyConfig()
@@ -376,6 +378,8 @@ class Backtester:
         self._sma_window = sma_window
         self._structure_window = structure_window
         self._structure_er_trend = structure_er_trend
+        self._market_gate = market_gate
+        self._market_sma_window = market_sma_window
         self._interpreters = interpreters
 
     async def run(
@@ -422,6 +426,8 @@ class Backtester:
             bus=bus, store=store, policy=Policy(self._policy_config),
             portfolio=ShadowPortfolio(), risk_engine=BasicRiskEngine(self._risk_config),
             clock=clock, prices=prices, history=buffer,
+            benchmark=benchmark, market_gate=self._market_gate,
+            market_sma_window=self._market_sma_window,
         )
         book = _Book(
             win_threshold_pct=self._win, prices=prices, cost_frac=self._cost_frac,
