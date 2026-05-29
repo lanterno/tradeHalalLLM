@@ -103,3 +103,23 @@ async def test_repeated_venue_errors_open_breaker():
     await ex.execute([_prop("NVDA", "buy", 0.1)], _ctx())  # error 1
     await ex.execute([_prop("NVDA", "buy", 0.1)], _ctx())  # error 2 → opens
     assert ex._breaker.is_open("NVDA", T0)
+
+
+@pytest.mark.asyncio
+async def test_pending_result_does_not_emit_fill(monkeypatch):
+    # INV-2 regression: a venue returning a non-filled (submitted/pending) result
+    # must NOT publish ORDER_FILLED with a None price.
+    from halabot.execution.venue import OrderResult
+
+    ex, venue, events = _build(prices={"NVDA": 100.0})
+
+    async def _pending(order):
+        return OrderResult(
+            asset=order.asset, side=order.side, requested_qty=order.quantity,
+            filled_qty=0.0, filled_price=None, status="submitted", order_id="pending-1",
+        )
+
+    monkeypatch.setattr(venue, "place", _pending)
+    await ex.execute([_prop("NVDA", "buy", 0.1)], _ctx())
+    assert not any(e.type == EventType.ORDER_FILLED for e in events)  # no fabricated fill
+    assert any(e.type == EventType.ORDER_SUBMITTED for e in events)

@@ -101,8 +101,21 @@ class Executor:
             await self._publish(EventType.ORDER_REJECTED, p, ctx, qty=0.0, detail=str(exc))
             return None
 
+        # The venue accepted the order (no glitch) → reset the breaker. But only
+        # emit ORDER_FILLED for a CONFIRMED fill (INV-2: never publish a fill with
+        # a None/zero price). A pending 'submitted' result leaves the ORDER_SUBMITTED
+        # already emitted for the reconcile/poll loop to confirm; 'rejected' → reject.
         self._breaker.record_success(p.asset)
-        await self._publish_fill(result, p, ctx)
+        if result.is_filled:
+            await self._publish_fill(result, p, ctx)
+        elif result.status == "rejected":
+            await self._publish(
+                EventType.ORDER_REJECTED, p, ctx, qty=0.0, detail=result.detail or "venue rejected"
+            )
+            return None
+        else:
+            logger.info("order %s %s pending (status=%s) — awaiting fill confirmation",
+                        p.side, p.asset, result.status)
         return result
 
     async def _size_buy(self, p: TradeProposal, ctx: ExecutionContext) -> Order | None:
@@ -158,6 +171,7 @@ class Executor:
                     "client_id": client_id,
                     "detail": detail,
                 },
+                correlation_id=p.correlation_id,  # stay on the decision chain (INV-5)
             )
         )
 
@@ -188,5 +202,6 @@ class Executor:
                     "engine_owner": ctx.engine_owner,
                     "slippage_pct": slippage,
                 },
+                correlation_id=p.correlation_id,  # stay on the decision chain (INV-5)
             )
         )

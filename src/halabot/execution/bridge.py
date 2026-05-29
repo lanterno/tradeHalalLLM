@@ -77,6 +77,7 @@ class LiveTradeBridge:
             weight_delta=float(event.payload.get("weight_delta", 0.0)),
             reason=str(event.payload.get("reason", "")),
             belief_version=int(event.payload.get("belief_version", 0)),
+            correlation_id=event.correlation_id,  # keep the order on the decision chain
         )
         # INV-9 account-exposure ceiling: refuse new buys past the SAFEGUARD cap.
         if p.side == "buy" and self._account.gross_exposure_usd() >= self._decision.max_account_usd:

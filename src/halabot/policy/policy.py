@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from uuid import UUID
 
 from halabot.belief.schema import BeliefState
 from halabot.policy.gates import GateContext, evaluate_gates
@@ -36,6 +37,9 @@ class TradeProposal:
     weight_delta: float
     reason: str
     belief_version: int
+    # Carries the decision's correlation_id across the execution boundary so
+    # order.* events stay on the same causal chain (INV-5 replay).
+    correlation_id: UUID | None = None
 
 
 class Policy:
@@ -86,7 +90,12 @@ class Policy:
                 continue  # one working order per asset; reconcile next tick (R-14)
             side = "buy" if gap > 0 else "sell"
             belief = beliefs_by_asset.get(t.asset)
-            if belief is not None:
+            if belief is None:
+                # Fail-closed (INV-7): with no belief there is no halal verdict, so
+                # a BUY must never proceed. A SELL is a risk-reducing exit → allowed.
+                if side == "buy":
+                    continue
+            else:
                 gate_reason = evaluate_gates(
                     GateContext(
                         belief=belief,

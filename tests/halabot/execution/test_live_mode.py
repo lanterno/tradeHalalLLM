@@ -60,6 +60,26 @@ def test_safeguard_order_cap_is_unloosenable(monkeypatch):
     assert d.max_order_usd == 1000.0  # clamped down, never up (INV-9)
 
 
+def test_config_cannot_raise_floors_above_absolute_ceiling(monkeypatch):
+    # INV-9 regression: raising the SAFEGUARD config in env must NOT raise the
+    # effective ceilings above the hard-coded absolute floors.
+    from halabot.execution.live_mode import (
+        ABS_MAX_ACCOUNT_USD,
+        ABS_MAX_ORDER_USD,
+    )
+
+    s = _settings(
+        monkeypatch,
+        ENGINE_LIVE="stocks",
+        ENGINE_LIVE_TOKEN=expected_token(TODAY),
+        HALABOT_SAFEGUARD__LIVE_MAX_ORDER_USD="1000000",
+        HALABOT_SAFEGUARD__LIVE_MAX_ACCOUNT_USD="10000000",
+    )
+    d = CHECKER.check(s, TODAY, requested_max_order_usd=500_000.0)
+    assert d.max_order_usd == ABS_MAX_ORDER_USD  # capped at the code floor, not the env
+    assert d.max_account_usd == ABS_MAX_ACCOUNT_USD
+
+
 def test_malformed_token_refused(monkeypatch):
     s = _settings(monkeypatch, ENGINE_LIVE="stocks", ENGINE_LIVE_TOKEN="yolo")
     d = CHECKER.check(s, TODAY)

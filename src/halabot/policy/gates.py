@@ -35,11 +35,13 @@ class GateContext:
 
 def evaluate_gates(ctx: GateContext) -> str | None:
     """Return the first rejection reason, or None if the proposal may proceed."""
-    if ctx.kill_switch:
-        return "kill-switch engaged"
-    # Exits (reducing risk) are always allowed past the buy-blocking gates.
+    # Exits (reducing risk) are ALWAYS allowed — even under the kill-switch or a
+    # risk halt (Appendix H rung 1: risk-reducing is always permitted). The
+    # kill-switch + halt checks sit BELOW this so they never suppress a sell.
     if ctx.side == "sell":
         return None
+    if ctx.kill_switch:
+        return "kill-switch engaged"
     if ctx.risk.halted:
         return f"risk halt: {ctx.risk.reason}"
     if ctx.belief.direction != Direction.LONG_BIAS:

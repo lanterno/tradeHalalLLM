@@ -179,3 +179,29 @@ def test_kill_switch_blocks_buy():
         ShadowPortfolio(), beliefs_by_asset={"NVDA": b}, risk=RISK, kill_switch=True,
     )
     assert props == []
+
+
+def test_kill_switch_still_allows_exit():
+    # Regression (INV/exits-always-allowed): a SELL/trim must survive the kill-switch.
+    policy = Policy(CFG)
+    b = _b("NVDA", conviction=0.9)
+    held = ShadowPortfolio()
+    held.set_weight("NVDA", policy.targets([b], ShadowPortfolio(), RISK)[0].weight)
+    # Conviction collapses → target 0 → a sell delta; must NOT be blocked by halt.
+    b2 = _b("NVDA", conviction=0.0, direction=Direction.NEUTRAL)
+    props = policy.deltas(
+        policy.targets([b2], held, RISK),
+        held, beliefs_by_asset={"NVDA": b2}, risk=RISK, kill_switch=True,
+    )
+    assert len(props) == 1 and props[0].side == "sell"
+
+
+def test_buy_with_missing_belief_is_failed_closed():
+    # INV-7 regression: a target whose belief is absent from the map must NOT buy.
+    policy = Policy(CFG)
+    b = _b("NVDA", conviction=0.9)
+    targets = policy.targets([b], ShadowPortfolio(), RISK)
+    props = policy.deltas(
+        targets, ShadowPortfolio(), beliefs_by_asset={}, risk=RISK  # belief missing
+    )
+    assert props == []  # no verdict → no buy

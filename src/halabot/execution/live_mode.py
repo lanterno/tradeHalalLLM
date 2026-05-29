@@ -21,10 +21,19 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from datetime import date
+from typing import Final
 
 from halabot.platform.config import HalabotSettings
 
 _TOKEN_RE = re.compile(r"^LIVE-(\d{4})-(\d{2})-(\d{2})$")
+
+# Absolute, CODE-LEVEL hard floors (INV-9). The SafeguardSettings config can only
+# TIGHTEN below these — it can never raise the engine above them, because a config
+# value is reachable from env (a typo / careless operator could otherwise blow past
+# the intended cap in one env change). The effective cap is min(config, ABS_MAX).
+ABS_MAX_ORDER_USD: Final[float] = 1_000.0
+ABS_MAX_ACCOUNT_USD: Final[float] = 10_000.0
+ABS_MAX_DAILY_LOSS_FLOOR_PCT: Final[float] = 0.05
 
 
 @dataclass(frozen=True)
@@ -54,24 +63,27 @@ class LiveModeChecker:
         requested_max_order_usd: float | None = None,
     ) -> LiveModeDecision:
         sg = settings.safeguard
-        # Effective caps are clamped to the SAFEGUARD ceilings regardless of any
-        # other config that asks for more (un-loosenable, INV-9).
+        # Effective caps = min(requested, config SAFEGUARD, ABSOLUTE code floor).
+        # Config can only TIGHTEN; the ABS_MAX_* constants are the real ceiling no
+        # env can raise (INV-9, the un-loosenable property).
         req_order = (
             settings.execution.min_notional_usd
             if requested_max_order_usd is None
             else requested_max_order_usd
         )
-        # Clamp to the SAFEGUARD ceiling regardless of what config requested.
-        eff_order = (
+        config_order = (
             sg.live_max_order_usd if req_order <= 0 else min(req_order, sg.live_max_order_usd)
         )
+        eff_order = min(config_order, ABS_MAX_ORDER_USD)
+        eff_account = min(sg.live_max_account_usd, ABS_MAX_ACCOUNT_USD)
+        eff_daily_loss = min(sg.live_daily_loss_floor_pct, ABS_MAX_DAILY_LOSS_FLOOR_PCT)
         clamp = LiveModeDecision(
             armed=False,
             reason="",
             market=settings.live.strip(),
             max_order_usd=eff_order,
-            max_account_usd=sg.live_max_account_usd,
-            daily_loss_floor_pct=sg.live_daily_loss_floor_pct,
+            max_account_usd=eff_account,
+            daily_loss_floor_pct=eff_daily_loss,
         )
 
         if not settings.live_enabled:
@@ -92,10 +104,8 @@ class LiveModeChecker:
                 reason=f"stale token ({token}); expected {expected_token(today)}",
             )
 
-        # Sanity on the floors themselves — refuse to arm on a nonsensical config.
-        if not (0 < eff_order <= sg.live_max_account_usd) or not (
-            0 < sg.live_daily_loss_floor_pct <= 1
-        ):
+        # Sanity on the EFFECTIVE (clamped) floors — refuse to arm on nonsense.
+        if not (0 < eff_order <= eff_account) or not (0 < eff_daily_loss <= 1):
             return _with(clamp, armed=False, reason="invalid SAFEGUARD floors")
 
         return _with(clamp, armed=True, reason=f"ARMED for {settings.live.strip()}")
