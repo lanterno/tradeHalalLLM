@@ -118,6 +118,7 @@ class Policy:
                         kill_switch=kill_switch,
                         now=now,
                         compliance_ttl=compliance_ttl,
+                        relstrength_gate=self._cfg.relstrength_gate,
                     )
                 )
                 if gate_reason is not None:

@@ -34,6 +34,9 @@ _FORECASTER_MAX_WEIGHT = 0.6
 # A volume-confirmed move and a structural (support/resistance) read.
 _VOLUME_WEIGHT = 0.5
 _STRUCTURE_WEIGHT = 0.45
+# Relative strength vs a market benchmark (alpha-vs-beta) is a strong, low-noise
+# leadership signal — weighted accordingly.
+_RELSTRENGTH_WEIGHT = 0.7
 
 
 class IndicatorInterpreter:
@@ -339,6 +342,53 @@ def _ols_slope_r2(ys: list[float]) -> tuple[float | None, float]:
     slope = sxy / sxx
     r2 = (sxy * sxy) / (sxx * syy)  # coefficient of determination for a line
     return slope, max(0.0, min(1.0, r2))
+
+
+class RelativeStrengthInterpreter:
+    """Alpha-vs-beta (rank 1 edge): is the asset LEADING the market or just riding
+    it? Compares the asset's recent return to a benchmark's (SPY) over the same
+    window. Outperformance = leadership = bullish; lagging = weak → abstain on the
+    short side (long-only). Every other interpreter reads only the asset's own
+    series, so the engine is otherwise blind to relative strength — the single most
+    predictive intraday equity factor. Abstains if the benchmark has no bars yet
+    (degrades cleanly when SPY isn't wired) or for the benchmark itself."""
+
+    consumes = frozenset({EventType.OBSERVATION_BAR})
+
+    def __init__(
+        self, buffer: BarBuffer, *, benchmark: str = "SPY", window: int = 20, min_rel: float = 0.002
+    ) -> None:
+        self._buffer = buffer
+        self._benchmark = benchmark
+        self._window = window
+        self._min_rel = min_rel
+
+    async def interpret(self, observation: Event) -> list[EvidenceItem]:
+        asset = observation.asset
+        if asset is None or asset == self._benchmark:
+            return []
+        a = self._buffer.closes(asset)
+        b = self._buffer.closes(self._benchmark)
+        if len(a) < self._window or len(b) < self._window:
+            return []  # not enough history (or benchmark not wired) → abstain
+        if a[-self._window] <= 0 or b[-self._window] <= 0:
+            return []
+        asset_ret = (a[-1] - a[-self._window]) / a[-self._window]
+        bench_ret = (b[-1] - b[-self._window]) / b[-self._window]
+        rel = asset_ret - bench_ret
+        if abs(rel) < self._min_rel:
+            return []
+        direction = max(-1.0, min(1.0, rel * 40.0))  # ±2.5% relative move saturates
+        return [
+            EvidenceItem(
+                source="indicator.relstrength",
+                direction=direction,
+                weight=_RELSTRENGTH_WEIGHT,
+                detail=f"rel {rel:+.2%} vs {self._benchmark}",
+                ts=observation.ts,
+                event_id=observation.id,
+            )
+        ]
 
 
 class VolumeConfirmationInterpreter:

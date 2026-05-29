@@ -99,6 +99,15 @@ async def _run_shadow(
     async def universe() -> list[str]:
         return await repo.get_halal_symbols()
 
+    # The benchmark (SPY) is fed for relative strength but NEVER traded: its bars
+    # go to the buffer (bar_universe), but it's excluded from the compliance seed
+    # and the news feed, so the halal gate blocks any benchmark buy.
+    bench = hb.cognition.benchmark_symbol if hb.cognition.relstrength_enabled else None
+
+    async def bar_universe() -> list[str]:
+        syms = await universe()
+        return syms + [bench] if bench and bench not in syms else syms
+
     from halabot.perception.dedup import PgDedupStore
     from halabot.perception.sources.finnhub_news import FinnhubNewsSource
 
@@ -106,7 +115,7 @@ async def _run_shadow(
     dedup = PgDedupStore(engine.db_engine)
 
     bar_source = AlpacaBarSource(
-        mcp, universe, clock, timeframe=timeframe, days=days, interval_s=interval
+        mcp, bar_universe, clock, timeframe=timeframe, days=days, interval_s=interval
     )
     sources: list[Any] = [bar_source]
     finnhub_key = getattr(getattr(settings, "finnhub", None), "api_key", "") or ""
@@ -250,9 +259,12 @@ async def _run_backtest(
     repo = Repository(ht_engine)
     chosen = [s.strip().upper() for s in symbols.split(",") if s.strip()]
     syms = chosen or await repo.get_halal_symbols()
+    # Fetch the benchmark too (fed for relative strength, never traded).
+    bench = hb.cognition.benchmark_symbol if hb.cognition.relstrength_enabled else None
+    fetch_syms = syms + ([bench] if bench and bench not in syms else [])
 
     async def universe() -> list[str]:
-        return syms
+        return fetch_syms
 
     src = AlpacaBarSource(mcp, universe, clock, timeframe=timeframe, days=days, interval_s=999.0)
     collected: list[Event] = []
@@ -285,6 +297,7 @@ async def _run_backtest(
                     max_gross_exposure=hb.policy.max_gross_exposure,
                     target_rebalance_threshold=hb.policy.target_rebalance_threshold,
                     max_open_positions=hb.engine.max_open_positions,
+                    relstrength_gate=hb.policy.relstrength_gate,
                 ),
                 updater_config=UpdaterConfig(
                     long_threshold=hb.belief.long_threshold,
@@ -306,12 +319,12 @@ async def _run_backtest(
             click.echo("=== entry-band sweep ===")
             for band in bands:
                 exit_band = min(band - 1e-6, hb.policy.conviction_exit_band)
-                res = await _make(band, max(0.0, exit_band)).run(bars_by_symbol)
+                res = await _make(band, max(0.0, exit_band)).run(bars_by_symbol, benchmark=bench)
                 click.echo(f"  entry={band:.2f}: {res.summary()}")
         else:
             res = await _make(
                 hb.policy.conviction_entry_band, hb.policy.conviction_exit_band
-            ).run(bars_by_symbol)
+            ).run(bars_by_symbol, benchmark=bench)
             click.echo(f"=== backtest result ===\n  {res.summary()}")
     finally:
         await mcp.disconnect()

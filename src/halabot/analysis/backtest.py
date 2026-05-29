@@ -29,6 +29,7 @@ from halabot.cognition.interpreters import (
     IndicatorInterpreter,
     MultiFrameInterpreter,
     NewsLexiconInterpreter,
+    RelativeStrengthInterpreter,
     RsiInterpreter,
     SupportResistanceInterpreter,
     TrendAlignmentInterpreter,
@@ -198,7 +199,12 @@ class Backtester:
         self._interpreters = interpreters
 
     async def run(
-        self, bars_by_symbol: dict[str, list[Bar]], *, start: datetime | None = None
+        self,
+        bars_by_symbol: dict[str, list[Bar]],
+        *,
+        start: datetime | None = None,
+        benchmark: str | None = None,
+        relstrength: bool = True,
     ) -> BacktestResult:
         # Flatten to a single chronological stream across symbols (event-time replay).
         stream: list[tuple[datetime, str, Bar]] = sorted(
@@ -229,6 +235,8 @@ class Backtester:
             VolumeConfirmationInterpreter(buffer), SupportResistanceInterpreter(buffer),
             NewsLexiconInterpreter(),
         ]
+        if benchmark and relstrength and self._interpreters is None:
+            interpreters.append(RelativeStrengthInterpreter(buffer, benchmark=benchmark))
         router = CognitionRouter(bus=bus, updater=updater, buffer=buffer, interpreters=interpreters)
         shadow = ShadowPolicyRunner(
             bus=bus, store=store, policy=Policy(self._policy_config),
@@ -240,8 +248,12 @@ class Backtester:
         router.start()
         shadow.start()
 
-        # Seed compliance halal for the universe (membership = halal, as in the shadow).
+        # Seed compliance halal for the universe (membership = halal, as in the
+        # shadow). The benchmark is fed for relative-strength but NEVER traded, so
+        # it gets no verdict (the halal gate blocks any benchmark buy).
         for sym in bars_by_symbol:
+            if sym == benchmark:
+                continue
             await bus.publish(
                 new_event(clock, EventType.COMPLIANCE_VERDICT, source="backtest", asset=sym,
                           payload={"status": "halal", "transient_error": False})

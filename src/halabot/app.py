@@ -35,6 +35,7 @@ from halabot.cognition.interpreters import (
     MultiFrameInterpreter,
     NewsLexiconInterpreter,
     NewsLlmInterpreter,
+    RelativeStrengthInterpreter,
     RsiInterpreter,
     SupportResistanceInterpreter,
     TrendAlignmentInterpreter,
@@ -164,6 +165,7 @@ async def build_engine(
         max_gross_exposure=s.policy.max_gross_exposure,
         target_rebalance_threshold=s.policy.target_rebalance_threshold,
         max_open_positions=s.engine.max_open_positions,
+        relstrength_gate=s.policy.relstrength_gate,
     )
     risk_config = risk_config or RiskConfig(
         max_portfolio_heat_pct=s.risk.max_portfolio_heat_pct,
@@ -242,6 +244,10 @@ async def build_engine(
         interpreters.append(VolumeConfirmationInterpreter(buffer))
     if s.cognition.structure_enabled:
         interpreters.append(SupportResistanceInterpreter(buffer))
+    if s.cognition.relstrength_enabled:
+        interpreters.append(
+            RelativeStrengthInterpreter(buffer, benchmark=s.cognition.benchmark_symbol)
+        )
     if s.cognition.forecaster_enabled:
         interpreters.append(ForecasterInterpreter(buffer))
     if s.cognition.news_llm_enabled:

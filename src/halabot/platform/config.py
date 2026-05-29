@@ -45,6 +45,10 @@ class CognitionSettings(BaseModel):
     # volume-confirmed moves and swing support/resistance proximity.
     volume_enabled: bool = True
     structure_enabled: bool = True
+    # Relative strength vs a market benchmark (alpha-vs-beta). Needs the benchmark
+    # symbol's bars in the buffer (fed but never traded).
+    relstrength_enabled: bool = True
+    benchmark_symbol: str = "SPY"
     # Sparse LLM headline scoring: only fires when the cheap lexicon abstains.
     # Off by default (per-headline LLM cost); the lexicon path always runs.
     news_llm_enabled: bool = False
@@ -63,6 +67,8 @@ class PolicySettings(BaseModel):
     max_weight_per_asset: float = Field(default=0.20, gt=0, le=1)
     max_gross_exposure: float = Field(default=1.0, gt=0, le=1)
     target_rebalance_threshold: float = Field(default=0.03, gt=0, le=1)
+    # Veto buys lagging the benchmark by this relstrength magnitude; 0 = off.
+    relstrength_gate: float = Field(default=0.5, ge=0, le=1)
 
 
 class RiskSettings(BaseModel):

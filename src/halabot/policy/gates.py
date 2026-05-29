@@ -31,6 +31,18 @@ class GateContext:
     # (fail-closed). Left None in unit fixtures that aren't exercising freshness.
     now: datetime | None = None
     compliance_ttl: timedelta | None = None
+    # Relative-strength filter: reject a BUY whose belief carries a relstrength
+    # signal materially negative (asset lagging the market benchmark) — don't buy
+    # beta-only names. 0 disables. As a co-equal vote it's inert against the
+    # momentum stack (conviction saturates); as a gate it actually filters.
+    relstrength_gate: float = 0.0
+
+
+def _relstrength_direction(b: BeliefState) -> float | None:
+    for e in b.evidence:
+        if e.source == "indicator.relstrength":
+            return e.direction
+    return None
 
 
 def evaluate_gates(ctx: GateContext) -> str | None:
@@ -48,6 +60,10 @@ def evaluate_gates(ctx: GateContext) -> str | None:
         return "belief not long-biased"
     if not _is_tradeable(ctx.belief, now=ctx.now, ttl=ctx.compliance_ttl):
         return f"halal gate: {_halal_reason(ctx.belief, now=ctx.now, ttl=ctx.compliance_ttl)}"
+    if ctx.relstrength_gate > 0:
+        rs = _relstrength_direction(ctx.belief)
+        if rs is not None and rs <= -ctx.relstrength_gate:
+            return f"relative-strength gate: lagging benchmark ({rs:+.2f})"
     return None
 
 

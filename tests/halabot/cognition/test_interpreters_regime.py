@@ -16,6 +16,7 @@ from halabot.cognition.interpreters import (
     MultiFrameInterpreter,
     NewsLexiconInterpreter,
     NewsLlmInterpreter,
+    RelativeStrengthInterpreter,
     RsiInterpreter,
     SupportResistanceInterpreter,
     TrendAlignmentInterpreter,
@@ -279,6 +280,33 @@ async def test_structure_silent_mid_range():
     # Far from any swing low/high → no structural signal.
     out = await SupportResistanceInterpreter(buf, lookback=2, proximity=0.005).interpret(obs)
     assert out == []
+
+
+# ── RelativeStrengthInterpreter ──
+@pytest.mark.asyncio
+async def test_relstrength_bullish_when_outperforming_benchmark():
+    buf = BarBuffer()
+    _fill(buf, "SPY", [100 + 0.2 * i for i in range(25)])   # benchmark +~5%
+    _fill(buf, "NVDA", [100 + 1.0 * i for i in range(25)])  # leader, far stronger
+    obs = new_event(CLOCK, EventType.OBSERVATION_BAR, source="alpaca", asset="NVDA")
+    out = await RelativeStrengthInterpreter(buf, benchmark="SPY").interpret(obs)
+    assert len(out) == 1 and out[0].source == "indicator.relstrength" and out[0].direction > 0
+
+
+@pytest.mark.asyncio
+async def test_relstrength_abstains_without_benchmark_bars():
+    buf = BarBuffer()
+    _fill(buf, "NVDA", [100 + i for i in range(25)])  # no SPY in the buffer
+    obs = new_event(CLOCK, EventType.OBSERVATION_BAR, source="alpaca", asset="NVDA")
+    assert await RelativeStrengthInterpreter(buf, benchmark="SPY").interpret(obs) == []
+
+
+@pytest.mark.asyncio
+async def test_relstrength_skips_the_benchmark_itself():
+    buf = BarBuffer()
+    _fill(buf, "SPY", [100 + i for i in range(25)])
+    obs = new_event(CLOCK, EventType.OBSERVATION_BAR, source="alpaca", asset="SPY")
+    assert await RelativeStrengthInterpreter(buf, benchmark="SPY").interpret(obs) == []
 
 
 # ── NewsLexiconInterpreter ──
