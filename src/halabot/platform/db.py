@@ -99,6 +99,26 @@ outcome = Table(
     Column("created_at", DateTime(timezone=True), nullable=False),
 )
 
+# Open-position mark-to-market: the CURRENT unrealized state of each held
+# (hypothetical) position, upserted by the shadow each cycle and deleted on
+# close. Closing-only ``hb_outcome`` is survivorship-biased (a "slow out" holds
+# winners), so attribution UNIONs these marked-open rows for an unbiased view.
+# One row per asset (latest mark wins). NEVER a calibrator input — open trades
+# have no realized label (the calibrator reads only closed ``hb_outcome``).
+open_position = Table(
+    "hb_open_position",
+    metadata,
+    Column("asset", Text, primary_key=True),  # one open position per asset
+    Column("entry_ts", DateTime(timezone=True), nullable=False),
+    Column("entry_vwap", Float, nullable=False),
+    Column("weight", Float, nullable=False),
+    Column("last_price", Float, nullable=False),
+    Column("unrealized_return_pct", Float, nullable=False),
+    Column("belief_version", Integer, nullable=False),
+    Column("entry_belief", JSONB, nullable=True),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+)
+
 # Conviction telemetry: one row per scoring (INV-5). NOT a calibration input —
 # the calibrator trains only on outcome.entry_belief (no mid-trade leakage, fix R).
 conviction_score = Table(
@@ -183,6 +203,7 @@ __all__ = [
     "event_log",
     "belief_state",
     "outcome",
+    "open_position",
     "perception_seen",
     "conviction_score",
     "target_weight",

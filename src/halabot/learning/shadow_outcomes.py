@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from halabot.belief.store import BeliefStore
 from halabot.platform.bus import EventBus, Subscription
+from halabot.platform.db import open_position as _open_position_table
 from halabot.platform.db import outcome as _outcome_table
 from halabot.platform.events import Event, EventType
 
@@ -35,6 +36,10 @@ class _Position:
     entry_vwap: float
     open_ts: datetime
     belief_version: int
+    # Entry-belief snapshot taken ONCE at open (regime + sources), reused for the
+    # open-position mark-to-market rows and the final closed outcome — so neither
+    # the per-bar MTM nor the close re-reads the belief store.
+    entry_belief: dict[str, object] | None = None
 
 
 class ShadowOutcomeTracker:
@@ -60,6 +65,9 @@ class ShadowOutcomeTracker:
 
     def start(self) -> None:
         self._subs.append(self._bus.subscribe({EventType.POLICY_TRADE_PROPOSED}, self._on_proposal))
+        # Mark open positions to market on each bar (kills the closed-only
+        # survivorship bias in attribution — a "slow out" holds winners).
+        self._subs.append(self._bus.subscribe({EventType.OBSERVATION_BAR}, self._on_bar))
 
     def stop(self) -> None:
         for sub in self._subs:
@@ -79,8 +87,10 @@ class ShadowOutcomeTracker:
         pos = self._positions.get(asset)
         if delta > 0:  # buy / add → blend VWAP
             if pos is None or pos.weight <= _EPS:
+                entry_belief = await self._entry_belief_snapshot(asset, belief_version)
                 self._positions[asset] = _Position(
-                    weight=delta, entry_vwap=price, open_ts=ts, belief_version=belief_version
+                    weight=delta, entry_vwap=price, open_ts=ts,
+                    belief_version=belief_version, entry_belief=entry_belief,
                 )
             else:
                 total = pos.weight + delta
@@ -105,16 +115,60 @@ class ShadowOutcomeTracker:
             hold_seconds=hold_seconds,
             belief_version=pos.belief_version,
             reason=str(p.get("reason", "")),
+            entry_belief=pos.entry_belief,
         )
         self.closed_count += 1
         pos.weight -= closed
         if pos.weight <= _EPS:
             self._positions.pop(asset, None)
+            await self._delete_open_position(asset)  # no longer held → drop the MTM row
         if self._on_close is not None:
             try:
                 await self._on_close()
             except Exception as exc:  # noqa: BLE001 — a retrain failure must not break the tracker
                 logger.warning("on_close hook failed: %r", exc)
+
+    async def _on_bar(self, event: Event) -> None:
+        """Mark a held position to the bar's close (upsert its open-MTM row)."""
+        asset = event.asset
+        pos = self._positions.get(asset) if asset is not None else None
+        if asset is None or pos is None or pos.weight <= _EPS:
+            return
+        price = event.payload.get("c")
+        if price is None or price <= 0:
+            return
+        unrealized = (price - pos.entry_vwap) / pos.entry_vwap if pos.entry_vwap > 0 else 0.0
+        await self._upsert_open_position(asset, pos, float(price), unrealized, event.ts)
+
+    async def _upsert_open_position(
+        self, asset: str, pos: _Position, last_price: float, unrealized: float, ts: datetime
+    ) -> None:
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+        values = {
+            "asset": asset,
+            "entry_ts": pos.open_ts,
+            "entry_vwap": pos.entry_vwap,
+            "weight": pos.weight,
+            "last_price": last_price,
+            "unrealized_return_pct": unrealized,
+            "belief_version": pos.belief_version,
+            "entry_belief": pos.entry_belief,
+            "updated_at": ts,
+        }
+        stmt = pg_insert(_open_position_table).values(**values)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["asset"],
+            set_={k: v for k, v in values.items() if k != "asset"},
+        )
+        async with self._engine.begin() as conn:
+            await conn.execute(stmt)
+
+    async def _delete_open_position(self, asset: str) -> None:
+        async with self._engine.begin() as conn:
+            await conn.execute(
+                sa.delete(_open_position_table).where(_open_position_table.c.asset == asset)
+            )
 
     async def _write_outcome(
         self,
@@ -129,8 +183,8 @@ class ShadowOutcomeTracker:
         hold_seconds: int,
         belief_version: int,
         reason: str,
+        entry_belief: dict[str, object] | None,
     ) -> None:
-        entry_belief = await self._entry_belief_snapshot(asset, belief_version)
         label = 1 if return_pct > self._win_threshold else 0
         async with self._engine.begin() as conn:
             await conn.execute(

@@ -523,16 +523,23 @@ def attribution_cmd(min_n: int) -> None:
 
 async def _run_attribution(*, min_n: int) -> None:
     from halabot.analysis.attribution import attribution
+    from halabot.platform.config import get_settings as get_hb_settings
     from halabot.platform.db import bootstrap_schema, make_engine
     from halal_trader.config import get_settings
 
     engine = make_engine(get_settings().database_url)
     await bootstrap_schema(engine)
     try:
-        attr = await attribution(engine, min_n=min_n)
+        attr = await attribution(
+            engine, min_n=min_n,
+            win_threshold_pct=get_hb_settings().conviction.win_threshold_pct,
+        )
     finally:
         await engine.dispose()
-    click.echo(f"=== outcome attribution ({attr.total} closed) ===")
+    click.echo(
+        f"=== outcome attribution ({attr.total} closed + {attr.open_count} open, "
+        "bias-corrected) ==="
+    )
     click.echo("by regime:")
     for b in attr.by_regime:
         click.echo(f"  {b.line()}")
