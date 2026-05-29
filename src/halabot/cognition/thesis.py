@@ -57,28 +57,53 @@ class LlmThesisWriter:
 
 
 _SCORE_SYSTEM = (
-    "You score a financial headline's directional impact on the named stock. "
-    "Reply with ONLY a number in [-1, 1]: -1 very bearish, 0 neutral, +1 very "
-    "bullish. No words, no explanation."
+    "You are a financial news analyst scoring a headline's likely directional "
+    "impact on a SPECIFIC stock's price over the next few trading days. Respond "
+    'with ONLY JSON: {"polarity": x} where x is a number in [-1, 1] — -1 very '
+    "bearish, 0 neutral/immaterial, +1 very bullish. Score impact FOR THE NAMED "
+    "TICKER specifically (a sector headline may matter little to one name). Treat "
+    "routine, immaterial, or clickbait headlines as 0."
 )
 
 
+def _score_prompt(headline: str, *, asset: str, summary: str = "") -> str:
+    parts = [f"Ticker: {asset}", f"Headline: {headline}"]
+    if summary:
+        parts.append(f"Summary: {summary[:400]}")
+    return "\n".join(parts)
+
+
 class LlmHeadlineScorer:
-    """Scores a headline to a polarity via the LLM (the sparse news path). Returns
-    None on an unparseable reply (abstain rather than fabricate a signal)."""
+    """Scores a headline to a polarity via the LLM (the sparse news path), for a
+    SPECIFIC ticker and with the article summary when available. Returns None on
+    an unparseable reply (abstain rather than fabricate a signal). The prompt asks
+    for JSON because the OpenAI backend runs in json_object response mode."""
 
     def __init__(self, llm: Generator) -> None:
         self._llm = llm
 
-    async def score(self, headline: str) -> float | None:
-        reply = await self._llm.generate(headline, _SCORE_SYSTEM)
+    async def score(self, headline: str, *, asset: str = "", summary: str = "") -> float | None:
+        prompt = _score_prompt(headline, asset=asset, summary=summary)
+        reply = await self._llm.generate(prompt, _SCORE_SYSTEM)
         return _parse_polarity(reply)
 
 
 def _parse_polarity(text: str) -> float | None:
+    """Extract a polarity in [-1, 1] from the reply — JSON {"polarity": x} first
+    (the backend's json_object mode), then a bare number as a fallback."""
+    import json
     import re
 
-    m = re.search(r"-?\d*\.?\d+", text or "")
+    raw = text or ""
+    try:
+        obj = json.loads(raw)
+        if isinstance(obj, dict):
+            for key in ("polarity", "score", "impact"):
+                if key in obj:
+                    return max(-1.0, min(1.0, float(obj[key])))
+    except (ValueError, TypeError):
+        pass
+    m = re.search(r"-?\d*\.?\d+", raw)
     if m is None:
         return None
     try:

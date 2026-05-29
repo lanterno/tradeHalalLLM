@@ -265,10 +265,24 @@ async def build_engine(
         else:
             interpreters.append(ForecasterInterpreter(buffer))
     if s.cognition.news_llm_enabled:
-        from halabot.cognition.thesis import LlmHeadlineScorer
-        from halal_trader.core.llm import create_llm
+        # Sparse LLM news scoring (B2): fires only on headlines the cheap lexicon
+        # can't read. Graceful — if the LLM backend can't init (no API key), skip
+        # it rather than fail the engine (the lexicon path still runs).
+        try:
+            from halabot.cognition.thesis import LlmHeadlineScorer
+            from halal_trader.core.llm import create_llm
 
-        interpreters.append(NewsLlmInterpreter(LlmHeadlineScorer(create_llm())))
+            interpreters.append(
+                NewsLlmInterpreter(
+                    LlmHeadlineScorer(create_llm()),
+                    max_per_window=s.cognition.news_llm_max_per_min,
+                )
+            )
+            logger.info(
+                "news LLM scoring enabled (sparse, <=%d/min)", s.cognition.news_llm_max_per_min
+            )
+        except Exception as exc:  # noqa: BLE001 — degrade, never block the engine on the LLM
+            logger.warning("news LLM scoring unavailable, skipping: %r", exc)
     router = CognitionRouter(
         bus=bus,
         sink=sink,

@@ -56,9 +56,15 @@ class CognitionSettings(BaseModel):
     # symbol's bars in the buffer (fed but never traded).
     relstrength_enabled: bool = True
     benchmark_symbol: str = "SPY"
-    # Sparse LLM headline scoring: only fires when the cheap lexicon abstains.
-    # Off by default (per-headline LLM cost); the lexicon path always runs.
-    news_llm_enabled: bool = False
+    # Sparse LLM headline scoring (B2): fires ONLY when the cheap lexicon abstains,
+    # so the LLM is spent only on headlines the free path can't read — bounded
+    # cost. Scores impact for the SPECIFIC ticker (with the article summary) to a
+    # polarity. Graceful: degrades to no-op if the LLM backend can't init.
+    news_llm_enabled: bool = True
+    # Cap LLM headline scorings per rolling minute (bounds cold-start cost +
+    # latency, since the lexicon abstains on most headlines). Excess lexicon-less
+    # headlines in a burst get no LLM read; steady-state is well under the cap.
+    news_llm_max_per_min: int = Field(default=20, ge=1)
 
 
 class ConvictionSettings(BaseModel):

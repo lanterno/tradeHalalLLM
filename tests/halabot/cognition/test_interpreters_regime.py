@@ -336,8 +336,9 @@ class _Scorer:
     def __init__(self, polarity, *, raises=False):
         self.polarity, self.raises, self.calls = polarity, raises, 0
 
-    async def score(self, headline):
+    async def score(self, headline, *, asset="", summary=""):
         self.calls += 1
+        self.last_asset = asset
         if self.raises:
             raise RuntimeError("llm down")
         return self.polarity
@@ -362,6 +363,42 @@ async def test_news_llm_skips_when_lexicon_already_scored():
     )
     assert await NewsLlmInterpreter(scorer).interpret(obs) == []
     assert scorer.calls == 0  # LLM never spent (sparse)
+
+
+@pytest.mark.asyncio
+async def test_news_llm_rate_limits_burst():
+    # The lexicon abstains on most headlines, so a cold-start burst must be capped
+    # (bounds cost + latency). With max 2 per window, the 3rd in the same window
+    # gets no LLM read.
+    scorer = _Scorer(0.6)
+    itp = NewsLlmInterpreter(scorer, max_per_window=2, monotonic=lambda: 1000.0)  # frozen clock
+    obs = new_event(
+        CLOCK, EventType.OBSERVATION_NEWS, source="finnhub", asset="NVDA",
+        payload={"lexicon_polarity": None, "headline": "nuanced headline"},
+    )
+    assert len(await itp.interpret(obs)) == 1
+    assert len(await itp.interpret(obs)) == 1
+    assert await itp.interpret(obs) == []  # budget exhausted → abstain
+    assert scorer.calls == 2  # only 2 LLM calls spent
+
+
+@pytest.mark.asyncio
+async def test_news_llm_budget_recovers_after_window():
+    # A frozen-then-advanced clock: once the window passes, the budget refills.
+    scorer = _Scorer(0.6)
+    clock_now = [1000.0]
+    itp = NewsLlmInterpreter(
+        scorer, max_per_window=1, window_s=60.0, monotonic=lambda: clock_now[0]
+    )
+    obs = new_event(
+        CLOCK, EventType.OBSERVATION_NEWS, source="finnhub", asset="NVDA",
+        payload={"lexicon_polarity": None, "headline": "h"},
+    )
+    assert len(await itp.interpret(obs)) == 1
+    assert await itp.interpret(obs) == []  # within window → capped
+    clock_now[0] += 61.0  # window elapsed
+    assert len(await itp.interpret(obs)) == 1  # budget refilled
+    assert scorer.calls == 2
 
 
 @pytest.mark.asyncio

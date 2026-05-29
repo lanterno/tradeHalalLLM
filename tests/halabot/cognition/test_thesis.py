@@ -57,7 +57,24 @@ async def test_headline_scorer_parses_number():
     assert await LlmHeadlineScorer(_FakeLLM(reply="no idea")).score("???") is None
 
 
+@pytest.mark.asyncio
+async def test_headline_scorer_parses_json_and_passes_ticker():
+    # The OpenAI backend runs in json_object mode, so the scorer asks for JSON.
+    llm = _FakeLLM(reply='{"polarity": 0.6}')
+    assert await llm_score(llm, "merger talks", asset="NVDA", summary="rumored deal") == 0.6
+    # The prompt must carry the ticker + summary (impact is ticker-specific).
+    assert "NVDA" in llm.prompts[0] and "rumored deal" in llm.prompts[0]
+
+
+async def llm_score(llm, headline, **kw):
+    return await LlmHeadlineScorer(llm).score(headline, **kw)
+
+
 def test_parse_polarity_edge_cases():
     assert _parse_polarity("the score is +0.5 today") == 0.5
     assert _parse_polarity("") is None
     assert _parse_polarity("2") == 1.0  # clamped to [-1, 1]
+    # JSON forms (the backend's json_object mode) parse first.
+    assert _parse_polarity('{"polarity": -0.7}') == -0.7
+    assert _parse_polarity('{"score": 1.0}') == 1.0
+    assert _parse_polarity('{"polarity": 5}') == 1.0  # clamped

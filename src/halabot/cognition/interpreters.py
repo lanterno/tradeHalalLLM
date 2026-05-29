@@ -13,6 +13,9 @@ from __future__ import annotations
 
 import logging
 import statistics
+import time
+from collections import deque
+from collections.abc import Callable
 from typing import Protocol
 
 from halabot.belief.schema import EvidenceItem
@@ -525,9 +528,10 @@ class NewsLexiconInterpreter:
 
 
 class HeadlineScorer(Protocol):
-    """Scores a headline to a directional polarity in [-1, 1], or None to abstain."""
+    """Scores a headline to a directional polarity in [-1, 1] for a specific
+    ticker (with the article summary when available), or None to abstain."""
 
-    async def score(self, headline: str) -> float | None: ...
+    async def score(self, headline: str, *, asset: str = "", summary: str = "") -> float | None: ...
 
 
 class NewsLlmInterpreter:
@@ -538,8 +542,25 @@ class NewsLlmInterpreter:
 
     consumes = frozenset({EventType.OBSERVATION_NEWS})
 
-    def __init__(self, scorer: HeadlineScorer) -> None:
+    def __init__(
+        self,
+        scorer: HeadlineScorer,
+        *,
+        max_per_window: int = 20,
+        window_s: float = 60.0,
+        monotonic: Callable[[], float] = time.monotonic,
+    ) -> None:
         self._scorer = scorer
+        # Wall-clock rate limit: the cheap lexicon abstains on MOST headlines, so a
+        # cold start would otherwise score the entire backlog (hundreds of LLM
+        # calls + minutes of latency, repeated every restart). Cap to the freshest
+        # `max_per_window` per `window_s`; excess lexicon-less headlines just get no
+        # LLM read (acceptable — perception still recorded the event). Steady-state
+        # (a few new headlines per cycle) is unthrottled.
+        self._max_per_window = max_per_window
+        self._window_s = window_s
+        self._monotonic = monotonic
+        self._recent: deque[float] = deque()
 
     async def interpret(self, observation: Event) -> list[EvidenceItem]:
         asset = observation.asset
@@ -548,8 +569,15 @@ class NewsLlmInterpreter:
         headline = str(observation.payload.get("headline", "")).strip()
         if not headline:
             return []
+        now = self._monotonic()
+        while self._recent and now - self._recent[0] > self._window_s:
+            self._recent.popleft()
+        if len(self._recent) >= self._max_per_window:
+            return []  # LLM budget exhausted this window → abstain (bounds cost/latency)
+        self._recent.append(now)
+        summary = str(observation.payload.get("summary", "")).strip()
         try:
-            polarity = await self._scorer.score(headline)
+            polarity = await self._scorer.score(headline, asset=asset, summary=summary)
         except Exception as exc:  # noqa: BLE001 — an LLM hiccup yields no evidence (INV-1)
             logger.warning("news LLM scoring failed: %r", exc)
             return []
