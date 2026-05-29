@@ -4,13 +4,23 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
-from halabot.platform.clock import Clock, FakeClock, SystemClock
+from halabot.platform.clock import Clock, FakeClock, SystemClock, parse_iso
 
 
 def test_system_clock_is_utc_aware():
     out = SystemClock().now()
     assert out.tzinfo is not None
     assert out.utcoffset() == timedelta(0)
+
+
+def test_parse_iso_fail_soft():
+    # Regression: empty / malformed / non-string must return None, never raise —
+    # a missing bar_ts ("") must not crash the bar parser and silently drop a bar.
+    assert parse_iso("") is None
+    assert parse_iso("not-a-date") is None
+    assert parse_iso(None) is None
+    assert parse_iso(12345) is None
+    assert parse_iso("2026-05-28T12:00:00+00:00") == datetime(2026, 5, 28, 12, 0, tzinfo=UTC)
 
 
 def test_system_clock_satisfies_protocol():

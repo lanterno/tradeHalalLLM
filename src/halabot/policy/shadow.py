@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Awaitable, Callable
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Protocol
 
 from halabot.belief.store import BeliefStore
@@ -29,20 +29,23 @@ class PriceSource(Protocol):
 
 
 class PriceHistory(Protocol):
-    """Closing-price history per asset (for the risk engine's correlation pass)."""
+    """Timestamped closing-price history per asset (for the risk correlation pass)."""
 
-    def closes(self, asset: str) -> list[float]: ...
+    def timestamped_closes(self, asset: str) -> list[tuple[datetime, float]]: ...
 
 
 logger = logging.getLogger(__name__)
 
 
-def _returns(closes: list[float]) -> list[float]:
-    return [
-        (closes[i] - closes[i - 1]) / closes[i - 1]
-        for i in range(1, len(closes))
-        if closes[i - 1] > 0
-    ]
+def _returns(closes: list[tuple[datetime, float]]) -> list[tuple[datetime, float]]:
+    """Consecutive-close returns stamped with the LATER bar's time, so correlation
+    can inner-join series on shared timestamps rather than positionally."""
+    out: list[tuple[datetime, float]] = []
+    for i in range(1, len(closes)):
+        prev_c = closes[i - 1][1]
+        if prev_c > 0:
+            out.append((closes[i][0], (closes[i][1] - prev_c) / prev_c))
+    return out
 
 
 class ShadowPolicyRunner:
@@ -202,7 +205,9 @@ class ShadowPolicyRunner:
         by_asset = {b.asset: b for b in beliefs}
         returns = None
         if self._history is not None:
-            returns = {b.asset: _returns(self._history.closes(b.asset)) for b in beliefs}
+            returns = {
+                b.asset: _returns(self._history.timestamped_closes(b.asset)) for b in beliefs
+            }
         risk = self._risk.evaluate(self._snapshot(), beliefs=beliefs, returns_by_asset=returns)
         await self._emit_risk_state(risk, event)
         targets = self._policy.targets(beliefs, self._portfolio, risk)

@@ -20,6 +20,7 @@ from halabot.cognition.bars import Bar, BarBuffer
 from halabot.cognition.base import Interpreter
 from halabot.cognition.worker import BeliefSink, InlineBeliefSink
 from halabot.platform.bus import EventBus, Subscription
+from halabot.platform.clock import parse_iso
 from halabot.platform.events import Event, EventType
 
 logger = logging.getLogger(__name__)
@@ -187,9 +188,5 @@ def _parse_bar(event: Event) -> Bar:
         low=float(p["low"]),
         c=float(p["c"]),
         v=float(p.get("v", 0.0)),
-        ts=_parse_dt(p.get("bar_ts")) or event.ts,
+        ts=parse_iso(p.get("bar_ts")) or event.ts,
     )
-
-
-def _parse_dt(value: object) -> datetime | None:
-    return datetime.fromisoformat(value) if isinstance(value, str) else None

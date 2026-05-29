@@ -61,3 +61,18 @@ class FakeClock:
 def _as_utc(value: datetime) -> datetime:
     """Coerce to a tz-aware UTC datetime (assume UTC if naive)."""
     return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
+def parse_iso(value: object) -> datetime | None:
+    """Parse an ISO-8601 string to a datetime, or None for anything unparseable.
+
+    Returns None for non-strings, empty strings, and malformed values — so a
+    missing/garbage ``bar_ts`` on an observation becomes a clean fallback rather
+    than a ValueError that the bus's handler-isolation would silently swallow
+    (dropping the bar). Used by the cognition router and the belief serde."""
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None

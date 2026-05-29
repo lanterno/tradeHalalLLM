@@ -188,17 +188,27 @@ class CoalescingBeliefWorker:
                 items = [it for j in run for it in j.items]
                 latest = max(run, key=lambda j: j.now)
                 is_replay = all(j.is_replay for j in run)
-                # Coalesced batch carries the latest event's correlation_id (the
-                # dominant chain — coalescing is a perf optimization, INV-5 best-effort).
-                await self._u.apply_evidence(
-                    asset,
-                    items,
-                    latest.now,
-                    is_replay=is_replay,
-                    correlation_id=latest.correlation_id,
-                )
+                # Per-asset isolation: a transient store/bus error on ONE asset's
+                # coalesced sub-batch must not discard the OTHER assets' writes in
+                # this drain (the durable log keeps the observation; the next live
+                # event for this asset re-derives it).
+                try:
+                    # Coalesced batch carries the latest event's correlation_id (the
+                    # dominant chain — coalescing is best-effort, INV-5).
+                    await self._u.apply_evidence(
+                        asset,
+                        items,
+                        latest.now,
+                        is_replay=is_replay,
+                        correlation_id=latest.correlation_id,
+                    )
+                except Exception as exc:  # noqa: BLE001 — isolate this asset, keep the rest
+                    logger.error("belief write failed for %s (dropped): %r", asset, exc)
             else:
-                await self._u.set_compliance(
-                    job.asset, job.verdict, job.now, correlation_id=job.correlation_id
-                )
+                try:
+                    await self._u.set_compliance(
+                        job.asset, job.verdict, job.now, correlation_id=job.correlation_id
+                    )
+                except Exception as exc:  # noqa: BLE001 — isolate this asset, keep the rest
+                    logger.error("compliance write failed for %s (dropped): %r", job.asset, exc)
                 i += 1

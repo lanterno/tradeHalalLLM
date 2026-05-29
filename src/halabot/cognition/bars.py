@@ -42,6 +42,11 @@ class BarBuffer:
     def closes(self, asset: str) -> list[float]:
         return [b.c for b in self._bars.get(asset, ())]
 
+    def timestamped_closes(self, asset: str) -> list[tuple[datetime, float]]:
+        """(bar_ts, close) pairs — lets the risk engine align return series by
+        time rather than by position (correlation correctness)."""
+        return [(b.ts, b.c) for b in self._bars.get(asset, ())]
+
     def highs(self, asset: str) -> list[float]:
         return [b.h for b in self._bars.get(asset, ())]
 

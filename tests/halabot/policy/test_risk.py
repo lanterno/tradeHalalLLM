@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 from halabot.belief.schema import BeliefState, Regime
 from halabot.risk.engine import (
     BasicRiskEngine,
@@ -69,18 +71,36 @@ def test_volatile_regime_gets_size_haircut():
     assert s.volatility_multiplier("NVDA") == 1.0  # trending → full size
 
 
+def _timed(vals):
+    base = datetime(2026, 5, 28, tzinfo=UTC)
+    return [(base + timedelta(minutes=i), v) for i, v in enumerate(vals)]
+
+
 def test_correlation_multipliers_cluster_haircut():
     # Two perfectly co-moving series + one independent → the pair is haircut.
-    up = [float(i) for i in range(20)]
-    same = [2.0 * i + 1.0 for i in range(20)]  # ρ(up, same) = 1.0
-    zig = [(-1.0) ** i for i in range(20)]  # uncorrelated with the trend
+    up = _timed([float(i) for i in range(20)])
+    same = _timed([2.0 * i + 1.0 for i in range(20)])  # ρ(up, same) = 1.0
+    zig = _timed([(-1.0) ** i for i in range(20)])  # uncorrelated with the trend
     mults = correlation_multipliers({"A": up, "B": same, "C": zig}, threshold=0.7)
     assert mults["A"] < 1.0 and mults["B"] < 1.0  # clustered → haircut
     assert mults["C"] == 1.0  # lone wolf → full size
 
 
+def test_correlation_aligns_by_timestamp_not_position():
+    # B is the same series as A but SHIFTED one bar later in time. Tail-index
+    # alignment would (wrongly) see them as correlated; timestamp alignment must
+    # only pair the overlapping bars.
+    base = datetime(2026, 5, 28, tzinfo=UTC)
+    seq = [float(i % 3) for i in range(30)]  # repeating, so a 1-bar shift decorrelates
+    a = [(base + timedelta(minutes=i), seq[i]) for i in range(30)]
+    b = [(base + timedelta(minutes=i + 1), seq[i]) for i in range(30)]  # shifted +1 bar
+    mults = correlation_multipliers({"A": a, "B": b}, threshold=0.95)
+    # On shared timestamps the values differ (phase-shifted) → not >0.95 → no haircut.
+    assert mults["A"] == 1.0 and mults["B"] == 1.0
+
+
 def test_correlation_multiplier_applied_in_evaluate():
-    up = [float(i) for i in range(20)]
-    same = [3.0 * i for i in range(20)]
+    up = _timed([float(i) for i in range(20)])
+    same = _timed([3.0 * i for i in range(20)])
     s = ENGINE.evaluate(_snap(), returns_by_asset={"A": up, "B": same})
     assert s.correlation_multiplier("A") < 1.0

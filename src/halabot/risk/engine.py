@@ -12,10 +12,15 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:
     from halabot.belief.schema import BeliefState
+
+# A per-asset return series as (timestamp, return) pairs, so correlation aligns
+# on shared bar times rather than positionally (fix: tail-index misalignment).
+TimedReturns = list[tuple[datetime, float]]
 
 
 @dataclass(frozen=True)
@@ -63,16 +68,15 @@ class RiskEngine(Protocol):
         snapshot: PortfolioSnapshot,
         *,
         beliefs: list[BeliefState] | None = None,
-        returns_by_asset: dict[str, list[float]] | None = None,
+        returns_by_asset: dict[str, TimedReturns] | None = None,
     ) -> RiskState: ...
 
 
 def _pearson(a: list[float], b: list[float]) -> float | None:
-    """Pearson correlation over the overlapping tail, or None if degenerate."""
-    n = min(len(a), len(b))
-    if n < 10:
+    """Pearson correlation of two equal-length aligned vectors, None if degenerate."""
+    n = len(a)
+    if n < 10 or len(b) != n:
         return None
-    a, b = a[-n:], b[-n:]
     ma = sum(a) / n
     mb = sum(b) / n
     cov = sum((x - ma) * (y - mb) for x, y in zip(a, b))
@@ -83,17 +87,33 @@ def _pearson(a: list[float], b: list[float]) -> float | None:
     return cov / math.sqrt(va * vb)
 
 
+def _aligned(x: TimedReturns, y: TimedReturns) -> tuple[list[float], list[float]]:
+    """Inner-join two timestamped return series on shared timestamps."""
+    yb = dict(y)
+    xs: list[float] = []
+    ys: list[float] = []
+    for ts, rx in x:
+        if ts in yb:
+            xs.append(rx)
+            ys.append(yb[ts])
+    return xs, ys
+
+
 def correlation_multipliers(
-    returns_by_asset: dict[str, list[float]], *, threshold: float
+    returns_by_asset: dict[str, TimedReturns], *, threshold: float
 ) -> dict[str, float]:
     """Per-asset size haircut for correlation clustering: an asset correlated
     (|ρ| > threshold) with k other names is scaled by 1/√(1+k), so a cluster of
-    co-moving bets carries roughly √k risk instead of k (diversification-aware)."""
+    co-moving bets carries roughly √k risk instead of k (diversification-aware).
+
+    Series are inner-joined on TIMESTAMP before correlating, so unequal-length or
+    gapped histories never pair returns from different times (fix R, alignment)."""
     assets = list(returns_by_asset)
     peers: dict[str, int] = dict.fromkeys(assets, 0)
     for i, x in enumerate(assets):
         for y in assets[i + 1 :]:
-            rho = _pearson(returns_by_asset[x], returns_by_asset[y])
+            ax, ay = _aligned(returns_by_asset[x], returns_by_asset[y])
+            rho = _pearson(ax, ay)
             if rho is not None and abs(rho) > threshold:
                 peers[x] += 1
                 peers[y] += 1
@@ -115,7 +135,7 @@ class BasicRiskEngine:
         snapshot: PortfolioSnapshot,
         *,
         beliefs: list[BeliefState] | None = None,
-        returns_by_asset: dict[str, list[float]] | None = None,
+        returns_by_asset: dict[str, TimedReturns] | None = None,
     ) -> RiskState:
         eq = snapshot.equity or 1.0
         heat = max(0.0, -snapshot.unrealized_pnl) / eq  # only losses count as heat

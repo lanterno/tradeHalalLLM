@@ -82,8 +82,18 @@ def merge(
     items still contribute to :func:`weighted_sum` — decay (not replacement) is
     what fades old ones.
     """
+    # Dedup fresh against BOTH existing AND already-kept fresh items, in one pass —
+    # so a redelivered event whose two copies land in the SAME batch (the coalescing
+    # worker concatenates items across coalesced jobs) cannot both survive and
+    # double-count conviction's mass factor (fix, idempotency within a batch).
     seen = {it.event_id for it in existing if it.event_id is not None}
-    deduped_fresh = [it for it in fresh if it.event_id is None or it.event_id not in seen]
+    deduped_fresh: list[EvidenceItem] = []
+    for it in fresh:
+        if it.event_id is not None:
+            if it.event_id in seen:
+                continue
+            seen.add(it.event_id)
+        deduped_fresh.append(it)
 
     by_source: dict[str, list[EvidenceItem]] = defaultdict(list)
     for it in [*existing, *deduped_fresh]:

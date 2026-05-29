@@ -85,6 +85,26 @@ async def test_worker_flushes_evidence_before_compliance():
 
 
 @pytest.mark.asyncio
+async def test_worker_isolates_a_failing_asset_in_a_batch():
+    # Regression: one asset's apply error must NOT discard other assets' writes
+    # in the same drained batch.
+    class _Flaky(FakeUpdater):
+        async def apply_evidence(self, asset, items, now, *, is_replay=False, correlation_id=None):
+            if asset == "BAD":
+                raise RuntimeError("store down for BAD")
+            await super().apply_evidence(asset, items, now, is_replay=is_replay)
+
+    u = _Flaky()
+    w = CoalescingBeliefWorker(u)  # type: ignore[arg-type]
+    await w.evidence("NVDA", T0, [_ev()])
+    await w.evidence("BAD", T0, [_ev()])  # raises
+    await w.evidence("AAPL", T0, [_ev()])
+    await w.drain()
+    applied = {c[0] for c in u.evidence_calls}
+    assert applied == {"NVDA", "AAPL"}  # BAD dropped, the rest survived
+
+
+@pytest.mark.asyncio
 async def test_worker_run_task_processes_in_background():
     u = FakeUpdater()
     w = CoalescingBeliefWorker(u)  # type: ignore[arg-type]

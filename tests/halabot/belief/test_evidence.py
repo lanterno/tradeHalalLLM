@@ -71,6 +71,16 @@ def test_merge_dedups_by_event_id():
     assert len(out) == 1  # not double-counted (R, idempotency)
 
 
+def test_merge_dedups_duplicate_event_id_within_fresh_batch():
+    # Regression: the coalescing worker concatenates items across coalesced jobs,
+    # so a redelivered event's two copies can land in the SAME fresh batch. Both
+    # must NOT survive (else conviction's mass factor double-counts).
+    eid = uuid4()
+    dup = _ev("news", 1.0, 1.0, event_id=eid)
+    out = merge([], [dup, dup])
+    assert len(out) == 1
+
+
 def test_merge_keeps_distinct_event_ids():
     out = merge(
         [_ev("news", 1.0, 1.0, event_id=uuid4())],

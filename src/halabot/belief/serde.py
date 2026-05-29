@@ -21,6 +21,7 @@ from halabot.belief.schema import (
     Levels,
     Regime,
 )
+from halabot.platform.clock import parse_iso
 
 
 def _iso(dt: datetime | None) -> str | None:
@@ -28,7 +29,9 @@ def _iso(dt: datetime | None) -> str | None:
 
 
 def _parse_dt(value: Any) -> datetime | None:
-    return datetime.fromisoformat(value) if isinstance(value, str) else None
+    # Shared fail-soft ISO parser (None on empty/malformed/non-str) — never raises
+    # mid-deserialization on a corrupt persisted timestamp.
+    return parse_iso(value)
 
 
 def evidence_to_json(e: EvidenceItem) -> dict[str, Any]:
