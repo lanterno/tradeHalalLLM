@@ -13,9 +13,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any
+from collections.abc import Iterator
+from typing import TYPE_CHECKING, Any
 
 import click
+
+if TYPE_CHECKING:  # annotations only (PEP 563) — no runtime import, lazy CLI preserved
+    from halabot.cognition.bars import Bar
 
 logger = logging.getLogger(__name__)
 
@@ -233,10 +237,21 @@ def ab_report_cmd(days: int) -> None:
     "--trailing-pct", default=0.05, show_default=True,
     help="Trailing-stop ratchet distance for --exit-ladder (fraction of the high-water mark).",
 )
+@click.option(
+    "--cache-write", default="", help="After fetching, write the bars to this JSON file.",
+)
+@click.option(
+    "--cache-read", default="",
+    help="Replay bars from this JSON cache instead of fetching (reproducible, offline).",
+)
+@click.option(
+    "--oos-splits", default=1, show_default=True,
+    help="Partition the bars into N disjoint time windows and report each (out-of-sample).",
+)
 def backtest(
     symbols: str, days: int, timeframe: str, continuous: bool, sweep_bands: str,
     cost_bps: float, exit_ladder: bool, ladder_ab: bool, market_gate_ab: bool,
-    trailing_pct: float,
+    trailing_pct: float, cache_write: str, cache_read: str, oos_splits: int,
 ) -> None:
     """Replay historical bars through the engine and report hypothetical P&L."""
     from halabot.platform.observability import setup_logging
@@ -247,53 +262,48 @@ def backtest(
             symbols=symbols, days=days, timeframe=timeframe, continuous=continuous,
             sweep_bands=sweep_bands, cost_bps=cost_bps,
             exit_ladder=exit_ladder, ladder_ab=ladder_ab, market_gate_ab=market_gate_ab,
-            trailing_pct=trailing_pct,
+            trailing_pct=trailing_pct, cache_write=cache_write, cache_read=cache_read,
+            oos_splits=oos_splits,
         )
     )
 
 
-async def _run_backtest(
-    *, symbols: str, days: int, timeframe: str, continuous: bool, sweep_bands: str = "",
-    cost_bps: float = 5.0, exit_ladder: bool = False, ladder_ab: bool = False,
-    market_gate_ab: bool = False, trailing_pct: float = 0.05,
-) -> None:
-    from halabot.analysis.backtest import Backtester
-    from halabot.belief.updater import UpdaterConfig
+async def _fetch_backtest_bars(
+    *, symbols: str, timeframe: str, days: int, bench: str | None
+) -> dict[str, list[Bar]]:
+    """Fetch OHLC bars via Alpaca MCP for the halal universe (+ benchmark).
+    Returns {symbol: [Bar, ...]}. Owns its MCP + DB lifecycle (connect/dispose)."""
     from halabot.cognition.bars import Bar
     from halabot.perception.sources.alpaca_bars import AlpacaBarSource
     from halabot.platform.clock import SystemClock, parse_iso
-    from halabot.platform.config import get_settings as get_hb_settings
     from halabot.platform.events import Event
-    from halabot.policy.sizing import PolicyConfig
-    from halabot.risk.engine import RiskConfig
     from halal_trader.config import get_settings
     from halal_trader.db.models import init_db
     from halal_trader.db.repository import Repository
     from halal_trader.mcp.client import AlpacaMCPClient
 
     settings = get_settings()
-    hb = get_hb_settings()
     clock = SystemClock()
     mcp = AlpacaMCPClient()
     await mcp.connect()
     ht_engine = await init_db(settings.database_url)
-    repo = Repository(ht_engine)
-    chosen = [s.strip().upper() for s in symbols.split(",") if s.strip()]
-    syms = chosen or await repo.get_halal_symbols()
-    # Fetch the benchmark too (fed for relative strength, never traded).
-    bench = hb.cognition.benchmark_symbol if hb.cognition.relstrength_enabled else None
-    fetch_syms = syms + ([bench] if bench and bench not in syms else [])
-
-    async def universe() -> list[str]:
-        return fetch_syms
-
-    src = AlpacaBarSource(mcp, universe, clock, timeframe=timeframe, days=days, interval_s=999.0)
-    collected: list[Event] = []
-
-    async def collect(e: Event) -> None:
-        collected.append(e)
-
     try:
+        repo = Repository(ht_engine)
+        chosen = [s.strip().upper() for s in symbols.split(",") if s.strip()]
+        syms = chosen or await repo.get_halal_symbols()
+        fetch_syms = syms + ([bench] if bench and bench not in syms else [])
+
+        async def universe() -> list[str]:
+            return fetch_syms
+
+        src = AlpacaBarSource(
+            mcp, universe, clock, timeframe=timeframe, days=days, interval_s=999.0
+        )
+        collected: list[Event] = []
+
+        async def collect(e: Event) -> None:
+            collected.append(e)
+
         await src.poll_once(collect)
         bars_by_symbol: dict[str, list[Bar]] = {}
         for e in collected:
@@ -305,70 +315,146 @@ async def _run_backtest(
                 Bar(o=float(p["o"]), h=float(p["h"]), low=float(p["low"]),
                     c=float(p["c"]), v=float(p.get("v", 0.0)), ts=ts)
             )
-        total_bars = sum(len(v) for v in bars_by_symbol.values())
-        click.echo(
-            f"backtest: {len(bars_by_symbol)} symbols, {total_bars} bars ({timeframe}, {days}d)"
-        )
-        def _make(
-            entry_band: float, exit_band: float, *,
-            ladder: bool = exit_ladder, market_gate: bool = hb.policy.market_gate_enabled,
-        ) -> Backtester:
-            return Backtester(
-                policy_config=PolicyConfig(
-                    conviction_entry_band=entry_band,
-                    conviction_exit_band=exit_band,
-                    max_weight_per_asset=hb.policy.max_weight_per_asset,
-                    max_gross_exposure=hb.policy.max_gross_exposure,
-                    target_rebalance_threshold=hb.policy.target_rebalance_threshold,
-                    max_open_positions=hb.engine.max_open_positions,
-                    relstrength_gate=hb.policy.relstrength_gate,
-                ),
-                updater_config=UpdaterConfig(
-                    long_threshold=hb.belief.long_threshold,
-                    evidence_decay_halflife_min=hb.belief.evidence_decay_halflife_min,
-                    llm_thesis_enabled=False,
-                ),
-                risk_config=RiskConfig(
-                    max_portfolio_heat_pct=hb.risk.max_portfolio_heat_pct,
-                    max_drawdown_pct=hb.risk.max_drawdown_pct,
-                    daily_loss_limit=hb.risk.daily_loss_limit,
-                ),
-                trading_hours=not continuous,
-                win_threshold_pct=hb.conviction.win_threshold_pct,
-                cost_bps=cost_bps,
-                exit_ladder=ladder,
-                trailing_pct=trailing_pct,
-                market_gate=market_gate,
-            )
+        return bars_by_symbol
+    finally:
+        await mcp.disconnect()
+        await ht_engine.dispose()
 
+
+def _save_bars_cache(path: str, bars_by_symbol: dict[str, list[Bar]]) -> None:
+    """Serialize fetched bars to JSON so a backtest is reproducible offline
+    (no Alpaca, no re-fetch drift — the same bars replay identically)."""
+    import json
+
+    data = {
+        sym: [[b.o, b.h, b.low, b.c, b.v, b.ts.isoformat()] for b in bars]
+        for sym, bars in bars_by_symbol.items()
+    }
+    with open(path, "w") as f:
+        json.dump(data, f)
+
+
+def _load_bars_cache(path: str) -> dict[str, list[Bar]]:
+    import json
+    from datetime import datetime
+
+    from halabot.cognition.bars import Bar
+
+    with open(path) as f:
+        data = json.load(f)
+    return {
+        sym: [
+            Bar(o=r[0], h=r[1], low=r[2], c=r[3], v=r[4], ts=datetime.fromisoformat(r[5]))
+            for r in rows
+        ]
+        for sym, rows in data.items()
+    }
+
+
+def _oos_windows(
+    bars_by_symbol: dict[str, list[Bar]], n: int
+) -> Iterator[tuple[str, dict[str, list[Bar]]]]:
+    """Partition the global time axis into ``n`` DISJOINT contiguous windows for
+    out-of-sample validation (each window is a fresh, independent replay). Yields
+    (label, sliced_bars_by_symbol)."""
+    all_ts = sorted(b.ts for bars in bars_by_symbol.values() for b in bars)
+    if not all_ts or n < 2:
+        yield ("", bars_by_symbol)
+        return
+    t0, t1 = all_ts[0], all_ts[-1]
+    span = (t1 - t0) / n
+    for i in range(n):
+        lo = t0 + span * i
+        hi = t1 if i == n - 1 else t0 + span * (i + 1)
+        last = i == n - 1
+        sliced = {
+            sym: [b for b in bars if lo <= b.ts <= hi if last or b.ts < hi]
+            for sym, bars in bars_by_symbol.items()
+        }
+        sliced = {sym: bars for sym, bars in sliced.items() if bars}
+        yield (f"{lo:%Y-%m-%d %H:%M}..{hi:%Y-%m-%d %H:%M}", sliced)
+
+
+async def _run_backtest(
+    *, symbols: str, days: int, timeframe: str, continuous: bool, sweep_bands: str = "",
+    cost_bps: float = 5.0, exit_ladder: bool = False, ladder_ab: bool = False,
+    market_gate_ab: bool = False, trailing_pct: float = 0.05,
+    cache_read: str = "", cache_write: str = "", oos_splits: int = 1,
+) -> None:
+    from halabot.analysis.backtest import Backtester
+    from halabot.belief.updater import UpdaterConfig
+    from halabot.platform.config import get_settings as get_hb_settings
+    from halabot.policy.sizing import PolicyConfig
+    from halabot.risk.engine import RiskConfig
+
+    hb = get_hb_settings()
+    # The benchmark (SPY) is fed for relative strength + the market gate, never traded.
+    bench = hb.cognition.benchmark_symbol if hb.cognition.relstrength_enabled else None
+
+    def _make(
+        entry_band: float, exit_band: float, *,
+        ladder: bool = exit_ladder, market_gate: bool = hb.policy.market_gate_enabled,
+    ) -> Backtester:
+        return Backtester(
+            policy_config=PolicyConfig(
+                conviction_entry_band=entry_band,
+                conviction_exit_band=exit_band,
+                max_weight_per_asset=hb.policy.max_weight_per_asset,
+                max_gross_exposure=hb.policy.max_gross_exposure,
+                target_rebalance_threshold=hb.policy.target_rebalance_threshold,
+                max_open_positions=hb.engine.max_open_positions,
+                relstrength_gate=hb.policy.relstrength_gate,
+            ),
+            updater_config=UpdaterConfig(
+                long_threshold=hb.belief.long_threshold,
+                evidence_decay_halflife_min=hb.belief.evidence_decay_halflife_min,
+                llm_thesis_enabled=False,
+            ),
+            risk_config=RiskConfig(
+                max_portfolio_heat_pct=hb.risk.max_portfolio_heat_pct,
+                max_drawdown_pct=hb.risk.max_drawdown_pct,
+                daily_loss_limit=hb.risk.daily_loss_limit,
+            ),
+            trading_hours=not continuous,
+            win_threshold_pct=hb.conviction.win_threshold_pct,
+            cost_bps=cost_bps,
+            exit_ladder=ladder,
+            trailing_pct=trailing_pct,
+            market_gate=market_gate,
+        )
+
+    async def _run_and_report(bbs: dict[str, list[Bar]], *, label: str = "") -> None:
+        if label:
+            nbars = sum(len(v) for v in bbs.values())
+            click.echo(f"\n########## window {label} ({nbars} bars) ##########")
         bands = [float(b) for b in sweep_bands.split(",") if b.strip()]
         eb = hb.policy.conviction_entry_band
         xb = hb.policy.conviction_exit_band
         if ladder_ab:
-            # Controlled A/B: same fetched bars, ladder OFF vs ON. (Comparing
-            # across separate invocations is invalid — each re-fetches live bars.)
+            # Controlled A/B: same bars, ladder OFF vs ON. (Comparing across separate
+            # invocations is invalid — each re-fetches live bars; use --cache-read.)
             click.echo(f"=== exit-ladder A/B (same bars, trailing={trailing_pct:.0%}) ===")
-            off = await _make(eb, xb, ladder=False).run(bars_by_symbol, benchmark=bench)
-            on = await _make(eb, xb, ladder=True).run(bars_by_symbol, benchmark=bench)
+            off = await _make(eb, xb, ladder=False).run(bbs, benchmark=bench)
+            on = await _make(eb, xb, ladder=True).run(bbs, benchmark=bench)
             click.echo(f"  OFF: {off.summary()}")
             click.echo(f"  ON : {on.summary()}")
         elif market_gate_ab:
-            # Controlled A/B: same fetched bars, market-regime gate OFF vs ON.
+            # Controlled A/B: same bars, market-regime gate OFF vs ON.
             click.echo("=== market-regime gate A/B (same bars, benchmark vs SMA) ===")
-            off = await _make(eb, xb, market_gate=False).run(bars_by_symbol, benchmark=bench)
-            on = await _make(eb, xb, market_gate=True).run(bars_by_symbol, benchmark=bench)
+            off = await _make(eb, xb, market_gate=False).run(bbs, benchmark=bench)
+            on = await _make(eb, xb, market_gate=True).run(bbs, benchmark=bench)
             click.echo(f"  OFF: {off.summary()}")
             click.echo(f"  ON : {on.summary()}")
         elif bands:
             click.echo("=== entry-band sweep ===")
             for band in bands:
                 exit_band = min(band - 1e-6, hb.policy.conviction_exit_band)
-                res = await _make(band, max(0.0, exit_band)).run(bars_by_symbol, benchmark=bench)
+                res = await _make(band, max(0.0, exit_band)).run(bbs, benchmark=bench)
                 click.echo(f"  entry={band:.2f}: {res.summary()}")
         else:
             res = await _make(
                 hb.policy.conviction_entry_band, hb.policy.conviction_exit_band
-            ).run(bars_by_symbol, benchmark=bench)
+            ).run(bbs, benchmark=bench)
             click.echo(f"=== backtest result ===\n  {res.summary()}")
             click.echo("=== by entry regime ===")
             click.echo(res.regime_summary())
@@ -376,9 +462,29 @@ async def _run_backtest(
             click.echo(res.structure_summary())
             click.echo("=== by entry market-regime (benchmark vs SMA) ===")
             click.echo(res.market_summary())
-    finally:
-        await mcp.disconnect()
-        await ht_engine.dispose()
+
+    if cache_read:
+        bars_by_symbol = _load_bars_cache(cache_read)
+        nbars = sum(len(v) for v in bars_by_symbol.values())
+        click.echo(
+            f"backtest: loaded {len(bars_by_symbol)} symbols / {nbars} bars from {cache_read}"
+        )
+    else:
+        bars_by_symbol = await _fetch_backtest_bars(
+            symbols=symbols, timeframe=timeframe, days=days, bench=bench
+        )
+        nbars = sum(len(v) for v in bars_by_symbol.values())
+        click.echo(f"backtest: {len(bars_by_symbol)} symbols, {nbars} bars ({timeframe}, {days}d)")
+        if cache_write:
+            _save_bars_cache(cache_write, bars_by_symbol)
+            click.echo(f"backtest: wrote bar cache → {cache_write}")
+
+    if oos_splits and oos_splits > 1:
+        click.echo(f"=== out-of-sample: {oos_splits} disjoint windows ===")
+        for lbl, sliced in _oos_windows(bars_by_symbol, oos_splits):
+            await _run_and_report(sliced, label=lbl)
+    else:
+        await _run_and_report(bars_by_symbol)
 
 
 @cli.command("attribution")

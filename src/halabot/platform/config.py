@@ -75,11 +75,16 @@ class PolicySettings(BaseModel):
     # Veto buys lagging the benchmark by this relstrength magnitude; 0 = off.
     relstrength_gate: float = Field(default=0.5, ge=0, le=1)
     # Market-regime ("don't fight the tape") gate: block BUYs while the benchmark
-    # sits below its SMA. Default ON — a controlled same-bars backtest A/B
-    # (2026-05-29, 5 windows, 1H, 5bps) showed it improves profit factor and
-    # ~halves drawdown in every window where it fires (20d/45d/90d) and is
-    # identical where the market stays risk-on (30d/60d) — it never hurts.
-    # Needs the benchmark fed (relstrength_enabled); inert otherwise.
+    # sits below its SMA. Default ON. Evidence (2026-05-29, controlled same-bars
+    # A/B): on RECENT nested windows (20/45/90d, 1H, 5bps) it lifts profit factor
+    # and cuts drawdown where it fires, inert where the market is risk-on. An
+    # out-of-sample check on DISJOINT older windows (cached Jan–Mar) is more
+    # modest — it helps the larger window (PF 0.87->1.13) and is inert otherwise,
+    # with one small-sample whipsaw sub-window where it mildly hurt. Net: helps in
+    # sustained risk-off, never robustly hurts at adequate sample, but it is a
+    # market-WIDE gate (won't catch a name-specific selloff while SPY holds up).
+    # Needs the benchmark fed (relstrength_enabled); inert otherwise. Re-validate
+    # as live outcomes accumulate; flip OFF if the OOS edge doesn't hold.
     market_gate_enabled: bool = True
     market_sma_window: int = Field(default=50, ge=2)
 
