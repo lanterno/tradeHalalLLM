@@ -44,6 +44,22 @@ def test_weight_capped_at_max():
     assert target_weight(_belief(1.0), RISK, held=False, cfg=CFG) == CFG.max_weight_per_asset
 
 
+def test_conviction_size_power_shrinks_marginal_positions():
+    # power>1 makes the conviction->size ramp convex: a mid-conviction position is
+    # smaller than under the linear (power=1) default, but full conviction is
+    # unchanged. (A/B showed >1 hurts overall, so it ships at 1.0; default off.)
+    linear = PolicyConfig(conviction_entry_band=0.60, conviction_exit_band=0.45,
+                          max_weight_per_asset=0.20, conviction_size_power=1.0)
+    convex = PolicyConfig(conviction_entry_band=0.60, conviction_exit_band=0.45,
+                          max_weight_per_asset=0.20, conviction_size_power=2.0)
+    mid = _belief(0.75)
+    assert target_weight(mid, RISK, held=False, cfg=convex) < target_weight(
+        mid, RISK, held=False, cfg=linear
+    )
+    # Full conviction → scale 1.0; 1.0**power == 1.0, so the cap is unchanged.
+    assert target_weight(_belief(1.0), RISK, held=False, cfg=convex) == 0.20
+
+
 def test_multipliers_scale_down():
     risk = RiskState(_correlation_mult={"NVDA": 0.5})
     full = target_weight(_belief(0.80), RISK, held=False, cfg=CFG)

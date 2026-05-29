@@ -24,6 +24,11 @@ class PolicyConfig:
     target_rebalance_threshold: float = 0.05  # min weight change to trade (R-14 / anti-churn)
     max_open_positions: int = 0  # cap on concurrent positions; 0 = unlimited
     relstrength_gate: float = 0.5  # veto buys lagging the benchmark by this much; 0 = off
+    # Convexity of the conviction→size ramp: weight = max × scale**power. 1.0 =
+    # linear (default). >1 shrinks LOW-conviction positions harder (the marginal
+    # conv<0.40 entries that the diagnostic showed lose), preserving hysteresis
+    # continuity. Tuned by the conviction-sizing A/B.
+    conviction_size_power: float = 1.0
 
     def __post_init__(self) -> None:
         if not (0.0 <= self.conviction_exit_band < self.conviction_entry_band < 1.0):
@@ -49,6 +54,8 @@ def target_weight(b: BeliefState, risk: RiskState, *, held: bool, cfg: PolicyCon
     scale = _clamp(
         (b.conviction - cfg.conviction_exit_band) / (1.0 - cfg.conviction_exit_band), 0.0, 1.0
     )
+    if cfg.conviction_size_power != 1.0:
+        scale = scale**cfg.conviction_size_power  # convex: penalize marginal conviction
     raw = scale * cfg.max_weight_per_asset
     raw *= risk.correlation_multiplier(b.asset)
     raw *= risk.volatility_multiplier(b.asset)
