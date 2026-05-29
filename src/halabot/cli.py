@@ -194,6 +194,100 @@ def ab_report_cmd(days: int) -> None:
     asyncio.run(_run_ab_report(days=days))
 
 
+@cli.command("backtest")
+@click.option("--symbols", default="", help="Comma-separated; default = the halal universe.")
+@click.option("--days", default=10, show_default=True, help="History window to fetch.")
+@click.option("--timeframe", default="1Hour", show_default=True)
+@click.option("--continuous", is_flag=True, default=False, help="24/7 decay (else RTH).")
+def backtest(symbols: str, days: int, timeframe: str, continuous: bool) -> None:
+    """Replay historical bars through the engine and report hypothetical P&L."""
+    from halabot.platform.observability import setup_logging
+
+    setup_logging(logging.WARNING)  # quiet — the result line is the output
+    asyncio.run(
+        _run_backtest(symbols=symbols, days=days, timeframe=timeframe, continuous=continuous)
+    )
+
+
+async def _run_backtest(*, symbols: str, days: int, timeframe: str, continuous: bool) -> None:
+    from halabot.analysis.backtest import Backtester
+    from halabot.belief.updater import UpdaterConfig
+    from halabot.cognition.bars import Bar
+    from halabot.perception.sources.alpaca_bars import AlpacaBarSource
+    from halabot.platform.clock import SystemClock, parse_iso
+    from halabot.platform.config import get_settings as get_hb_settings
+    from halabot.platform.events import Event
+    from halabot.policy.sizing import PolicyConfig
+    from halabot.risk.engine import RiskConfig
+    from halal_trader.config import get_settings
+    from halal_trader.db.models import init_db
+    from halal_trader.db.repository import Repository
+    from halal_trader.mcp.client import AlpacaMCPClient
+
+    settings = get_settings()
+    hb = get_hb_settings()
+    clock = SystemClock()
+    mcp = AlpacaMCPClient()
+    await mcp.connect()
+    ht_engine = await init_db(settings.database_url)
+    repo = Repository(ht_engine)
+    chosen = [s.strip().upper() for s in symbols.split(",") if s.strip()]
+    syms = chosen or await repo.get_halal_symbols()
+
+    async def universe() -> list[str]:
+        return syms
+
+    src = AlpacaBarSource(mcp, universe, clock, timeframe=timeframe, days=days, interval_s=999.0)
+    collected: list[Event] = []
+
+    async def collect(e: Event) -> None:
+        collected.append(e)
+
+    try:
+        await src.poll_once(collect)
+        bars_by_symbol: dict[str, list[Bar]] = {}
+        for e in collected:
+            if e.asset is None:
+                continue
+            p = e.payload
+            ts = parse_iso(p.get("bar_ts")) or e.ts
+            bars_by_symbol.setdefault(e.asset, []).append(
+                Bar(o=float(p["o"]), h=float(p["h"]), low=float(p["low"]),
+                    c=float(p["c"]), v=float(p.get("v", 0.0)), ts=ts)
+            )
+        total_bars = sum(len(v) for v in bars_by_symbol.values())
+        click.echo(
+            f"backtest: {len(bars_by_symbol)} symbols, {total_bars} bars ({timeframe}, {days}d)"
+        )
+        bt = Backtester(
+            policy_config=PolicyConfig(
+                conviction_entry_band=hb.policy.conviction_entry_band,
+                conviction_exit_band=hb.policy.conviction_exit_band,
+                max_weight_per_asset=hb.policy.max_weight_per_asset,
+                max_gross_exposure=hb.policy.max_gross_exposure,
+                target_rebalance_threshold=hb.policy.target_rebalance_threshold,
+                max_open_positions=hb.engine.max_open_positions,
+            ),
+            updater_config=UpdaterConfig(
+                long_threshold=hb.belief.long_threshold,
+                evidence_decay_halflife_min=hb.belief.evidence_decay_halflife_min,
+                llm_thesis_enabled=False,
+            ),
+            risk_config=RiskConfig(
+                max_portfolio_heat_pct=hb.risk.max_portfolio_heat_pct,
+                max_drawdown_pct=hb.risk.max_drawdown_pct,
+                daily_loss_limit=hb.risk.daily_loss_limit,
+            ),
+            trading_hours=not continuous,
+            win_threshold_pct=hb.conviction.win_threshold_pct,
+        )
+        result = await bt.run(bars_by_symbol)
+        click.echo(f"=== backtest result ===\n  {result.summary()}")
+    finally:
+        await mcp.disconnect()
+        await ht_engine.dispose()
+
+
 @cli.command("dashboard")
 @click.option("--host", default="127.0.0.1", show_default=True)
 @click.option("--port", default=8083, show_default=True, help="HTTP port (legacy uses 8082).")
