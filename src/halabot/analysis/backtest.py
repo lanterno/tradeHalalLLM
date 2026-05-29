@@ -38,7 +38,7 @@ from halabot.cognition.interpreters import (
 from halabot.cognition.level_engine import BarLevelEngine
 from halabot.cognition.regime import EvidenceRegimeClassifier
 from halabot.cognition.router import CognitionRouter
-from halabot.cognition.structure import structural_label
+from halabot.cognition.structure import sma_trend_state, structural_label
 from halabot.conviction.raw import IdentityCalibrator
 from halabot.execution.position_manager import HoldContext, decide_exit
 from halabot.platform.bus import InProcessEventBus
@@ -75,6 +75,7 @@ class _Pos:
     open_ts: datetime
     regime: str = "unknown"  # entry regime, for per-regime P&L segmentation
     structural: str = "unknown"  # entry price-structure label (rank 5)
+    market: str = "unknown"  # entry market-regime label (benchmark vs its SMA)
 
 
 @dataclass
@@ -110,6 +111,7 @@ class BacktestResult:
     returns: list[float] = field(default_factory=list)
     by_regime: list[RegimeStats] = field(default_factory=list)  # entry-regime split
     by_structure: list[RegimeStats] = field(default_factory=list)  # price-structure split
+    by_market: list[RegimeStats] = field(default_factory=list)  # market-regime split
 
     def summary(self) -> str:
         wr = f"{self.win_rate:.0%}" if self.win_rate is not None else "n/a"
@@ -132,6 +134,12 @@ class BacktestResult:
             return "  (no closed trades)"
         return "\n".join("  " + r.line() for r in self.by_structure)
 
+    def market_summary(self) -> str:
+        """Multi-line per-entry market-regime breakdown (benchmark vs its SMA)."""
+        if not self.by_market:
+            return "  (no closed trades)"
+        return "\n".join("  " + r.line() for r in self.by_market)
+
 
 class _Book:
     """In-memory hypothetical book: marks shadow proposals to their decision price,
@@ -149,6 +157,8 @@ class _Book:
         buffer: BarBuffer | None = None,
         structure_window: int = 20,
         structure_er_trend: float = 0.5,
+        benchmark: str | None = None,
+        market_sma_window: int = 50,
     ) -> None:
         self._win = win_threshold_pct
         self._prices = prices
@@ -159,6 +169,10 @@ class _Book:
         self._buffer = buffer
         self._structure_window = structure_window
         self._structure_er_trend = structure_er_trend
+        # Market-wide regime read off the benchmark (e.g. SPY vs its SMA) — a
+        # single global risk-on/off label, non-circular w.r.t. any one asset.
+        self._benchmark = benchmark
+        self._market_sma_window = market_sma_window
         # One-way transaction cost (slippage + commission) as a fraction of
         # notional: a buy fills slightly HIGHER, a sell slightly LOWER, so each
         # round-trip pays ~2× — which is exactly what penalizes churn honestly.
@@ -181,6 +195,7 @@ class _Book:
         self.weights: list[float] = []  # closed_weight, parallel to returns
         self.regimes: list[str] = []  # entry regime, parallel to returns
         self.structurals: list[str] = []  # entry structural label, parallel to returns
+        self.markets: list[str] = []  # entry market-regime label, parallel to returns
         self.proposals = 0
         self._cum = 0.0
         self._peak = 0.0
@@ -203,6 +218,7 @@ class _Book:
                     weight=delta, vwap=fill, open_ts=ts,
                     regime=str(p.get("regime", "unknown")),
                     structural=self._structural_at_entry(asset),
+                    market=self._market_at_entry(),
                 )
             else:
                 total = pos.weight + delta
@@ -221,6 +237,7 @@ class _Book:
         self.weights.append(closed)
         self.regimes.append(pos.regime)
         self.structurals.append(pos.structural)
+        self.markets.append(pos.market)
         self._cum += ret * closed
         self._peak = max(self._peak, self._cum)
         self.max_dd = max(self.max_dd, self._peak - self._cum)
@@ -276,6 +293,14 @@ class _Book:
             er_trend=self._structure_er_trend,
         )
 
+    def _market_at_entry(self) -> str:
+        """Market-regime label (benchmark vs its SMA) at the entry bar:
+        risk_on (above) / risk_off (below) / unknown."""
+        if self._buffer is None or self._benchmark is None:
+            return "unknown"
+        state = sma_trend_state(self._buffer.closes(self._benchmark), self._market_sma_window)
+        return {"above": "risk_on", "below": "risk_off"}.get(state, "unknown")
+
     def _bucket_stats(self, keys: list[str]) -> list[RegimeStats]:
         """Group closed trades by a per-trade key (regime / structure), most-traded
         first. ``keys`` is parallel to ``returns``/``weights``."""
@@ -317,6 +342,7 @@ class _Book:
             returns=list(self.returns),
             by_regime=self._bucket_stats(self.regimes),
             by_structure=self._bucket_stats(self.structurals),
+            by_market=self._bucket_stats(self.markets),
         )
 
 
@@ -401,7 +427,7 @@ class Backtester:
             win_threshold_pct=self._win, prices=prices, cost_frac=self._cost_frac,
             exit_ladder=self._exit_ladder, trailing_pct=self._trailing_pct,
             buffer=buffer, structure_window=self._structure_window,
-            structure_er_trend=self._structure_er_trend,
+            structure_er_trend=self._structure_er_trend, benchmark=benchmark,
         )
         bus.subscribe({EventType.POLICY_TRADE_PROPOSED}, book.on_proposal)
         router.start()

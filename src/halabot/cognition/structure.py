@@ -66,6 +66,18 @@ def donchian_breakout(
     return 0
 
 
+def sma_trend_state(closes: list[float], window: int = 50) -> Literal["above", "below", "unknown"]:
+    """Where the latest close sits relative to its ``window``-bar simple moving
+    average: ``above`` (uptrend side) / ``below`` (downtrend side) / ``unknown``
+    (too few bars). Used for a market-wide risk-on/off read on the benchmark —
+    a single global, non-circular signal independent of any one asset's
+    evidence (rank 5, market-regime variant)."""
+    if window < 1 or len(closes) < window:
+        return "unknown"
+    sma = sum(closes[-window:]) / window
+    return "above" if closes[-1] >= sma else "below"
+
+
 def structural_label(
     highs: list[float],
     lows: list[float],

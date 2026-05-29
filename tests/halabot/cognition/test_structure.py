@@ -5,6 +5,7 @@ from __future__ import annotations
 from halabot.cognition.structure import (
     donchian_breakout,
     efficiency_ratio,
+    sma_trend_state,
     structural_label,
 )
 
@@ -82,3 +83,16 @@ def test_label_trend_efficient_but_not_fresh_breakout():
 
 def test_label_unknown_when_too_few_bars():
     assert structural_label([100.0], [99.0], [99.5], window=20) == "unknown"
+
+
+# ── SMA trend state (market regime) ──
+def test_sma_trend_above_on_uptrend():
+    assert sma_trend_state([100.0 + i for i in range(50)], 50) == "above"
+
+
+def test_sma_trend_below_on_downtrend():
+    assert sma_trend_state([100.0 - i for i in range(50)], 50) == "below"
+
+
+def test_sma_trend_unknown_when_too_few_bars():
+    assert sma_trend_state([100.0, 101.0], 50) == "unknown"

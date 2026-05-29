@@ -357,6 +357,8 @@ async def _run_backtest(
             click.echo(res.regime_summary())
             click.echo("=== by entry price-structure ===")
             click.echo(res.structure_summary())
+            click.echo("=== by entry market-regime (benchmark vs SMA) ===")
+            click.echo(res.market_summary())
     finally:
         await mcp.disconnect()
         await ht_engine.dispose()
