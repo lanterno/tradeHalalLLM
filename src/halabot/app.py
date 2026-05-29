@@ -36,7 +36,9 @@ from halabot.cognition.interpreters import (
     NewsLexiconInterpreter,
     NewsLlmInterpreter,
     RsiInterpreter,
+    SupportResistanceInterpreter,
     TrendAlignmentInterpreter,
+    VolumeConfirmationInterpreter,
 )
 from halabot.cognition.level_engine import BarLevelEngine
 from halabot.cognition.regime import EvidenceRegimeClassifier
@@ -236,6 +238,10 @@ async def build_engine(
     ]
     if s.cognition.multiframe_enabled:
         interpreters.append(MultiFrameInterpreter(buffer))
+    if s.cognition.volume_enabled:
+        interpreters.append(VolumeConfirmationInterpreter(buffer))
+    if s.cognition.structure_enabled:
+        interpreters.append(SupportResistanceInterpreter(buffer))
     if s.cognition.forecaster_enabled:
         interpreters.append(ForecasterInterpreter(buffer))
     if s.cognition.news_llm_enabled:

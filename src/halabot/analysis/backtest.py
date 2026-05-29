@@ -30,7 +30,9 @@ from halabot.cognition.interpreters import (
     MultiFrameInterpreter,
     NewsLexiconInterpreter,
     RsiInterpreter,
+    SupportResistanceInterpreter,
     TrendAlignmentInterpreter,
+    VolumeConfirmationInterpreter,
 )
 from halabot.cognition.level_engine import BarLevelEngine
 from halabot.cognition.regime import EvidenceRegimeClassifier
@@ -214,6 +216,7 @@ class Backtester:
             IndicatorInterpreter(buffer), RsiInterpreter(buffer),
             TrendAlignmentInterpreter(buffer), AnomalyInterpreter(buffer),
             DriftInterpreter(buffer), MultiFrameInterpreter(buffer),
+            VolumeConfirmationInterpreter(buffer), SupportResistanceInterpreter(buffer),
             NewsLexiconInterpreter(),
         ]
         router = CognitionRouter(bus=bus, updater=updater, buffer=buffer, interpreters=interpreters)

@@ -41,6 +41,10 @@ class CognitionSettings(BaseModel):
     # the same interpreter seam.
     forecaster_enabled: bool = False
     multiframe_enabled: bool = True
+    # Cheap, always-on structural signals the engine otherwise ignores (B3):
+    # volume-confirmed moves and swing support/resistance proximity.
+    volume_enabled: bool = True
+    structure_enabled: bool = True
     # Sparse LLM headline scoring: only fires when the cheap lexicon abstains.
     # Off by default (per-headline LLM cost); the lexicon path always runs.
     news_llm_enabled: bool = False

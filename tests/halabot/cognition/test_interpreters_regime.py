@@ -17,7 +17,9 @@ from halabot.cognition.interpreters import (
     NewsLexiconInterpreter,
     NewsLlmInterpreter,
     RsiInterpreter,
+    SupportResistanceInterpreter,
     TrendAlignmentInterpreter,
+    VolumeConfirmationInterpreter,
 )
 from halabot.cognition.regime import EvidenceRegimeClassifier
 from halabot.platform.clock import FakeClock
@@ -229,6 +231,54 @@ async def test_forecaster_silent_on_noisy_series():
                         108, 94, 106, 93, 107, 96, 104, 97, 103, 99])  # low R²
     obs = new_event(CLOCK, EventType.OBSERVATION_BAR, source="alpaca", asset="NVDA")
     assert await ForecasterInterpreter(buf).interpret(obs) == []
+
+
+# ── VolumeConfirmationInterpreter ──
+def _fill_vol(buf, asset, closes, vols):
+    for c, v in zip(closes, vols):
+        buf.append(asset, Bar(o=c, h=c + 1, low=c - 1, c=c, v=v, ts=T0))
+
+
+@pytest.mark.asyncio
+async def test_volume_confirms_a_move_on_elevated_volume():
+    buf = BarBuffer()
+    closes = [100 + i for i in range(25)]
+    vols = [1000.0] * 22 + [3000.0, 3000.0, 3000.0]  # last bars on 3x volume
+    _fill_vol(buf, "NVDA", closes, vols)
+    obs = new_event(CLOCK, EventType.OBSERVATION_BAR, source="alpaca", asset="NVDA")
+    out = await VolumeConfirmationInterpreter(buf).interpret(obs)
+    assert len(out) == 1 and out[0].source == "indicator.volume" and out[0].direction > 0
+
+
+@pytest.mark.asyncio
+async def test_volume_silent_on_thin_volume():
+    buf = BarBuffer()
+    closes = [100 + i for i in range(25)]
+    _fill_vol(buf, "NVDA", closes, [1000.0] * 25)  # flat volume → no confirmation
+    obs = new_event(CLOCK, EventType.OBSERVATION_BAR, source="alpaca", asset="NVDA")
+    assert await VolumeConfirmationInterpreter(buf).interpret(obs) == []
+
+
+# ── SupportResistanceInterpreter ──
+@pytest.mark.asyncio
+async def test_structure_bullish_near_support():
+    buf = BarBuffer()
+    # A dip to ~100 (swing low) then recovery; price ends just above that support.
+    closes = [120, 115, 110, 105, 100, 105, 110, 108, 106, 104, 102, 101]
+    _fill(buf, "NVDA", closes)
+    obs = new_event(CLOCK, EventType.OBSERVATION_BAR, source="alpaca", asset="NVDA")
+    out = await SupportResistanceInterpreter(buf, lookback=1, proximity=0.03).interpret(obs)
+    assert out and out[0].source == "indicator.structure" and out[0].direction > 0
+
+
+@pytest.mark.asyncio
+async def test_structure_silent_mid_range():
+    buf = BarBuffer()
+    _fill(buf, "NVDA", [100 + i for i in range(40)])  # steady climb, no nearby swing
+    obs = new_event(CLOCK, EventType.OBSERVATION_BAR, source="alpaca", asset="NVDA")
+    # Far from any swing low/high → no structural signal.
+    out = await SupportResistanceInterpreter(buf, lookback=2, proximity=0.005).interpret(obs)
+    assert out == []
 
 
 # ── NewsLexiconInterpreter ──

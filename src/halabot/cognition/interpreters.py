@@ -16,7 +16,7 @@ import statistics
 from typing import Protocol
 
 from halabot.belief.schema import EvidenceItem
-from halabot.cognition.bars import BarBuffer, ema, momentum_signal, returns, rsi
+from halabot.cognition.bars import BarBuffer, ema, momentum_signal, returns, rsi, swing_points
 from halabot.platform.events import Event, EventType
 
 logger = logging.getLogger(__name__)
@@ -31,6 +31,9 @@ _ALIGN_WEIGHT = 0.6
 _MULTIFRAME_WEIGHT = 0.7
 # The forecaster's vote is sized by its own fit confidence (R²); this caps it.
 _FORECASTER_MAX_WEIGHT = 0.6
+# A volume-confirmed move and a structural (support/resistance) read.
+_VOLUME_WEIGHT = 0.5
+_STRUCTURE_WEIGHT = 0.45
 
 
 class IndicatorInterpreter:
@@ -336,6 +339,113 @@ def _ols_slope_r2(ys: list[float]) -> tuple[float | None, float]:
     slope = sxy / sxx
     r2 = (sxy * sxy) / (sxx * syy)  # coefficient of determination for a line
     return slope, max(0.0, min(1.0, r2))
+
+
+class VolumeConfirmationInterpreter:
+    """Volume-confirmed move (B3): a recent price move BACKED by above-average
+    volume is stronger evidence than the same move on thin volume — participation
+    confirms conviction. The engine otherwise ignores volume entirely. Abstains
+    when volume isn't elevated or there's no directional move (adds no noise)."""
+
+    consumes = frozenset({EventType.OBSERVATION_BAR})
+
+    def __init__(
+        self, buffer: BarBuffer, *, short: int = 3, baseline: int = 20, min_ratio: float = 1.3
+    ) -> None:
+        self._buffer = buffer
+        self._short = short
+        self._baseline = baseline
+        self._min_ratio = min_ratio
+
+    async def interpret(self, observation: Event) -> list[EvidenceItem]:
+        asset = observation.asset
+        if asset is None:
+            return []
+        bars = self._buffer.bars(asset)
+        if len(bars) < self._baseline + 1:
+            return []
+        closes = [b.c for b in bars]
+        vols = [b.v for b in bars]
+        recent_vol = statistics.fmean(vols[-self._short :])
+        base_vol = statistics.fmean(vols[-self._baseline :])
+        if base_vol <= 0 or closes[-self._short] <= 0:
+            return []
+        ratio = recent_vol / base_vol
+        short_ret = (closes[-1] - closes[-self._short]) / closes[-self._short]
+        if ratio < self._min_ratio or abs(short_ret) < 0.001:
+            return []  # no volume confirmation, or no move to confirm
+        direction = max(-1.0, min(1.0, short_ret * 50.0))
+        # More excess volume → more weight (ratio 1.3→~0.15, 2.0→~0.5, capped).
+        weight = _VOLUME_WEIGHT * min(1.0, ratio - 1.0)
+        if weight <= 0.0:
+            return []
+        return [
+            EvidenceItem(
+                source="indicator.volume",
+                direction=direction,
+                weight=weight,
+                detail=f"vol {ratio:.1f}x conf move {short_ret:+.2%}",
+                ts=observation.ts,
+                event_id=observation.id,
+            )
+        ]
+
+
+class SupportResistanceInterpreter:
+    """Structural read (B3): where price sits vs recent swing support/resistance.
+    Near a recent swing LOW (a support shelf) is a favorable long entry zone →
+    mild bullish; pressing into a recent swing HIGH (resistance) risks rejection →
+    mild bearish. Uses the same swing detection as the level engine. The engine
+    otherwise has no notion of structure in its conviction."""
+
+    consumes = frozenset({EventType.OBSERVATION_BAR})
+
+    def __init__(
+        self, buffer: BarBuffer, *, lookback: int = 2, proximity: float = 0.02, window: int = 60
+    ) -> None:
+        self._buffer = buffer
+        self._lookback = lookback
+        self._proximity = proximity
+        self._window = window
+
+    async def interpret(self, observation: Event) -> list[EvidenceItem]:
+        asset = observation.asset
+        if asset is None:
+            return []
+        highs = self._buffer.highs(asset)[-self._window :]
+        lows = self._buffer.lows(asset)[-self._window :]
+        closes = self._buffer.closes(asset)
+        if len(highs) < 2 * self._lookback + 1 or not closes:
+            return []
+        swing_highs, swing_lows = swing_points(highs, lows, self._lookback)
+        price = closes[-1]
+        if price <= 0:
+            return []
+        # Nearest support below price, nearest resistance above price.
+        support = max((s for s in swing_lows if s <= price), default=None)
+        resistance = min((r for r in swing_highs if r >= price), default=None)
+        near_support = support is not None and (price - support) / price <= self._proximity
+        near_resistance = (
+            resistance is not None and (resistance - price) / price <= self._proximity
+        )
+        if near_support and not near_resistance:
+            direction = 0.6  # bounce zone — favorable long entry
+            detail = f"near support {support:.2f}"
+        elif near_resistance and not near_support:
+            direction = -0.6  # pressing into resistance — rejection risk
+            detail = f"near resistance {resistance:.2f}"
+        else:
+            return []  # mid-range or squeezed between both → no structural signal
+        return [
+            EvidenceItem(
+                source="indicator.structure",
+                direction=direction,
+                weight=_STRUCTURE_WEIGHT,
+                detail=detail,
+                ts=observation.ts,
+                event_id=observation.id,
+            )
+        ]
 
 
 class NewsLexiconInterpreter:
