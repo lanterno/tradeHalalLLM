@@ -106,27 +106,30 @@ def merge(
     *,
     cap_per_source: int = _CAP_PER_SOURCE,
 ) -> list[EvidenceItem]:
-    """Combine evidence, deduping by ``event_id`` and bounding per source.
+    """Combine evidence, deduping by ``(source, event_id)`` and bounding per source.
 
-    Dedup (R, idempotency): a fresh item whose ``event_id`` is already held is
-    dropped, so a redelivered/replayed event cannot double-count. Items without
-    an ``event_id`` are always kept (synthetic/test evidence).
+    Dedup (R, idempotency): a fresh item whose ``(source, event_id)`` is already
+    held is dropped, so a redelivered/replayed event cannot double-count. The key
+    is ``(source, event_id)`` — NOT event_id alone — because MANY interpreters fire
+    on ONE bar and all carry that bar's ``event_id``; keying on event_id alone
+    wrongly dropped every interpreter's evidence but the first. Items without an
+    ``event_id`` are always kept (synthetic/test evidence).
 
     Bounding: keep the ``cap_per_source`` newest items per source. All retained
     items still contribute to :func:`weighted_sum` — decay (not replacement) is
     what fades old ones.
     """
-    # Dedup fresh against BOTH existing AND already-kept fresh items, in one pass —
-    # so a redelivered event whose two copies land in the SAME batch (the coalescing
-    # worker concatenates items across coalesced jobs) cannot both survive and
-    # double-count conviction's mass factor (fix, idempotency within a batch).
-    seen = {it.event_id for it in existing if it.event_id is not None}
+    # Dedup fresh against BOTH existing AND already-kept fresh, in one pass — so a
+    # genuine redelivery (same source AND event_id) can't double-count, while
+    # distinct interpreters sharing a bar's event_id are all retained.
+    seen = {(it.source, it.event_id) for it in existing if it.event_id is not None}
     deduped_fresh: list[EvidenceItem] = []
     for it in fresh:
         if it.event_id is not None:
-            if it.event_id in seen:
+            key = (it.source, it.event_id)
+            if key in seen:
                 continue
-            seen.add(it.event_id)
+            seen.add(key)
         deduped_fresh.append(it)
 
     by_source: dict[str, list[EvidenceItem]] = defaultdict(list)

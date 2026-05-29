@@ -89,12 +89,28 @@ def test_merge_dedups_by_event_id():
 
 def test_merge_dedups_duplicate_event_id_within_fresh_batch():
     # Regression: the coalescing worker concatenates items across coalesced jobs,
-    # so a redelivered event's two copies can land in the SAME fresh batch. Both
-    # must NOT survive (else conviction's mass factor double-counts).
+    # so a redelivered event's two copies (SAME source + event_id) can land in the
+    # SAME fresh batch. Both must NOT survive (else conviction's mass double-counts).
     eid = uuid4()
     dup = _ev("news", 1.0, 1.0, event_id=eid)
     out = merge([], [dup, dup])
     assert len(out) == 1
+
+
+def test_merge_keeps_distinct_sources_sharing_one_event_id():
+    # CRITICAL regression: every interpreter firing on ONE bar carries that bar's
+    # event_id. Dedup must key on (source, event_id), NOT event_id alone, or all
+    # but the first interpreter's evidence is silently dropped.
+    eid = uuid4()
+    items = [
+        _ev("indicator.momentum", 0.7, 1.0, event_id=eid),
+        _ev("indicator.rsi", 1.0, 0.5, event_id=eid),
+        _ev("indicator.relstrength", -1.0, 0.7, event_id=eid),
+    ]
+    out = merge([], items)
+    assert {e.source for e in out} == {
+        "indicator.momentum", "indicator.rsi", "indicator.relstrength"
+    }
 
 
 def test_merge_keeps_distinct_event_ids():
