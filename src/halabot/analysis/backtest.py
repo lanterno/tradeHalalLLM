@@ -78,6 +78,7 @@ class _Pos:
     structural: str = "unknown"  # entry price-structure label (rank 5)
     market: str = "unknown"  # entry market-regime label (benchmark vs its SMA)
     sources: tuple[str, ...] = ()  # evidence sources present at entry (attribution)
+    conviction_raw: float = 0.0  # raw (pre-calibration) conviction at entry
 
 
 @dataclass
@@ -115,6 +116,7 @@ class BacktestResult:
     by_structure: list[RegimeStats] = field(default_factory=list)  # price-structure split
     by_market: list[RegimeStats] = field(default_factory=list)  # market-regime split
     by_source: list[RegimeStats] = field(default_factory=list)  # per evidence source (multi-label)
+    by_conviction: list[RegimeStats] = field(default_factory=list)  # per raw-conviction band
 
     def summary(self) -> str:
         wr = f"{self.win_rate:.0%}" if self.win_rate is not None else "n/a"
@@ -149,6 +151,12 @@ class BacktestResult:
         if not self.by_source:
             return "  (no closed trades)"
         return "\n".join("  " + r.line() for r in self.by_source)
+
+    def conviction_summary(self) -> str:
+        """Per raw-conviction band (ascending) — does conviction predict wins?"""
+        if not self.by_conviction:
+            return "  (no closed trades)"
+        return "\n".join("  " + r.line() for r in self.by_conviction)
 
 
 class _Book:
@@ -207,6 +215,7 @@ class _Book:
         self.structurals: list[str] = []  # entry structural label, parallel to returns
         self.markets: list[str] = []  # entry market-regime label, parallel to returns
         self.source_sets: list[tuple[str, ...]] = []  # entry evidence sources, parallel
+        self.convictions: list[float] = []  # entry raw conviction, parallel to returns
         self.proposals = 0
         self._cum = 0.0
         self._peak = 0.0
@@ -231,6 +240,7 @@ class _Book:
                     structural=self._structural_at_entry(asset),
                     market=self._market_at_entry(),
                     sources=tuple(p.get("sources", ())),
+                    conviction_raw=float(p.get("conviction_raw", 0.0)),
                 )
             else:
                 total = pos.weight + delta
@@ -251,6 +261,7 @@ class _Book:
         self.structurals.append(pos.structural)
         self.markets.append(pos.market)
         self.source_sets.append(pos.sources)
+        self.convictions.append(pos.conviction_raw)
         self._cum += ret * closed
         self._peak = max(self._peak, self._cum)
         self.max_dd = max(self.max_dd, self._peak - self._cum)
@@ -369,6 +380,23 @@ class _Book:
         out.sort(key=lambda s: s.n, reverse=True)
         return out
 
+    def _conviction_buckets(self) -> list[RegimeStats]:
+        """Bucket closed trades by entry raw-conviction band — the premise behind
+        calibration/sizing: does higher conviction predict a higher win rate? Bands
+        ascend so the trend (or lack of it) is read top-to-bottom."""
+        edges = [(0.0, 0.40), (0.40, 0.45), (0.45, 0.50), (0.50, 1.01)]
+        labels = ["conv<0.40", "conv0.40-0.45", "conv0.45-0.50", "conv>=0.50"]
+        keys = []
+        for c in self.convictions:
+            for (lo, hi), lab in zip(edges, labels):
+                if lo <= c < hi:
+                    keys.append(lab)
+                    break
+            else:
+                keys.append("conv?")
+        stats = {s.regime: s for s in self._bucket_stats(keys)}
+        return [stats[lab] for lab in labels if lab in stats]  # ascending band order
+
     def result(self) -> BacktestResult:
         n = len(self.returns)
         wins = [r for r in self.returns if r > self._win]
@@ -387,6 +415,7 @@ class _Book:
             by_structure=self._bucket_stats(self.structurals),
             by_market=self._bucket_stats(self.markets),
             by_source=self._source_stats(),
+            by_conviction=self._conviction_buckets(),
         )
 
 

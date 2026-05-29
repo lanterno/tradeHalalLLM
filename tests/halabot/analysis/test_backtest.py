@@ -200,6 +200,29 @@ async def test_book_attributes_outcomes_to_entry_sources_multilabel():
 
 
 @pytest.mark.asyncio
+async def test_book_buckets_by_entry_conviction():
+    # Three trades at distinct entry convictions land in distinct bands; the
+    # diagnostic answers whether conviction predicts wins.
+    book = _book()
+    for asset, conv, exit_px in [("A", 0.38, 95.0), ("B", 0.42, 110.0), ("C", 0.55, 105.0)]:
+        await book.on_proposal(
+            SimpleNamespace(
+                asset=asset, ts=T0,
+                payload={"price": 100.0, "weight_delta": 0.2, "conviction_raw": conv},
+            )
+        )
+        await book.on_proposal(
+            SimpleNamespace(asset=asset, ts=T0, payload={"price": exit_px, "weight_delta": -0.2})
+        )
+    by = {s.regime: s for s in book.result().by_conviction}
+    assert by["conv<0.40"].n == 1 and by["conv<0.40"].win_rate == 0.0  # A lost
+    assert by["conv0.40-0.45"].n == 1 and by["conv0.40-0.45"].win_rate == 1.0  # B won
+    assert by["conv>=0.50"].n == 1 and by["conv>=0.50"].win_rate == 1.0  # C won
+    # Ascending band order in the list (reads top-to-bottom for a trend).
+    assert [s.regime for s in book.result().by_conviction][0] == "conv<0.40"
+
+
+@pytest.mark.asyncio
 async def test_book_tags_entry_structure_from_buffer():
     # With a buffer pre-warmed with a clean uptrend, an entry is tagged with a
     # non-"unknown" structural label (breakout/trend) read from price geometry.

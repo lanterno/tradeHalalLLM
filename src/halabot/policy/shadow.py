@@ -298,6 +298,12 @@ class ShadowPolicyRunner:
                         "sources": sorted({e.source for e in by_asset[p.asset].evidence})
                         if p.asset in by_asset
                         else [],
+                        # Raw (pre-calibration) conviction at entry — lets the
+                        # backtest test the premise behind calibration/sizing:
+                        # does higher conviction actually predict a higher win rate?
+                        "conviction_raw": round(by_asset[p.asset].conviction_raw, 4)
+                        if p.asset in by_asset
+                        else 0.0,
                         "shadow": True,  # never executed
                     },
                     causation=event,

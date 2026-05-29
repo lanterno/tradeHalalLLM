@@ -488,6 +488,8 @@ async def _run_backtest(
             click.echo(res.market_summary())
             click.echo("=== by entry evidence source (multi-label) ===")
             click.echo(res.source_summary())
+            click.echo("=== by entry raw conviction (does conviction predict wins?) ===")
+            click.echo(res.conviction_summary())
 
     if cache_read:
         bars_by_symbol = _load_bars_cache(cache_read)
