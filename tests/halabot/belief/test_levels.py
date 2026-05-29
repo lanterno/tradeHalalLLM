@@ -52,6 +52,27 @@ def test_support_and_resistance_nearest_to_price():
     assert out.resistance == 105.0   # nearest high above
 
 
+def test_invalidation_never_set_above_price_from_recent_swing_low():
+    # Regression (churn fix): the most-recent swing low (105) is ABOVE the current
+    # price (100) after a pullback. The stop must use the swing low BELOW price
+    # (98), never 105 — a stop above price would fire the instant a long opens.
+    out = update_levels(
+        last_price=100.0, swing_lows=[98.0, 105.0], swing_highs=[], atr=2.0, prev=Levels(),
+        atr_stop_mult=2.0,
+    )
+    assert out.invalidation is not None and out.invalidation < 100.0
+
+
+def test_ratcheted_invalidation_capped_below_price_on_pullback():
+    # Regression: a prior invalidation ratcheted to 105 while price retraces to 100
+    # must be capped below price (not left at 105, which would fire immediately).
+    out = update_levels(
+        last_price=100.0, swing_lows=[98.0], swing_highs=[], atr=2.0,
+        prev=Levels(invalidation=105.0), atr_stop_mult=2.0,
+    )
+    assert out.invalidation is not None and out.invalidation < 100.0
+
+
 def test_stop_mirrors_invalidation():
     out = update_levels(
         last_price=100.0, swing_lows=[], swing_highs=[], atr=3.0, prev=Levels(),

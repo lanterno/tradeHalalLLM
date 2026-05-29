@@ -37,7 +37,11 @@ def update_levels(
     support = _nearest_below(last_price, swing_lows)
     resistance = _nearest_above(last_price, swing_highs)
 
-    structural = swing_lows[-1] if swing_lows else None
+    # The structural stop must sit BELOW price — use the nearest swing low below
+    # price (support), NOT the most recent swing low, which in a pullback can be
+    # ABOVE price and would set a nonsensical stop that fires the instant a long
+    # is opened (the price_break churn — diagnosed from outcome attribution).
+    structural = support
     atr_floor = (
         last_price - atr_stop_mult * atr
         if last_price is not None and atr is not None and atr > 0
@@ -45,6 +49,14 @@ def update_levels(
     )
     candidates = [x for x in (structural, atr_floor, prev.invalidation) if x is not None]
     invalidation = max(candidates) if candidates else None  # fix R: no ValueError on empty
+    # A stop above the current price is not a stop (it would fire the instant a
+    # long opens). If the ratchet pushed invalidation to/above price (a pullback
+    # below a previously-trailed level), drop back to the highest BELOW-price
+    # structural candidate, else no stop this bar. A genuine break still fires on
+    # a later bar when price falls through this below-price level.
+    if invalidation is not None and last_price is not None and invalidation >= last_price:
+        below = [x for x in (structural, atr_floor) if x is not None and x < last_price]
+        invalidation = max(below) if below else None
 
     return Levels(
         support=support,
