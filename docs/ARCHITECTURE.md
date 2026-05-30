@@ -100,7 +100,8 @@ flowchart TD
 
 ```
 src/halal_trader/
-├── cli.py                    # Click CLI entry point
+├── cli/                      # Click CLI command package (entry: cli:cli)
+│   └── …                     # db, stocks, crypto, halal, halt, watchdog, ml, …
 ├── config.py                 # Pydantic Settings (.env)
 ├── logging.py                # Dual-output: Rich console + JSON log files
 ├── market_hours.py           # NYSE/NASDAQ hours, holidays, timezone helpers
@@ -154,14 +155,12 @@ src/halal_trader/
 │   ├── portfolio.py          # Daily equity tracking, loss limit
 │   ├── risk.py               # Stock portfolio-risk adapter (uses crypto.risk engine)
 │   ├── bars.py               # Alpaca bars → Kline coercion + indicator helper
-│   ├── timeframes.py         # Multi-timeframe analyzer (1Hour/1Day/1Week)
 │   ├── snapshots.py          # Indicator-snapshot recorder for ML labelling
 │   ├── catalysts.py          # News/earnings/insider catalyst feed
 │   ├── fred_catalysts.py     # Macro release calendar (CPI/FOMC/NFP/GDP)
 │   ├── edgar_catalysts.py    # SEC 8-K material-event stream
 │   ├── fed_speak.py          # Federal Reserve speeches scraper
-│   ├── options_iv.py         # Options IV-skew catalyst
-│   └── backtest.py           # Stock backtester
+│   └── options_iv.py         # Options IV-skew catalyst
 │
 ├── sentiment/
 │   ├── manager.py            # Orchestrates Reddit + CryptoPanic on a schedule
@@ -337,7 +336,6 @@ Per-cycle the LLM receives the same prompt-context surface the crypto bot uses, 
 * **Risk** — `evaluate_stock_risk` runs the shared `PortfolioRiskEngine` over Alpaca bars (correlation, heat, drawdown, ATR-baselined sizing).
 * **Regime** — `RegimeDetector.detect(indicators)` per halal symbol via the shared `build_regime_text` helper. Rule-based, no key/cost.
 * **ML signals** — IsolationForest anomaly + signal classifier inference (gated on `ML_ENABLED`); models load from `models/stocks/` so stocks and crypto don't share weights.
-* **Multi-timeframe** — `StockTimeframeAnalyzer` pulls 1Hour/1Day/1Week bars and computes a trend-alignment score per symbol.
 * **Catalysts** — FRED macro releases, SEC EDGAR 8-K events, Fed-speak, options-IV skew, and Alpaca news (when the MCP server exposes `get_stock_news`) flow into a single `=== RECENT CATALYSTS ===` block.
 
 After execution the cycle hands the same `analyze_kwargs` to an optional `ShadowRunner` (frozen-prompt parallel strategy) which writes a divergence row to `InsightsHub.shadow`. The cycle also pushes its `state.risk_state` into `hub.runtime.risk_state` (with a `market="stocks"` discriminator + `pushed_at` timestamp) so the dashboard's `/api/risk/state`, `/api/mobile/summary`, and Prometheus `halal_trader_drawdown_pct{market="stocks"}` all render the stocks bot's heat/drawdown alongside crypto's. On each filled / submitted execution result, the cycle calls `notifier.notify_trade(...)` for an operator Telegram alert (parity with crypto). A separate background `StockPositionMonitor` enforces SL/TP between cycles (see below), fires `notifier.notify_sl_tp(...)` on each close, and routes the event through the shared `CloseRecorders` bundle (drift / thesis / regret / RAG / purification ledger) plus a stocks-namespaced `RetrainingScheduler` which labels the buy-time indicator snapshot. The end-of-day job sends `notify_daily_summary(...)` after recording P&L.
