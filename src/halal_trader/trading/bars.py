@@ -23,16 +23,27 @@ logger = logging.getLogger(__name__)
 def bars_to_klines(bars_for_symbol: Any) -> list[Kline]:
     """Coerce Alpaca's ``get_stock_bars`` response into ``Kline`` objects.
 
-    Alpaca returns either a list of dicts with ``t/o/h/l/c/v`` keys or a
-    nested ``{"bars": [...]}`` envelope. We tolerate both, plus the
-    ``open``/``high``/``low``/``close``/``volume`` long-key variant some
-    SDK versions emit.
+    Alpaca returns a list of dicts with ``t/o/h/l/c/v`` keys, OR a nested
+    ``{"bars": [...]}`` envelope, OR — what ``get_stock_bars`` actually emits —
+    a symbol-keyed ``{"bars": {"NVDA": [...]}}`` envelope. We tolerate all three,
+    plus the ``open``/``high``/``low``/``close``/``volume`` long-key variant some
+    SDK versions emit. (The symbol-keyed shape previously fell through to an empty
+    list, silently starving the monitor's trend-break SMA, ML snapshots, the
+    multi-timeframe analyzer, and risk indicators of data.)
     """
     if not bars_for_symbol:
         return []
     raw_bars: list[dict[str, Any]]
     if isinstance(bars_for_symbol, dict):
         raw_bars = bars_for_symbol.get("bars") or bars_for_symbol.get("data") or []
+        # ``get_stock_bars`` wraps bars under the symbol: {"bars": {"NVDA": [...]}}.
+        # Flatten that symbol level to the underlying bar list.
+        if isinstance(raw_bars, dict):
+            flattened: list[Any] = []
+            for v in raw_bars.values():
+                if isinstance(v, list):
+                    flattened.extend(v)
+            raw_bars = flattened
     elif isinstance(bars_for_symbol, list):
         raw_bars = bars_for_symbol
     else:

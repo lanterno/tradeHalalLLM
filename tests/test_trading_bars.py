@@ -70,6 +70,17 @@ def test_compute_indicators_by_symbol_handles_alpaca_envelope():
     assert "rsi_14" in indicators["MSFT"]
 
 
+def test_bars_to_klines_handles_symbol_keyed_envelope():
+    """REGRESSION: get_stock_bars actually returns {"bars": {SYMBOL: [...]}} —
+    a symbol-keyed level inside the envelope. This previously parsed to an empty
+    list, silently starving the monitor's trend-break SMA, ML snapshots, and the
+    multi-timeframe analyzer. bars_to_klines must flatten the symbol level."""
+    payload = {"bars": {"NVDA": _series(100, 40)}}
+    klines = bars_to_klines(payload)
+    assert len(klines) == 40
+    assert klines[0].close > 0
+
+
 def test_bars_to_klines_synthetic_timestamps_are_monotonic():
     """Downstream consumers rely on ordered open_time even though the value is synthetic."""
     klines = bars_to_klines(_series(100, 5))
