@@ -70,6 +70,18 @@ def test_compute_indicators_by_symbol_handles_alpaca_envelope():
     assert "rsi_14" in indicators["MSFT"]
 
 
+def test_compute_indicators_by_symbol_real_cycle_envelope():
+    """REGRESSION (integration): the live cycle builds {sym: get_stock_bars(sym)},
+    where each value is the symbol-keyed {"bars": {sym: [...]}} envelope. This is
+    what feeds the risk engine, regime detection, ML inference, and the LLM prompt
+    — it must yield REAL indicators, not the empty dict the old bars_to_klines
+    silently produced (which left the stock bot trading with no technicals)."""
+    payload = {"NVDA": {"bars": {"NVDA": _series(100, 40)}}}
+    klines, indicators = compute_indicators_by_symbol(payload)
+    assert len(klines["NVDA"]) == 40
+    assert "rsi_14" in indicators["NVDA"] and "atr_14" in indicators["NVDA"]
+
+
 def test_bars_to_klines_handles_symbol_keyed_envelope():
     """REGRESSION: get_stock_bars actually returns {"bars": {SYMBOL: [...]}} —
     a symbol-keyed level inside the envelope. This previously parsed to an empty
