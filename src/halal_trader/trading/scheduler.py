@@ -29,6 +29,7 @@ from halal_trader.trading.cycle import TradingCycleService
 from halal_trader.trading.executor import TradeExecutor
 from halal_trader.trading.portfolio import PortfolioTracker
 from halal_trader.trading.strategy import TradingStrategy
+from halal_trader.trading.timeframes import StockTimeframeAnalyzer
 
 logger = logging.getLogger(__name__)
 
@@ -343,6 +344,10 @@ class TradingBot(BaseTradingBot):
             analytics=stocks_analytics,
             self_review=stocks_self_review,
             news_collector=self._stocks_news,
+            # Multi-timeframe trend alignment (1H/1D/1W via Alpaca) — the strongest
+            # signal in halabot's per-source attribution. Reuses the crypto
+            # TimeframeAnalyzer math; errors degrade to an empty block (cycle-safe).
+            timeframe_analyzer=StockTimeframeAnalyzer(self.broker),
         )
 
         logger.info("Trading bot initialized successfully")
