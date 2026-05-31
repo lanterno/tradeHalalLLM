@@ -190,12 +190,6 @@ class StockSettings(BaseSettings):
     daily_loss_limit: float = Field(default=0.02, ge=0, le=0.5)
     max_simultaneous_positions: int = Field(default=5, ge=1)
 
-    # Round-4 wave 1.A: pluggable broker adapter selector. Default
-    # remains ``alpaca`` so existing operator workflows are unchanged.
-    # Set to a registered name (e.g. ``ibkr``, ``tradier``) to switch
-    # adapter at startup.
-    broker: str = Field(default="alpaca")
-
     # Position monitor — polls open trades against SL/TP between LLM
     # cycles (cycle is 15min; the monitor fills the gap). Mirrors the
     # crypto-side knobs but at coarser cadence: stocks aren't 24/7 and
@@ -282,11 +276,6 @@ class CryptoSettings(BaseSettings):
     max_simultaneous_positions: int = Field(default=4, ge=1)
     min_market_cap: float = Field(default=1_000_000_000, ge=0)
     max_pairs_per_cycle: int = Field(default=10, ge=1)
-
-    # Round-4 wave 1.A: pluggable broker adapter selector. Default
-    # remains ``binance`` so existing operator workflows are unchanged.
-    # Set to a registered name (e.g. ``coinbase``) to switch.
-    broker: str = Field(default="binance")
 
     # Portfolio risk
     max_portfolio_heat_pct: float = Field(default=0.05, ge=0.01, le=0.5)
