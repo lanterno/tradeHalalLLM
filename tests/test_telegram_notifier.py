@@ -325,3 +325,71 @@ async def test_notify_error_critical_severity_uses_distinct_emoji():
     assert "CRITICAL" in msg
     assert "[crypto]" in msg
     assert "llm.insufficient_quota" in msg
+
+
+# ── send(): plain-text fallback on a parse-entities 400 ───────────
+
+
+class _Resp:
+    def __init__(self, status: int, text: str = "") -> None:
+        self.status_code = status
+        self.text = text
+
+
+@pytest.mark.asyncio
+async def test_send_retries_as_plain_text_on_parse_400():
+    """A stray < / > / & in interpolated free text breaks HTML mode (400
+    'can't parse entities'). The alert must still be delivered — retry as plain
+    text rather than dropping it (live incident 2026-06-04: reactor catalyst
+    alerts with 'intraday change X < Y' were lost)."""
+    n = _notifier()
+    posts: list[dict] = []
+
+    async def fake_post(url, json=None):
+        posts.append(json)
+        if len(posts) == 1:
+            return _Resp(400, '{"description":"Bad Request: can\'t parse entities: ..."}')
+        return _Resp(200)
+
+    client = AsyncMock()
+    client.post = fake_post
+    with patch.object(n, "_get_client", return_value=client):
+        ok = await n.send("alert <b>x</b>: change -0.5 < 0.2")
+    assert ok is True
+    assert len(posts) == 2
+    assert posts[0].get("parse_mode") == "HTML"  # first attempt: HTML
+    assert "parse_mode" not in posts[1]  # retry: plain text
+
+
+@pytest.mark.asyncio
+async def test_send_no_retry_on_success():
+    n = _notifier()
+    posts: list[dict] = []
+
+    async def fake_post(url, json=None):
+        posts.append(json)
+        return _Resp(200)
+
+    client = AsyncMock()
+    client.post = fake_post
+    with patch.object(n, "_get_client", return_value=client):
+        ok = await n.send("clean message")
+    assert ok is True and len(posts) == 1  # single HTML post, no fallback
+
+
+@pytest.mark.asyncio
+async def test_send_no_retry_on_non_parse_error():
+    """A non-formatting error (e.g. 403 bad token) must NOT trigger the plain-
+    text retry — only parse-entities 400s do."""
+    n = _notifier()
+    posts: list[dict] = []
+
+    async def fake_post(url, json=None):
+        posts.append(json)
+        return _Resp(403, '{"description":"Forbidden: bot was blocked"}')
+
+    client = AsyncMock()
+    client.post = fake_post
+    with patch.object(n, "_get_client", return_value=client):
+        ok = await n.send("x")
+    assert ok is False and len(posts) == 1

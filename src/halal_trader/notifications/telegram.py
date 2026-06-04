@@ -44,25 +44,36 @@ class TelegramNotifier:
             self._client = None
 
     async def send(self, message: str, *, parse_mode: str = "HTML") -> bool:
-        """Send a message to the configured Telegram chat."""
+        """Send a message to the configured Telegram chat.
+
+        On a parse-entities 400 (a stray ``<`` / ``>`` / ``&`` in interpolated
+        free text — e.g. a headline or a "change X < Y" reason — breaking HTML
+        mode), retry once as PLAIN TEXT so the alert is delivered rather than
+        silently dropped."""
         if not self.enabled:
             return False
 
         url = _API_BASE.format(token=self._bot_token)
+        attempts = [parse_mode, None] if parse_mode else [None]
         try:
             client = self._get_client()
-            resp = await client.post(
-                url,
-                json={
+            for i, pm in enumerate(attempts):
+                body: dict[str, Any] = {
                     "chat_id": self._chat_id,
                     "text": message,
-                    "parse_mode": parse_mode,
                     "disable_web_page_preview": True,
-                },
-            )
-            if resp.status_code == 200:
-                return True
-            logger.warning("Telegram API returned %d: %s", resp.status_code, resp.text)
+                }
+                if pm:
+                    body["parse_mode"] = pm
+                resp = await client.post(url, json=body)
+                if resp.status_code == 200:
+                    return True
+                # Formatting-only failure → retry as plain text (still deliver).
+                if i == 0 and resp.status_code == 400 and "parse entities" in resp.text:
+                    logger.debug("Telegram HTML parse failed; retrying as plain text")
+                    continue
+                logger.warning("Telegram API returned %d: %s", resp.status_code, resp.text)
+                return False
             return False
         except Exception as e:
             logger.warning("Telegram send failed: %s", e)
