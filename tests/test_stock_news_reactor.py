@@ -392,6 +392,65 @@ async def test_quota_breaker_fires_alert_sink_once():
 
 
 @pytest.mark.asyncio
+async def test_quota_breaker_half_open_recovers_after_cooldown():
+    """REGRESSION: a quota dip used to LATCH the breaker until restart, leaving
+    the reactor dead for days (observed live 2026-06-04). After the cooldown the
+    breaker goes half-open: one probe is allowed, and on success it clears so the
+    reactor self-heals without a restart."""
+    import time
+
+    from halal_trader.sentiment.stocks_events import _QUOTA_RECOVERY_COOLDOWN_S
+
+    class _RecoveringLLM:
+        def __init__(self):
+            self.calls = 0
+            self.fail = True
+
+        async def generate_json(self, prompt, system=None):
+            self.calls += 1
+            if self.fail:
+                raise RuntimeError("429 ... 'code': 'insufficient_quota'")
+            return {"score": 0.7, "tag": "earnings", "rationale": "beat"}
+
+    llm = _RecoveringLLM()
+    sink = _CountingAlertSink()
+    c = GPTHeadlineClassifier(llm, alert_sink=sink)
+
+    assert (await c.classify(symbol="NVDA", headline="x")).score == 0.0  # trips
+    assert c._quota_exhausted is True and llm.calls == 1
+    assert (await c.classify(symbol="AAPL", headline="y")).score == 0.0  # short-circuit
+    assert llm.calls == 1  # no probe yet (within cooldown)
+
+    # Cooldown elapses + quota recovered → half-open probe succeeds → breaker clears.
+    c._quota_tripped_at = time.monotonic() - _QUOTA_RECOVERY_COOLDOWN_S - 1
+    llm.fail = False
+    out = await c.classify(symbol="MSFT", headline="real beat")
+    assert out.score == 0.7 and llm.calls == 2
+    assert c._quota_exhausted is False  # self-healed, no restart needed
+    assert len(sink.calls) == 1  # recovery does NOT re-alert
+
+
+@pytest.mark.asyncio
+async def test_quota_breaker_half_open_probe_failure_does_not_realert():
+    """If the half-open probe still hits quota, the breaker stays tripped and
+    re-arms the cooldown WITHOUT re-firing the operator alert."""
+    import time
+
+    from halal_trader.sentiment.stocks_events import _QUOTA_RECOVERY_COOLDOWN_S
+
+    llm = _QuotaLLM()
+    sink = _CountingAlertSink()
+    c = GPTHeadlineClassifier(llm, alert_sink=sink)
+    await c.classify(symbol="NVDA", headline="x")  # trip (alert #1)
+    assert llm.calls == 1 and len(sink.calls) == 1
+
+    c._quota_tripped_at = time.monotonic() - _QUOTA_RECOVERY_COOLDOWN_S - 1
+    await c.classify(symbol="AAPL", headline="y")  # probe still quota-fails
+    assert llm.calls == 2 and c._quota_exhausted is True
+    assert len(sink.calls) == 1  # no re-alert on re-arm
+
+
+@pytest.mark.asyncio
 async def test_quota_breaker_does_not_trip_on_non_quota_errors():
     """Transient 503s, timeouts, network blips must NOT trip the
     breaker — they're recoverable, quota exhaustion isn't."""

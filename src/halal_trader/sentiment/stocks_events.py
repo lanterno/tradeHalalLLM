@@ -414,6 +414,12 @@ _QUOTA_ERROR_MARKERS = ("insufficient_quota", "exceeded your current quota")
 # silently slipping into an unbounded spend (the trigger for tonight's
 # 3,736-call 429 hammering).
 _DEFAULT_DAILY_CLASSIFY_CAP = 250
+# Half-open recovery window for the quota breaker: after tripping, the breaker
+# allows ONE probe call per this interval to test whether quota recovered
+# (period reset / operator top-up) WITHOUT a restart. Bounds wasted calls to
+# ~1/window while letting the reactor self-heal — the original design latched
+# until restart, which left the reactor dead for days after a transient dip.
+_QUOTA_RECOVERY_COOLDOWN_S = 3600.0  # 1 hour
 
 
 def _is_quota_exhausted(error: Exception) -> bool:
@@ -437,12 +443,14 @@ class GPTHeadlineClassifier:
     Two guards added 2026-05-23 after a quota-exhaustion incident
     triggered 3,736 wasted 429 calls to OpenAI in ~9.5h:
 
-    * **Insufficient-quota circuit breaker.** First ``insufficient_quota``
-      response trips a session flag; subsequent calls short-circuit to
-      score=0.0 without hitting the API. One Telegram alert fires via
-      the injected ``AlertSink`` (deduped by its own cooldown).
-      Auto-resets on bot restart — a human top-up is the only valid
-      recovery path.
+    * **Insufficient-quota circuit breaker (half-open).** First
+      ``insufficient_quota`` response trips a session flag; subsequent calls
+      short-circuit to score=0.0 without hitting the API. One Telegram alert
+      fires via the injected ``AlertSink``. After ``_QUOTA_RECOVERY_COOLDOWN_S``
+      the breaker goes half-open: it allows ONE probe call to test whether quota
+      recovered (period reset / top-up) and clears itself on success — so the
+      reactor self-heals without a restart, while a real outage still costs at
+      most ~1 probe/hour (not the 3,736-call hammering that motivated the guard).
     * **Daily classify ceiling.** Hard ceiling on attempted API calls
       per UTC day (default 250). When tripped, classify returns 0.0
       silently and logs once per day. Resets at UTC midnight or
@@ -476,9 +484,12 @@ class GPTHeadlineClassifier:
         self._llm = llm
         self._alert_sink = alert_sink
         self._daily_cap = max(0, daily_classify_cap)
-        # Quota-exhausted session flag — set on first insufficient_quota
-        # and never cleared (a process restart is the only reset).
+        # Quota-exhausted session flag — set on insufficient_quota. Cleared
+        # automatically when a half-open probe succeeds (see classify); a
+        # restart also resets it. ``_quota_tripped_at`` is a monotonic stamp
+        # used to gate the half-open probe cadence.
         self._quota_exhausted = False
+        self._quota_tripped_at: float | None = None
         # Daily counter — counts every attempted API call (success or
         # failure) since both consume rate budget and we want a single
         # truth-source for "how many calls did we make today".
@@ -522,9 +533,21 @@ class GPTHeadlineClassifier:
             self._cap_log_date = self._daily_reset_date
         return True
 
+    def _quota_recovery_due(self) -> bool:
+        """True when the breaker is tripped but the half-open probe window has
+        elapsed, so one call should be allowed through to test for recovery."""
+        if self._quota_tripped_at is None:
+            return True
+        return (time.monotonic() - self._quota_tripped_at) >= _QUOTA_RECOVERY_COOLDOWN_S
+
     async def _trip_quota_breaker(self, *, symbol: str, headline: str) -> None:
-        """Fire the one-shot alert + flip the session flag."""
+        """Flip the session flag + (on the FIRST trip) fire the one-shot alert.
+        Re-trips (a failed half-open probe) only re-arm the cooldown, silently."""
+        already = self._quota_exhausted
         self._quota_exhausted = True
+        self._quota_tripped_at = time.monotonic()
+        if already:
+            return  # re-armed the half-open cooldown; don't re-log / re-alert
         logger.warning(
             "LLM quota exhausted (first detected on %s '%s') — classifier will "
             "short-circuit to score=0.0 until bot restart; top up provider quota "
@@ -553,8 +576,9 @@ class GPTHeadlineClassifier:
     async def classify(
         self, *, symbol: str, headline: str, summary: str = ""
     ) -> HeadlineClassification:
-        # Guard 1: session-level quota breaker. No API call.
-        if self._quota_exhausted:
+        # Guard 1: session-level quota breaker. Short-circuit (no API call)
+        # unless the half-open window has elapsed — then fall through to probe.
+        if self._quota_exhausted and not self._quota_recovery_due():
             self._total_short_circuits += 1
             return HeadlineClassification(score=0.0)
         # Guard 2: daily ceiling. No API call.
@@ -585,6 +609,14 @@ class GPTHeadlineClassifier:
         # for the cloud providers; Ollama populates provider="ollama"
         # too but cost stays 0).
         self._total_successes += 1
+        # Half-open probe succeeded → quota recovered; close the breaker so the
+        # reactor goes fully live again without needing a restart.
+        if self._quota_exhausted:
+            self._quota_exhausted = False
+            self._quota_tripped_at = None
+            logger.info(
+                "LLM quota recovered — classifier breaker reset; news reactor live again"
+            )
         last_usage = getattr(self._llm, "last_usage", None)
         if last_usage is not None:
             provider = getattr(last_usage, "provider", "") or "unknown"
