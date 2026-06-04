@@ -249,13 +249,15 @@ class TradeExecutor(BaseExecutor):
         if latest <= 0:
             return None
         ref = 0.0
-        prev = data.get("prev_daily_bar") or data.get("previous_daily_bar")
+        # Prior session close (real key: prevDailyBar.c), else today's open
+        # (dailyBar.o). Tolerate the snake_case/long-key variants too.
+        prev = data.get("prevDailyBar") or data.get("prev_daily_bar")
         if isinstance(prev, dict):
-            ref = float(prev.get("close", 0) or 0)
+            ref = float(prev.get("c") or prev.get("close") or 0)
         if ref <= 0:
-            bar = data.get("daily_bar")
+            bar = data.get("dailyBar") or data.get("daily_bar")
             if isinstance(bar, dict):
-                ref = float(bar.get("open", 0) or 0)
+                ref = float(bar.get("o") or bar.get("open") or 0)
         if ref <= 0:
             return None
         return (latest - ref) / ref
@@ -1320,18 +1322,30 @@ class TradeExecutor(BaseExecutor):
         return None
 
     def _extract_price(self, snapshot: Any, symbol: str) -> float:
-        """Extract a usable price from a snapshot response."""
+        """Extract a usable latest price from a snapshot response.
+
+        Reuses the canonical :func:`trading.bars.extract_last_price` (which
+        handles the REAL Alpaca shape — ``{symbol: {"latestTrade": {"p": ...}}}``
+        — short camelCase keys) rather than a second, drifted key map. Falls back
+        to the minute/daily-bar close. The previous map looked for
+        ``latest_trade.price`` / ``daily_bar.close`` which never matched the live
+        payload, so every reactor entry skipped with "no usable price".
+        """
+        from halal_trader.trading.bars import extract_last_price
+
+        price = extract_last_price(snapshot, symbol)
+        if price and price > 0:
+            return float(price)
         if isinstance(snapshot, dict):
-            data = snapshot.get(symbol, snapshot)
+            data = snapshot.get(symbol) or snapshot.get(symbol.upper()) or snapshot
             if isinstance(data, dict):
-                trade = data.get("latest_trade", {})
-                if isinstance(trade, dict):
-                    price = trade.get("price", 0)
-                    if price:
-                        return float(price)
-                bar = data.get("daily_bar", {})
-                if isinstance(bar, dict):
-                    close = bar.get("close", 0)
-                    if close:
-                        return float(close)
+                for bar_key in ("minuteBar", "dailyBar", "minute_bar", "daily_bar"):
+                    bar = data.get(bar_key)
+                    if isinstance(bar, dict):
+                        c = bar.get("c") or bar.get("close")
+                        if c:
+                            try:
+                                return float(c)
+                            except (TypeError, ValueError):
+                                pass
         return 0.0

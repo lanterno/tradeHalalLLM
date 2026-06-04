@@ -29,11 +29,16 @@ def _account(portfolio_value: float = 100_000.0) -> Account:
 
 
 def _snapshot(symbol: str, latest: float, prev_close: float) -> dict:
+    # The REAL Alpaca get_stock_snapshot shape: symbol-keyed, short camelCase
+    # keys (latestTrade.p, prevDailyBar.c, dailyBar.o/c). The previous fixture
+    # used latest_trade.price / daily_bar.close — keys that never matched live
+    # output, so the reactor's price/intraday-change extraction silently failed
+    # in production while these tests passed. (Regression: 2026-06-04.)
     return {
         symbol: {
-            "latest_trade": {"price": latest},
-            "prev_daily_bar": {"close": prev_close},
-            "daily_bar": {"open": prev_close, "close": latest},
+            "latestTrade": {"p": latest},
+            "prevDailyBar": {"c": prev_close},
+            "dailyBar": {"o": prev_close, "c": latest},
         }
     }
 
