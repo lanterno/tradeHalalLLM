@@ -121,7 +121,12 @@ class StockNewsEventReactor:
     # genuinely-new catalyst (different tag, different rationale)
     # land within the cycle cadence.
     _DEFAULT_NOTIFY_COOLDOWN_S = 1800  # 30 min
-    _SEEN_CAP = 1000
+    # Dedup capacity. Must comfortably exceed a full session's DISTINCT
+    # (symbol, url) headlines across the watchlist (~700-1000/day observed), or
+    # entries thrash out of the dedup and get re-classified — which burns the
+    # daily classify cap on duplicates and floods the logs (live 2026-06-09:
+    # ~1000 distinct headlines re-scored ~190x -> 233k DEBUG lines + 5 rotations).
+    _SEEN_CAP = 8000
 
     def __init__(
         self,
@@ -142,7 +147,11 @@ class StockNewsEventReactor:
         self._score_threshold = score_threshold
         self._spacing = per_symbol_request_spacing_s
         self._notify_cooldown_s = per_symbol_notify_cooldown_s
-        self._seen: set[tuple[str, str]] = set()
+        # Insertion-ordered dedup (dict preserves order) so eviction is FIFO —
+        # drop the OLDEST seen headlines, not arbitrary ones (a set evicts
+        # randomly, which is what let still-relevant headlines fall back out and
+        # get re-classified). Value is unused; only the key set matters.
+        self._seen: dict[tuple[str, str], None] = {}
         # symbol → wall-clock epoch of last callback fire. Wall-clock
         # (not monotonic) so the cooldown survives a restart — the
         # 2026-05-22 session restarted 5+ times and re-fired the same
@@ -216,7 +225,7 @@ class StockNewsEventReactor:
             return
         seen = raw.get("seen", [])
         self._seen = {
-            (str(pair[0]), str(pair[1]))
+            (str(pair[0]), str(pair[1])): None
             for pair in seen
             if isinstance(pair, (list, tuple)) and len(pair) == 2
         }
@@ -366,13 +375,13 @@ class StockNewsEventReactor:
         key = (symbol, url)
         if key in self._seen:
             return None
-        self._seen.add(key)
+        self._seen[key] = None
         self._state_dirty = True
-        # Bound the dedup set so a long-running reactor doesn't leak.
-        if len(self._seen) > self._SEEN_CAP:
-            extras = list(self._seen)[: self._SEEN_CAP // 2]
-            for k in extras:
-                self._seen.discard(k)
+        # Bound the dedup map so a long-running reactor doesn't leak — evict the
+        # OLDEST entries first (insertion order) rather than arbitrary ones, so
+        # still-relevant recent headlines stay deduped and aren't re-classified.
+        while len(self._seen) > self._SEEN_CAP:
+            self._seen.pop(next(iter(self._seen)))
 
         title = str(item.get("headline") or "").strip()
         if not title:

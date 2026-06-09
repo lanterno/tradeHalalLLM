@@ -847,7 +847,7 @@ def test_save_then_load_roundtrips_seen_and_cooldowns(tmp_path):
     path = tmp_path / "reactor_state.json"
     r1 = _reactor(_FakeClassifier({}))
     r1._state_path = path
-    r1._seen = {("AAPL", "http://a"), ("MSFT", "http://b")}
+    r1._seen = {("AAPL", "http://a"): None, ("MSFT", "http://b"): None}
     r1._last_notify = {"AAPL": 1234.5}
     r1._state_dirty = True
     r1._save_state()
@@ -855,7 +855,8 @@ def test_save_then_load_roundtrips_seen_and_cooldowns(tmp_path):
     r2 = _reactor(_FakeClassifier({}))
     r2._state_path = path
     r2._load_state()
-    assert r2._seen == {("AAPL", "http://a"), ("MSFT", "http://b")}
+    # _seen is an insertion-ordered dict (FIFO dedup); compare its keys.
+    assert set(r2._seen) == {("AAPL", "http://a"), ("MSFT", "http://b")}
     assert r2._last_notify == {"AAPL": 1234.5}
 
 
@@ -864,7 +865,7 @@ def test_load_missing_file_is_noop(tmp_path):
     r = _reactor(_FakeClassifier({}))
     r._state_path = tmp_path / "does_not_exist.json"
     r._load_state()
-    assert r._seen == set()
+    assert r._seen == {}
     assert r._last_notify == {}
 
 
@@ -875,7 +876,7 @@ def test_load_corrupt_file_starts_fresh(tmp_path):
     r = _reactor(_FakeClassifier({}))
     r._state_path = path
     r._load_state()
-    assert r._seen == set()
+    assert r._seen == {}
 
 
 def test_save_is_noop_when_not_dirty(tmp_path):
@@ -892,7 +893,7 @@ def test_save_noop_when_persistence_disabled():
     """state_path=None (default for tests / ad-hoc runs) → never writes."""
     r = _reactor(_FakeClassifier({}))
     assert r._state_path is None
-    r._seen = {("AAPL", "http://a")}
+    r._seen = {("AAPL", "http://a"): None}
     r._state_dirty = True
     r._save_state()  # must not raise even with nowhere to write
 
