@@ -57,29 +57,34 @@ def _find_last_activity(
     bot that fires the same generic event names (e.g. crypto cycles
     failing every 60 s would otherwise mask a stocks-side hang).
     """
-    try:
-        blob = _tail_bytes(log_file)
-    except FileNotFoundError:
-        return None
+    # Scan the current file first, then the most recent rotated sibling
+    # (``.log.1``). Reading moments after a rotation would otherwise see a
+    # fresh/near-empty log, return None, and spuriously fire (or crash) the
+    # dead-man switch — the bot floods + rotates the log under load.
     name_needle = f'"name": "{logger_prefix}'.encode()
-    for raw in reversed(blob.splitlines()):
-        if not raw or name_needle not in raw:
-            continue
+    for path in (log_file, log_file.with_name(log_file.name + ".1")):
         try:
-            rec = json.loads(raw)
-        except (ValueError, TypeError):
+            blob = _tail_bytes(path)
+        except FileNotFoundError:
             continue
-        name = rec.get("name", "")
-        if not isinstance(name, str) or not name.startswith(logger_prefix):
-            continue
-        ts_str = rec.get("timestamp")
-        if not ts_str:
-            continue
-        ts = _parse_ts(ts_str)
-        if ts is None:
-            continue
-        label = rec.get("event") or name
-        return str(label), ts
+        for raw in reversed(blob.splitlines()):
+            if not raw or name_needle not in raw:
+                continue
+            try:
+                rec = json.loads(raw)
+            except (ValueError, TypeError):
+                continue
+            name = rec.get("name", "")
+            if not isinstance(name, str) or not name.startswith(logger_prefix):
+                continue
+            ts_str = rec.get("timestamp")
+            if not ts_str:
+                continue
+            ts = _parse_ts(ts_str)
+            if ts is None:
+                continue
+            label = rec.get("event") or name
+            return str(label), ts
     return None
 
 
@@ -210,8 +215,16 @@ def watchdog(
             last_alert = datetime.fromisoformat(last_alert_iso)
             since = (datetime.now() - last_alert).total_seconds() / 60.0
             if since < dedup_minutes:
+                # gap_minutes is None when no matching log activity was found
+                # (e.g. a log-rotation race) — guard the format so the dedup
+                # path doesn't TypeError and crash the watchdog's alert branch.
+                gap_str = (
+                    f"{gap_minutes:.0f} min gap"
+                    if gap_minutes is not None
+                    else "no recent activity"
+                )
                 click.echo(
-                    f"watchdog: would alert ({gap_minutes:.0f} min gap) but "
+                    f"watchdog: would alert ({gap_str}) but "
                     f"last alert was {since:.0f} min ago (< {dedup_minutes} min dedup)"
                 )
                 return
