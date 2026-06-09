@@ -7,6 +7,7 @@ matching ``TradeRepo`` Protocol lives in ``protocols.py``.
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -20,6 +21,8 @@ from halal_trader.market_hours import (
     trading_day_end_utc,
     trading_day_start_utc,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class TradeRepoImpl:
@@ -228,9 +231,20 @@ class TradeRepoImpl:
 
             results = await session.exec(statement)
             round_trips = []
+            skipped_no_entry = 0
             for trade in results.all():
                 entry = trade.filled_price or trade.price or 0
                 exit_p = trade.exit_price or 0
+                # A round-trip with no known entry price has UNKNOWABLE P&L —
+                # ``(exit_p - 0) * qty`` would book the entire exit value as a
+                # phantom gain (e.g. one AAPL row = +$14k), which is exactly
+                # what inflated the LLM's RECENT PERFORMANCE block to a fake
+                # ~+$71k / PF 29.9. Such rows come from a since-fixed entry
+                # price-extraction bug (2026-06-03/04). Drop them rather than
+                # poison every downstream stat.
+                if entry <= 0:
+                    skipped_no_entry += 1
+                    continue
                 pnl = (exit_p - entry) * trade.quantity
                 pnl_pct = (exit_p - entry) / entry if entry > 0 else 0
                 duration_min = 0.0
@@ -250,5 +264,11 @@ class TradeRepoImpl:
                         "opened_at": trade.timestamp,
                         "closed_at": trade.closed_at,
                     }
+                )
+            if skipped_no_entry:
+                logger.warning(
+                    "Excluded %d closed stock trade(s) with no recorded entry "
+                    "price from round-trip stats (unknowable P&L)",
+                    skipped_no_entry,
                 )
             return round_trips

@@ -53,6 +53,33 @@ async def test_stock_analytics_aggregates_round_trips(engine):
     assert stats.worst_pair == "MSFT"
 
 
+async def test_stock_analytics_excludes_zero_entry_phantom(engine):
+    """A closed BUY with no recorded entry price (a since-fixed price-extraction
+    bug) must not be counted: ``(exit_price - 0) * qty`` would book the whole
+    exit value as a fake gain (this inflated the live perf block to ~+$71k).
+    It must be dropped, leaving the genuine round-trips untouched."""
+    repo = Repository(engine)
+    await _seed_stock_round_trips(engine, repo)  # 3 real trips, total_pnl=150
+    # A phantom: entry price 0, large exit → +$5,000 if (wrongly) counted.
+    tid = await repo.record_trade(symbol="TSLA", side="buy", quantity=10, price=0.0)
+    async with AsyncSession(engine) as session:
+        trade = await session.get(Trade, tid)
+        trade.filled_price = None
+        trade.exit_price = 500.0
+        trade.exit_reason = "take_profit"
+        trade.closed_at = datetime.now(UTC) - timedelta(hours=1)
+        trade.status = "closed"
+        session.add(trade)
+        await session.commit()
+
+    analytics = CrossAssetAnalytics(repo, asset_class="stock")
+    stats = await analytics.compute_stats(lookback_days=7)
+    # Phantom excluded entirely — counts and P&L match the 3 real round-trips.
+    assert stats.total_trades == 3
+    assert stats.total_pnl == 150
+    assert "TSLA" not in {stats.best_pair, stats.worst_pair}
+
+
 async def test_crypto_analytics_path_unchanged(engine):
     """Default asset_class='crypto' must delegate to the original analytics."""
     repo = Repository(engine)
