@@ -384,6 +384,17 @@ class AlpacaMCPClient:
             return result
         return {}
 
+    async def cancel_order(self, symbol: str, order_id: str) -> dict[str, Any]:
+        """Cancel a single open order by id.
+
+        ``symbol`` is accepted for ``Broker``-port parity / logging only —
+        Alpaca cancels purely by order id. Used by the position monitor to
+        clear a resting order that's blocking an exit with a wash-trade
+        rejection (40310000) before it resubmits the market sell.
+        """
+        result = await self.call_tool("cancel_order_by_id", {"order_id": order_id})
+        return result if isinstance(result, dict) else {"result": result}
+
     async def close_position(self, symbol: str) -> Any:
         return await self.call_tool("close_position", {"symbol": symbol})
 

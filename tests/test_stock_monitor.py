@@ -163,6 +163,62 @@ async def test_exit_swallows_mcp_exception(engine):
     await mon._exit(_trade(id_=tid), price=185.0, reason="stop_loss")
 
 
+def _wash_trade_rejection(existing_order_id: str | None = "blocking-ord") -> dict:
+    """Shape of an Alpaca wash-trade (40310000) rejection via the MCP server."""
+    detail: dict = {
+        "code": 40310000,
+        "message": "potential wash trade detected. use complex orders",
+    }
+    if existing_order_id is not None:
+        detail["existing_order_id"] = existing_order_id
+    return {"error": {"message": "API rejected the order", "http_status": 403, "detail": detail}}
+
+
+async def test_exit_recovers_from_wash_trade_by_cancelling_blocker(engine):
+    """A wash-trade rejection names the resting order blocking the sell — the
+    monitor must cancel it and retry ONCE rather than looping a doomed sell."""
+    repo = Repository(engine)
+    tid = await repo.record_trade(
+        symbol="AAPL", side="buy", quantity=10, price=200.0, stop_loss=190.0, target_price=220.0
+    )
+    mcp = MagicMock()
+    mcp.place_order = AsyncMock(
+        side_effect=[_wash_trade_rejection("blocking-ord"), {"id": "ord-2", "status": "filled"}]
+    )
+    mcp.cancel_order = AsyncMock(return_value={})
+    mon = _monitor(repo, mcp=mcp)
+
+    await mon._exit(_trade(id_=tid), price=185.0, reason="stop_loss")
+
+    # Cancelled the exact blocker, then retried the sell → trade closed.
+    mcp.cancel_order.assert_awaited_once_with("AAPL", "blocking-ord")
+    assert mcp.place_order.await_count == 2
+    async with engine.begin() as conn:
+        row = await conn.execute(sa.text("SELECT status FROM trades WHERE id = :i"), {"i": tid})
+        assert row.first()[0] == "closed"
+
+
+async def test_exit_wash_trade_without_blocker_id_does_not_cancel(engine):
+    """A 40310000 with no existing_order_id can't be auto-recovered — abort
+    cleanly (don't cancel a guessed order); the position stays open."""
+    repo = Repository(engine)
+    tid = await repo.record_trade(
+        symbol="AAPL", side="buy", quantity=10, price=200.0, stop_loss=190.0, target_price=220.0
+    )
+    mcp = MagicMock()
+    mcp.place_order = AsyncMock(return_value=_wash_trade_rejection(existing_order_id=None))
+    mcp.cancel_order = AsyncMock(return_value={})
+    mon = _monitor(repo, mcp=mcp)
+
+    await mon._exit(_trade(id_=tid), price=185.0, reason="stop_loss")
+
+    mcp.cancel_order.assert_not_awaited()
+    assert mcp.place_order.await_count == 1
+    async with engine.begin() as conn:
+        row = await conn.execute(sa.text("SELECT status FROM trades WHERE id = :i"), {"i": tid})
+        assert row.first()[0] != "closed"
+
+
 # ── Repo round-trip surface ─────────────────────────────────────
 
 

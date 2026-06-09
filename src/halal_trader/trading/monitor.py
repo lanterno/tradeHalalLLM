@@ -265,8 +265,13 @@ class StockPositionMonitor:
                 price,
             )
 
-    async def _exit(self, trade: Any, price: float, reason: str) -> None:
-        """Submit a market sell to close the position; record exit on success."""
+    async def _place_exit_order(self, trade: Any, reason: str) -> dict[str, Any] | None:
+        """Submit the market sell that flattens ``trade``.
+
+        Returns the raw MCP result as a dict, or ``None`` if the call raised
+        (already logged). Non-dict MCP shapes are wrapped so callers can probe
+        ``.get("error")`` uniformly.
+        """
         try:
             result = await self._mcp.place_order(
                 symbol=trade.symbol,
@@ -277,12 +282,69 @@ class StockPositionMonitor:
             )
         except Exception as e:
             logger.warning("Stock exit failed for %s (%s): %s", trade.symbol, reason, e)
+            return None
+        return result if isinstance(result, dict) else {"_raw": result}
+
+    @staticmethod
+    def _wash_trade_conflict_id(result: dict[str, Any]) -> str | None:
+        """Extract the resting-order id from an Alpaca wash-trade rejection.
+
+        A market sell is rejected with code 40310000 ("potential wash trade
+        detected") when an order on the same symbol is already resting (e.g. a
+        leftover protective stop). The rejection carries that order's id in
+        ``error.detail.existing_order_id`` — return it so the caller can cancel
+        the blocker and retry, instead of re-submitting the same doomed sell on
+        every monitor tick.
+        """
+        err = result.get("error")
+        if not isinstance(err, dict):
+            return None
+        detail = err.get("detail")
+        if not isinstance(detail, dict) or detail.get("code") != 40310000:
+            return None
+        oid = detail.get("existing_order_id")
+        return str(oid) if oid else None
+
+    async def _exit(self, trade: Any, price: float, reason: str) -> None:
+        """Submit a market sell to close the position; record exit on success."""
+        result = await self._place_exit_order(trade, reason)
+        if result is None:
             return
 
         # The MCP shape varies; treat anything truthy with a non-error as success.
-        if isinstance(result, dict) and result.get("error"):
-            logger.warning("Alpaca rejected exit for %s: %s", trade.symbol, result.get("error"))
-            return
+        if result.get("error"):
+            # Wash-trade rejection: a resting order on this symbol is blocking
+            # the sell. Cancel that order and retry ONCE — otherwise the monitor
+            # loops a bare market sell every tick forever (seen re-submitting
+            # every ~30 s against a leftover stop). Other rejections just abort.
+            conflict_id = self._wash_trade_conflict_id(result)
+            if conflict_id is None:
+                logger.warning(
+                    "Alpaca rejected exit for %s: %s", trade.symbol, result.get("error")
+                )
+                return
+            logger.warning(
+                "Exit on %s blocked by wash trade vs order %s — cancelling it and retrying",
+                trade.symbol,
+                conflict_id,
+            )
+            try:
+                await self._mcp.cancel_order(trade.symbol, conflict_id)
+            except Exception as e:  # noqa: BLE001
+                logger.warning(
+                    "cancel_order(%s) failed for %s: %s", conflict_id, trade.symbol, e
+                )
+                return
+            result = await self._place_exit_order(trade, reason)
+            if result is None:
+                return
+            if result.get("error"):
+                logger.warning(
+                    "Exit retry after wash-trade cancel still rejected for %s: %s",
+                    trade.symbol,
+                    result.get("error"),
+                )
+                return
 
         await self._repo.close_trade(trade.id, exit_price=price, exit_reason=reason)
         self._high_water.pop(trade.id, None)
