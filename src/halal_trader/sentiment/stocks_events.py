@@ -418,11 +418,12 @@ class StockNewsEventReactor:
 
 
 _QUOTA_ERROR_MARKERS = ("insufficient_quota", "exceeded your current quota")
-# Default per-UTC-day call ceiling. Yesterday's reactor scored 188
-# headlines in a 6h session; 250 leaves room for an active day without
-# silently slipping into an unbounded spend (the trigger for tonight's
-# 3,736-call 429 hammering).
-_DEFAULT_DAILY_CLASSIFY_CAP = 250
+# Default per-UTC-day call ceiling — pure cost backstop (see config.py).
+# Raised 250 -> 1500 on 2026-06-09: a full day is ~700-1000 DISTINCT
+# headlines, so 250 silently starved the reactor once dedup stopped
+# re-scoring duplicates. Quota-exhaustion call-spam is handled by the
+# half-open quota breaker now, not this ceiling.
+_DEFAULT_DAILY_CLASSIFY_CAP = 1500
 # Half-open recovery window for the quota breaker: after tripping, the breaker
 # allows ONE probe call per this interval to test whether quota recovered
 # (period reset / operator top-up) WITHOUT a restart. Bounds wasted calls to

@@ -218,10 +218,14 @@ class StockSettings(BaseSettings):
 
     # News-momentum reactor: hard ceiling on classifier API calls per
     # UTC day. Trip is silent (score=0.0) with one warning log per day.
-    # 0 disables the cap. Backstop against runaway polling spend after
-    # the 2026-05-22 incident where a single quota exhaustion led to
-    # 3,736 wasted 429 calls in ~9.5h.
-    reactor_daily_classify_cap: int = Field(default=250, ge=0)
+    # 0 disables the cap. Pure cost backstop against runaway polling spend.
+    # Raised 250 -> 1500 on 2026-06-09: 250 silently dropped ~65-75% of a
+    # day's ~700-1000 DISTINCT headlines once dedup stopped re-scoring
+    # duplicates, starving the "fast in" edge for trivial savings
+    # (~$0.0001/call -> ~$0.15/day at the new ceiling). The quota-exhaustion
+    # call-spam that originally motivated 250 (2026-05-22: 3,736 wasted 429s)
+    # is now owned by the classifier's half-open quota breaker, not this cap.
+    reactor_daily_classify_cap: int = Field(default=1500, ge=0)
 
     # News-momentum reactor: entry execution (Phase 2B / "fast in").
     # When enabled, a high-confidence scored catalyst places a real

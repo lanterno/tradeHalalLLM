@@ -576,7 +576,10 @@ def test_settings_exposes_reactor_daily_classify_cap():
     from halal_trader.config import StockSettings
 
     s = StockSettings()
-    assert s.reactor_daily_classify_cap == 250  # default matches plan
+    # Raised 250 -> 1500 on 2026-06-09 (cost backstop only; quota-spam is now
+    # handled by the half-open quota breaker, so the cap no longer needs to be
+    # tight enough to bound 429 hammering — see config.py rationale).
+    assert s.reactor_daily_classify_cap == 1500
 
 
 def test_settings_reactor_cap_is_configurable():
