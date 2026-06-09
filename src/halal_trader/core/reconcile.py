@@ -45,6 +45,16 @@ _NON_EXECUTED_STATUSES: frozenset[str] = frozenset(
     }
 )
 
+# Stocks reconcile aggregates the FULL recent-trades ledger (not just open
+# rows), so on top of the never-executed statuses it must also drop CLOSED
+# positions: a closed BUY is an exit, not a holding. Every exit in this bot
+# is a full-position close — the SL/TP/trailing monitor flips the BUY row to
+# 'closed' (no SELL row), and the LLM-sell path closes the BUY(s) too — so a
+# 'closed' BUY left in the ledger would otherwise phantom-count as still held
+# (the chronic ~100% stock drift). The crypto path queries open trades only,
+# so it keeps the narrower set above.
+_NON_OPEN_STATUSES: frozenset[str] = _NON_EXECUTED_STATUSES | {TradeStatus.CLOSED.value}
+
 # A stocks fill recorded within this window may not yet be visible on
 # Alpaca's ``/v2/positions`` cache. When drift is observed on such a
 # symbol we downgrade the alert to a settlement-race note instead of a
@@ -227,16 +237,29 @@ def _aggregate_stocks_positions(
     now: datetime,
     grace: timedelta,
 ) -> tuple[dict[str, float], set[str]]:
-    """Fold Trade rows into (signed-quantity per symbol, symbols still settling).
+    """Fold Trade rows into (open-quantity per symbol, symbols still settling).
 
-    Skips rows whose ``status`` is non-executed (pending, rejected, …) —
-    a row that never moved shares must not inflate the DB-side sum;
-    this filter is the core fix for the historical orphan-counting bug.
-    For executed rows, ``filled_quantity`` is preferred but the legacy
-    ``quantity`` is accepted as a fallback (older fills predate the
-    fill-confirmer that populates ``filled_quantity``). ``filled_at``
-    newer than (now - grace) marks the symbol as "settling" so callers
-    can downgrade the alert during the broker's propagation window.
+    A stock position is OPEN iff it has a filled/accepted BUY row that has
+    not yet been closed. This bot records every exit as a FULL-position
+    close, two ways: the SL/TP/trailing monitor flips the BUY row to
+    status='closed' writing no SELL row, and the LLM-sell path writes a
+    'filled' SELL row AND closes the BUY(s) via close_open_trades_for_symbol.
+    So neither 'closed' BUY rows nor SELL rows represent a current holding —
+    they are exits. The old signed buy-minus-sell model summed them and
+    phantom-counted every monitor exit (a closed BUY with no offsetting SELL)
+    as still held, which drove the chronic ~100% stock drift and corrupted
+    the LLM's RECENT PERFORMANCE block.
+
+    Therefore: count only non-closed BUY rows (filled / open / legacy-blank),
+    preferring ``filled_quantity`` over the requested ``quantity`` (older
+    fills predate the fill-confirmer). Non-executed statuses, closed
+    positions, and SELL legs never contribute. ``filled_at`` newer than
+    (now - grace) marks the symbol "settling" so callers can downgrade the
+    alert during the broker's position-cache propagation window.
+
+    NOTE: assumes exits are full-position (true today — every sell closes the
+    whole BUY). A real partial-exit path would have to record the residual as
+    its own open BUY row, or this aggregation would over-report.
     """
     db_by_symbol: dict[str, float] = {}
     settling: set[str] = set()
@@ -244,11 +267,15 @@ def _aggregate_stocks_positions(
         symbol = (row.get("symbol") or "").upper()
         if not symbol:
             continue
+        # SELL rows are exit legs, never holdings (the matching BUY carries
+        # the position and is closed on exit).
+        side = (row.get("side") or "").lower()
+        if side != "buy":
+            continue
         status = (row.get("status") or "").lower()
-        # Drop non-executed rows entirely — they never moved shares.
-        # Unknown/empty statuses default to "trust the row" so legacy
-        # fixtures keep their semantics.
-        if status in _NON_EXECUTED_STATUSES:
+        # Drop never-executed AND already-exited (closed) BUYs. Unknown/empty
+        # statuses default to "trust the row" so legacy fixtures keep working.
+        if status in _NON_OPEN_STATUSES:
             continue
         filled_raw = row.get("filled_quantity")
         try:
@@ -266,11 +293,7 @@ def _aggregate_stocks_positions(
                 qty = 0.0
         if qty <= 0:
             continue
-        side = (row.get("side") or "").lower()
-        sign = 1 if side == "buy" else -1 if side == "sell" else 0
-        if sign == 0:
-            continue
-        db_by_symbol[symbol] = db_by_symbol.get(symbol, 0.0) + sign * qty
+        db_by_symbol[symbol] = db_by_symbol.get(symbol, 0.0) + qty
         filled_at = _parse_iso(row.get("filled_at"))
         if filled_at is not None and (now - filled_at) <= grace:
             settling.add(symbol)

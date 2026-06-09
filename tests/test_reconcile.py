@@ -131,13 +131,36 @@ async def test_stocks_clean_when_match(engine):
 
 
 @pytest.mark.asyncio
-async def test_stocks_signed_aggregation(engine):
+async def test_stocks_excludes_closed_buys(engine):
+    """A closed BUY is an exited position, not a holding. The SL/TP/trailing
+    monitor flips the BUY row to status='closed' (no SELL row), so counting it
+    would phantom a long-gone position as still held — the chronic ~100%
+    stock-drift bug. Broker is flat; DB must agree (no drift)."""
     repo = Repository(engine)
-    await repo.record_trade(symbol="AAPL", side="buy", quantity=10, status="filled")
-    await repo.record_trade(symbol="AAPL", side="sell", quantity=4, status="filled")
+    bid = await repo.record_trade(symbol="AAPL", side="buy", quantity=10, status="filled")
+    await repo.close_trade(bid, exit_price=205.0, exit_reason="stop_loss")
 
     broker = MagicMock()
-    broker.get_all_positions = AsyncMock(return_value=[_stock_position("AAPL", 6)])
+    broker.get_all_positions = AsyncMock(return_value=[])  # flat — position exited
+
+    report = await reconcile.reconcile_stocks(engine=engine, broker=broker)
+    assert not report.has_drift
+
+
+@pytest.mark.asyncio
+async def test_stocks_ignores_sell_legs_counts_open_buys(engine):
+    """The LLM-sell path writes a 'filled' SELL row AND closes the BUY(s), so a
+    SELL row never represents a holding. Only the still-open BUY is counted."""
+    repo = Repository(engine)
+    # An exited LLM round-trip: a closed BUY plus its filled SELL leg.
+    sold = await repo.record_trade(symbol="MSFT", side="buy", quantity=8, status="filled")
+    await repo.close_trade(sold, exit_price=410.0, exit_reason="llm_sell")
+    await repo.record_trade(symbol="MSFT", side="sell", quantity=8, status="filled")
+    # A genuinely open position on the same symbol.
+    await repo.record_trade(symbol="MSFT", side="buy", quantity=5, status="filled")
+
+    broker = MagicMock()
+    broker.get_all_positions = AsyncMock(return_value=[_stock_position("MSFT", 5)])
 
     report = await reconcile.reconcile_stocks(engine=engine, broker=broker)
     assert not report.has_drift
