@@ -137,27 +137,41 @@ class PerformanceAnalytics:
 
     @staticmethod
     def _compute_max_drawdown(round_trips: list[dict[str, Any]]) -> float:
-        """Compute max drawdown percentage from chronological round-trips."""
+        """Compute max drawdown as a fraction from chronological round-trips.
+
+        Compounds each trade's ``pnl_pct`` (already a fraction in both the
+        crypto and stock round-trip dicts) into a unit equity curve and takes
+        the worst peak-to-trough drop relative to the running peak — bounded
+        in [0, 1) by construction.
+
+        The previous version summed DOLLAR pnl and normalized by the peak of
+        cumulative P&L (not equity). With small per-trade P&L the cumulative
+        peak is tiny, so any losing streak that drove the curve below zero
+        produced ratios > 1 — the live stock prompt printed "Max drawdown:
+        242.52%" (peak +$50, trough −$71), telling the LLM the account was
+        deep underwater while real equity moved a fraction of a percent. It
+        also degenerated to 0.0 whenever the curve never went positive,
+        hiding genuine drawdowns. Per-trade compounding slightly overstates
+        true account-equity drawdown (it assumes sequential full-capital
+        allocation) — acceptable conservatism for a prompt signal.
+        """
         sorted_trips = sorted(round_trips, key=lambda r: r.get("closed_at") or "")
         if not sorted_trips:
             return 0.0
 
-        cumulative = 0.0
-        peak = 0.0
+        equity = 1.0
+        peak = 1.0
         max_dd = 0.0
 
         for rt in sorted_trips:
-            cumulative += rt["pnl"]
-            if cumulative > peak:
-                peak = cumulative
-            dd = peak - cumulative
+            equity *= 1.0 + rt.get("pnl_pct", 0.0)
+            if equity > peak:
+                peak = equity
+            dd = (peak - equity) / peak
             if dd > max_dd:
                 max_dd = dd
 
-        # Express as percentage of peak (or initial equity if peak is 0)
-        if peak > 0:
-            return max_dd / peak
-        return 0.0
+        return max_dd
 
     @staticmethod
     def _compute_streak(round_trips: list[dict[str, Any]]) -> tuple[int, str]:

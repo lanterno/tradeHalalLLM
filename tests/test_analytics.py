@@ -128,6 +128,13 @@ class TestMaxDrawdown:
         assert dd == 0.0
 
     def test_drawdown_after_peak(self):
+        """Two +1% wins then -1.5%/-0.5% losses → the worst peak-to-trough on
+        the compounded equity curve is 1 - (0.985 * 0.995) ≈ 1.99%.
+
+        The old dollar-cumulative version normalized by the PEAK OF CUMULATIVE
+        P&L (not equity) and asserted 20/20 = 100% drawdown for trades that
+        individually moved at most 1.5% — the same defect that printed a fake
+        'Max drawdown: 242.52%' into the live stock LLM prompt."""
         trips = [
             _make_rt("A", 10, 0.01, closed_at="2025-01-01T12:00:00"),
             _make_rt("A", 10, 0.01, closed_at="2025-01-01T12:05:00"),
@@ -135,7 +142,20 @@ class TestMaxDrawdown:
             _make_rt("A", -5, -0.005, closed_at="2025-01-01T12:15:00"),
         ]
         dd = PerformanceAnalytics._compute_max_drawdown(trips)
-        assert dd == pytest.approx(20.0 / 20.0)
+        assert dd == pytest.approx(1 - 0.985 * 0.995)
+
+    def test_drawdown_bounded_below_one_even_when_cumulative_goes_negative(self):
+        """Regression for the 242% bug: a losing streak that drives cumulative
+        P&L below zero must still yield a drawdown fraction < 1, not a
+        peak-relative blowup."""
+        trips = [
+            _make_rt("A", 50, 0.005, closed_at="2025-01-01T12:00:00"),  # peak +$50
+            _make_rt("A", -60, -0.006, closed_at="2025-01-01T12:05:00"),
+            _make_rt("A", -61, -0.006, closed_at="2025-01-01T12:10:00"),  # trough -$71
+        ]
+        dd = PerformanceAnalytics._compute_max_drawdown(trips)
+        # Old math: (50 + 71) / 50 = 2.42 → printed "242%". New math: ~1.2%.
+        assert 0.0 < dd < 0.05
 
     def test_empty_trips(self):
         dd = PerformanceAnalytics._compute_max_drawdown([])
