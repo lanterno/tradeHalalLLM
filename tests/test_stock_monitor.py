@@ -219,6 +219,105 @@ async def test_exit_wash_trade_without_blocker_id_does_not_cancel(engine):
         assert row.first()[0] != "closed"
 
 
+# ── Ledger SELL row on monitor exits (reconcile consistency) ────
+
+
+async def _sell_rows(engine, symbol: str) -> list:
+    async with engine.begin() as conn:
+        rows = await conn.execute(
+            sa.text(
+                "SELECT side, status, quantity, filled_quantity, filled_price, "
+                "order_id, entry_type, llm_reasoning FROM trades "
+                "WHERE symbol = :s AND side = 'sell'"
+            ),
+            {"s": symbol},
+        )
+        return rows.all()
+
+
+async def test_exit_records_ledger_sell_row(engine):
+    """A successful monitor exit must record the executed sell as its own
+    SELL row (status='filled', qty mirroring the BUY) so the reconcile
+    signed sum nets to zero — close_trade alone leaves the BUY phantom-
+    counting as a still-held position (the chronic ~100% stock drift)."""
+    repo = Repository(engine)
+    tid = await repo.record_trade(
+        symbol="AAPL", side="buy", quantity=10, price=200.0, stop_loss=190.0, target_price=220.0
+    )
+    mon = _monitor(repo)
+
+    await mon._exit(_trade(id_=tid), price=185.0, reason="stop_loss")
+
+    sells = await _sell_rows(engine, "AAPL")
+    assert len(sells) == 1
+    s = sells[0]._mapping
+    assert s["status"] == "filled"  # 'pending' default is reconcile-invisible
+    assert s["quantity"] == 10
+    assert s["filled_quantity"] == 10
+    assert s["filled_price"] == 185.0
+    assert s["order_id"] == "ord-1"
+    assert s["entry_type"] == "monitor_exit"
+    assert "stop_loss" in s["llm_reasoning"]
+
+
+async def test_exit_records_no_sell_row_on_rejection(engine):
+    """A rejected exit (no shares moved at the broker) must NOT write a
+    SELL row — a phantom sell would flip the reconcile net negative."""
+    repo = Repository(engine)
+    tid = await repo.record_trade(
+        symbol="AAPL", side="buy", quantity=10, price=200.0, stop_loss=190.0, target_price=220.0
+    )
+    mcp = MagicMock()
+    mcp.place_order = AsyncMock(return_value={"error": "rejected"})
+    mon = _monitor(repo, mcp=mcp)
+
+    await mon._exit(_trade(id_=tid), price=185.0, reason="stop_loss")
+
+    assert await _sell_rows(engine, "AAPL") == []
+
+
+async def test_exit_wash_trade_retry_records_one_sell_row(engine):
+    """The wash-trade cancel+retry path must record exactly ONE SELL row,
+    carrying the successful retry's order id (not the rejected attempt's)."""
+    repo = Repository(engine)
+    tid = await repo.record_trade(
+        symbol="AAPL", side="buy", quantity=10, price=200.0, stop_loss=190.0, target_price=220.0
+    )
+    mcp = MagicMock()
+    mcp.place_order = AsyncMock(
+        side_effect=[_wash_trade_rejection("blocking-ord"), {"id": "ord-2", "status": "filled"}]
+    )
+    mcp.cancel_order = AsyncMock(return_value={})
+    mon = _monitor(repo, mcp=mcp)
+
+    await mon._exit(_trade(id_=tid), price=185.0, reason="stop_loss")
+
+    sells = await _sell_rows(engine, "AAPL")
+    assert len(sells) == 1
+    assert sells[0]._mapping["order_id"] == "ord-2"
+
+
+async def test_exit_sell_row_nets_reconcile_clean(engine):
+    """End-to-end pin of the fix's purpose: after a monitor exit, the
+    reconcile signed sum (closed BUY + new filled SELL) nets to zero, so a
+    flat broker shows NO drift. Before this fix the closed BUY phantom-
+    counted +10 against broker 0 → permanent 100% drift per exit."""
+    from halal_trader.core import reconcile
+
+    repo = Repository(engine)
+    tid = await repo.record_trade(
+        symbol="AAPL", side="buy", quantity=10, price=200.0, stop_loss=190.0, target_price=220.0
+    )
+    mon = _monitor(repo)
+    await mon._exit(_trade(id_=tid), price=185.0, reason="stop_loss")
+
+    broker = MagicMock()
+    broker.get_all_positions = AsyncMock(return_value=[])  # flat — position exited
+
+    report = await reconcile.reconcile_stocks(engine=engine, broker=broker)
+    assert not report.has_drift
+
+
 # ── Repo round-trip surface ─────────────────────────────────────
 
 
@@ -406,6 +505,7 @@ async def test_trend_break_exits_winning_reactor_below_ma():
     with reason 'trend_break' instead of waiting for the wide stop."""
     repo = MagicMock()
     repo.close_trade = AsyncMock()
+    repo.record_trade = AsyncMock(return_value=1)
     mcp = MagicMock()
     # 20 closes averaging ~210; latest price 205 < SMA → break.
     mcp.get_stock_bars = AsyncMock(return_value=_bars([210.0] * 20))
@@ -419,6 +519,10 @@ async def test_trend_break_exits_winning_reactor_below_ma():
     assert exited is True
     repo.close_trade.assert_awaited_once()
     assert repo.close_trade.await_args.kwargs["exit_reason"] == "trend_break"
+    # The executed sell is also recorded as a ledger SELL row.
+    repo.record_trade.assert_awaited_once()
+    assert repo.record_trade.await_args.kwargs["side"] == "sell"
+    assert repo.record_trade.await_args.kwargs["entry_type"] == "monitor_exit"
 
 
 async def test_trend_break_skips_losing_position():

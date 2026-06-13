@@ -86,7 +86,12 @@ async def ab_report(engine: AsyncEngine, *, since: datetime, until: datetime) ->
             shadow_by_symbol[asset or "?"] = int(n)
 
         # Live filled trades from the legacy table (raw SQL — avoids importing
-        # the legacy SQLModel into this package's metadata).
+        # the legacy SQLModel into this package's metadata). Both sides count
+        # by design — the shadow book also counts its sell legs. NOTE: as of
+        # 2026-06-11 the live monitor records its SL/TP/trailing exits as
+        # 'filled' SELL rows (previously only LLM sells produced one), so
+        # live_total includes monitor-exit legs from that date; churn_reduction
+        # values are not comparable across windows spanning that change.
         live_rows = await conn.execute(
             sa.text(
                 "SELECT symbol, count(*) FROM trades "

@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import UTC, datetime
 from typing import Any
 
 from halal_trader.db.repos import TradeRepo
@@ -305,8 +306,70 @@ class StockPositionMonitor:
         oid = detail.get("existing_order_id")
         return str(oid) if oid else None
 
+    async def _record_exit_sell(
+        self,
+        trade: Any,
+        price: float,
+        reason: str,
+        result: dict[str, Any],
+        submitted_at: datetime,
+    ) -> None:
+        """Record the monitor's executed market sell as its own SELL Trade row.
+
+        The LLM-sell path records a SELL row AND closes the BUY; the monitor
+        historically only closed the BUY, so the signed buy-minus-sell ledger
+        that ``core/reconcile.py`` aggregates phantom-counted every monitor
+        exit as a still-held position (the chronic ~100% stock drift).
+        Mirror the EOD synthetic-SELL contract (executor ``close_all``):
+
+        * ``status='filled'`` explicitly — the ``record_trade`` default
+          ``'pending'`` is in reconcile's non-executed skip set (the fix would
+          be a silent no-op) and would later be flipped ``rejected`` by the
+          fix-orphans backfiller.
+        * ``filled_quantity`` mirrors what the BUY contributed to the signed
+          sum (``filled_quantity`` preferred, ``quantity`` fallback) so the
+          pair nets to exactly zero.
+        * ``entry_type='monitor_exit'`` tags the row for audit queries.
+
+        Forward-only by design: historical monitor exits must NOT be
+        backfilled — past drift was already compensated by applied
+        RECONCILE-ADJ rows, and a backfill would double-correct.
+
+        Best-effort: the position is already closed at the broker and in the
+        DB by the time this runs, so a ledger-write failure must not break
+        the exit flow (notifier / retrainer / post-close still follow).
+        """
+        from halal_trader.trading.executor import _extract_order_id
+
+        qty = float(trade.filled_quantity or trade.quantity or 0)
+        if qty <= 0:
+            return
+        try:
+            await self._repo.record_trade(
+                symbol=trade.symbol,
+                side="sell",
+                quantity=qty,
+                price=price,
+                order_id=_extract_order_id(result),
+                status="filled",
+                llm_reasoning=f"monitor exit ({reason})",
+                submitted_at=submitted_at,
+                filled_at=datetime.now(UTC),
+                filled_price=price,
+                filled_quantity=qty,
+                entry_type="monitor_exit",
+            )
+        except Exception as e:  # noqa: BLE001 — ledger row is best-effort
+            logger.warning(
+                "Failed to record monitor-exit SELL row for %s (%s): %s",
+                trade.symbol,
+                reason,
+                e,
+            )
+
     async def _exit(self, trade: Any, price: float, reason: str) -> None:
         """Submit a market sell to close the position; record exit on success."""
+        submitted_at = datetime.now(UTC)
         result = await self._place_exit_order(trade, reason)
         if result is None:
             return
@@ -347,6 +410,13 @@ class StockPositionMonitor:
                 return
 
         await self._repo.close_trade(trade.id, exit_price=price, exit_reason=reason)
+        # Ledger consistency: record the executed sell as its own SELL row so
+        # the reconcile signed sum nets this position to zero (close_trade
+        # alone leaves the BUY phantom-counting against the broker). Runs
+        # AFTER close_trade so a ledger failure can never leave the position
+        # un-closed and re-selling every tick. The retrainer / post-close
+        # hooks below stay keyed on the BUY id — the SELL row is ledger-only.
+        await self._record_exit_sell(trade, price, reason, result, submitted_at)
         self._high_water.pop(trade.id, None)
         self._last_trend_check.pop(trade.id, None)
         logger.info("Closed %s on %s at %.2f", trade.symbol, reason, price)
@@ -377,9 +447,6 @@ class StockPositionMonitor:
 
         if self._close_recorders is not None:
             try:
-                from datetime import UTC
-                from datetime import datetime as _dt
-
                 from halal_trader.core.post_close import (
                     CloseEvent,
                     record_close,
@@ -390,7 +457,7 @@ class StockPositionMonitor:
                 pnl_usd = (price - entry) * (trade.filled_quantity or trade.quantity or 0)
                 hold_seconds = 0
                 if trade.timestamp:
-                    now_ts = _dt.now(UTC)
+                    now_ts = datetime.now(UTC)
                     ts = (
                         trade.timestamp
                         if trade.timestamp.tzinfo
