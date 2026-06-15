@@ -154,7 +154,13 @@ def test_payload_tamper_invalidates_signature():
 def test_signature_tamper_invalidates():
     """Modify even one byte of the signature → verify False."""
     signed = generate_signer().sign(_receipt())
-    bad_sig = signed.signature_b64url[:-2] + "AA"  # last 2 chars mangled
+    # Flip the FIRST base64url char to a different one — this always alters
+    # byte 0 of the decoded signature, so the tamper is guaranteed real.
+    # (The old ``[:-2] + "AA"`` was a no-op whenever the signature already
+    # ended in "AA" — a ~5.6% chance — which made this test fail randomly in
+    # the full suite while passing in isolation.)
+    first = signed.signature_b64url[0]
+    bad_sig = ("B" if first != "B" else "C") + signed.signature_b64url[1:]
     tampered = SignedReceipt(
         receipt=signed.receipt,
         signature_b64url=bad_sig,
