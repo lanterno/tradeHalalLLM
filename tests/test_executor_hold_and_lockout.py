@@ -123,6 +123,68 @@ async def test_sell_allowed_when_youngest_buy_past_hold():
     assert result["status"] != "rejected"
 
 
+# ── short-guard: never sell more than the held LONG quantity ────
+
+
+@pytest.mark.asyncio
+async def test_sell_skipped_when_not_held_long():
+    """A sized SELL of a symbol the broker doesn't hold long (flat or already
+    short) must be SKIPPED — selling it would open/deepen a haram short on a
+    margin account."""
+    repo = MagicMock()
+    repo.get_open_trades = AsyncMock(return_value=[])
+    repo.record_trade = AsyncMock(return_value=1)
+    executor = _executor(repo, min_hold=0, cooldown=0)
+    executor._broker.get_all_positions = AsyncMock(
+        return_value=[SimpleNamespace(symbol="AMD", qty=-144.0)]  # already short
+    )
+
+    result = await executor._execute_sell(_decision_sell("AMD", quantity=144))
+
+    assert result["status"] == "skipped"
+    assert "not held long" in result["reason"].lower()
+    executor._broker.place_order.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_sell_clamped_to_held_quantity():
+    """A sized SELL larger than the held long position is clamped down to the
+    holding so the position can at most go flat, never short."""
+    repo = MagicMock()
+    repo.get_open_trades = AsyncMock(return_value=[])
+    repo.record_trade = AsyncMock(return_value=1)
+    repo.close_open_trades_for_symbol = AsyncMock(return_value=1)
+    executor = _executor(repo, min_hold=0, cooldown=0)
+    executor._broker.get_all_positions = AsyncMock(
+        return_value=[SimpleNamespace(symbol="AAPL", qty=10.0)]
+    )
+
+    result = await executor._execute_sell(_decision_sell("AAPL", quantity=50))
+
+    assert result["status"] != "rejected"
+    assert result["status"] != "skipped"
+    # Order placed for the HELD 10, not the requested 50.
+    assert executor._broker.place_order.await_args.kwargs["quantity"] == 10.0
+
+
+@pytest.mark.asyncio
+async def test_sell_within_holding_is_unchanged():
+    """A sell within the held quantity passes through untouched."""
+    repo = MagicMock()
+    repo.get_open_trades = AsyncMock(return_value=[])
+    repo.record_trade = AsyncMock(return_value=1)
+    repo.close_open_trades_for_symbol = AsyncMock(return_value=1)
+    executor = _executor(repo, min_hold=0, cooldown=0)
+    executor._broker.get_all_positions = AsyncMock(
+        return_value=[SimpleNamespace(symbol="AAPL", qty=50.0)]
+    )
+
+    result = await executor._execute_sell(_decision_sell("AAPL", quantity=10))
+
+    assert result["status"] != "rejected"
+    assert executor._broker.place_order.await_args.kwargs["quantity"] == 10
+
+
 @pytest.mark.asyncio
 async def test_sell_blocked_uses_youngest_buy_when_multiple_open():
     """Multiple BUYs open: youngest one determines the gate."""

@@ -14,6 +14,7 @@ produces a ``rejected`` row.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -192,6 +193,10 @@ async def test_sell_fill_closes_open_buy_row():
     14:45 ET on QCOM)."""
     broker = MagicMock()
     broker.get_account_info = AsyncMock(return_value=_account())
+    # Held long ≥ the sell quantity so the short-guard clamp lets it through.
+    broker.get_all_positions = AsyncMock(
+        return_value=[SimpleNamespace(symbol="QCOM", qty=40.0)]
+    )
     broker.place_order = AsyncMock(return_value={"id": "sell-1", "status": "filled"})
     broker.get_order_by_id = AsyncMock(
         return_value={

@@ -525,6 +525,36 @@ class TradeExecutor(BaseExecutor):
                     }
                 result = await self._broker.close_position(decision.symbol)
             else:
+                # Never sell more than the held LONG quantity. On a
+                # margin-enabled (paper) account an over-sized sell flips the
+                # position SHORT — a halal violation (this bot is long-only,
+                # never shorts) and a risk breach. Clamp the order to the
+                # broker's actual holding; skip entirely if we hold no long
+                # position in this symbol (e.g. a stale/phantom DB position or
+                # one the monitor already exited).
+                held_qty = await self._fetch_position_qty(decision.symbol)
+                if held_qty <= 0:
+                    logger.warning(
+                        "SELL skipped: %s not held long (broker qty=%g) — "
+                        "refusing to open/deepen a short",
+                        decision.symbol,
+                        held_qty,
+                    )
+                    return {
+                        "symbol": decision.symbol,
+                        "action": "sell",
+                        "status": "skipped",
+                        "reason": f"not held long (broker qty={held_qty:g})",
+                    }
+                if decision.quantity > held_qty:
+                    logger.info(
+                        "SELL clamped: %s requested %g but only %g held long — "
+                        "selling the held quantity to avoid going short",
+                        decision.symbol,
+                        decision.quantity,
+                        held_qty,
+                    )
+                    decision.quantity = held_qty
                 result = await self._broker.place_order(
                     symbol=decision.symbol,
                     side="sell",
