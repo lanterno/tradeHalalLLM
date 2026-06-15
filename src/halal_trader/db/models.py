@@ -671,7 +671,18 @@ async def init_db(database_url: str) -> AsyncEngine:
     """
     import sqlalchemy as sa
 
-    engine = create_async_engine(database_url)
+    # pool_pre_ping: liveness-check each pooled connection on checkout and
+    # transparently replace dead ones — fixes the recurring
+    # "connection is closed" / "ConnectionDoesNotExist" InterfaceErrors that
+    # surfaced in the long-lived monitor/cycle loops when Postgres (or a proxy)
+    # dropped an idle asyncpg connection out from under the pool.
+    # pool_recycle: proactively retire connections older than 30 min, below
+    # typical server-side idle timeouts, so stale ones are rare to begin with.
+    engine = create_async_engine(
+        database_url,
+        pool_pre_ping=True,
+        pool_recycle=1800,
+    )
 
     expected_head = _alembic_head_revision()
     expected_tables = set(SQLModel.metadata.tables.keys())
