@@ -137,6 +137,62 @@ def test_multiple_fallbacks_all_added_in_order():
     assert isinstance(out, FallbackLLM)
 
 
+# ── same-provider model fallback ──────────────────────────────
+
+
+def test_same_provider_model_fallback_added_when_explicitly_configured():
+    """An explicit distinct OPENAI_FALLBACK_MODEL gives the OpenAI primary a
+    same-key degraded path (gpt-4o -> gpt-4o-mini) even with an empty
+    fallback_providers list — so a transient gpt-4o timeout doesn't yield a
+    no-action cycle."""
+    from halal_trader.core.llm.openai import OpenAILLM
+
+    s = _settings(provider=LLMProvider.OPENAI, openai_key="sk-test")
+    s.llm.model = "gpt-4o"
+    s.llm.openai.fallback_model = "gpt-4o-mini"
+    out = create_llm(s)
+    assert isinstance(out, FallbackLLM)
+    assert isinstance(out._primary, OpenAILLM)
+    assert out._primary.model == "gpt-4o"
+    assert [f.model for f in out._fallbacks] == ["gpt-4o-mini"]
+
+
+def test_same_provider_model_fallback_skipped_when_unset():
+    """Default (empty fallback_model) → bare primary, no wrapper (unchanged
+    behavior for configs that never opted in)."""
+    s = _settings(provider=LLMProvider.OPENAI, openai_key="sk-test")
+    s.llm.model = "gpt-4o"
+    s.llm.openai.fallback_model = ""
+    out = create_llm(s)
+    assert not isinstance(out, FallbackLLM)
+
+
+def test_same_provider_model_fallback_skipped_when_equal_to_primary():
+    """A fallback model identical to the primary is a no-op (no pointless
+    same-model retry leg)."""
+    s = _settings(provider=LLMProvider.OPENAI, openai_key="sk-test")
+    s.llm.model = "gpt-4o-mini"
+    s.llm.openai.fallback_model = "gpt-4o-mini"
+    out = create_llm(s)
+    assert not isinstance(out, FallbackLLM)
+
+
+def test_same_provider_model_fallback_precedes_cross_provider():
+    """Same-provider model fallback is tried BEFORE switching providers."""
+    s = _settings(
+        provider=LLMProvider.OPENAI,
+        fallback_providers=["anthropic"],
+        openai_key="sk-1",
+        anthropic_key="sk-2",
+    )
+    s.llm.model = "gpt-4o"
+    s.llm.openai.fallback_model = "gpt-4o-mini"
+    out = create_llm(s)
+    assert isinstance(out, FallbackLLM)
+    # gpt-4o -> gpt-4o-mini (same key) -> Anthropic (provider switch).
+    assert [f.model for f in out._fallbacks] == ["gpt-4o-mini", "claude-sonnet-4-20250514"]
+
+
 # ── create_classifier_llm — dedicated reactor-classifier chain ──
 
 

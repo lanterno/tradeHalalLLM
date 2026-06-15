@@ -61,6 +61,27 @@ def create_llm(settings: Settings | None = None) -> BaseLLM:
     }
 
     fallbacks: list[BaseLLM] = []
+
+    # Same-provider model fallback, added FIRST. When the operator has
+    # EXPLICITLY configured a distinct fallback model for the PRIMARY provider
+    # (e.g. OPENAI_FALLBACK_MODEL=gpt-4o-mini while LLM_MODEL=gpt-4o), give the
+    # primary a cheap, same-key degraded path: a transient gpt-4o timeout /
+    # rate-limit falls back to gpt-4o-mini instead of failing the whole cycle.
+    # Without this the strategy LLM has NO fallback (fallback_providers
+    # defaults to []) and a single OpenAI hiccup yields a no-action cycle.
+    # Gated on an explicit setting so default-empty configs are unaffected.
+    explicit_primary_fb = {
+        LLMProvider.OLLAMA: settings.llm.ollama.fallback_model,
+        LLMProvider.OPENAI: settings.llm.openai.fallback_model,
+        LLMProvider.ANTHROPIC: settings.llm.anthropic.fallback_model,
+    }.get(settings.llm.provider, "")
+    if explicit_primary_fb and explicit_primary_fb != settings.llm.model:
+        same_provider_fb = _create_single_llm(
+            settings.llm.provider, explicit_primary_fb, settings
+        )
+        if same_provider_fb is not None:
+            fallbacks.append(same_provider_fb)
+
     for name in settings.llm.fallback_providers:
         try:
             provider = LLMProvider(name.lower())
@@ -81,9 +102,10 @@ def create_llm(settings: Settings | None = None) -> BaseLLM:
 
     if fallbacks:
         logger.info(
-            "LLM fallback chain: %s -> %s",
+            "LLM fallback chain: %s/%s -> %s",
             type(primary).__name__,
-            " -> ".join(type(f).__name__ for f in fallbacks),
+            primary.model,
+            " -> ".join(f"{type(f).__name__}/{f.model}" for f in fallbacks),
         )
         return FallbackLLM(primary, fallbacks)
 
