@@ -266,8 +266,39 @@ class StockPositionMonitor:
                 price,
             )
 
-    async def _place_exit_order(self, trade: Any, reason: str) -> dict[str, Any] | None:
+    async def _held_long_qty(self, symbol: str) -> float | None:
+        """Broker's current LONG quantity for ``symbol``.
+
+        Returns ``None`` when the broker lookup fails — the caller must then
+        SKIP the tick and retry, because selling blind risks opening a short.
+        A flat or *short* position is reported as ``0.0`` (shorts clamped up)
+        so the caller never sells into a short. Mirrors
+        ``executor._fetch_position_qty`` but with the failure-vs-flat
+        distinction the monitor's hot path needs.
+        """
+        try:
+            positions = await self._mcp.get_all_positions()
+        except Exception as e:  # noqa: BLE001 — broker flake → skip, don't sell blind
+            logger.warning("get_all_positions failed during %s exit lookup: %s", symbol, e)
+            return None
+        wanted = symbol.upper()
+        for pos in positions:
+            if str(getattr(pos, "symbol", "")).upper() == wanted:
+                try:
+                    return max(0.0, float(getattr(pos, "qty", 0) or 0))
+                except (TypeError, ValueError):
+                    return 0.0
+        return 0.0
+
+    async def _place_exit_order(
+        self, trade: Any, reason: str, quantity: float
+    ) -> dict[str, Any] | None:
         """Submit the market sell that flattens ``trade``.
+
+        ``quantity`` is the broker-verified sell size (clamped to the held
+        long qty by the caller) — NOT ``trade.quantity``, which is the
+        originally *requested* size and can exceed the held shares on a
+        partial fill, opening a short.
 
         Returns the raw MCP result as a dict, or ``None`` if the call raised
         (already logged). Non-dict MCP shapes are wrapped so callers can probe
@@ -277,7 +308,7 @@ class StockPositionMonitor:
             result = await self._mcp.place_order(
                 symbol=trade.symbol,
                 side="sell",
-                quantity=trade.quantity,
+                quantity=quantity,
                 order_type="market",
                 time_in_force="day",
             )
@@ -313,6 +344,7 @@ class StockPositionMonitor:
         reason: str,
         result: dict[str, Any],
         submitted_at: datetime,
+        sell_qty: float,
     ) -> None:
         """Record the monitor's executed market sell as its own SELL Trade row.
 
@@ -326,9 +358,11 @@ class StockPositionMonitor:
           ``'pending'`` is in reconcile's non-executed skip set (the fix would
           be a silent no-op) and would later be flipped ``rejected`` by the
           fix-orphans backfiller.
-        * ``filled_quantity`` mirrors what the BUY contributed to the signed
-          sum (``filled_quantity`` preferred, ``quantity`` fallback) so the
-          pair nets to exactly zero.
+        * ``sell_qty`` is the quantity ACTUALLY sold at the broker (the
+          held-clamped size), so the recorded SELL equals the executed
+          fill — on a partial fill this pairs against the BUY's held shares
+          and any residual surfaces honestly as reconcile drift, rather than
+          fabricating an offset for shares we never sold.
         * ``entry_type='monitor_exit'`` tags the row for audit queries.
 
         Forward-only by design: historical monitor exits must NOT be
@@ -341,7 +375,7 @@ class StockPositionMonitor:
         """
         from halal_trader.trading.executor import _extract_order_id
 
-        qty = float(trade.filled_quantity or trade.quantity or 0)
+        qty = float(sell_qty or 0)
         if qty <= 0:
             return
         try:
@@ -370,7 +404,44 @@ class StockPositionMonitor:
     async def _exit(self, trade: Any, price: float, reason: str) -> None:
         """Submit a market sell to close the position; record exit on success."""
         submitted_at = datetime.now(UTC)
-        result = await self._place_exit_order(trade, reason)
+
+        # Halal guard — never sell more than the broker actually holds long.
+        # The monitor's SL/TP hot path bypasses the executor, so the
+        # executor's short-clamp doesn't protect it: on a partial-fill BUY
+        # the DB row's requested ``quantity`` exceeds the held shares, and
+        # selling the requested qty would open a SHORT on the paper margin
+        # account (exactly the AMAT/AMD/QCOM incident that forced the halt).
+        held = await self._held_long_qty(trade.symbol)
+        if held is None:
+            return  # broker lookup flaked — skip this tick, retry the next one
+        sell_qty = min(float(trade.quantity or 0.0), held)
+        if sell_qty <= 0:
+            # Broker holds nothing long (flat, or already short). A sell here
+            # would OPEN a short. Close the stale DB row so the monitor stops
+            # re-firing on it every tick, but record NO SELL row — we moved no
+            # shares, so a fabricated fill would mis-state the ledger; a real
+            # BUY/broker mismatch correctly surfaces as a reconcile drift alert.
+            logger.warning(
+                "%s exit (%s): broker holds 0 long — closing stale DB row, no order placed",
+                trade.symbol,
+                reason,
+            )
+            await self._repo.close_trade(
+                trade.id, exit_price=price, exit_reason="balance_exhausted"
+            )
+            self._high_water.pop(trade.id, None)
+            self._last_trend_check.pop(trade.id, None)
+            return
+        if sell_qty < float(trade.quantity or 0.0):
+            logger.info(
+                "%s exit clamped: requested %g but only %g held long — selling held "
+                "qty to avoid opening a short",
+                trade.symbol,
+                float(trade.quantity or 0.0),
+                sell_qty,
+            )
+
+        result = await self._place_exit_order(trade, reason, sell_qty)
         if result is None:
             return
 
@@ -398,7 +469,7 @@ class StockPositionMonitor:
                     "cancel_order(%s) failed for %s: %s", conflict_id, trade.symbol, e
                 )
                 return
-            result = await self._place_exit_order(trade, reason)
+            result = await self._place_exit_order(trade, reason, sell_qty)
             if result is None:
                 return
             if result.get("error"):
@@ -416,7 +487,7 @@ class StockPositionMonitor:
         # AFTER close_trade so a ledger failure can never leave the position
         # un-closed and re-selling every tick. The retrainer / post-close
         # hooks below stay keyed on the BUY id — the SELL row is ledger-only.
-        await self._record_exit_sell(trade, price, reason, result, submitted_at)
+        await self._record_exit_sell(trade, price, reason, result, submitted_at, sell_qty)
         self._high_water.pop(trade.id, None)
         self._last_trend_check.pop(trade.id, None)
         logger.info("Closed %s on %s at %.2f", trade.symbol, reason, price)

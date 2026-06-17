@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -26,11 +27,27 @@ def _trade(*, id_=1, symbol="AAPL", entry=200.0, sl=190.0, tp=220.0, qty=10):
     )
 
 
+def _position(symbol="AAPL", qty=10.0):
+    """Broker-position shape (.symbol/.qty) for ``mcp.get_all_positions``.
+
+    The monitor now looks up the held long qty before every exit (the
+    short-clamp), so exit-exercising tests must stub a holding that covers
+    the trade or the sell is (correctly) skipped/clamped.
+    """
+    return SimpleNamespace(symbol=symbol, qty=qty)
+
+
 def _monitor(repo, mcp=None):
     if mcp is None:
         mcp = MagicMock()
         mcp.place_order = AsyncMock(return_value={"id": "ord-1", "status": "filled"})
         mcp.get_stock_snapshot = AsyncMock(return_value={})
+    # The exit path now verifies the held long qty before selling (the
+    # short-clamp). Default to a holding that covers the standard AAPL/10
+    # fixture so existing exit tests still place their sell — unless the
+    # caller pre-stubbed get_all_positions for a partial-fill / flat case.
+    if not isinstance(getattr(mcp, "get_all_positions", None), AsyncMock):
+        mcp.get_all_positions = AsyncMock(return_value=[_position("AAPL", 10)])
     return StockPositionMonitor(mcp=mcp, repo=repo, check_interval=1)
 
 
@@ -318,6 +335,80 @@ async def test_exit_sell_row_nets_reconcile_clean(engine):
     assert not report.has_drift
 
 
+# ── Short-clamp on monitor exits (halal: long-only) ─────────────
+
+
+async def test_exit_clamps_sell_to_held_on_partial_fill(engine):
+    """A partial-fill BUY (requested 100, only 60 held at the broker) must
+    sell ONLY the 60 held — selling the requested 100 would open a 40-share
+    SHORT on the paper margin account. The recorded SELL mirrors what was
+    actually sold (60), keeping the ledger honest."""
+    repo = Repository(engine)
+    tid = await repo.record_trade(
+        symbol="AAPL", side="buy", quantity=100, price=200.0, stop_loss=190.0, target_price=220.0
+    )
+    mcp = MagicMock()
+    mcp.place_order = AsyncMock(return_value={"id": "ord-1", "status": "filled"})
+    mcp.get_all_positions = AsyncMock(return_value=[_position("AAPL", 60)])
+    mon = _monitor(repo, mcp=mcp)
+
+    await mon._exit(_trade(id_=tid, qty=100), price=185.0, reason="stop_loss")
+
+    assert mcp.place_order.await_count == 1
+    assert mcp.place_order.await_args.kwargs["quantity"] == 60  # clamped, not 100
+    sells = await _sell_rows(engine, "AAPL")
+    assert len(sells) == 1
+    s = sells[0]._mapping
+    assert s["quantity"] == 60
+    assert s["filled_quantity"] == 60
+
+
+async def test_exit_when_broker_flat_closes_without_order_or_sell_row(engine):
+    """If the broker holds nothing long (already flat or short), the monitor
+    must NOT place a sell — that would OPEN a short. It closes the stale DB
+    row as 'balance_exhausted' and writes no SELL row (no shares moved)."""
+    repo = Repository(engine)
+    tid = await repo.record_trade(
+        symbol="AAPL", side="buy", quantity=10, price=200.0, stop_loss=190.0, target_price=220.0
+    )
+    mcp = MagicMock()
+    mcp.place_order = AsyncMock(return_value={"id": "ord-1", "status": "filled"})
+    mcp.get_all_positions = AsyncMock(return_value=[])  # broker flat
+    mon = _monitor(repo, mcp=mcp)
+
+    await mon._exit(_trade(id_=tid), price=185.0, reason="stop_loss")
+
+    mcp.place_order.assert_not_awaited()
+    assert await _sell_rows(engine, "AAPL") == []
+    async with engine.begin() as conn:
+        row = await conn.execute(
+            sa.text("SELECT status, exit_reason FROM trades WHERE id = :i"), {"i": tid}
+        )
+        status, reason = row.first()
+        assert status == "closed"
+        assert reason == "balance_exhausted"
+
+
+async def test_exit_skipped_when_position_lookup_flakes(engine):
+    """A broker position-lookup error must skip the tick (leave the position
+    open to retry next tick) rather than sell blind and risk a short."""
+    repo = Repository(engine)
+    tid = await repo.record_trade(
+        symbol="AAPL", side="buy", quantity=10, price=200.0, stop_loss=190.0, target_price=220.0
+    )
+    mcp = MagicMock()
+    mcp.place_order = AsyncMock(return_value={"id": "ord-1", "status": "filled"})
+    mcp.get_all_positions = AsyncMock(side_effect=RuntimeError("broker down"))
+    mon = _monitor(repo, mcp=mcp)
+
+    await mon._exit(_trade(id_=tid), price=185.0, reason="stop_loss")
+
+    mcp.place_order.assert_not_awaited()
+    async with engine.begin() as conn:
+        row = await conn.execute(sa.text("SELECT status FROM trades WHERE id = :i"), {"i": tid})
+        assert row.first()[0] != "closed"
+
+
 # ── Repo round-trip surface ─────────────────────────────────────
 
 
@@ -510,6 +601,7 @@ async def test_trend_break_exits_winning_reactor_below_ma():
     # 20 closes averaging ~210; latest price 205 < SMA → break.
     mcp.get_stock_bars = AsyncMock(return_value=_bars([210.0] * 20))
     mcp.place_order = AsyncMock(return_value={"id": "o", "status": "filled"})
+    mcp.get_all_positions = AsyncMock(return_value=[_position("NVDA", 10)])
     mon = StockPositionMonitor(
         mcp, repo, check_interval=1, trend_break_ma_period=20, trend_break_enabled=True
     )
