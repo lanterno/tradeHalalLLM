@@ -33,6 +33,21 @@ def crypto_start(once: bool) -> None:
     from halal_trader.crypto.scheduler import CryptoTradingBot
 
     settings = get_settings()
+
+    # Fail fast (and loudly) on missing credentials rather than letting the
+    # bot dead-loop a signed-endpoint failure every 60s into the shared log.
+    if not (settings.binance.api_key and settings.binance.secret_key):
+        console.print(
+            Panel(
+                "[bold red]Binance API credentials are not set.[/bold red]\n"
+                "Set BINANCE_API_KEY and BINANCE_SECRET_KEY in .env "
+                "(testnet keys for paper trading).",
+                title="Cannot start crypto bot",
+                border_style="red",
+            )
+        )
+        raise SystemExit(1)
+
     mode = "TESTNET" if settings.binance.testnet else "PRODUCTION"
 
     console.print(

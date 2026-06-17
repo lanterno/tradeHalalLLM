@@ -85,6 +85,17 @@ class BinanceClient:
 
     async def connect(self) -> None:
         """Create and initialise the async Binance client."""
+        # Fail fast on empty credentials. Without this, init succeeds (it
+        # touches only public endpoints) and the FIRST signed call per cycle
+        # — get_account in PortfolioTracker.should_halt — raises "API Secret
+        # required for private endpoints", so an unconfigured bot dead-loops
+        # one cycle.failed (+ traceback, + alert) every 60s forever. Surface
+        # it once, here, as a clear startup error instead.
+        if not (self._api_key and self._secret_key):
+            raise RuntimeError(
+                "Binance API credentials are empty — set BINANCE_API_KEY / "
+                "BINANCE_SECRET_KEY before connecting."
+            )
         self._client = await AsyncClient.create(
             api_key=self._api_key,
             api_secret=self._secret_key,

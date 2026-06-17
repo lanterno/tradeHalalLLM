@@ -12,6 +12,8 @@ fine for testing pure math.
 
 from __future__ import annotations
 
+import pytest
+
 from halal_trader.crypto.exchange import BinanceClient, SymbolFilter
 
 
@@ -21,6 +23,15 @@ def _client(filters: dict[str, SymbolFilter] | None = None) -> BinanceClient:
     if filters:
         c._symbol_filters = filters
     return c
+
+
+async def test_connect_raises_on_empty_credentials():
+    """An unconfigured client must fail fast at connect() rather than let the
+    bot dead-loop a signed-endpoint failure (cycle.failed + alert) every 60s.
+    See crypto.exchange.connect."""
+    c = BinanceClient(api_key="", secret_key="", testnet=True)
+    with pytest.raises(RuntimeError, match="credentials"):
+        await c.connect()
 
 
 def _filter(
