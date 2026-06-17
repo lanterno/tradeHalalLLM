@@ -16,6 +16,14 @@ logger = logging.getLogger(__name__)
 # Maximum number of symbols to fetch market data for per cycle.
 _MAX_SYMBOLS_PER_CYCLE = 20
 
+# Daily-bar lookback for the per-symbol market-data sweep. The indicator
+# stack (RSI-14, MACD-26/9, BB-20, ATR-14, EMA-21) and the ML snapshot
+# writer both require >=30 klines; the prior 5-day window yielded only
+# ~3 trading-day bars, so EVERY snapshot was skipped and the risk/regime
+# indicators ran on near-empty input. 60 calendar days ≈ 42 trading days,
+# comfortably clearing the 30-bar floor in a single Alpaca call per symbol.
+_BARS_LOOKBACK_DAYS = 60
+
 
 class TradingCycleService(BaseCycleService):
     """Runs a single intraday trading cycle: gather data, analyze, execute.
@@ -457,7 +465,9 @@ class TradingCycleService(BaseCycleService):
             except Exception as e:
                 logger.debug("Failed to get snapshot for %s: %s", sym, e)
             try:
-                bar = await self._broker.get_stock_bars(sym, days=5, timeframe="1Day")
+                bar = await self._broker.get_stock_bars(
+                    sym, days=_BARS_LOOKBACK_DAYS, timeframe="1Day"
+                )
                 bars[sym] = bar
             except Exception as e:
                 logger.debug("Failed to get bars for %s: %s", sym, e)

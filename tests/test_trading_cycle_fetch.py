@@ -45,11 +45,12 @@ async def test_fetch_market_data_returns_snapshots_and_bars():
 
 
 @pytest.mark.asyncio
-async def test_fetch_market_data_uses_5day_1day_bars():
-    """The bar-fetch is hard-coded to ``days=5, timeframe="1Day"`` —
-    enough history for the 30-bar indicator floor without burning
-    Alpaca's rate budget. Pin so a refactor that shifts these has
-    to update this test too."""
+async def test_fetch_market_data_uses_60day_1day_bars():
+    """The bar-fetch must request enough daily history to clear the 30-bar
+    indicator/snapshot floor. The prior 5-day window yielded only ~3
+    trading-day bars, so every ML snapshot was skipped and the risk/regime
+    indicators ran near-empty. Pin 60 days (≈42 trading bars) so a refactor
+    that shrinks this has to confront the floor again."""
     broker = AsyncMock()
     broker.get_stock_snapshot = AsyncMock(return_value={})
     broker.get_stock_bars = AsyncMock(return_value=[])
@@ -59,7 +60,7 @@ async def test_fetch_market_data_uses_5day_1day_bars():
 
     broker.get_stock_bars.assert_awaited_once()
     kwargs = broker.get_stock_bars.call_args.kwargs
-    assert kwargs == {"days": 5, "timeframe": "1Day"}
+    assert kwargs == {"days": 60, "timeframe": "1Day"}
 
 
 # ── Per-symbol exception isolation ─────────────────────────
