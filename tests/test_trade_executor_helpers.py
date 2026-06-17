@@ -158,3 +158,60 @@ def test_extract_price_unknown_symbol_in_populated_snapshot_returns_zero():
         "MSFT": {"latest_trade": {"price": 410.0}},
     }
     assert _executor()._extract_price(snap, "GOOG") == 0.0
+
+
+# ── _sanitize_long_risk_levels ──────────────────────────────────
+#
+# A long's stop MUST be below the fill and its target above it. The LLM
+# occasionally returns a stop >= entry (observed 2026-06-17: ADBE filled
+# 203.27 with stop_loss 230), which the monitor stop-losses on its next
+# check — a buy-then-instant-exit. The sanitizer clamps a bad stop and
+# drops a bad target; sane levels pass through untouched.
+
+
+def test_sanitize_valid_levels_pass_through():
+    from halal_trader.trading.executor import _sanitize_long_risk_levels
+
+    stop, target = _sanitize_long_risk_levels("AAPL", 200.0, 190.0, 220.0)
+    assert stop == 190.0
+    assert target == 220.0
+
+
+def test_sanitize_clamps_stop_above_entry():
+    """The ADBE #433 case: fill 203.27, stop 230 → clamp to 5% below entry."""
+    from halal_trader.trading.executor import _sanitize_long_risk_levels
+
+    stop, target = _sanitize_long_risk_levels("ADBE", 203.27, 230.0, 260.0)
+    assert stop == round(203.27 * 0.95, 2)  # 193.11
+    assert stop < 203.27
+    assert target == 260.0  # valid target untouched
+
+
+def test_sanitize_clamps_stop_equal_to_entry():
+    from halal_trader.trading.executor import _sanitize_long_risk_levels
+
+    stop, _ = _sanitize_long_risk_levels("AAPL", 100.0, 100.0, None)
+    assert stop is not None and stop < 100.0
+
+
+def test_sanitize_drops_target_below_entry():
+    from halal_trader.trading.executor import _sanitize_long_risk_levels
+
+    stop, target = _sanitize_long_risk_levels("AAPL", 200.0, 190.0, 195.0)
+    assert stop == 190.0
+    assert target is None  # invalid target dropped
+
+
+def test_sanitize_none_levels_stay_none():
+    from halal_trader.trading.executor import _sanitize_long_risk_levels
+
+    stop, target = _sanitize_long_risk_levels("AAPL", 200.0, None, None)
+    assert stop is None and target is None
+
+
+def test_sanitize_noops_when_fill_price_missing():
+    """No fill price → can't validate; pass levels through unchanged."""
+    from halal_trader.trading.executor import _sanitize_long_risk_levels
+
+    stop, target = _sanitize_long_risk_levels("AAPL", None, 230.0, 1.0)
+    assert stop == 230.0 and target == 1.0

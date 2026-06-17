@@ -17,6 +17,53 @@ logger = logging.getLogger(__name__)
 _FILL_TIMEOUT = 30.0
 _FILL_POLL_INTERVAL = 2.0
 
+# Fallback stop when the LLM hands back a stop-loss that's invalid for a long
+# (>= the fill price). 5% below entry — a sane generic stock stop that keeps
+# downside protection without the instant stop-out a bad level causes.
+_FALLBACK_STOP_PCT = 0.05
+
+
+def _sanitize_long_risk_levels(
+    symbol: str,
+    fill_price: float | None,
+    stop_loss: float | None,
+    target_price: float | None,
+) -> tuple[float | None, float | None]:
+    """Validate LLM-supplied risk levels for a LONG against the actual fill.
+
+    A long's stop MUST sit below the fill and its target above it. The
+    strategy occasionally returns a stop >= entry (e.g. anchored on stale
+    historical prices — observed 2026-06-17: ADBE filled 203.27 with
+    stop_loss 230), which makes the monitor stop-loss the position on its very
+    next check: a buy-then-instant-exit that bleeds slippage both ways. Clamp
+    an invalid stop to ``_FALLBACK_STOP_PCT`` below entry (keep protection);
+    drop an invalid target. Sane levels pass through untouched.
+    """
+    if not fill_price or fill_price <= 0:
+        return stop_loss, target_price
+    safe_stop = stop_loss
+    if stop_loss is not None and stop_loss >= fill_price:
+        safe_stop = round(fill_price * (1 - _FALLBACK_STOP_PCT), 2)
+        logger.warning(
+            "%s buy: stop_loss %.2f >= fill %.2f (invalid for a long) — clamping to "
+            "%.2f (%.0f%% below entry) to avoid an instant stop-out",
+            symbol,
+            stop_loss,
+            fill_price,
+            safe_stop,
+            _FALLBACK_STOP_PCT * 100,
+        )
+    safe_target = target_price
+    if target_price is not None and target_price <= fill_price:
+        logger.warning(
+            "%s buy: target_price %.2f <= fill %.2f (invalid for a long) — dropping it",
+            symbol,
+            target_price,
+            fill_price,
+        )
+        safe_target = None
+    return safe_stop, safe_target
+
 
 def _compute_slippage_pct(
     *, side: str, estimated_price: float | None, filled_price: float | None
@@ -436,6 +483,15 @@ class TradeExecutor(BaseExecutor):
                 },
             )
 
+            # Guard against nonsensical LLM risk levels (stop >= entry /
+            # target <= entry) that would instant-stop the position.
+            safe_stop, safe_target = _sanitize_long_risk_levels(
+                decision.symbol,
+                fill.filled_price or estimated_price,
+                getattr(decision, "stop_loss", None),
+                getattr(decision, "target_price", None),
+            )
+
             trade_id = await self._repo.record_trade(
                 symbol=decision.symbol,
                 side="buy",
@@ -454,8 +510,8 @@ class TradeExecutor(BaseExecutor):
                     filled_price=fill.filled_price,
                 ),
                 entry_type=entry_type,
-                stop_loss=getattr(decision, "stop_loss", None),
-                target_price=getattr(decision, "target_price", None),
+                stop_loss=safe_stop,
+                target_price=safe_target,
             )
 
             # Stock-side ML snapshot — best-effort, never aborts the buy.
