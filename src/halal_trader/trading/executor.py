@@ -65,6 +65,31 @@ def _sanitize_long_risk_levels(
     return safe_stop, safe_target
 
 
+def _existing_position_value(symbol: str, positions: Any) -> float:
+    """Market value of the current holding in ``symbol`` (0.0 if flat/none).
+
+    Mirrors the sector-exposure math (qty * current-or-avg price). Used to
+    make the per-name position cap CUMULATIVE: checking only a new order's
+    notional let repeated adds to one symbol blow past ``max_position_pct``
+    (observed 2026-06-17: AAPL accreted to ~34% of equity via four buys each
+    individually under the 20% cap).
+    """
+    wanted = symbol.upper()
+    for pos in positions or []:
+        if str(getattr(pos, "symbol", "")).upper() == wanted:
+            try:
+                qty = float(getattr(pos, "qty", 0) or 0)
+                px = float(
+                    getattr(pos, "current_price", 0)
+                    or getattr(pos, "avg_entry_price", 0)
+                    or 0
+                )
+                return abs(qty * px)
+            except (TypeError, ValueError):
+                return 0.0
+    return 0.0
+
+
 def _compute_slippage_pct(
     *, side: str, estimated_price: float | None, filled_price: float | None
 ) -> float | None:
@@ -384,11 +409,24 @@ class TradeExecutor(BaseExecutor):
             logger.warning(msg)
             return {"symbol": decision.symbol, "action": "buy", "status": "rejected", "reason": msg}
 
+        # Per-name cap is CUMULATIVE: held value + this order must stay under
+        # max_position_pct. Checking only the new order's notional let repeated
+        # adds to one symbol breach the cap (AAPL → ~34% vs a 20% limit).
+        existing_value = _existing_position_value(
+            decision.symbol, kwargs.get("positions")
+        )
+        projected_value = existing_value + estimated_cost
         if (
             account.portfolio_value > 0
-            and (estimated_cost / account.portfolio_value) > self._max_position_pct
+            and (projected_value / account.portfolio_value) > self._max_position_pct
         ):
-            msg = f"Position size for {decision.symbol} exceeds {self._max_position_pct:.0%} limit"
+            msg = (
+                f"Position size for {decision.symbol} exceeds "
+                f"{self._max_position_pct:.0%} limit "
+                f"(held ${existing_value:,.0f} + new ${estimated_cost:,.0f} = "
+                f"{projected_value / account.portfolio_value:.0%} of "
+                f"${account.portfolio_value:,.0f})"
+            )
             logger.warning(msg)
             return {"symbol": decision.symbol, "action": "buy", "status": "rejected", "reason": msg}
 

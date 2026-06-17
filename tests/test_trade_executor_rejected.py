@@ -648,3 +648,70 @@ async def test_buy_with_valid_response_unchanged_path():
     kwargs = repo.record_trade.await_args.kwargs
     assert kwargs["status"] == "filled"
     assert kwargs["filled_quantity"] == 10.0
+
+
+# ── cumulative per-name position cap ────────────────────────────
+#
+# The per-name cap (max_position_pct) must count the EXISTING holding plus
+# the new order — checking only the new order's notional let repeated adds
+# to one symbol blow past the cap (observed 2026-06-17: AAPL → ~34% of
+# equity via four buys each individually under the 20% cap).
+
+
+def _pos(symbol: str, qty: float, price: float = 200.0):
+    return SimpleNamespace(
+        symbol=symbol, qty=qty, current_price=price, avg_entry_price=price
+    )
+
+
+def test_existing_position_value_held_and_absent():
+    from halal_trader.trading.executor import _existing_position_value
+
+    positions = [_pos("AAPL", 60, 200.0), _pos("MSFT", 10, 410.0)]
+    assert _existing_position_value("AAPL", positions) == 60 * 200.0
+    assert _existing_position_value("aapl", positions) == 60 * 200.0  # case-insensitive
+    assert _existing_position_value("NVDA", positions) == 0.0  # not held
+    assert _existing_position_value("AAPL", []) == 0.0
+    assert _existing_position_value("AAPL", None) == 0.0
+
+
+@pytest.mark.asyncio
+async def test_position_cap_counts_existing_holding():
+    """Held $12k (60@200) + new $10k (50@200) = 22% of $100k > 20% cap →
+    rejected, even though the new order alone is only 10%."""
+    broker = _broker(place_order_return={"id": "x", "status": "filled"})
+    repo = MagicMock()
+    repo.record_trade = AsyncMock(return_value=1)
+    executor = TradeExecutor(
+        broker, repo, max_position_pct=0.20, max_simultaneous_positions=10, max_sector_pct=0
+    )
+
+    result = await executor._execute_buy(
+        _decision("AAPL", quantity=50), positions=[_pos("AAPL", 60, 200.0)]
+    )
+
+    assert result["status"] == "rejected"
+    assert "exceeds" in result["reason"] and "limit" in result["reason"]
+    broker.place_order.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_position_cap_allows_when_cumulative_under_limit():
+    """Held $12k + new $6k (30@200) = 18% < 20% → the cap does NOT block it
+    (it proceeds and is rejected later for the malformed response, proving
+    the cap check passed)."""
+    broker = _broker(place_order_return="2 validation errors for place_stock_order …")
+    repo = MagicMock()
+    repo.record_trade = AsyncMock(return_value=1)
+    executor = TradeExecutor(
+        broker, repo, max_position_pct=0.20, max_simultaneous_positions=10, max_sector_pct=0
+    )
+
+    result = await executor._execute_buy(
+        _decision("AAPL", quantity=30), positions=[_pos("AAPL", 60, 200.0)]
+    )
+
+    # Rejected, but NOT by the position cap — it got past the cap to the broker.
+    assert result["status"] == "rejected"
+    assert "exceeds" not in result["reason"]
+    broker.place_order.assert_awaited_once()
