@@ -306,11 +306,17 @@ class TradingBot(BaseTradingBot):
                     alert_sink=self._alerts,
                     daily_classify_cap=self.settings.stocks.reactor_daily_classify_cap,
                 )
+                # Gate the reactor's sweep on the kill-switch so it stops
+                # burning classifier/Finnhub calls while halted (entries are
+                # blocked downstream regardless).
+                from halal_trader.core.halt import is_halted
+
                 self._news_reactor = StockNewsEventReactor(
                     api_key=finnhub_key,
                     symbols=watchlist,
                     classifier=classifier,
                     state_path=self.settings.resolve_data_dir() / "reactor_state.json",
+                    halt_check=lambda: is_halted(self._engine),
                 )
                 self._news_reactor.on_event(self._on_news_event)
                 # Surface the reactor on the dashboard runtime so

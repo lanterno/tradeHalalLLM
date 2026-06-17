@@ -139,8 +139,17 @@ class StockNewsEventReactor:
         per_symbol_request_spacing_s: float = 0.5,
         per_symbol_notify_cooldown_s: int = _DEFAULT_NOTIFY_COOLDOWN_S,
         state_path: Path | str | None = None,
+        halt_check: Callable[[], Awaitable[bool]] | None = None,
     ) -> None:
         self._api_key = api_key
+        # Optional kill-switch probe. When engaged, the entry path is already
+        # blocked downstream — but classification runs BEFORE that gate, so an
+        # ungated reactor burns LLM calls + Finnhub quota scoring catalysts it
+        # can never act on (≈850 wasted classify calls over the 06-15..17
+        # halt). Gating the whole sweep skips fetch+classify entirely while
+        # halted; unseen headlines are left unscored so they classify once on
+        # resume. Best-effort: a flaky halt read degrades to "proceed".
+        self._halt_check = halt_check
         self._symbols = [s.upper() for s in symbols]
         self._classifier = classifier
         self._poll_interval = poll_interval_seconds
@@ -269,6 +278,20 @@ class StockNewsEventReactor:
         # the bot starts (gives the scheduler time to wire callbacks).
         await asyncio.sleep(5)
         while self._running:
+            # Skip the entire sweep (fetch + classify) while the kill-switch
+            # is engaged — entries are blocked downstream anyway, so scoring
+            # is pure wasted LLM/Finnhub spend. Keep polling at the normal
+            # cadence so the reactor wakes within one interval of resume.
+            if self._halt_check is not None:
+                try:
+                    halted = await self._halt_check()
+                except Exception as exc:  # noqa: BLE001 — halt read flaked → proceed
+                    logger.debug("reactor halt check failed: %s — proceeding", exc)
+                    halted = False
+                if halted:
+                    logger.debug("reactor sweep skipped — kill-switch engaged")
+                    await asyncio.sleep(self._poll_interval)
+                    continue
             try:
                 events = await self._scan_all_symbols()
                 for event in events:

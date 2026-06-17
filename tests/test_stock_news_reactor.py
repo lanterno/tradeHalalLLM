@@ -94,6 +94,61 @@ def test_reactor_default_notify_cooldown_1800s():
     assert StockNewsEventReactor._DEFAULT_NOTIFY_COOLDOWN_S == 1800
 
 
+# ── kill-switch sweep gate ──────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_reactor_skips_sweep_while_halted(monkeypatch):
+    """While the kill-switch is engaged the reactor must NOT fetch or
+    classify — those calls feed an entry path that's blocked anyway, so
+    they're pure wasted LLM/Finnhub spend (~850 such calls accumulated
+    during the 06-15..17 operator halt)."""
+    import asyncio as _aio
+
+    monkeypatch.setattr(_aio, "sleep", AsyncMock())
+
+    classifier = _FakeClassifier({"good": 0.95})
+    r = _reactor(classifier)
+    r._scan_all_symbols = AsyncMock(
+        side_effect=AssertionError("reactor scanned while halted")
+    )
+
+    async def _halt():
+        r._running = False  # one gated iteration, then stop the loop
+        return True
+
+    r._halt_check = _halt
+    r._running = True
+    await r._poll_loop()
+
+    assert r._scan_all_symbols.await_count == 0
+    assert classifier.calls == []
+
+
+@pytest.mark.asyncio
+async def test_reactor_scans_when_not_halted(monkeypatch):
+    """The gate must be transparent when the switch is clear — the sweep
+    runs exactly as before (regression guard against gating too eagerly)."""
+    import asyncio as _aio
+
+    monkeypatch.setattr(_aio, "sleep", AsyncMock())
+
+    r = _reactor(_FakeClassifier({}))
+    scanned = {"n": 0}
+
+    async def _scan():
+        scanned["n"] += 1
+        r._running = False  # one iteration, then stop
+        return []
+
+    r._scan_all_symbols = _scan
+    r._halt_check = AsyncMock(return_value=False)
+    r._running = True
+    await r._poll_loop()
+
+    assert scanned["n"] == 1
+
+
 # ── per-symbol notification cooldown ────────────────────────────
 
 
