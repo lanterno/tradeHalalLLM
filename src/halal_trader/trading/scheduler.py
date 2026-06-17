@@ -145,6 +145,9 @@ class TradingBot(BaseTradingBot):
             repo,
             max_position_pct=self.settings.stocks.max_position_pct,
             max_simultaneous_positions=self.settings.stocks.max_simultaneous_positions,
+            recent_close_cooldown_minutes=(
+                self.settings.stocks.recent_close_cooldown_minutes
+            ),
             stop_loss_reentry_cooldown_minutes=(
                 self.settings.stocks.stop_loss_reentry_cooldown_minutes
             ),

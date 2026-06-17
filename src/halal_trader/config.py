@@ -261,11 +261,18 @@ class StockSettings(BaseSettings):
     trend_break_enabled: bool = Field(default=True)
     trend_break_ma_period: int = Field(default=20, ge=2, le=200)
     trend_break_timeframe: str = Field(default="1Hour")
+    # Reason-agnostic re-entry gate: refuse a BUY for any symbol closed
+    # within this window. Raised 30 → 60 on 2026-06-17 after observing
+    # round-trip churn — the bot sold INTU then re-bought it exactly 30 min
+    # (2 cycles) later, paying slippage both ways, which fights the
+    # operator's "slow out" direction. 60 min = 4 cycles: blocks the
+    # immediate flip-flop while still allowing same-day re-entry. 0 disables.
+    recent_close_cooldown_minutes: int = Field(default=60, ge=0)
     # Stop-loss re-entry gate: a position the monitor STOPPED OUT is a
     # stronger "stay away" signal than an LLM-chosen sell, so it gets a
     # longer re-entry block than the reason-agnostic recent-close
     # cooldown. Stops the falling-knife loop of re-buying a downtrending
-    # stock each time the 30-min cooldown elapses (observed 2026-05-27:
+    # stock each time the cooldown elapses (observed 2026-05-27:
     # MSFT stopped out twice with an LLM re-buy between). 0 disables.
     stop_loss_reentry_cooldown_minutes: int = Field(default=120, ge=0)
 

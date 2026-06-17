@@ -70,6 +70,8 @@ class TestSettings:
         assert settings.stocks.daily_loss_limit == 0.02
         assert settings.stocks.trading_interval_minutes == 15
         assert settings.stocks.max_simultaneous_positions == 5
+        # Re-entry cooldown raised 30→60 (2026-06-17) to curb round-trip churn.
+        assert settings.stocks.recent_close_cooldown_minutes == 60
 
     def test_custom_values(self):
         settings = _isolated_settings(
