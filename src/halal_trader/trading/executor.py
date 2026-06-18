@@ -354,7 +354,37 @@ class TradeExecutor(BaseExecutor):
         return plan.sells
 
     def _get_buys(self, plan: Any) -> list[Any]:
-        return plan.buys
+        """Buy decisions, with duplicate same-symbol orders merged into one.
+
+        The strategy occasionally emits the same symbol twice in one plan
+        (observed 2026-06-17: ADBE x15 + ADBE x15, INTU x15 + INTU x15).
+        Left split, each order is cap-checked against the SAME cycle-start
+        position snapshot, so both slip past the cumulative position cap and
+        the name accretes over its limit (INTU reached ~22% of equity that
+        way). Summing the quantity into the first occurrence makes the cap
+        see the true intended size — and is a no-op for the normal case of
+        distinct symbols. The merged order keeps the first occurrence's risk
+        levels; the stop-clamp guard validates them regardless.
+        """
+        merged: dict[str, Any] = {}
+        order: list[str] = []
+        for b in plan.buys:
+            sym = str(b.symbol).upper()
+            if sym in merged:
+                prev = merged[sym]
+                merged[sym] = prev.model_copy(
+                    update={"quantity": prev.quantity + b.quantity}
+                )
+                logger.info(
+                    "Merged duplicate same-cycle BUY for %s (+%g → %g shares)",
+                    sym,
+                    b.quantity,
+                    merged[sym].quantity,
+                )
+            else:
+                merged[sym] = b
+                order.append(sym)
+        return [merged[s] for s in order]
 
     async def _get_current_position_count(self, **_kwargs: Any) -> int:
         current_positions = await self._broker.get_all_positions()

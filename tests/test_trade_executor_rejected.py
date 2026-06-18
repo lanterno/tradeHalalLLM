@@ -715,3 +715,46 @@ async def test_position_cap_allows_when_cumulative_under_limit():
     assert result["status"] == "rejected"
     assert "exceeds" not in result["reason"]
     broker.place_order.assert_awaited_once()
+
+
+# ── _get_buys merges duplicate same-symbol orders ───────────────
+#
+# The strategy occasionally emits the same symbol twice in one plan
+# (observed 2026-06-17: INTU x15 + INTU x15). Split, each order is
+# cap-checked against the same cycle-start snapshot and slips past the
+# cumulative cap. _get_buys merges them so the cap sees the true size.
+
+
+def _buy(symbol: str, qty: int, **kw):
+    return TradeDecision(
+        action=TradeAction.BUY, symbol=symbol, quantity=qty, confidence=0.8,
+        reasoning="t", **kw
+    )
+
+
+def test_get_buys_merges_duplicate_same_symbol():
+    from halal_trader.domain.models import TradingPlan
+
+    ex = TradeExecutor(MagicMock(), MagicMock(), max_position_pct=0.2,
+                       max_simultaneous_positions=10)
+    plan = TradingPlan(decisions=[
+        _buy("INTU", 15, stop_loss=270.0),
+        _buy("ADBE", 10),
+        _buy("INTU", 15),
+    ])
+    buys = ex._get_buys(plan)
+    # INTU merged to a single 30-share order; ADBE untouched; order preserved.
+    assert [(b.symbol, b.quantity) for b in buys] == [("INTU", 30), ("ADBE", 10)]
+    # merged order keeps the first occurrence's risk levels.
+    intu = next(b for b in buys if b.symbol == "INTU")
+    assert intu.stop_loss == 270.0
+
+
+def test_get_buys_noop_for_distinct_symbols():
+    from halal_trader.domain.models import TradingPlan
+
+    ex = TradeExecutor(MagicMock(), MagicMock(), max_position_pct=0.2,
+                       max_simultaneous_positions=10)
+    plan = TradingPlan(decisions=[_buy("AAPL", 10), _buy("MSFT", 5)])
+    buys = ex._get_buys(plan)
+    assert [(b.symbol, b.quantity) for b in buys] == [("AAPL", 10), ("MSFT", 5)]
