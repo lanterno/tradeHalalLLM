@@ -161,32 +161,42 @@ class StockPositionMonitor:
 
     async def _check_trade(self, trade: Any, price: float) -> None:
         """Close the trade if SL/TP/trend-break triggered, else trail."""
-        # Repair a bogus stop sitting at/above entry before it can instant-
-        # trigger. The executor clamps LLM stops at order time, but a fresh
-        # market order often reports filled_price late (core/fills.py stamps
-        # the real fill afterward), so a stop between the estimate and a
-        # lower actual fill slips through and would stop the position out
-        # seconds after entry (observed 2026-06-18: INTU filled 263.03 with
-        # stop 264.04). Re-clamp to a sane level below the real entry.
-        entry = trade.filled_price or trade.price
-        if entry and trade.stop_loss is not None and trade.stop_loss >= entry:
-            fixed = round(entry * (1 - _BOGUS_STOP_REPAIR_PCT), 2)
-            logger.warning(
-                "%s: repairing bogus stop_loss %.2f (>= entry %.2f) → %.2f",
-                trade.symbol,
-                trade.stop_loss,
-                entry,
-                fixed,
-            )
-            try:
-                await self._repo.update_stock_trade_stop_loss(trade.id, fixed)
-            except Exception as e:  # noqa: BLE001 — best-effort; use the fixed value regardless
-                logger.debug("stop-loss repair DB update failed for %s: %s", trade.symbol, e)
-            trade.stop_loss = fixed
-
         if trade.stop_loss is not None and price <= trade.stop_loss:
-            await self._exit(trade, price, "stop_loss")
-            return
+            # The stop would trigger now. Distinguish a real stop hit from a
+            # BOGUS stop that would instant-trigger: a bogus stop sits ABOVE
+            # entry AND the price never rose to reach it (high-water below
+            # it) — i.e. it was recorded above the actual fill at entry (the
+            # executor clamps LLM stops at order time, but a fresh market
+            # order reports filled_price late, so a stop between the estimate
+            # and a lower fill slips through — observed 2026-06-18: INTU
+            # filled 263.03 with stop 264.04). Repair that. A trailing stop a
+            # winner ratcheted ABOVE entry then fell back to has high-water
+            # >= stop and is a legitimate exit, NOT bogus — never repair it.
+            entry = trade.filled_price or trade.price
+            high_water = self._high_water.get(trade.id, entry or 0.0)
+            if entry and trade.stop_loss > entry and high_water < trade.stop_loss:
+                fixed = round(entry * (1 - _BOGUS_STOP_REPAIR_PCT), 2)
+                logger.warning(
+                    "%s: repairing bogus stop_loss %.2f (> entry %.2f, never reached; "
+                    "price %.2f) → %.2f",
+                    trade.symbol,
+                    trade.stop_loss,
+                    entry,
+                    price,
+                    fixed,
+                )
+                try:
+                    await self._repo.update_stock_trade_stop_loss(trade.id, fixed)
+                except Exception as e:  # noqa: BLE001 — best-effort; use fixed value regardless
+                    logger.debug(
+                        "stop-loss repair DB update failed for %s: %s", trade.symbol, e
+                    )
+                trade.stop_loss = fixed
+                # Not an exit — the repaired stop now sits below price; fall
+                # through so the trailing stop can manage from here.
+            else:
+                await self._exit(trade, price, "stop_loss")
+                return
         if trade.target_price is not None and price >= trade.target_price:
             await self._exit(trade, price, "take_profit")
             return

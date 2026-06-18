@@ -146,6 +146,54 @@ async def test_check_trade_repairs_bogus_stop_above_entry(engine):
         assert abs(float(sl) - 190.0) < 0.01  # repair persisted to DB
 
 
+async def test_check_trade_leaves_valid_trailing_stop_above_entry(engine):
+    """A trailing stop ratcheted ABOVE entry on a winner (stop still below the
+    current price) must NOT be 'repaired' — regression guard for 2026-06-18,
+    where the repair fired on stop>=entry alone and destroyed winners'
+    profit-locking trailing stops every cycle (ADBE 195→184)."""
+    repo = Repository(engine)
+    tid = await repo.record_trade(
+        symbol="AAPL", side="buy", quantity=10, price=193.0, stop_loss=195.0, target_price=230.0
+    )
+    mon = _monitor(repo)
+    mon._high_water[tid] = 199.0  # winner ratcheted the stop up to 195
+    tr = _trade(id_=tid, entry=193.0, sl=195.0, tp=230.0)
+    await mon._check_trade(tr, price=196.5)  # price ABOVE the trailing stop → no trigger
+
+    assert mon._mcp.place_order.await_count == 0  # not exited
+    assert tr.stop_loss == 195.0  # NOT repaired/lowered
+    async with engine.begin() as conn:
+        row = await conn.execute(
+            sa.text("SELECT status, stop_loss FROM trades WHERE id = :i"), {"i": tid}
+        )
+        status, sl = row.first()
+        assert status != "closed"
+        assert abs(float(sl) - 195.0) < 0.01  # stop unchanged in DB
+
+
+async def test_check_trade_exits_when_winner_falls_to_trailing_stop(engine):
+    """A winner whose stop ratcheted ABOVE entry, then fell back to it, must
+    EXIT (lock the profit) — high-water >= stop marks it a real trailing-stop
+    hit, not a bogus entry stop to repair."""
+    repo = Repository(engine)
+    tid = await repo.record_trade(
+        symbol="AAPL", side="buy", quantity=10, price=200.0, stop_loss=205.0, target_price=230.0
+    )
+    mon = _monitor(repo)
+    mon._high_water[tid] = 210.0  # rose to 210 (above the 205 stop) then pulled back
+    tr = _trade(id_=tid, entry=200.0, sl=205.0, tp=230.0)
+    await mon._check_trade(tr, price=205.0)  # fell back to the trailing stop
+
+    assert mon._mcp.place_order.await_count == 1  # exited
+    async with engine.begin() as conn:
+        row = await conn.execute(
+            sa.text("SELECT status, exit_reason FROM trades WHERE id = :i"), {"i": tid}
+        )
+        status, reason = row.first()
+        assert status == "closed"
+        assert reason == "stop_loss"
+
+
 async def test_check_trade_holds_inside_band(engine):
     repo = Repository(engine)
     tid = await repo.record_trade(
