@@ -121,6 +121,31 @@ async def test_check_trade_triggers_take_profit(engine):
         assert row.first()[0] == "take_profit"
 
 
+async def test_check_trade_repairs_bogus_stop_above_entry(engine):
+    """A stop set at/above entry (an LLM stop that cleared the executor's
+    estimate-time clamp but the fill printed below it) must be repaired to a
+    sane level below entry — not instant-trigger a stop-loss. Observed
+    2026-06-18: INTU filled 263.03 with stop 264.04, stopped out 2.5 min in."""
+    repo = Repository(engine)
+    tid = await repo.record_trade(
+        symbol="AAPL", side="buy", quantity=10, price=200.0, stop_loss=205.0, target_price=230.0
+    )
+    mon = _monitor(repo)
+    # filled_price=200 (entry), stop 205 is ABOVE entry → bogus.
+    tr = _trade(id_=tid, entry=200.0, sl=205.0, tp=230.0)
+    await mon._check_trade(tr, price=199.0)  # below bogus 205, above repaired ~190
+
+    assert mon._mcp.place_order.await_count == 0  # NOT stopped out
+    assert tr.stop_loss == round(200.0 * 0.95, 2)  # repaired to 190.0
+    async with engine.begin() as conn:
+        row = await conn.execute(
+            sa.text("SELECT status, stop_loss FROM trades WHERE id = :i"), {"i": tid}
+        )
+        status, sl = row.first()
+        assert status != "closed"
+        assert abs(float(sl) - 190.0) < 0.01  # repair persisted to DB
+
+
 async def test_check_trade_holds_inside_band(engine):
     repo = Repository(engine)
     tid = await repo.record_trade(

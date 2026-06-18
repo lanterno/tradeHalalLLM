@@ -39,6 +39,11 @@ logger = logging.getLogger(__name__)
 # seconds. Per-trade timestamp gate in ``_maybe_trend_break_exit``.
 _TREND_BREAK_MIN_INTERVAL_S = 300.0
 
+# When a recorded stop sits at/above entry (a bogus stop that would
+# instant-trigger), repair it to this fraction below the real entry —
+# matches the executor's order-time fallback (_FALLBACK_STOP_PCT).
+_BOGUS_STOP_REPAIR_PCT = 0.05
+
 
 class StockPositionMonitor:
     """Watches open stock trades against their SL / TP between LLM cycles."""
@@ -156,6 +161,29 @@ class StockPositionMonitor:
 
     async def _check_trade(self, trade: Any, price: float) -> None:
         """Close the trade if SL/TP/trend-break triggered, else trail."""
+        # Repair a bogus stop sitting at/above entry before it can instant-
+        # trigger. The executor clamps LLM stops at order time, but a fresh
+        # market order often reports filled_price late (core/fills.py stamps
+        # the real fill afterward), so a stop between the estimate and a
+        # lower actual fill slips through and would stop the position out
+        # seconds after entry (observed 2026-06-18: INTU filled 263.03 with
+        # stop 264.04). Re-clamp to a sane level below the real entry.
+        entry = trade.filled_price or trade.price
+        if entry and trade.stop_loss is not None and trade.stop_loss >= entry:
+            fixed = round(entry * (1 - _BOGUS_STOP_REPAIR_PCT), 2)
+            logger.warning(
+                "%s: repairing bogus stop_loss %.2f (>= entry %.2f) → %.2f",
+                trade.symbol,
+                trade.stop_loss,
+                entry,
+                fixed,
+            )
+            try:
+                await self._repo.update_stock_trade_stop_loss(trade.id, fixed)
+            except Exception as e:  # noqa: BLE001 — best-effort; use the fixed value regardless
+                logger.debug("stop-loss repair DB update failed for %s: %s", trade.symbol, e)
+            trade.stop_loss = fixed
+
         if trade.stop_loss is not None and price <= trade.stop_loss:
             await self._exit(trade, price, "stop_loss")
             return
