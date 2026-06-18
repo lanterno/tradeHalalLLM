@@ -88,8 +88,10 @@ def test_observability_filter_attaches_only_set_ids():
 
 def test_observability_filter_attaches_service_when_set():
     """set_service() tags every record so the shared stock/crypto log file
-    can be filtered by which bot emitted each line."""
-    from halal_trader.core.observability import service_var
+    can be filtered by which bot emitted each line. It's a process-wide
+    global (not a ContextVar) so the tag survives into APScheduler job
+    contexts / worker threads where the cycle records are actually emitted."""
+    from halal_trader.core.observability import get_service, set_service
 
     filt = ObservabilityFilter()
 
@@ -99,17 +101,19 @@ def test_observability_filter_attaches_service_when_set():
             lineno=0, msg="hi", args=None, exc_info=None,
         )
 
+    assert get_service() == ""  # default unset
     rec_default = _rec()
     filt.filter(rec_default)
     assert not hasattr(rec_default, "service")  # unset → field omitted
 
-    token = service_var.set("stock")
+    set_service("stock")
     try:
         rec_tagged = _rec()
         filt.filter(rec_tagged)
         assert rec_tagged.service == "stock"
+        assert get_service() == "stock"
     finally:
-        service_var.reset(token)
+        set_service("")  # restore default for other tests
 
 
 class _StubCycle(BaseCycleService):
