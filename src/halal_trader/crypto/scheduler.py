@@ -371,8 +371,10 @@ class CryptoTradingBot(BaseTradingBot):
         task propagates back here with the original traceback rather
         than silently leaving a stale subsystem behind.
         """
+        from halal_trader.core.observability import set_service
         from halal_trader.core.supervisor import RestartPolicy, TaskSupervisor
 
+        set_service("crypto")  # tag this process's logs (shared file w/ stock)
         await self.initialize()
         self._running = True
 

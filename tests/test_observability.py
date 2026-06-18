@@ -86,6 +86,32 @@ def test_observability_filter_attaches_only_set_ids():
         assert not hasattr(rec_in, "monitor_id")
 
 
+def test_observability_filter_attaches_service_when_set():
+    """set_service() tags every record so the shared stock/crypto log file
+    can be filtered by which bot emitted each line."""
+    from halal_trader.core.observability import service_var
+
+    filt = ObservabilityFilter()
+
+    def _rec():
+        return logging.LogRecord(
+            name="halal_trader.test", level=logging.INFO, pathname=__file__,
+            lineno=0, msg="hi", args=None, exc_info=None,
+        )
+
+    rec_default = _rec()
+    filt.filter(rec_default)
+    assert not hasattr(rec_default, "service")  # unset → field omitted
+
+    token = service_var.set("stock")
+    try:
+        rec_tagged = _rec()
+        filt.filter(rec_tagged)
+        assert rec_tagged.service == "stock"
+    finally:
+        service_var.reset(token)
+
+
 class _StubCycle(BaseCycleService):
     def __init__(self) -> None:
         super().__init__()

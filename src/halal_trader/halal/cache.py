@@ -94,6 +94,30 @@ class HalalScreener:
                     errored,
                     len(target),
                 )
+            # Surface the size of the tradable universe — a tiny halal set
+            # silently concentrates every entry into a handful of names
+            # (observed 2026-06-18: only 3/20 verdicted halal → all buys
+            # funnelled into AAPL/ADBE/INTU). Make it loud, and louder still
+            # in sandbox, where Zoya verdicts are RANDOMISED, not real.
+            halal_n = sum(
+                1
+                for r in results
+                if not r.get("error") and r.get("compliance") == "halal"
+            )
+            screened_n = sum(1 for r in results if not r.get("error"))
+            logger.info(
+                "Halal universe: %d/%d screened symbols verdicted halal",
+                halal_n,
+                screened_n,
+            )
+            if get_settings().zoya.use_sandbox:
+                logger.warning(
+                    "Zoya SANDBOX mode is ON — verdicts are RANDOMISED, not real "
+                    "Shariah screening, so the %d-symbol halal universe is arbitrary. "
+                    "Set ZOYA_USE_SANDBOX=false + a production key for real compliance "
+                    "and a wider, stable universe.",
+                    halal_n,
+                )
         else:
             logger.info(
                 "Zoya API not configured — loading %d default halal symbols",

@@ -16,6 +16,16 @@ from contextvars import ContextVar
 cycle_id_var: ContextVar[str] = ContextVar("cycle_id", default="")
 monitor_id_var: ContextVar[str] = ContextVar("monitor_id", default="")
 request_id_var: ContextVar[str] = ContextVar("request_id", default="")
+# Which bot owns this process — stock vs crypto. Set once at bot startup
+# (set_service) so the shared logs/halal_trader.log can be filtered by
+# service: the two bots share the file + the "halal_trader.core.cycle"
+# logger, so cycle.start/cycle.failed are otherwise indistinguishable.
+service_var: ContextVar[str] = ContextVar("service", default="")
+
+
+def set_service(name: str) -> None:
+    """Tag every subsequent log record from this process with the owning bot."""
+    service_var.set(name)
 
 
 def new_id(prefix: str) -> str:
@@ -73,4 +83,7 @@ class ObservabilityFilter(logging.Filter):
             record.monitor_id = mid
         if rid:
             record.request_id = rid
+        svc = service_var.get()
+        if svc:
+            record.service = svc
         return True

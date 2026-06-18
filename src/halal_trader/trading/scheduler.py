@@ -838,6 +838,9 @@ class TradingBot(BaseTradingBot):
 
     async def run(self) -> None:
         """Start the trading bot with scheduled jobs."""
+        from halal_trader.core.observability import set_service
+
+        set_service("stock")  # tag this process's logs (shared file w/ crypto)
         self._acquire_lock()
         await self.initialize()
         try:
