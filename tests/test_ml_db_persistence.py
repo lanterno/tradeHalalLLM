@@ -351,7 +351,6 @@ async def test_anomaly_state_persists_to_db(engine, tmp_path) -> None:
     """The warm-up buffer (samples + last_trained_at) lands in
     ``ml_artefacts`` under name=anomaly_state when an engine is wired."""
     pytest.importorskip("sklearn")
-    import asyncio
 
     from halal_trader.db.ml_artefacts import load_artefact
     from halal_trader.ml.anomaly import MarketAnomalyDetector
@@ -362,7 +361,10 @@ async def test_anomaly_state_persists_to_db(engine, tmp_path) -> None:
     # _save_state fires once.
     for i in range(30):
         det.add_sample({k: float(i + j) for j, k in enumerate(_FEATURES_KEYS)})
-    await asyncio.sleep(0.05)  # let the fire-and-forget save run
+    # Await the fire-and-forget DB save deterministically — a fixed 50ms
+    # sleep flaked intermittently in full-suite runs under loop/DB load.
+    assert det._save_task is not None
+    await det._save_task
 
     row = await load_artefact(engine=engine, name="anomaly_state")
     assert row is not None

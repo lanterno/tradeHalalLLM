@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import pickle
 from typing import TYPE_CHECKING, Any
@@ -66,6 +67,11 @@ class MarketAnomalyDetector:
         # to the DB when wired; ``load_state_from_db`` is called from
         # the composition root alongside ``load_latest``.
         self._engine = engine
+        # Handle to the most recent fire-and-forget DB save. Kept on the
+        # instance so the task isn't garbage-collected mid-flight (an
+        # un-referenced create_task() can be), and so tests can await it
+        # deterministically instead of sleeping.
+        self._save_task: "asyncio.Task[None] | None" = None
         self._load_model()
         if engine is None:
             self._load_state()
@@ -142,12 +148,11 @@ class MarketAnomalyDetector:
         if self._engine is not None:
             # Fire-and-forget — _save_state is sync (called from
             # add_sample, sync path). add_sample runs inside the
-            # cycle's async stage, so a running loop is available.
-            import asyncio
-
+            # cycle's async stage, so a running loop is available. Keep the
+            # task handle so it isn't GC'd mid-write and tests can await it.
             try:
                 loop = asyncio.get_running_loop()
-                loop.create_task(self._save_state_to_db(payload))
+                self._save_task = loop.create_task(self._save_state_to_db(payload))
                 return
             except RuntimeError:
                 # No running loop — fall through to disk path.
