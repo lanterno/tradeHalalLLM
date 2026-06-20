@@ -48,6 +48,10 @@ class TradingBot(BaseTradingBot):
         self.executor: TradeExecutor | None = None
         self.portfolio: PortfolioTracker | None = None
         self.cycle_service: TradingCycleService | None = None
+        # Advisory daily "stock of the day" engine — built in
+        # ``_create_components``, run by the pre-market ``recommend`` job.
+        # Never trades.
+        self._recommendation: Any | None = None
         self.scheduler = AsyncIOScheduler()
         self._lock_file: int | None = None
         # Lazy-built in ``_create_components``; closed in ``shutdown``.
@@ -359,7 +363,38 @@ class TradingBot(BaseTradingBot):
             timeframe_analyzer=StockTimeframeAnalyzer(self.broker),
         )
 
+        # Advisory daily halal recommendation engine (never trades).
+        from halal_trader.recommendation.engine import DailyRecommendationEngine
+
+        self._recommendation = DailyRecommendationEngine(
+            broker=self.broker, repo=self._repo, settings=self.settings
+        )
+
         logger.info("Trading bot initialized successfully")
+
+    async def recommend(self) -> None:
+        """Pre-market job: generate the advisory halal stock-of-the-day.
+
+        Best-effort and non-fatal — a failure here must never affect trading.
+        """
+        now = now_eastern()
+        if not is_trading_day(now.date()):
+            return
+        if self._recommendation is None:
+            return
+        try:
+            rec = await self._recommendation.generate()
+            logger.info(
+                "Daily recommendation ready: %s (conviction %.2f)",
+                rec.get("symbol"),
+                float(rec.get("conviction") or 0.0),
+            )
+        except Exception as exc:  # noqa: BLE001 — advisory; never break the bot
+            logger.warning("Daily recommendation generation failed: %s", exc)
+            if self._alerts is not None:
+                await self._alerts.notify(
+                    "recommendation.failed", str(exc)[:300], market="stocks"
+                )
 
     def _get_cycle_service(self) -> TradingCycleService:
         _, _, _, cs = self._require_initialized()
@@ -858,6 +893,17 @@ class TradingBot(BaseTradingBot):
                 id="pre_market",
                 replace_existing=True,
                 misfire_grace_time=1800,
+            )
+
+            # Advisory daily halal "stock of the day" — generated pre-market,
+            # a few minutes after the cache refresh, before the open. Never
+            # trades; surfaced on the dashboard / CLI / API.
+            self.scheduler.add_job(
+                self.recommend,
+                CronTrigger(day_of_week="mon-fri", hour=9, minute=5, timezone=MARKET_TZ),
+                id="daily_recommendation",
+                replace_existing=True,
+                misfire_grace_time=3600,
             )
 
             # Schedule trading cycles every N minutes during market hours (9:30 - 15:45 ET).
