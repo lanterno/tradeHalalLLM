@@ -18,6 +18,7 @@ from halal_trader.cli import insights as insights_cmd
 from halal_trader.cli import llm_decisions as llm_decisions_cmd
 from halal_trader.cli import ml as ml_cmd
 from halal_trader.cli import prompts as prompts_cmd
+from halal_trader.cli import recommend as recommend_cmd
 from halal_trader.cli import reconcile as reconcile_cmd
 from halal_trader.cli import stocks as stocks_cmd
 from halal_trader.cli import watchdog as watchdog_cmd
@@ -67,6 +68,9 @@ cli.add_command(dashboard_cmd.dashboard)
 
 # ── Insights (regret / thesis / stress / drift / calibration) ──
 cli.add_command(insights_cmd.insights)
+
+# ── Daily halal recommendation (advisory stock-of-the-day) ─────
+cli.add_command(recommend_cmd.recommend)
 
 # ── Prompt evolution (Wave F) ──────────────────────────────────
 cli.add_command(prompts_cmd.prompts_group)
