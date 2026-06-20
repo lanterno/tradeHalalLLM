@@ -26,6 +26,7 @@ from halal_trader.web.routes import (
     positions,
     prometheus,
     prompts,
+    recommendation,
     research,
     research_jobs,
     risk,
@@ -60,6 +61,7 @@ _MODULES = (
     prompts,
     halal_explain,
     halal_compliance,
+    recommendation,
 )
 
 
