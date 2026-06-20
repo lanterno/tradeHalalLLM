@@ -4,6 +4,7 @@ import { Layout } from "./components/Layout";
 import { PageSkeleton } from "./components/PageSkeleton";
 
 const Dashboard = lazy(() => import("./pages/Dashboard"));
+const Recommendation = lazy(() => import("./pages/Recommendation"));
 const Positions = lazy(() => import("./pages/Positions"));
 const Trades = lazy(() => import("./pages/Trades"));
 const Analytics = lazy(() => import("./pages/Analytics"));
@@ -23,6 +24,14 @@ export default function App() {
           element={
             <Suspense fallback={<PageSkeleton />}>
               <Dashboard />
+            </Suspense>
+          }
+        />
+        <Route
+          path="recommendation"
+          element={
+            <Suspense fallback={<PageSkeleton />}>
+              <Recommendation />
             </Suspense>
           }
         />
