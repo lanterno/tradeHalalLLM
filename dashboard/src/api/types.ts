@@ -181,3 +181,24 @@ export interface BackupRow {
   size_bytes: number;
   backed_up_at: string;
 }
+
+// Daily halal "stock of the day" recommendation (advisory — never traded).
+// The latest endpoint returns { available: false } when none has been
+// generated yet; otherwise available is true and the fields are populated.
+export interface StockOfTheDay {
+  available: boolean;
+  id?: number;
+  date?: string;
+  symbol?: string;
+  conviction?: number;
+  thesis?: string;
+  halal_note?: string;
+  suggested_entry?: number | null;
+  suggested_target?: number | null;
+  suggested_stop?: number | null;
+  catalysts?: string | null;
+  risks?: string | null;
+  universe_size?: number;
+  model?: string | null;
+  created_at?: string;
+}

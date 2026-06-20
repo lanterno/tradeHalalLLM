@@ -1,14 +1,17 @@
 import { useAnalytics, useDailyPnl } from "../hooks/useAnalytics";
 import { useTrades } from "../hooks/useTrades";
+import { useStockOfTheDay } from "../hooks/useRecommendation";
 import { StatCard } from "../components/StatCard";
 import { EquityCurve } from "../components/EquityCurve";
 import { TradesTable } from "../components/TradesTable";
+import { RecommendationCard } from "../components/RecommendationCard";
 import { formatUsd, formatPct, pnlColor } from "../lib/utils";
 
 export default function Dashboard() {
   const { data: stats, isLoading: statsLoading } = useAnalytics(7);
   const { data: pnl } = useDailyPnl(30);
   const { data: trades } = useTrades({ limit: 10 });
+  const { data: pick, isLoading: pickLoading } = useStockOfTheDay();
 
   return (
     <div className="space-y-6 p-6">
@@ -16,6 +19,9 @@ export default function Dashboard() {
         <h1 className="text-2xl font-bold text-white">Dashboard</h1>
         <p className="text-xs text-muted">Last 7 days</p>
       </div>
+
+      {/* Daily halal recommendation (advisory) */}
+      <RecommendationCard pick={pick} isLoading={pickLoading} />
 
       {/* Stats grid */}
       {statsLoading ? (
