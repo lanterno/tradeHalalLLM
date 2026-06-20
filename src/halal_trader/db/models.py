@@ -293,6 +293,40 @@ class ResearchJob(SQLModel, table=True):
     pinned: bool = Field(default=False)
 
 
+class DailyRecommendation(SQLModel, table=True):
+    """LLM-picked "stock of the day" — the single most promising halal stock.
+
+    Advisory only: surfaced on the dashboard / CLI / API, never auto-traded.
+    One row per generation; the most recent row for a given ``date`` is the
+    active pick, and regenerating appends a new row so history is preserved.
+    """
+
+    __tablename__ = "daily_recommendations"
+
+    id: int | None = Field(default=None, primary_key=True)
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(UTC), sa_type=sa.DateTime(timezone=True)
+    )
+    date: str = Field(index=True)  # trading day, YYYY-MM-DD (US/Eastern)
+    symbol: str
+    conviction: float = Field(default=0.0)  # 0..1
+    thesis: str = ""  # why this is the most promising buy today
+    halal_note: str = ""  # Shariah-compliance justification
+    suggested_entry: float | None = None
+    suggested_target: float | None = None
+    suggested_stop: float | None = None
+    catalysts: str | None = None
+    risks: str | None = None
+    universe_size: int = Field(default=0)  # candidates considered
+    model: str | None = None  # LLM model that produced the pick
+    prompt_version: str | None = None
+    # Per-symbol context the model weighed (price/trend/indicator summary),
+    # kept for transparency on the dashboard.
+    candidates: dict | None = Field(
+        default=None, sa_column=sa.Column("candidates", JSONB, nullable=True)
+    )
+
+
 class RuntimeConfig(SQLModel, table=True):
     """Runtime overlay for ``Settings`` knobs.
 

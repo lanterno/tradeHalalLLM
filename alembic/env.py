@@ -15,6 +15,7 @@ from halal_trader.db.models import (  # noqa: F401
     CryptoHalalCache,
     CryptoTrade,
     DailyPnl,
+    DailyRecommendation,
     HalalCache,
     IndicatorSnapshot,
     LlmDecision,

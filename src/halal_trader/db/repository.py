@@ -29,6 +29,9 @@ class Repository:
 
     def __init__(self, engine: AsyncEngine) -> None:
         from halal_trader.db.repos.crypto_trades import CryptoTradeRepoImpl
+        from halal_trader.db.repos.daily_recommendations import (
+            DailyRecommendationRepoImpl,
+        )
         from halal_trader.db.repos.halal_cache import HalalCacheRepoImpl
         from halal_trader.db.repos.halal_screening import HalalScreeningRepoImpl
         from halal_trader.db.repos.indicator_snapshots import IndicatorSnapshotRepoImpl
@@ -54,6 +57,7 @@ class Repository:
         self._purification = PurificationRepoImpl(engine)
         self._halal_screening = HalalScreeningRepoImpl(engine)
         self._research_jobs = ResearchJobRepoImpl(engine)
+        self._daily_recommendations = DailyRecommendationRepoImpl(engine)
         self._indicator_snapshots = IndicatorSnapshotRepoImpl(engine)
         self._llm_decisions = LlmDecisionRepoImpl(engine)
         self._pnl = PnlRepoImpl(engine)
@@ -86,6 +90,7 @@ class Repository:
             halal_screening=self._halal_screening,
             runtime_config=self._runtime_config,
             research_jobs=self._research_jobs,
+            daily_recommendations=self._daily_recommendations,
             web_audit=self._web_audit,
             indicator_snapshots=self._indicator_snapshots,
             llm_decisions=self._llm_decisions,
@@ -213,6 +218,19 @@ class Repository:
 
     async def list_research_jobs(self, limit: int = 50) -> list[dict[str, Any]]:
         return await self._research_jobs.list_research_jobs(limit)
+
+    # ── Daily recommendation (delegated to DailyRecommendationRepoImpl) ──
+
+    async def save_recommendation(self, rec: dict[str, Any]) -> int:
+        return await self._daily_recommendations.save_recommendation(rec)
+
+    async def get_latest_recommendation(self) -> dict[str, Any] | None:
+        return await self._daily_recommendations.get_latest_recommendation()
+
+    async def get_recent_recommendations(
+        self, limit: int = 30
+    ) -> list[dict[str, Any]]:
+        return await self._daily_recommendations.get_recent_recommendations(limit)
 
     async def pin_research_job(self, job_id: int, pinned: bool) -> bool:
         return await self._research_jobs.pin_research_job(job_id, pinned)

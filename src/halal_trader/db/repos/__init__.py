@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING
 
 from halal_trader.db.repos.protocols import (
     CryptoTradeRepo,
+    DailyRecommendationRepo,
     HalalCacheRepo,
     HalalScreeningRepo,
     IndicatorSnapshotRepo,
@@ -60,6 +61,7 @@ class RepoBundle:
     halal_screening: HalalScreeningRepo
     runtime_config: RuntimeConfigRepo
     research_jobs: ResearchJobRepo
+    daily_recommendations: DailyRecommendationRepo
     web_audit: WebAuditRepo
     indicator_snapshots: IndicatorSnapshotRepo
     llm_decisions: LlmDecisionRepo
@@ -71,6 +73,9 @@ class RepoBundle:
     def from_engine(cls, engine: "AsyncEngine") -> "RepoBundle":
         """Build a bundle directly from an engine (no Repository needed)."""
         from halal_trader.db.repos.crypto_trades import CryptoTradeRepoImpl
+        from halal_trader.db.repos.daily_recommendations import (
+            DailyRecommendationRepoImpl,
+        )
         from halal_trader.db.repos.halal_cache import HalalCacheRepoImpl
         from halal_trader.db.repos.halal_screening import HalalScreeningRepoImpl
         from halal_trader.db.repos.indicator_snapshots import IndicatorSnapshotRepoImpl
@@ -96,6 +101,7 @@ class RepoBundle:
             halal_screening=HalalScreeningRepoImpl(engine),
             runtime_config=RuntimeConfigRepoImpl(engine),
             research_jobs=ResearchJobRepoImpl(engine),
+            daily_recommendations=DailyRecommendationRepoImpl(engine),
             web_audit=WebAuditRepoImpl(engine),
             indicator_snapshots=IndicatorSnapshotRepoImpl(engine),
             llm_decisions=LlmDecisionRepoImpl(engine),
@@ -107,6 +113,7 @@ class RepoBundle:
 
 __all__ = [
     "CryptoTradeRepo",
+    "DailyRecommendationRepo",
     "HalalCacheRepo",
     "HalalScreeningRepo",
     "IndicatorSnapshotRepo",
