@@ -35,6 +35,17 @@ def register(app: FastAPI) -> None:
         rows = await ctx.repo.get_recent_recommendations(limit=limit)
         return JSONResponse(serialize(rows))
 
+    @app.get("/api/recommendation/scorecard")
+    async def api_recommendation_scorecard(
+        ctx: DashboardContext = Depends(get_ctx),
+    ) -> JSONResponse:
+        # Read-only aggregate over already-labeled picks; the daily job does
+        # the (broker-bound) forward-return backfill, not this endpoint.
+        from halal_trader.recommendation.scorecard import compute_scorecard
+
+        sc = await compute_scorecard(ctx.repo)
+        return JSONResponse(serialize(sc))
+
     @app.post("/api/recommendation/generate")
     async def api_recommendation_generate(
         ctx: DashboardContext = Depends(get_ctx),

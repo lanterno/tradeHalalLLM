@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import {
   fetchStockOfTheDay,
   fetchRecommendationHistory,
+  fetchRecommendationScorecard,
 } from "../api/recommendation";
 
 // The daily pick changes at most once per pre-market run, so a slow poll
@@ -20,6 +21,14 @@ export function useRecommendationHistory(limit = 30) {
   return useQuery({
     queryKey: ["recommendation", "history", limit],
     queryFn: () => fetchRecommendationHistory(limit),
+    refetchInterval: REFRESH_MS,
+  });
+}
+
+export function useRecommendationScorecard() {
+  return useQuery({
+    queryKey: ["recommendation", "scorecard"],
+    queryFn: fetchRecommendationScorecard,
     refetchInterval: REFRESH_MS,
   });
 }

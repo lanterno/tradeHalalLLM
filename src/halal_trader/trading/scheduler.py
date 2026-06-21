@@ -389,6 +389,16 @@ class TradingBot(BaseTradingBot):
                 rec.get("symbol"),
                 float(rec.get("conviction") or 0.0),
             )
+            # Label matured past picks with forward returns (honest scorecard).
+            from halal_trader.recommendation.scorecard import backfill_outcomes
+
+            res = await backfill_outcomes(self.broker, self._repo)
+            if res.get("updated"):
+                logger.info(
+                    "Recommendation scorecard backfill: %d updated, %d scored",
+                    res["updated"],
+                    res.get("scored", 0),
+                )
         except Exception as exc:  # noqa: BLE001 — advisory; never break the bot
             logger.warning("Daily recommendation generation failed: %s", exc)
             if self._alerts is not None:

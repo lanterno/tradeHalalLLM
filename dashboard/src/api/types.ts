@@ -201,4 +201,25 @@ export interface StockOfTheDay {
   universe_size?: number;
   model?: string | null;
   created_at?: string;
+  // Outcome tracking (populated by the scorecard backfill once matured).
+  outcome_status?: string;
+  fwd_return_1d?: number | null;
+  fwd_return_5d?: number | null;
+  fwd_return_20d?: number | null;
+  benchmark_return_5d?: number | null;
+}
+
+// Aggregate track record for the daily recommendation (forward returns).
+export interface RecommendationScorecard {
+  available: boolean;
+  n_total: number;
+  n_scored: number;
+  hit_rate_5d?: number;
+  avg_fwd_1d?: number | null;
+  avg_fwd_5d?: number | null;
+  avg_fwd_20d?: number | null;
+  avg_excess_5d?: number | null;
+  benchmark?: string;
+  best?: { symbol: string; date: string; fwd_5d: number };
+  worst?: { symbol: string; date: string; fwd_5d: number };
 }
