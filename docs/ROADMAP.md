@@ -5,8 +5,8 @@ Working backlog for the autonomous build loop. **Pick the next unchecked item, b
 Constraints: long-only / no-leverage / no-derivatives (halal, non-negotiable). Never change live trading/sizing paths without offline validation. Advisory + infra + validation work is preferred for autonomous slices.
 
 ## Phase 0 — Foundations & honesty (do first)
-- [ ] **Recommendation Scorecard + forward-return labeling service** — outcome columns on `DailyRecommendation`, leakage-safe forward-return backfill (the shared foundation), track record vs a halal benchmark (SPUS). *(in progress)*
-- [ ] Deflated & Probabilistic Sharpe gate on every backtest, walk-forward fold, and the prompt-evolution GA.
+- [x] **Recommendation Scorecard + forward-return labeling service** — outcome columns on `DailyRecommendation`, leakage-safe forward-return backfill (the shared foundation), track record vs a halal benchmark (SPUS). CLI/web/scheduler/dashboard surfaces. 2026-06-20.
+- [ ] Deflated & Probabilistic Sharpe gate on every backtest, walk-forward fold, and the prompt-evolution GA. **← next**
 - [ ] Fix the walk-forward leakage bug (`test_start == train_end`).
 - [ ] Unify the no-short invariant into one enforced gate (today two executor clamps) + halal-screening freshness/expiry gate.
 - [ ] Minimum-track-record / sample-size guard before any learned stat (Kelly/calibration/IC) may act.
