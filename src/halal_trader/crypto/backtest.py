@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+from halal_trader.core.sharpe_stats import probabilistic_sharpe_ratio
 from halal_trader.crypto.indicators import compute_all
 from halal_trader.domain.models import Kline
 
@@ -53,6 +54,10 @@ class BacktestResult:
     max_drawdown_pct: float = 0.0
     sharpe_ratio: float = 0.0
     sortino_ratio: float = 0.0
+    # Probability the true Sharpe > 0 (López de Prado), correcting for sample
+    # length + skew/kurtosis. A short or fat-tailed track scores low even with
+    # a flattering raw Sharpe — the honest "is this real?" number.
+    psr: float = 0.0
     avg_hold_candles: float = 0.0
     trades: list[SimulatedTrade] = field(default_factory=list)
     equity_curve: list[float] = field(default_factory=list)
@@ -352,7 +357,7 @@ class BacktestEngine:
             dd = (peak - e) / peak if peak > 0 else 0
             max_dd = max(max_dd, dd)
 
-        # Sharpe & Sortino
+        # Sharpe & Sortino + Probabilistic Sharpe (PSR vs 0)
         if len(equity) > 1:
             returns = np.diff(equity) / np.array(equity[:-1])
             annual = np.sqrt(252 * 24 * 60)
@@ -361,8 +366,9 @@ class BacktestEngine:
             downside = returns[returns < 0]
             std_d = float(np.std(downside)) if len(downside) > 0 else 0.0
             sortino = float(np.mean(returns) / std_d * annual) if std_d > 0 else 0.0
+            psr = probabilistic_sharpe_ratio(returns)
         else:
-            sharpe = sortino = 0.0
+            sharpe = sortino = psr = 0.0
 
         # Avg hold time
         hold_candles = []
@@ -397,6 +403,7 @@ class BacktestEngine:
             max_drawdown_pct=max_dd,
             sharpe_ratio=sharpe,
             sortino_ratio=sortino,
+            psr=psr,
             avg_hold_candles=sum(hold_candles) / len(hold_candles) if hold_candles else 0.0,
             trades=trades,
             equity_curve=equity,

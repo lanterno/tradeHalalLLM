@@ -339,6 +339,8 @@ def print_backtest_results(result, pair: str, *, is_llm: bool = False) -> None:
     table.add_row("Max Drawdown", Text(f"{result.max_drawdown_pct:.2%}", style="red"))
     table.add_row("Sharpe Ratio", f"{result.sharpe_ratio:.2f}")
     table.add_row("Sortino Ratio", f"{result.sortino_ratio:.2f}")
+    psr_style = "green" if result.psr >= 0.95 else "yellow" if result.psr >= 0.8 else "red"
+    table.add_row("Prob. Sharpe (PSR>0)", Text(f"{result.psr:.1%}", style=psr_style))
     table.add_row("Avg Hold", f"{result.avg_hold_candles:.0f} candles")
     console.print(table)
 

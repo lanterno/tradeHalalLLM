@@ -48,6 +48,9 @@ class WalkForwardReport:
     avg_sharpe: float
     win_rate: float
     fold_count: int
+    # Mean out-of-sample Probabilistic Sharpe across folds (0..1). Low values
+    # mean the per-fold edge is statistically indistinguishable from noise.
+    avg_psr: float = 0.0
 
 
 def split_walk_forward(
@@ -116,12 +119,14 @@ async def run_walk_forward(
 
     avg_ret = float(np.mean([r.total_return_pct for r in fold_results]))
     avg_sharpe = float(np.mean([r.sharpe_ratio for r in fold_results]))
+    avg_psr = float(np.mean([r.psr for r in fold_results]))
     winning_folds = sum(1 for r in fold_results if r.total_return_pct > 0)
     win_rate = winning_folds / len(fold_results)
     return WalkForwardReport(
         folds=fold_results,
         avg_return_pct=avg_ret,
         avg_sharpe=avg_sharpe,
+        avg_psr=avg_psr,
         win_rate=win_rate,
         fold_count=len(fold_results),
     )
