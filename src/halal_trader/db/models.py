@@ -325,6 +325,16 @@ class DailyRecommendation(SQLModel, table=True):
     candidates: dict | None = Field(
         default=None, sa_column=sa.Column("candidates", JSONB, nullable=True)
     )
+    # ── Outcome tracking (forward-return labeling; advisory track record) ──
+    # Populated by the scorecard backfill once the pick has matured. Honest
+    # measurement of whether the recommendations actually work.
+    outcome_status: str = Field(default="pending")  # pending | scored | skipped
+    scored_at: datetime | None = Field(default=None, sa_type=sa.DateTime(timezone=True))
+    entry_close: float | None = None  # close on/after the rec date (return baseline)
+    fwd_return_1d: float | None = None  # % forward return, 1 trading day
+    fwd_return_5d: float | None = None  # % forward return, 5 trading days
+    fwd_return_20d: float | None = None  # % forward return, 20 trading days
+    benchmark_return_5d: float | None = None  # halal benchmark (SPUS) over 5d
 
 
 class RuntimeConfig(SQLModel, table=True):

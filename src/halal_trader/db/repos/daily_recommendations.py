@@ -52,3 +52,35 @@ class DailyRecommendationRepoImpl:
             )
             results = await session.exec(statement)
             return [r.model_dump() for r in results.all()]
+
+    async def get_recommendations_to_score(
+        self, limit: int = 500
+    ) -> list[dict[str, Any]]:
+        """Picks not yet fully scored (outcome_status != 'scored').
+
+        Progressive: a pick is revisited each backfill until its 20-day
+        forward return is available, then marked 'scored'.
+        """
+        async with AsyncSession(self._engine) as session:
+            statement = (
+                select(DailyRecommendation)
+                .where(col(DailyRecommendation.outcome_status) != "scored")
+                .order_by(col(DailyRecommendation.id).desc())
+                .limit(limit)
+            )
+            results = await session.exec(statement)
+            return [r.model_dump() for r in results.all()]
+
+    async def update_recommendation_outcome(
+        self, rec_id: int, **fields: Any
+    ) -> bool:
+        async with AsyncSession(self._engine) as session:
+            row = await session.get(DailyRecommendation, rec_id)
+            if row is None:
+                return False
+            for key, value in fields.items():
+                if hasattr(row, key):
+                    setattr(row, key, value)
+            session.add(row)
+            await session.commit()
+            return True

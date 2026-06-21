@@ -232,6 +232,18 @@ class Repository:
     ) -> list[dict[str, Any]]:
         return await self._daily_recommendations.get_recent_recommendations(limit)
 
+    async def get_recommendations_to_score(
+        self, limit: int = 500
+    ) -> list[dict[str, Any]]:
+        return await self._daily_recommendations.get_recommendations_to_score(limit)
+
+    async def update_recommendation_outcome(
+        self, rec_id: int, **fields: Any
+    ) -> bool:
+        return await self._daily_recommendations.update_recommendation_outcome(
+            rec_id, **fields
+        )
+
     async def pin_research_job(self, job_id: int, pinned: bool) -> bool:
         return await self._research_jobs.pin_research_job(job_id, pinned)
 
