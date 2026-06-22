@@ -7,6 +7,7 @@ from typing import Any
 from halal_trader.core import events
 from halal_trader.core.executor import BaseExecutor
 from halal_trader.core.fills import confirm_alpaca
+from halal_trader.core.long_only import clamp_sell_to_long
 from halal_trader.db.repos import TradeRepo
 from halal_trader.domain.models import TradeAction, TradeDecision, TradingPlan
 from halal_trader.domain.ports import Broker
@@ -657,12 +658,13 @@ class TradeExecutor(BaseExecutor):
                 # Never sell more than the held LONG quantity. On a
                 # margin-enabled (paper) account an over-sized sell flips the
                 # position SHORT — a halal violation (this bot is long-only,
-                # never shorts) and a risk breach. Clamp the order to the
-                # broker's actual holding; skip entirely if we hold no long
-                # position in this symbol (e.g. a stale/phantom DB position or
-                # one the monitor already exited).
+                # never shorts) and a risk breach. Enforce the shared no-short
+                # invariant against the broker's actual holding; skip entirely
+                # if we hold no long position in this symbol (e.g. a stale/
+                # phantom DB position or one the monitor already exited).
                 held_qty = await self._fetch_position_qty(decision.symbol)
-                if held_qty <= 0:
+                clamp = clamp_sell_to_long(decision.quantity, held_qty)
+                if clamp.blocked:
                     logger.warning(
                         "SELL skipped: %s not held long (broker qty=%g) — "
                         "refusing to open/deepen a short",
@@ -675,7 +677,7 @@ class TradeExecutor(BaseExecutor):
                         "status": "skipped",
                         "reason": f"not held long (broker qty={held_qty:g})",
                     }
-                if decision.quantity > held_qty:
+                if clamp.clamped:
                     logger.info(
                         "SELL clamped: %s requested %g but only %g held long — "
                         "selling the held quantity to avoid going short",
@@ -683,7 +685,7 @@ class TradeExecutor(BaseExecutor):
                         decision.quantity,
                         held_qty,
                     )
-                    decision.quantity = held_qty
+                decision.quantity = clamp.quantity
                 result = await self._broker.place_order(
                     symbol=decision.symbol,
                     side="sell",

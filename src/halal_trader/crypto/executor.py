@@ -11,6 +11,7 @@ from binance import BinanceAPIException
 from halal_trader.core import events
 from halal_trader.core.executor import BaseExecutor
 from halal_trader.core.fills import confirm_binance
+from halal_trader.core.long_only import clamp_sell_to_long
 from halal_trader.crypto.exchange import DUST_NOTIONAL_USD, BinanceClient
 from halal_trader.db.repos import CryptoTradeRepo
 from halal_trader.domain.models import (
@@ -549,7 +550,10 @@ class CryptoExecutor(BaseExecutor):
             balances = await self._broker.get_balances()
             actual_free = next((b.free for b in balances if b.asset == base_asset), 0.0)
 
-            quantity = min(decision.quantity, actual_free)
+            # Shared no-short invariant: never sell more than the free balance
+            # (a long-only book can at most go flat). The <=0 guard below covers
+            # the "nothing held" (blocked) case.
+            quantity = clamp_sell_to_long(decision.quantity, actual_free).quantity
             quantity = self._broker.round_quantity(decision.symbol, quantity)
 
             if quantity <= 0:
