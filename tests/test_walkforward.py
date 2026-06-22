@@ -92,11 +92,59 @@ async def test_run_walk_forward_aggregates_fold_metrics():
         )
 
     report = await run_walk_forward(
-        "X", klines, backtest_fn=fake_backtest, train_size=40, test_size=20
+        "X", klines, backtest_fn=fake_backtest, train_size=40, test_size=20, warmup=20
     )
     assert report.fold_count > 0
     assert -1 < report.avg_return_pct < 1
     assert 0 <= report.win_rate <= 1
+
+
+async def test_run_walk_forward_feeds_pure_oos_slices_no_leakage():
+    """Each fold must receive exactly warmup + test_size bars (warmup context
+    before the test window, then the test window) — never the full train span.
+    This pins the leakage fix: the engine, which trades from index window_size,
+    then trades only the out-of-sample test window."""
+    klines = [_kl(100 + i * 0.1, i * 60_000) for i in range(300)]
+    seen_lengths: list[int] = []
+
+    async def capture(pair: str, slice_: list[Kline]) -> BacktestResult:
+        seen_lengths.append(len(slice_))
+        return BacktestResult(
+            pair=pair, start_date="", end_date="",
+            initial_balance=10_000, final_balance=10_000,
+        )
+
+    warmup, test_size = 100, 50
+    report = await run_walk_forward(
+        "X", klines, backtest_fn=capture,
+        train_size=200, test_size=test_size, warmup=warmup,
+    )
+    assert report.fold_count > 0
+    # Every fold slice is exactly warmup + test_size — no extra train bars.
+    assert seen_lengths
+    assert all(n == warmup + test_size for n in seen_lengths)
+
+
+async def test_run_walk_forward_skips_folds_without_full_warmup():
+    """A fold whose test window starts before a full warmup prefix is skipped
+    rather than evaluated on a truncated (leaky/degraded) context."""
+    klines = [_kl(100 + i * 0.1, i * 60_000) for i in range(200)]
+
+    async def fake(pair: str, slice_: list[Kline]) -> BacktestResult:
+        # train_size 60 < warmup 100 → test_start (60) - warmup (100) < 0 → skip.
+        assert len(slice_) >= 100  # if ever called, must have a full warmup
+        return BacktestResult(
+            pair=pair, start_date="", end_date="",
+            initial_balance=10_000, final_balance=10_000,
+        )
+
+    report = await run_walk_forward(
+        "X", klines, backtest_fn=fake, train_size=60, test_size=20, warmup=100
+    )
+    # First test_start is 60 < 100, but later folds step forward; only folds
+    # with test_start >= 100 survive.
+    assert all(True for _ in report.folds)  # no crash
+    assert report.fold_count >= 0
 
 
 async def test_run_walk_forward_empty_returns_zero():

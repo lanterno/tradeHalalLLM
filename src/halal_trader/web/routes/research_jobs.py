@@ -161,9 +161,12 @@ async def _run_walk_forward(params: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("walk_forward requires non-empty 'klines' in params")
 
     engine = BacktestEngine()
+    # warmup must equal the engine's window_size so each fold trades exactly its
+    # out-of-sample test window (no in-sample leakage). Pin them together.
+    window_size = int(params.get("window_size", 100))
 
     async def _bt(p: str, slice_: list[Kline]) -> Any:
-        return await engine.run(p, slice_)
+        return await engine.run(p, slice_, window_size=window_size)
 
     report = await run_walk_forward(
         pair,
@@ -171,6 +174,7 @@ async def _run_walk_forward(params: dict[str, Any]) -> dict[str, Any]:
         backtest_fn=_bt,
         train_size=params.get("train_size", 200),
         test_size=params.get("test_size", 50),
+        warmup=window_size,
     )
     return {
         "fold_count": report.fold_count,

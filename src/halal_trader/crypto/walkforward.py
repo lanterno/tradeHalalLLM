@@ -92,21 +92,33 @@ async def run_walk_forward(
     train_size: int,
     test_size: int,
     step: int | None = None,
+    warmup: int = 100,
 ) -> WalkForwardReport:
     """Run ``backtest_fn`` over each test window and aggregate the results.
 
-    The current ``BacktestEngine`` doesn't expose a "use these as fit
-    data, then run on these" split — its rule-based path needs no
-    fitting and the LLM path is fitted via the LLM itself. So today the
-    train slice is implicit context (the bars before the test window
-    are part of the indicator-warmup window). When Phase 5's parameter-
-    sweep lands, this is where the fit step plugs in.
+    Each fold feeds ``backtest_fn`` exactly ``warmup`` bars *before* the test
+    window (for indicator context only) followed by the test window itself.
+    ``BacktestEngine.run`` starts trading at index ``window_size`` of its input,
+    so when ``warmup`` equals the engine's ``window_size`` the engine begins
+    trading exactly at ``test_start`` and the fold result is **pure
+    out-of-sample**.
+
+    This fixes a leakage bug: the previous ``klines[train_start:test_end]``
+    slice handed the engine the whole train+test span, so it traded the last
+    ``window_size`` *training* bars too and folded their in-sample performance
+    into the "out-of-sample" metrics. ``warmup`` MUST equal the backtest
+    engine's ``window_size`` — pass them together (see research_jobs).
     """
     folds = split_walk_forward(len(klines), train_size=train_size, test_size=test_size, step=step)
     fold_results: list[BacktestResult] = []
     for w in folds:
-        # Pass the train + test slice so the engine has enough warmup.
-        slice_ = klines[w.train_start : w.test_end]
+        # Exactly ``warmup`` context bars before the test window, then the test
+        # window — so the engine trades only [test_start, test_end). Skip a fold
+        # that lacks a full warmup prefix (can't be cleanly evaluated).
+        start = w.test_start - warmup
+        if start < 0:
+            continue
+        slice_ = klines[start : w.test_end]
         if len(slice_) < 2:
             continue
         result = await backtest_fn(pair, slice_)
