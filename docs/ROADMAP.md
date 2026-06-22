@@ -9,8 +9,9 @@ Constraints: long-only / no-leverage / no-derivatives (halal, non-negotiable). N
 - [x] Deflated & Probabilistic Sharpe — PSR/DSR stats module + backtest `psr` + walk-forward `avg_psr` + CLI display. 2026-06-21.
 - [ ] GA Sharpe gate: make prompt-evo fitness carry a per-genome return series, then gate promotion on DSR (deferred from the PSR item — needs the fitness refactor).
 - [x] Fix the walk-forward leakage bug — folds now feed `warmup`(=engine window_size) context bars then the test window, so each fold is pure OOS. 2026-06-22.
-- [ ] Unify the no-short invariant into one enforced gate (today two executor clamps) + halal-screening freshness/expiry gate. **← next**
-- [ ] Minimum-track-record / sample-size guard before any learned stat (Kelly/calibration/IC) may act.
+- [x] Unify the no-short invariant into one enforced gate — `core/long_only.py:clamp_sell_to_long`, both executors use it (behavior-preserving). 2026-06-22.
+- [ ] Halal-screening freshness/expiry gate so factor/sentiment signals never act on a stale or sandbox screen (split from the no-short item).
+- [ ] Minimum-track-record / sample-size guard before any learned stat (Kelly/calibration/IC) may act. **← next**
 - [ ] Retire the dead Yahoo options-IV feed (permanent 401s).
 
 ## Phase 1 — Close the risk/sizing loop (offline-validate before any live wiring)
