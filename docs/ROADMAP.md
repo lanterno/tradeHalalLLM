@@ -8,8 +8,8 @@ Constraints: long-only / no-leverage / no-derivatives (halal, non-negotiable). N
 - [x] **Recommendation Scorecard + forward-return labeling service** — outcome columns on `DailyRecommendation`, leakage-safe forward-return backfill (the shared foundation), track record vs a halal benchmark (SPUS). CLI/web/scheduler/dashboard surfaces. 2026-06-20.
 - [x] Deflated & Probabilistic Sharpe — PSR/DSR stats module + backtest `psr` + walk-forward `avg_psr` + CLI display. 2026-06-21.
 - [ ] GA Sharpe gate: make prompt-evo fitness carry a per-genome return series, then gate promotion on DSR (deferred from the PSR item — needs the fitness refactor).
-- [ ] Fix the walk-forward leakage bug (`test_start == train_end`). **← next**
-- [ ] Unify the no-short invariant into one enforced gate (today two executor clamps) + halal-screening freshness/expiry gate.
+- [x] Fix the walk-forward leakage bug — folds now feed `warmup`(=engine window_size) context bars then the test window, so each fold is pure OOS. 2026-06-22.
+- [ ] Unify the no-short invariant into one enforced gate (today two executor clamps) + halal-screening freshness/expiry gate. **← next**
 - [ ] Minimum-track-record / sample-size guard before any learned stat (Kelly/calibration/IC) may act.
 - [ ] Retire the dead Yahoo options-IV feed (permanent 401s).
 
