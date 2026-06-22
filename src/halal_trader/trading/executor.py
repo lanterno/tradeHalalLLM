@@ -14,7 +14,12 @@ from halal_trader.domain.status import TradeStatus
 
 logger = logging.getLogger(__name__)
 
-_FILL_TIMEOUT = 30.0
+# Fill-confirmation poll budget. Paper orders are occasionally still ``new``
+# (accepted, unfilled) past 30s at the open; recording those as timeouts lets
+# the late async fill land at the broker while the DB shows pending — a source
+# of reconcile drift. 90s captures the common late-fill window; the cycle is
+# wrapped in asyncio.wait_for(interval*2) (~30min) so this is well within budget.
+_FILL_TIMEOUT = 90.0
 _FILL_POLL_INTERVAL = 2.0
 
 # Fallback stop when the LLM hands back a stop-loss that's invalid for a long
