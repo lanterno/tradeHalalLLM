@@ -214,6 +214,8 @@ export interface RecommendationScorecard {
   available: boolean;
   n_total: number;
   n_scored: number;
+  sufficient?: boolean;
+  min_samples?: number;
   hit_rate_5d?: number;
   avg_fwd_1d?: number | null;
   avg_fwd_5d?: number | null;

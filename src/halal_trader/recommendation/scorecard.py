@@ -13,6 +13,8 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
+from halal_trader.core.sample_guard import SampleGate
+
 logger = logging.getLogger(__name__)
 
 # Halal benchmark: SP Funds S&P 500 Sharia Industry Exclusions ETF.
@@ -165,10 +167,14 @@ async def compute_scorecard(repo: Any, *, limit: int = 500) -> dict[str, Any]:
     ]
     best = max(labeled, key=lambda r: r["fwd_return_5d"])
     worst = min(labeled, key=lambda r: r["fwd_return_5d"])
+    gate = SampleGate(n)  # is the track record long enough to trust the rates?
     return {
         "available": True,
         "n_total": len(rows),
         "n_scored": n,
+        # Honest caveat: below ~20 scored picks the hit-rate/averages are noise.
+        "sufficient": gate.sufficient,
+        "min_samples": gate.min_n,
         "hit_rate_5d": round(hit, 4),
         "avg_fwd_1d": _avg(labeled, "fwd_return_1d"),
         "avg_fwd_5d": _avg(labeled, "fwd_return_5d"),

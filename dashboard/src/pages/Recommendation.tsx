@@ -35,6 +35,12 @@ export default function Recommendation() {
       <RecommendationCard pick={pick} isLoading={isLoading} />
 
       {/* Honest track record (forward returns vs halal benchmark) */}
+      {sc?.available && sc.sufficient === false ? (
+        <div className="rounded-xl border border-border bg-surface p-3 text-xs text-muted">
+          ⚠ Track record is a thin sample ({sc.n_scored} scored picks) — needs
+          ≥{sc.min_samples ?? 20} for the rates below to be trustworthy.
+        </div>
+      ) : null}
       {sc?.available ? (
         <div className="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-5">
           <StatCard

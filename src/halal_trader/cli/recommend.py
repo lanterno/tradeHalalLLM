@@ -62,9 +62,14 @@ def _print_scorecard(sc: dict[str, Any], backfill: dict[str, int]) -> None:
     hit = sc.get("hit_rate_5d")
     hit_s = f"{hit:.0%}" if isinstance(hit, int | float) else "—"
     best, worst = sc.get("best", {}), sc.get("worst", {})
+    caveat = (
+        ""
+        if sc.get("sufficient")
+        else f"  [yellow]⚠ thin sample — needs ≥{sc.get('min_samples', 20)} to trust[/yellow]"
+    )
     body = (
         f"[bold]{sc['n_scored']}[/bold] scored picks "
-        f"(of {sc['n_total']} total)\n\n"
+        f"(of {sc['n_total']} total){caveat}\n\n"
         f"5-day hit rate: [bold]{hit_s}[/bold]\n"
         f"Avg forward return — 1d {_pct(sc.get('avg_fwd_1d'))} · "
         f"5d {_pct(sc.get('avg_fwd_5d'))} · 20d {_pct(sc.get('avg_fwd_20d'))}\n"
