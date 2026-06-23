@@ -20,7 +20,7 @@ Constraints: long-only / no-leverage / no-derivatives (halal, non-negotiable). N
 - [ ] Wire the confidence calibrator into live position sizing (all 3 critics' #1).
 - [ ] Half-Kelly sizing from per-bucket win-rate/payoff, hard-clamped at f*≥0.
 - [ ] CPPI-style continuous drawdown throttle on the sizing path.
-- [ ] CVaR (Expected Shortfall) tail-risk budget gate + prompt surface.
+- [~] CVaR (Expected Shortfall) — metric done (`core/risk_metrics.py`, backtest `cvar_5pct` + walk-forward `avg_cvar_5pct` + CLI). 2026-06-23. Remaining: the live tail-risk *budget gate* that shapes sizing (deferred — touches live sizing).
 - [ ] Persisted realized-vol / covariance estimator across cycles + turnover/churn budget.
 - [ ] In-cycle daily-loss-halt enforced before order submission.
 
