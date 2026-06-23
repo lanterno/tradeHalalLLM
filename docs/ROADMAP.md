@@ -18,8 +18,8 @@ Constraints: long-only / no-leverage / no-derivatives (halal, non-negotiable). N
 
 ## Phase 1 — Close the risk/sizing loop (offline-validate before any live wiring)
 - [ ] Wire the confidence calibrator into live position sizing (all 3 critics' #1).
-- [ ] Half-Kelly sizing from per-bucket win-rate/payoff, hard-clamped at f*≥0.
-- [ ] CPPI-style continuous drawdown throttle on the sizing path.
+- [~] Half-Kelly sizing — pure primitive done (`core/sizing.py:half_kelly_fraction`, clamped ≥0, sample-gated). 2026-06-23. Remaining: live wiring (needs per-bucket win/payoff stats + offline backtest evidence).
+- [~] CPPI drawdown throttle — primitive done + wired into the backtest as opt-in (`drawdown_throttle_budget`) for offline evidence. 2026-06-23. Remaining: live sizing-path wiring.
 - [~] CVaR (Expected Shortfall) — metric done (`core/risk_metrics.py`, backtest `cvar_5pct` + walk-forward `avg_cvar_5pct` + CLI). 2026-06-23. Remaining: the live tail-risk *budget gate* that shapes sizing (deferred — touches live sizing).
 - [ ] Persisted realized-vol / covariance estimator across cycles + turnover/churn budget.
 - [ ] In-cycle daily-loss-halt enforced before order submission.
