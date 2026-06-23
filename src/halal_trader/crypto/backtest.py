@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+from halal_trader.core.risk_metrics import conditional_value_at_risk
 from halal_trader.core.sharpe_stats import probabilistic_sharpe_ratio
 from halal_trader.crypto.indicators import compute_all
 from halal_trader.domain.models import Kline
@@ -58,6 +59,10 @@ class BacktestResult:
     # length + skew/kurtosis. A short or fat-tailed track scores low even with
     # a flattering raw Sharpe — the honest "is this real?" number.
     psr: float = 0.0
+    # Conditional VaR (5% Expected Shortfall) of per-period returns — the mean
+    # of the worst-5% tail. Negative = loss. Captures tail risk that variance/
+    # Sharpe hide.
+    cvar_5pct: float = 0.0
     avg_hold_candles: float = 0.0
     trades: list[SimulatedTrade] = field(default_factory=list)
     equity_curve: list[float] = field(default_factory=list)
@@ -367,8 +372,9 @@ class BacktestEngine:
             std_d = float(np.std(downside)) if len(downside) > 0 else 0.0
             sortino = float(np.mean(returns) / std_d * annual) if std_d > 0 else 0.0
             psr = probabilistic_sharpe_ratio(returns)
+            cvar_5pct = conditional_value_at_risk(returns, alpha=0.05)
         else:
-            sharpe = sortino = psr = 0.0
+            sharpe = sortino = psr = cvar_5pct = 0.0
 
         # Avg hold time
         hold_candles = []
@@ -404,6 +410,7 @@ class BacktestEngine:
             sharpe_ratio=sharpe,
             sortino_ratio=sortino,
             psr=psr,
+            cvar_5pct=cvar_5pct,
             avg_hold_candles=sum(hold_candles) / len(hold_candles) if hold_candles else 0.0,
             trades=trades,
             equity_curve=equity,
