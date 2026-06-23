@@ -10,6 +10,7 @@ import numpy as np
 
 from halal_trader.core.risk_metrics import conditional_value_at_risk
 from halal_trader.core.sharpe_stats import probabilistic_sharpe_ratio
+from halal_trader.core.sizing import drawdown_throttle
 from halal_trader.crypto.indicators import compute_all
 from halal_trader.domain.models import Kline
 
@@ -89,6 +90,7 @@ class SimulatedExecutor:
         max_position_pct: float = 0.25,
         atr_baseline: float = 0.02,
         slippage_model: "SlippageModel | None" = None,
+        drawdown_throttle_budget: float | None = None,
     ) -> None:
         self.balance = initial_balance
         self.initial_balance = initial_balance
@@ -96,6 +98,10 @@ class SimulatedExecutor:
         self._fee_pct = fee_pct
         self._max_position_pct = max_position_pct
         self._atr_baseline = atr_baseline
+        # Opt-in CPPI drawdown throttle: when set (a positive fraction, e.g.
+        # 0.15), buys are scaled down as the equity drawdown approaches this
+        # budget. None = off (default) → sizing behaviour unchanged.
+        self._dd_budget = drawdown_throttle_budget
         # Wave G: optional replay-fitted predictor — when provided, the
         # baseline slippage per fill comes from ``model.predict(features)``
         # so the backtester matches what the executor recorded for the
@@ -177,6 +183,11 @@ class SimulatedExecutor:
         max_spend = self.balance * self._max_position_pct
         if confidence is not None:
             max_spend = confidence_weighted_quantity(max_spend, confidence)
+        if self._dd_budget:
+            # Scale exposure down as the running drawdown nears the budget.
+            peak = max(self.equity_curve) if self.equity_curve else self.balance
+            dd = (peak - self.balance) / peak if peak > 0 else 0.0
+            max_spend *= drawdown_throttle(dd, max_drawdown_budget=self._dd_budget)
 
         fill_price = self._fill_price(
             side="buy", price=price, notional_usd=max_spend, atr_pct=atr_pct
