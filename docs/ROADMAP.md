@@ -12,7 +12,9 @@ Constraints: long-only / no-leverage / no-derivatives (halal, non-negotiable). N
 - [x] Unify the no-short invariant into one enforced gate — `core/long_only.py:clamp_sell_to_long`, both executors use it (behavior-preserving). 2026-06-22.
 - [ ] Halal-screening freshness/expiry gate so factor/sentiment signals never act on a stale or sandbox screen (split from the no-short item).
 - [x] Minimum-track-record / sample-size guard — `core/sample_guard.py` (SampleGate + gate_stat); scorecard now reports `sufficient`/`min_samples`. 2026-06-23.
-- [ ] Retire the dead Yahoo options-IV feed (permanent 401s). **← next**
+- [x] Retire the dead Yahoo options-IV feed — unwired from catalyst sources; module kept dormant. 2026-06-23.
+
+**Phase 0 complete** except two split-out items: the GA Sharpe gate (needs the prompt-evo fitness refactor) and the halal-screening freshness gate (below). Next: screening-freshness gate, then Phase 1 (sizing loop, offline-validated).
 
 ## Phase 1 — Close the risk/sizing loop (offline-validate before any live wiring)
 - [ ] Wire the confidence calibrator into live position sizing (all 3 critics' #1).
