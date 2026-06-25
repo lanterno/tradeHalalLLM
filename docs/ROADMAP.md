@@ -25,7 +25,7 @@ Constraints: long-only / no-leverage / no-derivatives (halal, non-negotiable). N
 - [ ] In-cycle daily-loss-halt enforced before order submission.
 
 ## Phase 2 — Real orthogonal edge
-- [ ] Cross-sectional factor core (momentum + low-vol + trend-quality), one rank module / two consumers (live tilt + advisory basket).
+- [x] Cross-sectional factor core (momentum + low-vol + trend-quality) — `core/factors.py:rank_factors`; consumer #1 = advisory recommendation (factor leaders in the prompt + scores stored). 2026-06-25. Consumer #2 (live top-N tilt) is the deferred live-sizing work.
 - [x] Rank-IC / ICIR keep-kill harness — `core/signal_eval.py` (information_coefficient + icir); first consumer = scorecard `conviction_ic`. 2026-06-25.
 - [ ] FinBERT/FinGPT transformer sentiment behind the `HeadlineClassifier` Protocol (gives stocks sentiment).
 - [ ] SEC EDGAR Form 4 insider-buy clustering catalyst (buy-side only).
