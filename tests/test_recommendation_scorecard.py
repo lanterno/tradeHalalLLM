@@ -137,6 +137,7 @@ async def test_compute_scorecard_aggregates():
     assert sc["n_scored"] == 2  # only the two with fwd_return_5d
     assert sc["sufficient"] is False  # 2 picks is far below the trust threshold
     assert sc["min_samples"] >= 2
+    assert sc["conviction_ic"] is None  # not enough samples to claim an IC
     assert sc["hit_rate_5d"] == pytest.approx(0.5)  # 1 of 2 positive
     assert sc["avg_fwd_5d"] == pytest.approx(1.0)  # (5 + -3)/2
     assert sc["avg_excess_5d"] == pytest.approx(((5.0 - 2.0) + (-3.0 - 1.0)) / 2)

@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from halal_trader.core.sample_guard import SampleGate
+from halal_trader.core.signal_eval import information_coefficient
 
 logger = logging.getLogger(__name__)
 
@@ -168,6 +169,12 @@ async def compute_scorecard(repo: Any, *, limit: int = 500) -> dict[str, Any]:
     best = max(labeled, key=lambda r: r["fwd_return_5d"])
     worst = min(labeled, key=lambda r: r["fwd_return_5d"])
     gate = SampleGate(n)  # is the track record long enough to trust the rates?
+    # Does the model's conviction actually rank-correlate with outcomes? Only
+    # report it once the sample is big enough to mean anything.
+    conviction_ic: float | None = None
+    if gate.sufficient:
+        convictions = [r.get("conviction") or 0.0 for r in labeled]
+        conviction_ic = round(information_coefficient(convictions, fwd5), 4)
     return {
         "available": True,
         "n_total": len(rows),
@@ -175,6 +182,7 @@ async def compute_scorecard(repo: Any, *, limit: int = 500) -> dict[str, Any]:
         # Honest caveat: below ~20 scored picks the hit-rate/averages are noise.
         "sufficient": gate.sufficient,
         "min_samples": gate.min_n,
+        "conviction_ic": conviction_ic,
         "hit_rate_5d": round(hit, 4),
         "avg_fwd_1d": _avg(labeled, "fwd_return_1d"),
         "avg_fwd_5d": _avg(labeled, "fwd_return_5d"),
