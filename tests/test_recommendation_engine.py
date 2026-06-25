@@ -94,6 +94,9 @@ async def test_generate_picks_and_persists():
     assert rec["candidates"]["NVDA"]["price"] is not None
     # the universe is shown to the model
     assert "NVDA" in llm.last_prompt and "AAPL" in llm.last_prompt
+    # cross-sectional factor core ran: scores merged + leaders in the prompt
+    assert "factor_score" in rec["candidates"]["NVDA"]
+    assert "factor leaders" in llm.last_prompt.lower()
 
 
 @pytest.mark.asyncio

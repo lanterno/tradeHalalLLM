@@ -176,11 +176,34 @@ class DailyRecommendationEngine:
             )
         return "\n".join(lines)
 
+    def _apply_factors(self, candidates: dict[str, dict[str, Any]]) -> str:
+        """Cross-sectional factor rank: merge each composite into the candidate
+        (stored + shown) and return a "factor leaders" block for the prompt."""
+        from halal_trader.core.factors import rank_factors
+
+        ranked = rank_factors(candidates)
+        for fs in ranked:
+            candidates[fs.symbol]["factor_score"] = fs.composite
+        top = ranked[:5]
+        lines = [
+            f"  {fs.symbol}: composite={fs.composite:+.2f} "
+            f"(mom {fs.momentum:+.2f}, lowvol {fs.low_vol:+.2f}, "
+            f"trend {fs.trend_quality:+.2f})"
+            for fs in top
+        ]
+        return (
+            "Cross-sectional factor leaders (z-scored momentum + low-vol + "
+            "trend-quality across the universe; higher = stronger long tilt):\n"
+            + "\n".join(lines)
+        )
+
     async def _pick(self, candidates: dict[str, dict[str, Any]]) -> dict[str, Any]:
         date = datetime.now(_ET).strftime("%Y-%m-%d")
+        factor_block = self._apply_factors(candidates)
         user = USER_PROMPT_TEMPLATE.format(
             date=date, n=len(candidates), table=self._format_table(candidates)
         )
+        user += "\n\n" + factor_block
         raw = await self._llm.generate_json(user, system=SYSTEM_PROMPT)
         return self._validate(raw, candidates)
 
