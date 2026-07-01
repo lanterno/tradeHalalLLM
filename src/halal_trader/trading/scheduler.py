@@ -301,20 +301,30 @@ class TradingBot(BaseTradingBot):
                 )
                 watchlist = []
             if watchlist:
-                # Dedicated classifier LLM stack (independent of strategy
-                # LLM) — picks up cheap cloud providers first and falls
-                # through to Ollama floor. Decouples classifier failure
-                # modes from strategy: a quota exhaustion in one no
-                # longer takes down the other. See create_classifier_llm
-                # for the chain order rationale.
-                from halal_trader.core.llm import create_classifier_llm
+                classifier: Any
+                if self.settings.stocks.headline_classifier == "finbert":
+                    # Local, free, LLM-outage-resilient sentiment classifier.
+                    from halal_trader.sentiment.finbert_classifier import (
+                        FinBERTHeadlineClassifier,
+                    )
 
-                classifier_llm = create_classifier_llm(self.settings)
-                classifier = GPTHeadlineClassifier(
-                    classifier_llm,
-                    alert_sink=self._alerts,
-                    daily_classify_cap=self.settings.stocks.reactor_daily_classify_cap,
-                )
+                    classifier = FinBERTHeadlineClassifier()
+                    logger.info("Reactor headline classifier: FinBERT (local)")
+                else:
+                    # Dedicated classifier LLM stack (independent of strategy
+                    # LLM) — picks up cheap cloud providers first and falls
+                    # through to Ollama floor. Decouples classifier failure
+                    # modes from strategy: a quota exhaustion in one no
+                    # longer takes down the other. See create_classifier_llm
+                    # for the chain order rationale.
+                    from halal_trader.core.llm import create_classifier_llm
+
+                    classifier_llm = create_classifier_llm(self.settings)
+                    classifier = GPTHeadlineClassifier(
+                        classifier_llm,
+                        alert_sink=self._alerts,
+                        daily_classify_cap=self.settings.stocks.reactor_daily_classify_cap,
+                    )
                 # Gate the reactor's sweep on the kill-switch so it stops
                 # burning classifier/Finnhub calls while halted (entries are
                 # blocked downstream regardless).

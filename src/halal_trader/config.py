@@ -226,6 +226,10 @@ class StockSettings(BaseSettings):
     # call-spam that originally motivated 250 (2026-05-22: 3,736 wasted 429s)
     # is now owned by the classifier's half-open quota breaker, not this cap.
     reactor_daily_classify_cap: int = Field(default=1500, ge=0)
+    # Which headline classifier the reactor uses: "llm" (GPT-4o-mini, default)
+    # or "finbert" (local ProsusAI/finbert — free, no API dependency, resilient
+    # to LLM outages, but sentiment-only vs the LLM's event-typed scoring).
+    headline_classifier: str = Field(default="llm")
 
     # News-momentum reactor: entry execution (Phase 2B / "fast in").
     # When enabled, a high-confidence scored catalyst places a real
