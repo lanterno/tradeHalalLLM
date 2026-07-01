@@ -303,7 +303,7 @@ async def build_components(
     strategy = CryptoTradingStrategy(
         llm,
         repo,
-        llm_provider_name=settings.llm.provider.value,
+        llm_provider_name="glm",
         max_position_pct=settings.crypto.max_position_pct,
         daily_loss_limit=settings.crypto.daily_loss_limit,
         daily_return_target=settings.crypto.daily_return_target,
@@ -437,7 +437,7 @@ async def build_components(
             shadow_strategy = CryptoTradingStrategy(
                 create_llm(settings),
                 repo,
-                llm_provider_name=settings.llm.provider.value,
+                llm_provider_name="glm",
                 max_position_pct=settings.crypto.max_position_pct,
                 daily_loss_limit=settings.crypto.daily_loss_limit,
                 daily_return_target=settings.crypto.daily_return_target,

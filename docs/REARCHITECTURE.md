@@ -412,7 +412,7 @@ async def apply_evidence(asset: str, items: list[EvidenceItem], now: datetime) -
 | Interpreter | Role | Reuse |
 |---|---|---|
 | `thesis_writer` | synthesize the evidence into a narrative + set `horizon`, refine `levels.invalidation` | `core/llm/*` (ensemble/adversarial as quality options), prompt registry |
-| `news_analyst` | score a *high-impact* headline's belief impact (only headlines the lexicon flags as potentially material) | the GPT classifier from `sentiment/stocks_events.py`, now belief-aware |
+| `news_analyst` | score a *high-impact* headline's belief impact (only headlines the lexicon flags as potentially material) | the LLM classifier from `sentiment/stocks_events.py`, now belief-aware |
 | `rag_grounding` | pull analogous past situations to weight conviction | `core/llm/rag_db.py`, `rationales` pgvector |
 
 **Boundary:**

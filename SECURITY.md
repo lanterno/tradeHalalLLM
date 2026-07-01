@@ -29,7 +29,7 @@ assets in scope:
 | Asset | Defended via |
 |---|---|
 | Operator's broker API keys (Alpaca, Binance) | `.env` is gitignored; secrets never logged; read-only by default in WS adapters |
-| LLM provider API keys (OpenAI, Anthropic, Ollama) | Same as above |
+| GLM API key (`GLM_API_KEY` — OpenRouter or other OpenAI-compatible host) | Same as above |
 | Operator's Postgres credentials | `.env` only; `pg_hba.conf` localhost-only by default |
 | Halal screening cache integrity | Append-only `HalalScreening` rows; consensus aggregator's STRICT-default rejects on any provider's `not_halal` |
 | Audit trail integrity | `LlmDecision`, `Trade`, `HalalScreening` rows are append-only; Wave 6.E model fingerprint detects post-hoc tampering |
@@ -70,7 +70,7 @@ Diagram:
               ┌────────┴────────┬───────────────┐
               ↓                 ↓               ↓
          Alpaca API       Binance API      LLM provider
-         (paper)         (testnet)        (OpenAI / etc.)
+         (paper)         (testnet)        (OpenRouter / GLM)
 ```
 
 Each external service is a separate trust boundary; the bot
@@ -173,8 +173,9 @@ a `SECURITY-HALL-OF-FAME.md` file.
   haven't yet responded to.** We track them via Dependabot but
   reasonable response time is the policy, not "instant".
 * **Findings in third-party services we depend on** (Postgres,
-  Ollama, Alpaca SDK, Binance SDK). Report those upstream;
-  we'll ship the upgrade once a fix is available.
+  the `openai` SDK — the client for GLM endpoints — Alpaca SDK,
+  Binance SDK). Report those upstream; we'll ship the upgrade
+  once a fix is available.
 * **Rate-limit shenanigans** that don't lead to data loss or
   secret extraction. The bot's circuit-breakers are
   rate-limit-aware; degraded performance under hostile traffic

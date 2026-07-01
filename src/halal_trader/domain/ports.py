@@ -69,7 +69,7 @@ class CryptoBroker(Protocol):
 
 
 class LLMBackend(Protocol):
-    """Abstraction over an LLM backend (Ollama, OpenAI, Anthropic, etc.)."""
+    """Abstraction over an LLM backend (GLM over any OpenAI-compatible endpoint)."""
 
     model: str
 

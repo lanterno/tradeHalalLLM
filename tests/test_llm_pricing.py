@@ -10,46 +10,49 @@ from halal_trader.core.llm.pricing import (
 )
 
 
-def test_known_anthropic_model_pricing():
-    p = get_pricing("claude-opus-4-7")
-    assert p.input_per_mtok == Decimal("15.00")
-    assert p.output_per_mtok == Decimal("75.00")
+def test_known_openrouter_glm_model_pricing():
+    p = get_pricing("z-ai/glm-5.2")
+    assert p.input_per_mtok == Decimal("0.93")
+    assert p.output_per_mtok == Decimal("3.00")
 
 
 def test_unknown_model_falls_back_to_default():
-    # Cloud-shaped name (no colon prefix) hits the conservative default,
-    # not free-ollama-pricing — we'd rather over-bill than silently $0.
+    # Any unrecognised name hits the conservative default — we'd
+    # rather over-bill than silently record $0.
     p = get_pricing("some-unreleased-frontier-model")
     assert p == DEFAULT_PRICING
 
 
-def test_ollama_style_model_is_free():
+def test_local_style_model_no_longer_free():
+    """The local-model free branch (colon/qwen/llama prefixes) was
+    removed with the Ollama provider — an old-config model id now gets
+    the conservative default instead of a silent $0 bill."""
     p = get_pricing("qwen2.5:32b")
-    assert p.input_per_mtok == Decimal("0")
+    assert p == DEFAULT_PRICING
 
 
 def test_compute_cost_usd_sums_all_categories():
-    # 1M input + 0.5M output on opus-4-7 = $15 + $37.50 = $52.50
+    # 1M input + 0.5M output on z-ai/glm-5.2 = $0.93 + $1.50 = $2.43
     cost = compute_cost_usd(
-        "claude-opus-4-7",
+        "z-ai/glm-5.2",
         input_tokens=1_000_000,
         output_tokens=500_000,
     )
-    assert cost == Decimal("52.50")
+    assert cost == Decimal("2.43")
 
 
 def test_compute_cost_usd_includes_cache_categories():
-    # 1M cache reads on opus-4-7 = $1.50; 1M cache writes = $18.75.
+    # 1M cache reads on glm-5.2 (Z.ai) = $0.26; cache writes are $0.
     cost = compute_cost_usd(
-        "claude-opus-4-7",
+        "glm-5.2",
         cache_read_tokens=1_000_000,
         cache_write_tokens=1_000_000,
     )
-    assert cost == Decimal("20.25")
+    assert cost == Decimal("0.26")
 
 
 def test_compute_cost_usd_returns_decimal_not_float():
-    cost = compute_cost_usd("gpt-4o", input_tokens=1000, output_tokens=500)
+    cost = compute_cost_usd("z-ai/glm-5.2", input_tokens=1000, output_tokens=500)
     assert isinstance(cost, Decimal)
 
 

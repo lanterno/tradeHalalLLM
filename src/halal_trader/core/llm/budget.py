@@ -39,7 +39,7 @@ class LLMBudget:
 
     ``cap_usd <= 0`` disables enforcement entirely (the bot still tracks
     spend but never trips). This is the default so a misconfigured
-    operator running locally against Ollama doesn't get an unexpected
+    operator running a $0-cost test config doesn't get an unexpected
     halt the first time they try a cloud fallback.
     """
 

@@ -6,9 +6,9 @@ a structured ``submit_plan`` call with arguments validated by the
 schema; the SDK returns a Python dict and we materialise the
 TradingPlan from it.
 
-Anthropic and OpenAI both speak the same JSONSchema-flavoured tool
-format; we encode the tools in a provider-agnostic ``Tool`` dataclass
-and let each provider's adapter project it onto its native API shape.
+The tools are encoded in a provider-agnostic ``Tool`` dataclass and
+projected onto the OpenAI-compatible API shape (``for_openai``), which
+is what every GLM endpoint speaks.
 """
 
 from __future__ import annotations
@@ -24,13 +24,6 @@ class Tool:
     name: str
     description: str
     input_schema: dict[str, Any] = field(default_factory=dict)
-
-    def for_anthropic(self) -> dict[str, Any]:
-        return {
-            "name": self.name,
-            "description": self.description,
-            "input_schema": self.input_schema,
-        }
 
     def for_openai(self) -> dict[str, Any]:
         return {
@@ -49,7 +42,7 @@ class ToolCall:
 
     name: str
     args: dict[str, Any]
-    id: str | None = None  # provider-supplied call id (Anthropic), if any
+    id: str | None = None  # provider-supplied call id, if any
 
 
 # ── Crypto strategy tools ────────────────────────────────────────

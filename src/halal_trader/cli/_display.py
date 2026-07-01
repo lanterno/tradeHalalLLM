@@ -8,32 +8,28 @@ from rich.text import Text
 
 from halal_trader.logging import console
 
-_CLOUD_LLM_PROVIDERS = {"openai", "anthropic"}
-
 
 def _warn_uncapped_cloud_llm() -> None:
-    """Print a loud warning when a cloud LLM is configured with no spend cap.
+    """Print a loud warning when the LLM is configured with no spend cap.
 
-    The combination ``LLM_PROVIDER ∈ {openai, anthropic}`` + ``LLM_DAILY_USD_CAP=0``
-    means the bot will keep calling the cloud API regardless of cost — a
-    runaway cycle loop can spend hundreds in an hour. Surface the risk at
-    startup so the operator sees it before they walk away from the
-    terminal.
+    GLM is always a metered cloud endpoint, so ``LLM_DAILY_USD_CAP=0``
+    means the bot will keep calling the API regardless of cost — a
+    runaway cycle loop can spend real money in an hour. Surface the
+    risk at startup so the operator sees it before they walk away from
+    the terminal.
     """
     from halal_trader.config import get_settings
 
     settings = get_settings()
-    if settings.llm.provider.value not in _CLOUD_LLM_PROVIDERS:
-        return
     if settings.llm.daily_usd_cap > 0:
         return
     console.print(
         Panel.fit(
             Text.from_markup(
-                "[bold red]⚠ LLM_DAILY_USD_CAP=0[/bold red] with cloud provider "
-                f"[bold]{settings.llm.provider.value}[/bold]\n"
+                "[bold red]⚠ LLM_DAILY_USD_CAP=0[/bold red] with metered model "
+                f"[bold]{settings.llm.model}[/bold]\n"
                 "No daily spend cap is enforced. A runaway cycle can spend\n"
-                "hundreds in an hour. Set [cyan]LLM_DAILY_USD_CAP=10.0[/cyan] "
+                "real money in an hour. Set [cyan]LLM_DAILY_USD_CAP=10.0[/cyan] "
                 "(or similar) in .env\n"
                 "then restart — the kill-switch will engage if exceeded."
             ),
@@ -53,7 +49,7 @@ def print_config() -> None:
     table.add_column("Setting", style="dim")
     table.add_column("Value")
 
-    table.add_row("LLM Provider", settings.llm.provider.value)
+    table.add_row("LLM Provider", "glm")
     table.add_row("LLM Model", settings.llm.model)
     table.add_row("Trading Interval", f"{settings.stocks.trading_interval_minutes} min")
     table.add_row("Daily Return Target", f"{settings.stocks.daily_return_target:.1%}")
@@ -85,7 +81,7 @@ def print_crypto_config() -> None:
     table.add_column("Setting", style="dim")
     table.add_column("Value")
 
-    table.add_row("LLM Provider", settings.llm.provider.value)
+    table.add_row("LLM Provider", "glm")
     table.add_row("LLM Model", settings.llm.model)
     table.add_row("Trading Interval", f"{settings.crypto.trading_interval_seconds}s")
     table.add_row("Daily Return Target", f"{settings.crypto.daily_return_target:.1%}")

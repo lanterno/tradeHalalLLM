@@ -2,30 +2,31 @@
 
 **Severity:** PAGE
 **Triggers when:** the `FallbackLLM` chain has cycled through
-every configured provider without success and the
+every configured GLM endpoint without success and the
 extended-backoff window (60s → 30min after all fail) has tripped
-the bot's halt — the bot refuses new entries until a provider
+the bot's halt — the bot refuses new entries until an endpoint
 recovers.
 **Acknowledgement window:** 15 minutes.
 
 ## Likely causes
 
-1. **All providers down** — coincidental outages across
-   primary + fallback (rare but possible during major cloud-
-   provider incidents).
-2. **Single provider mis-configured** — fallbacks listed in
-   `LLM_FALLBACK_PROVIDERS` are themselves down or auth-broken
-   so the chain has no working option.
+1. **All GLM endpoints down** — the OpenRouter primary and the
+   `GLM_FALLBACK_BASE_URL` endpoint (if configured) are out at
+   the same time (rare but possible during major cloud-provider
+   incidents). Cycles degrade to no-action plans; the position
+   monitor keeps enforcing SL/TP.
+2. **Fallback endpoint mis-configured** — the endpoint set via
+   `GLM_FALLBACK_BASE_URL` / `GLM_FALLBACK_MODEL` /
+   `GLM_FALLBACK_API_KEY` is itself down or auth-broken, so the
+   chain has no working option when the primary fails.
 3. **Sustained cost-cap budget** — the daily LLM USD cap
    (`LLM_DAILY_USD_CAP`) has been exhausted; the budget enforcer
    has refused to start new cycles. Distinct from circuit-
    breaker but presents similarly.
-4. **Quota throttling on every provider** — every provider
+4. **Quota throttling on every endpoint** — every endpoint
    simultaneously returned 429 / per-minute-quota error. Bot
    correctly waits, but if it persists across the full backoff
    window, the circuit breaker engages.
-5. **Local Ollama died** — primary `LLM_PROVIDER=ollama`
-   but the local server is down.
 
 ## Diagnose
 
@@ -41,30 +42,31 @@ uv run halal-trader llm cost-today  # if implemented
 # timestamp >= today UTC midnight
 ```
 
-Provider status:
+Endpoint status:
 
 ```bash
-# Primary: hit each provider's status page
-curl -fsS https://status.openai.com/api/v2/summary.json | jq .
-curl -fsS https://status.anthropic.com/api/v2/summary.json | jq .
-# Local Ollama
-curl -fsS http://localhost:11434/api/tags
+# OpenRouter (primary GLM host)
+# https://status.openrouter.ai
+curl -fsS https://status.openrouter.ai/api/v2/summary.json | jq .
+# Z.ai (if a Z.ai-direct fallback endpoint is configured)
+# https://status.z.ai
+curl -fsS https://status.z.ai/api/v2/summary.json | jq .
 ```
 
 ## Mitigate
 
-1. **If all providers down** — engage halt with reason "all
-   LLMs down; awaiting recovery". Resume when at least one
-   provider's status page reports green:
+1. **If all GLM endpoints down** — engage halt with reason "all
+   GLM endpoints down; awaiting recovery". Resume when at least
+   one endpoint's status page reports green:
    ```bash
    uv run halal-trader resume
    ```
-2. **If fallback chain mis-configured** — confirm
-   `LLM_FALLBACK_PROVIDERS` in `.env` has at least 2 working
-   alternates. Test each:
-   ```bash
-   uv run halal-trader llm test --provider openai --model gpt-4o-mini
-   ```
+2. **If fallback endpoint mis-configured** — confirm
+   `GLM_FALLBACK_BASE_URL` / `GLM_FALLBACK_MODEL` /
+   `GLM_FALLBACK_API_KEY` in `.env` point at a working host
+   (e.g. Z.ai direct: base URL
+   `https://api.z.ai/api/paas/v4`, model `glm-5.2`) and that
+   the key is valid.
 3. **If cost cap hit** — either wait for UTC midnight reset or
    raise `LLM_DAILY_USD_CAP` if budget allows. The cap engages
    the kill switch (halt) so the bot will refuse new entries
@@ -73,12 +75,15 @@ curl -fsS http://localhost:11434/api/tags
 4. **If quota throttling** — slow the cycle cadence
    (`CRYPTO_CYCLE_INTERVAL_SECONDS=120` halves the call rate);
    restart the bot.
-5. **If local Ollama** — `ollama serve` in another terminal,
-   or switch to OpenAI/Anthropic via `LLM_PROVIDER` in `.env`.
+5. **If only the primary endpoint is out** — the fallback
+   endpoint takes over automatically. If no fallback is
+   configured, point `GLM_BASE_URL` / `LLM_MODEL` at a working
+   host (or set the `GLM_FALLBACK_*` trio) in `.env` and
+   restart the bot.
 
 ## Escalate
 
-If the circuit stays tripped for >30 min and the providers'
+If the circuit stays tripped for >30 min and the endpoints'
 status pages report green, this is a sign of the bot's local
 HTTP client being misconfigured (proxy, TLS, DNS). Restart the
 bot with verbose logging:

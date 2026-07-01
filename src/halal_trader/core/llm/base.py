@@ -23,9 +23,8 @@ class CallUsage:
 
     Populated by every provider on its instance after each ``generate()``
     call so callers can persist the numbers alongside the LlmDecision row.
-    The fields mirror what Anthropic and OpenAI surface in their usage
-    objects — providers that don't report a category (e.g. cache tokens
-    on OpenAI today) leave it at zero.
+    The fields mirror the OpenAI-compatible usage object — categories a
+    given endpoint doesn't report stay at zero.
     """
 
     provider: str = ""
@@ -74,8 +73,8 @@ class BaseLLM(ABC):
     # Wave E: provider declares whether it speaks the SDK's native
     # tool-use API. When True, the strategy uses
     # ``generate_tool_call(tool)`` and the SDK validates the schema for
-    # us. When False (Ollama today), the strategy falls back to the
-    # ``generate_json`` path with the schema-repair retry.
+    # us. When False, the strategy falls back to the ``generate_json``
+    # path with the schema-repair retry.
     supports_tool_use: bool = False
 
     def __init__(self, model: str, *, temperature: float = 0.2) -> None:
@@ -135,7 +134,7 @@ class BaseLLM(ABC):
         per successful call so the per-call latency histogram in
         ``core/metrics.halal_trader_llm_call_ms`` matches what the LLM
         cost-roll-up sees. Providers that report 0 tokens still get the
-        latency observation (a stuck Ollama call should show up in p95
+        latency observation (a stuck endpoint should show up in p95
         even if it returned nothing).
         """
         from halal_trader.core.metrics import observe_llm_call
@@ -204,8 +203,8 @@ class BaseLLM(ABC):
 
         Default implementation falls back to ``generate_json`` and
         materialises a single tool call from the parsed JSON, matching
-        ``force_tool`` if provided. Provider subclasses (Anthropic,
-        OpenAI) override with native tool-use semantics.
+        ``force_tool`` if provided. GLMLLM overrides with native
+        tool-use semantics.
         """
         from halal_trader.core.llm.tools import ToolCall
 

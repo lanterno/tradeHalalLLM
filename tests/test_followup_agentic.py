@@ -47,12 +47,9 @@ def test_query_regime_memory_in_crypto_agentic_tools() -> None:
     assert "query_regime_memory" in names
 
 
-def test_query_regime_memory_anthropic_projection() -> None:
-    """The provider-side helpers (used by AnthropicLLM, OpenAILLM)
-    project the schema correctly."""
-    payload = QUERY_REGIME_MEMORY_TOOL.for_anthropic()
-    assert payload["name"] == "query_regime_memory"
-    assert "input_schema" in payload
+def test_query_regime_memory_openai_projection() -> None:
+    """The provider-side helper (used by GLMLLM) projects the schema
+    onto the OpenAI-compatible function envelope correctly."""
     openai_payload = QUERY_REGIME_MEMORY_TOOL.for_openai()
     assert openai_payload["type"] == "function"
     assert openai_payload["function"]["name"] == "query_regime_memory"

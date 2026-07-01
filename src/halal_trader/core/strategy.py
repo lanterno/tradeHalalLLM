@@ -107,7 +107,8 @@ class BaseStrategy(ABC):
             True, take the native tool-use path: the provider validates
             the schema before returning, schema-repair becomes a no-op,
             and output-token cost drops because the model doesn't emit
-            JSON syntax characters. When omitted (or the LLM is Ollama),
+            JSON syntax characters. When omitted (or the backend lacks
+            native tool use),
             falls back to the legacy ``generate_json`` + repair path.
         *agent* (Wave H): when provided AND ``llm.supports_tool_use``,
             drive the model through a bounded tool-calling loop

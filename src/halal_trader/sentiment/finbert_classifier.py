@@ -1,7 +1,7 @@
 """FinBERT headline classifier — a local, free, LLM-outage-resilient
 implementation of the reactor's :class:`HeadlineClassifier` Protocol.
 
-The production classifier is GPT-4o-mini (:class:`GPTHeadlineClassifier`);
+The production classifier is GLM-5.2 (:class:`GPTHeadlineClassifier`);
 when the LLM chain is down or in backoff (as happened live 2026-06-25) the
 reactor's "fast in" half goes dark. FinBERT (ProsusAI/finbert) runs locally on
 the already-installed ``transformers`` stack, so it keeps scoring headlines for
@@ -43,7 +43,7 @@ def _parse(result: Any) -> tuple[str, float]:
     label = str(row.get("label", "neutral")).lower()
     try:
         conf = float(row.get("score", 0.0))
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         conf = 0.0
     return label, conf
 
@@ -70,9 +70,7 @@ class FinBERTHeadlineClassifier:
             self._pipeline = self._loader(self._model_name)
         except Exception as exc:  # noqa: BLE001 — any load failure → degrade
             self._load_failed = True
-            logger.warning(
-                "FinBERT unavailable (%s) — headline classifier returns neutral", exc
-            )
+            logger.warning("FinBERT unavailable (%s) — headline classifier returns neutral", exc)
 
     async def classify(
         self, *, symbol: str, headline: str, summary: str = ""

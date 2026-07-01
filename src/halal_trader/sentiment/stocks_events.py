@@ -9,7 +9,7 @@ emergency-cycle callback) to the stocks side, with two key changes:
 
 2. **LLM-scored headlines, not exchange-vote sentiment.** Each new
    headline goes through a :class:`HeadlineClassifier` (default is
-   the GPT-4o-mini wrapper) and only events with ``score >= threshold``
+   the GLM wrapper) and only events with ``score >= threshold``
    trigger callbacks. The keyword-lexicon
    :func:`sentiment.headline_polarity.classify_headline` stays as the
    sentiment field for downstream prompt rendering, but it's too
@@ -62,7 +62,7 @@ class HeadlineClassification:
 
 class HeadlineClassifier(Protocol):
     """Stable surface the reactor depends on. Production impl wraps
-    GPT-4o-mini; tests stub with deterministic returns."""
+    GLM-5.2; tests stub with deterministic returns."""
 
     async def classify(
         self, *, symbol: str, headline: str, summary: str = ""
@@ -195,9 +195,7 @@ class StockNewsEventReactor:
     async def run(self) -> None:
         """Supervisor entry point — runs the poll loop until cancelled."""
         if not self.enabled:
-            logger.info(
-                "StockNewsEventReactor disabled — no Finnhub key or empty watchlist"
-            )
+            logger.info("StockNewsEventReactor disabled — no Finnhub key or empty watchlist")
             return
         self._load_state()
         self._running = True
@@ -241,9 +239,7 @@ class StockNewsEventReactor:
         last = raw.get("last_notify", {})
         if isinstance(last, dict):
             self._last_notify = {
-                str(k): float(v)
-                for k, v in last.items()
-                if isinstance(v, (int, float))
+                str(k): float(v) for k, v in last.items() if isinstance(v, (int, float))
             }
 
     def _save_state(self) -> None:
@@ -314,10 +310,7 @@ class StockNewsEventReactor:
                     # see one signal per real catalyst.
                     last = self._last_notify.get(event.symbol, 0.0)
                     now_t = time.time()
-                    if (
-                        self._notify_cooldown_s > 0
-                        and (now_t - last) < self._notify_cooldown_s
-                    ):
+                    if self._notify_cooldown_s > 0 and (now_t - last) < self._notify_cooldown_s:
                         continue
                     self._last_notify[event.symbol] = now_t
                     self._state_dirty = True
@@ -385,9 +378,7 @@ class StockNewsEventReactor:
         data = resp.json()
         return data if isinstance(data, list) else []
 
-    async def _maybe_emit(
-        self, symbol: str, item: dict[str, Any]
-    ) -> StockNewsEvent | None:
+    async def _maybe_emit(self, symbol: str, item: dict[str, Any]) -> StockNewsEvent | None:
         """Dedup + classify + threshold-filter a single headline.
 
         Returns the event when worth firing callbacks, ``None`` otherwise.
@@ -411,9 +402,7 @@ class StockNewsEventReactor:
             return None
         summary = str(item.get("summary") or "")[:500]
         try:
-            cls = await self._classifier.classify(
-                symbol=symbol, headline=title, summary=summary
-            )
+            cls = await self._classifier.classify(symbol=symbol, headline=title, summary=summary)
         except Exception as exc:  # noqa: BLE001
             logger.warning("classifier failed for %s '%s': %s", symbol, title[:60], exc)
             return None
@@ -437,10 +426,12 @@ class StockNewsEventReactor:
         )
 
 
-# ── Default LLM classifier (GPT-4o-mini wrapper) ────────────────
+# ── Default LLM classifier (GLM wrapper) ────────────────────────
 
 
-_QUOTA_ERROR_MARKERS = ("insufficient_quota", "exceeded your current quota")
+# OpenAI-compat shape ("insufficient_quota") plus OpenRouter's 402
+# "Insufficient credits" — matched case-insensitively below.
+_QUOTA_ERROR_MARKERS = ("insufficient_quota", "exceeded your current quota", "insufficient credits")
 # Default per-UTC-day call ceiling — pure cost backstop (see config.py).
 # Raised 250 -> 1500 on 2026-06-09: a full day is ~700-1000 DISTINCT
 # headlines, so 250 silently starved the reactor once dedup stopped
@@ -470,7 +461,7 @@ class GPTHeadlineClassifier:
 
     The strategy's existing :class:`LLMBackend` already satisfies
     this surface, so composition reuses one LLM client across the
-    bot. Costs at GPT-4o-mini: ~$0.0005 per headline, well inside
+    bot. Costs at GLM-5.2: ~$0.001 per headline, well inside
     operator budgets at the reactor's ~100-300 classified events/day.
 
     Two guards added 2026-05-23 after a quota-exhaustion incident
@@ -639,7 +630,7 @@ class GPTHeadlineClassifier:
         # Success path: roll up per-provider usage from the LLM's
         # ``last_usage`` if the provider populated it (every BaseLLM
         # subclass calls _record_usage on success, so this is reliable
-        # for the cloud providers; Ollama populates provider="ollama"
+        # by the GLM provider; the telemetry degrades gracefully
         # too but cost stays 0).
         self._total_successes += 1
         # Half-open probe succeeded → quota recovered; close the breaker so the
@@ -647,23 +638,19 @@ class GPTHeadlineClassifier:
         if self._quota_exhausted:
             self._quota_exhausted = False
             self._quota_tripped_at = None
-            logger.info(
-                "LLM quota recovered — classifier breaker reset; news reactor live again"
-            )
+            logger.info("LLM quota recovered — classifier breaker reset; news reactor live again")
         last_usage = getattr(self._llm, "last_usage", None)
         if last_usage is not None:
             provider = getattr(last_usage, "provider", "") or "unknown"
-            self._calls_by_provider[provider] = (
-                self._calls_by_provider.get(provider, 0) + 1
-            )
+            self._calls_by_provider[provider] = self._calls_by_provider.get(provider, 0) + 1
             cost = getattr(last_usage, "cost_usd", 0)
             try:
                 self._cost_usd_total += float(cost)
-            except (TypeError, ValueError):
+            except TypeError, ValueError:
                 pass
         try:
             score = float(raw.get("score", 0.0))
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             score = 0.0
         score = max(0.0, min(1.0, score))
         tag = str(raw.get("tag", "other"))

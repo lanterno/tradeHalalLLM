@@ -21,13 +21,6 @@ def test_submit_plan_schema_includes_required_fields() -> None:
     assert "market_outlook" in schema["required"]
 
 
-def test_anthropic_projection_strips_to_native_keys() -> None:
-    payload = SUBMIT_PLAN_TOOL.for_anthropic()
-    assert payload["name"] == "submit_plan"
-    assert payload["description"]
-    assert payload["input_schema"]["type"] == "object"
-
-
 def test_openai_projection_wraps_in_function_envelope() -> None:
     payload = SUBMIT_PLAN_TOOL.for_openai()
     assert payload["type"] == "function"
@@ -55,9 +48,7 @@ def test_tool_call_dataclass_round_trips() -> None:
     assert call.id is None
 
 
-def test_tool_can_be_serialised_to_both_providers() -> None:
+def test_tool_can_be_serialised_for_openai() -> None:
     tool = Tool(name="t", description="d", input_schema={"type": "object", "properties": {}})
-    a = tool.for_anthropic()
     o = tool.for_openai()
-    assert a["name"] == "t"
     assert o["function"]["name"] == "t"

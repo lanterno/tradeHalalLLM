@@ -31,7 +31,8 @@ def test_schema_includes_well_known_envvars(client):
     rows = client.get("/api/config/schema").json()
     env_names = {row["env_name"] for row in rows}
     # Smoke-check a few representative keys from every settings group.
-    assert "LLM_PROVIDER" in env_names
+    assert "GLM_API_KEY" in env_names
+    assert "GLM_BASE_URL" in env_names
     assert "LLM_MODEL" in env_names
     assert "BINANCE_API_KEY" in env_names
     assert "ALPACA_API_KEY" in env_names
@@ -44,8 +45,9 @@ def test_schema_flags_secrets(client):
     # Anything with api_key / secret in the name is a secret; defaults aren't.
     assert by_name["BINANCE_API_KEY"]["secret"] is True
     assert by_name["BINANCE_SECRET_KEY"]["secret"] is True
+    assert by_name["GLM_API_KEY"]["secret"] is True
     assert by_name["LLM_MODEL"]["secret"] is False
-    assert by_name["LLM_PROVIDER"]["secret"] is False
+    assert by_name["GLM_BASE_URL"]["secret"] is False
 
 
 def test_schema_default_for_simple_int_field(client):

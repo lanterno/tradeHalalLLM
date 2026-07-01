@@ -19,8 +19,10 @@ SL/TP enforcement.
 3. **Postgres serialization conflict** — a long-running
    transaction blocks the cycle's writes. Check
    `pg_stat_activity` for stuck transactions.
-4. **GPU / LLM-backend hang** — local Ollama or a remote
-   provider stops responding without raising an exception.
+4. **Remote GLM endpoint hang** — the GLM host stops responding
+   without raising an exception. The 60s client timeout
+   (`GLM_TIMEOUT_SECONDS`) plus `FallbackLLM` endpoint rotation
+   normally handles it before the watchdog fires.
 
 ## Diagnose
 
@@ -50,8 +52,9 @@ docker exec -it $(docker compose ps -q postgres) \
 
 1. **If stuck on an HTTP stage** — engage halt and restart the
    bot. The kill will free the hung connection. If the same
-   provider hangs again, lower its timeout or add it to the
-   `LLM_FALLBACK_PROVIDERS` chain.
+   endpoint hangs again, lower its timeout
+   (`GLM_TIMEOUT_SECONDS` for the LLM) or configure a fallback
+   endpoint via `GLM_FALLBACK_BASE_URL`.
 2. **If a Postgres transaction is stuck** — terminate it:
    ```bash
    docker exec -it $(docker compose ps -q postgres) \
@@ -59,9 +62,13 @@ docker exec -it $(docker compose ps -q postgres) \
      -c "SELECT pg_terminate_backend(<pid>)"
    ```
    Then resume the bot.
-3. **If LLM-backend hang** — restart Ollama (`pkill -f ollama`
-   then `ollama serve &`) or switch providers via
-   `LLM_PROVIDER` in `.env`.
+3. **If GLM endpoint hang** — check
+   <https://status.openrouter.ai> (and <https://status.z.ai>
+   when a Z.ai fallback endpoint is configured). The 60s client
+   timeout plus `FallbackLLM` rotation recovers on its own; if
+   the primary host is degraded for an extended period, point
+   `GLM_BASE_URL` at a healthy host (or set the
+   `GLM_FALLBACK_*` trio) in `.env` and restart the bot.
 4. **If unclear** — engage halt with reason "cycle stuck;
    investigating", then read the per-stage timeline (Wave 5.A
    `core/cycle_timeline.py` aggregator) for the most-recent

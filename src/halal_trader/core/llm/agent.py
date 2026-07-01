@@ -203,10 +203,10 @@ def _flatten(history: list[dict[str, Any]]) -> str:
     """Render the conversation as a single user prompt for providers
     that don't yet support a multi-turn tool history natively.
 
-    For Anthropic with tool use, the SDK ideally accepts a list of
-    role-tagged messages. The MVP just flattens everything to one
-    ``user`` blob — a future enhancement upgrades AnthropicLLM to
-    pass the structured history directly.
+    The chat-completions API ideally accepts a list of role-tagged
+    messages. The MVP just flattens everything to one ``user`` blob —
+    a future enhancement upgrades GLMLLM to pass the structured
+    history directly.
     """
     parts = []
     for msg in history:

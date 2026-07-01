@@ -51,7 +51,11 @@ def llm_decisions() -> None:
     default=None,
     help="Filter by prompt registry id, e.g. 'crypto.strategy.system@abc123…'.",
 )
-@click.option("--provider", default=None, help="Filter by provider name (anthropic, openai, …).")
+@click.option(
+    "--provider",
+    default=None,
+    help="Filter by provider name (glm; older rows may carry retired names).",
+)
 def list_cmd(limit: int, prompt_version: str | None, provider: str | None) -> None:
     """List recent LLM decisions, newest first."""
     from rich.table import Table

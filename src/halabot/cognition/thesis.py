@@ -77,7 +77,7 @@ class LlmHeadlineScorer:
     """Scores a headline to a polarity via the LLM (the sparse news path), for a
     SPECIFIC ticker and with the article summary when available. Returns None on
     an unparseable reply (abstain rather than fabricate a signal). The prompt asks
-    for JSON because the OpenAI backend runs in json_object response mode."""
+    for JSON because the GLM backend runs in json_object response mode."""
 
     def __init__(self, llm: Generator) -> None:
         self._llm = llm
@@ -101,7 +101,7 @@ def _parse_polarity(text: str) -> float | None:
             for key in ("polarity", "score", "impact"):
                 if key in obj:
                     return max(-1.0, min(1.0, float(obj[key])))
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         pass
     m = re.search(r"-?\d*\.?\d+", raw)
     if m is None:

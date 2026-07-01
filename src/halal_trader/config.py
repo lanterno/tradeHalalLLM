@@ -1,25 +1,17 @@
 """Application configuration via nested Pydantic Settings sub-models.
 
 The top-level ``Settings`` exposes domain-grouped sub-models (``settings.binance``,
-``settings.crypto``, ``settings.llm.openai``, …). Each sub-model is its own
+``settings.crypto``, ``settings.llm.glm``, …). Each sub-model is its own
 ``BaseSettings`` class with an ``env_prefix`` chosen to match the existing
 ``.env`` variable names so operators don't have to migrate their config.
 """
 
 from __future__ import annotations
 
-from enum import Enum
 from pathlib import Path
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
-
-
-class LLMProvider(str, Enum):
-    OLLAMA = "ollama"
-    OPENAI = "openai"
-    ANTHROPIC = "anthropic"
-
 
 _BASE_CONFIG = SettingsConfigDict(
     env_file=".env",
@@ -128,36 +120,52 @@ class HalalSettings(BaseSettings):
     midcycle_refresh_hours: int = Field(default=4)
 
 
-# ── LLM Providers ──────────────────────────────────────────────
+# ── LLM (GLM-5.2 only) ─────────────────────────────────────────
 
 
-class OllamaSettings(BaseSettings):
-    model_config = SettingsConfigDict(**_BASE_CONFIG, env_prefix="OLLAMA_")
-    host: str = Field(default="http://localhost:11434")
+class GLMSettings(BaseSettings):
+    """GLM-5.2 endpoint configuration (OpenAI-compatible API).
+
+    The bot speaks to exactly one model family: GLM-5.2. The default
+    endpoint is OpenRouter — its multi-host routing for the same
+    MIT-licensed weights is the structural fix for single-provider
+    outages. Point ``base_url`` at Z.ai direct
+    (https://api.z.ai/api/paas/v4) or any other OpenAI-compatible host
+    to switch; remember the model id naming differs per host
+    (OpenRouter ``z-ai/glm-5.2`` vs Z.ai ``glm-5.2``).
+    """
+
+    model_config = SettingsConfigDict(**_BASE_CONFIG, env_prefix="GLM_")
+    # REQUIRED — create_llm() refuses to start without it.
+    api_key: str = Field(default="")
+    base_url: str = Field(default="https://openrouter.ai/api/v1")
+    # Optional second endpoint tried by FallbackLLM when the primary
+    # fails (e.g. Z.ai direct as a backstop behind OpenRouter). All
+    # three must describe the SAME underlying model; fallback_api_key
+    # defaults to the primary key when empty.
+    fallback_base_url: str = Field(default="")
     fallback_model: str = Field(default="")
-
-
-class OpenAISettings(BaseSettings):
-    model_config = SettingsConfigDict(**_BASE_CONFIG, env_prefix="OPENAI_")
-    api_key: str | None = Field(default=None)
-    fallback_model: str = Field(default="gpt-4o-mini")
-
-
-class AnthropicSettings(BaseSettings):
-    model_config = SettingsConfigDict(**_BASE_CONFIG, env_prefix="ANTHROPIC_")
-    api_key: str | None = Field(default=None)
-    fallback_model: str = Field(default="claude-sonnet-4-20250514")
+    fallback_api_key: str = Field(default="")
+    # Client-side ceiling per call. GLM-5.2 with thinking disabled
+    # answers our prompts well inside this; the crypto cycle budget is
+    # interval*2 (120s), so 60s leaves room for the rest of the cycle.
+    timeout_seconds: int = Field(default=60, gt=0)
+    # GLM-5.2 thinks by default upstream — the bot turns it off for
+    # cycle latency and cost. Flip on for offline research runs only.
+    thinking: bool = Field(default=False)
+    # OpenRouter-only: route exclusively to hosts that honour every
+    # request param (response_format + tools). Without it a request can
+    # land on a host that silently drops JSON mode or tool calls.
+    require_parameters: bool = Field(default=True)
 
 
 class LLMSettings(BaseSettings):
     model_config = SettingsConfigDict(**_BASE_CONFIG, env_prefix="LLM_")
-    provider: LLMProvider = Field(default=LLMProvider.OLLAMA)
-    model: str = Field(default="qwen2.5:32b")
-    fallback_providers: list[str] = Field(default_factory=list)
-    # Hard ceiling on per-UTC-day cumulative spend across all providers.
-    # 0 disables the cap (useful in tests / local Ollama runs). When the
-    # cap trips it engages the kill-switch so both bots stop entering
-    # new positions until the operator clears it.
+    model: str = Field(default="z-ai/glm-5.2")
+    # Hard ceiling on per-UTC-day cumulative spend across all endpoints.
+    # 0 disables the cap (useful in tests). When the cap trips it
+    # engages the kill-switch so both bots stop entering new positions
+    # until the operator clears it.
     daily_usd_cap: float = Field(default=0.0)
     # Adversarial co-bot — runs a cheap follow-up LLM call that critiques
     # each plan and downsizes/skips buys when it surfaces a strong
@@ -172,9 +180,7 @@ class LLMSettings(BaseSettings):
     # decay between live (mutating) and shadow (frozen-prompt) curves.
     shadow_enabled: bool = Field(default=False)
     shadow_starting_cash: float = Field(default=1000.0, gt=0)
-    ollama: OllamaSettings = Field(default_factory=OllamaSettings)
-    openai: OpenAISettings = Field(default_factory=OpenAISettings)
-    anthropic: AnthropicSettings = Field(default_factory=AnthropicSettings)
+    glm: GLMSettings = Field(default_factory=GLMSettings)
 
 
 # ── Trading parameters ─────────────────────────────────────────
@@ -226,7 +232,7 @@ class StockSettings(BaseSettings):
     # call-spam that originally motivated 250 (2026-05-22: 3,736 wasted 429s)
     # is now owned by the classifier's half-open quota breaker, not this cap.
     reactor_daily_classify_cap: int = Field(default=1500, ge=0)
-    # Which headline classifier the reactor uses: "llm" (GPT-4o-mini, default)
+    # Which headline classifier the reactor uses: "llm" (GLM-5.2, default)
     # or "finbert" (local ProsusAI/finbert — free, no API dependency, resilient
     # to LLM outages, but sentiment-only vs the LLM's event-typed scoring).
     headline_classifier: str = Field(default="llm")

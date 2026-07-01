@@ -127,7 +127,7 @@ class TradingBot(BaseTradingBot):
         strategy = TradingStrategy(
             llm,
             repo,
-            llm_provider_name=self.settings.llm.provider.value,
+            llm_provider_name="glm",
             max_position_pct=self.settings.stocks.max_position_pct,
             daily_loss_limit=self.settings.stocks.daily_loss_limit,
             daily_return_target=self.settings.stocks.daily_return_target,
@@ -149,9 +149,7 @@ class TradingBot(BaseTradingBot):
             repo,
             max_position_pct=self.settings.stocks.max_position_pct,
             max_simultaneous_positions=self.settings.stocks.max_simultaneous_positions,
-            recent_close_cooldown_minutes=(
-                self.settings.stocks.recent_close_cooldown_minutes
-            ),
+            recent_close_cooldown_minutes=(self.settings.stocks.recent_close_cooldown_minutes),
             stop_loss_reentry_cooldown_minutes=(
                 self.settings.stocks.stop_loss_reentry_cooldown_minutes
             ),
@@ -289,14 +287,13 @@ class TradingBot(BaseTradingBot):
             )
 
             # Reuse the strategy's LLM for classification — same key,
-            # same provider, same rate budget. GPT-4o-mini at ~$0.0005
+            # same provider, same rate budget. GLM-5.2 at ~$0.001
             # per headline stays well under the operator daily cap.
             try:
                 watchlist = await self.screener.get_halal_symbols()
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
-                    "halal symbols unavailable for reactor watchlist (%s) "
-                    "— reactor disabled",
+                    "halal symbols unavailable for reactor watchlist (%s) — reactor disabled",
                     exc,
                 )
                 watchlist = []
@@ -311,12 +308,10 @@ class TradingBot(BaseTradingBot):
                     classifier = FinBERTHeadlineClassifier()
                     logger.info("Reactor headline classifier: FinBERT (local)")
                 else:
-                    # Dedicated classifier LLM stack (independent of strategy
-                    # LLM) — picks up cheap cloud providers first and falls
-                    # through to Ollama floor. Decouples classifier failure
-                    # modes from strategy: a quota exhaustion in one no
-                    # longer takes down the other. See create_classifier_llm
-                    # for the chain order rationale.
+                    # Dedicated classifier GLM stack (separate instances
+                    # from the strategy LLM) so backoff state and usage
+                    # accounting don't bleed between the two workloads.
+                    # See create_classifier_llm.
                     from halal_trader.core.llm import create_classifier_llm
 
                     classifier_llm = create_classifier_llm(self.settings)
@@ -414,9 +409,7 @@ class TradingBot(BaseTradingBot):
         except Exception as exc:  # noqa: BLE001 — advisory; never break the bot
             logger.warning("Daily recommendation generation failed: %s", exc)
             if self._alerts is not None:
-                await self._alerts.notify(
-                    "recommendation.failed", str(exc)[:300], market="stocks"
-                )
+                await self._alerts.notify("recommendation.failed", str(exc)[:300], market="stocks")
 
     def _get_cycle_service(self) -> TradingCycleService:
         _, _, _, cs = self._require_initialized()
@@ -480,7 +473,7 @@ class TradingBot(BaseTradingBot):
             self._news_reactor_task.cancel()
             try:
                 await self._news_reactor_task
-            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+            except asyncio.CancelledError, Exception:  # noqa: BLE001
                 pass
             self._news_reactor_task = None
         # Stop the position monitor before MCP teardown for the same
@@ -491,7 +484,7 @@ class TradingBot(BaseTradingBot):
             self._monitor_task.cancel()
             try:
                 await self._monitor_task
-            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+            except asyncio.CancelledError, Exception:  # noqa: BLE001
                 pass
             self._monitor_task = None
         if self._stocks_news is not None:
@@ -552,9 +545,7 @@ class TradingBot(BaseTradingBot):
                 },
             )
 
-    async def _maybe_execute_reactor_entry(
-        self, event: Any
-    ) -> tuple[dict[str, Any] | None, str]:
+    async def _maybe_execute_reactor_entry(self, event: Any) -> tuple[dict[str, Any] | None, str]:
         """Decide whether to place a reactor entry and do so.
 
         Returns ``(result, status_note)`` where ``result`` is the
@@ -795,12 +786,8 @@ class TradingBot(BaseTradingBot):
                         summary["classifier_calls"] = telem.get("total_calls", 0)
                         summary["classifier_calls_today"] = telem.get("calls_today", 0)
                         summary["classifier_cost_usd"] = telem.get("cost_usd_total", 0.0)
-                        summary["classifier_quota_exhausted"] = telem.get(
-                            "quota_exhausted", False
-                        )
-                        summary["classifier_by_provider"] = telem.get(
-                            "calls_by_provider", {}
-                        )
+                        summary["classifier_quota_exhausted"] = telem.get("quota_exhausted", False)
+                        summary["classifier_by_provider"] = telem.get("calls_by_provider", {})
                         if telem.get("quota_exhausted"):
                             # Surface quota exhaustion as a daily-summary
                             # ops alert too, in case the per-trip critical

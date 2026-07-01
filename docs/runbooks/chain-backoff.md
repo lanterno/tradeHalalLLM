@@ -1,17 +1,18 @@
-# `chain.backoff` — LLM provider chain in backoff
+# `chain.backoff` — LLM endpoint chain in backoff
 
 **Severity:** WARN
 **Triggers when:** the `FallbackLLM` chain has tried every
-configured provider and is now sleeping the exponential-backoff
-window (60s → 30min after all fail).
+configured GLM endpoint and is now sleeping the
+exponential-backoff window (60s → 30min after all fail).
 **Acknowledgement window:** 30 minutes.
 
 ## Likely causes
 
-1. **Single provider out** — primary OpenAI / Anthropic / Ollama
-   is failing, fallbacks haven't been configured or are also down.
-2. **All providers throttling** — same minute many cycles, all
-   providers responded with 429.
+1. **Primary GLM endpoint out** — the OpenRouter endpoint is
+   failing, and a fallback endpoint hasn't been configured or is
+   also down.
+2. **All endpoints throttling** — same minute many cycles, every
+   endpoint responded with 429.
 3. **API-key rotation in progress** — keys rotated, env not
    reloaded.
 
@@ -21,13 +22,15 @@ window (60s → 30min after all fail).
 just logs-tail | grep llm.fallback
 ```
 
-Each entry shows which provider failed with what error.
+Each entry shows which endpoint failed with what error.
 
 ## Mitigate
 
-1. **Single provider** — confirm with the provider's status page;
-   if it's a known outage, add the alternates to
-   `LLM_FALLBACK_PROVIDERS` in `.env`, restart the bot.
+1. **Primary endpoint out** — confirm with the status page
+   (<https://status.openrouter.ai>, or <https://status.z.ai> for
+   a Z.ai endpoint); if it's a known outage, set
+   `GLM_FALLBACK_BASE_URL` (+ `GLM_FALLBACK_MODEL` /
+   `GLM_FALLBACK_API_KEY`) in `.env`, restart the bot.
 2. **All throttled** — wait one cycle. If sustained, lower
    `LLM_DAILY_USD_CAP` to slow the cycle's call rate, or pause
    the agentic-tool loop (`LLM_AGENT_ENABLED=false`).
@@ -35,10 +38,10 @@ Each entry shows which provider failed with what error.
 
 ## Escalate
 
-If the chain stays in backoff for >30 min and no provider is
-responding, this likely indicates a billing problem (account
-suspended / hard limit hit). Operator with billing access
-escalates.
+If the chain stays in backoff for >30 min and no endpoint is
+responding, this likely indicates a billing problem (OpenRouter
+credits exhausted / account suspended / hard limit hit).
+Operator with billing access escalates.
 
 ---
 

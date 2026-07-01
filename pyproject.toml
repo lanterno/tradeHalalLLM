@@ -7,7 +7,6 @@ requires-python = ">=3.14"
 dependencies = [
     # Core
     "mcp>=1.0,<2.0",
-    "ollama",
     "httpx",
     "pydantic-settings",
     # Data / ORM
@@ -20,9 +19,8 @@ dependencies = [
     # CLI
     "click",
     "rich",
-    # Optional cloud LLM providers
+    # OpenAI-compatible client — talks to GLM-5.2 endpoints (OpenRouter/Z.ai)
     "openai",
-    "anthropic",
     # Crypto trading
     "python-binance",
     "numpy",
@@ -111,16 +109,14 @@ filterwarnings = [
 ]
 
 [tool.coverage.run]
-# Coverage gates the safety / lifecycle surface. The pure HTTP wrappers
-# under core/llm/ ({ollama,openai,anthropic}.py, base.py, factory.py)
-# and the asyncio scheduler are exercised end-to-end by the live bot
-# run rather than in pytest, so excluding them keeps the gate honest.
+# Coverage gates the safety / lifecycle surface. The pure HTTP wrapper
+# under core/llm/ (glm.py, base.py, factory.py) and the asyncio
+# scheduler are exercised end-to-end by the live bot run rather than
+# in pytest, so excluding them keeps the gate honest.
 omit = [
-    "src/halal_trader/core/llm/anthropic.py",
     "src/halal_trader/core/llm/base.py",
     "src/halal_trader/core/llm/factory.py",
-    "src/halal_trader/core/llm/ollama.py",
-    "src/halal_trader/core/llm/openai.py",
+    "src/halal_trader/core/llm/glm.py",
     "src/halal_trader/core/portfolio.py",
     "src/halal_trader/core/scheduler.py",
 ]

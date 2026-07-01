@@ -78,8 +78,8 @@ async def test_quota_error_arms_backoff_after_one_failure():
 @pytest.mark.asyncio
 async def test_insufficient_quota_message_also_fast_tracks():
     """The matcher accepts either "429" or "insufficient_quota" anywhere
-    in the error string — OpenAI/Anthropic phrase quota errors
-    differently."""
+    in the error string — GLM endpoints (OpenRouter vs Z.ai direct)
+    phrase quota errors differently."""
     primary = _StubLLM("primary", fail_n=1, fail_msg="error: insufficient_quota")
     fb = _StubLLM("fb")
     chain = FallbackLLM(primary, fallbacks=[fb])

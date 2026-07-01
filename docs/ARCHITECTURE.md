@@ -50,7 +50,7 @@ flowchart TD
         Alpaca["Alpaca MCP Server"]
         Binance["Binance API"]
         BinanceWS["Binance WebSocket"]
-        OpenAI["OpenAI / Anthropic / Ollama"]
+        GLM["GLM-5.2 (OpenRouter)"]
         Zoya["Zoya API"]
         CoinGecko["CoinGecko API"]
         CryptoPanic["CryptoPanic API"]
@@ -86,7 +86,7 @@ flowchart TD
     WSManager --> BinanceWS
     NewsReactor --> CryptoPanic
 
-    LLM --> OpenAI
+    LLM --> GLM
     DB --- StockCycle
     DB --- CryptoCycle
     DB --- Monitor
@@ -124,7 +124,7 @@ src/halal_trader/
 │       └── __init__.py        # RepoBundle.from_engine(engine)
 │
 ├── core/                     # Cross-asset shared services
-│   ├── llm/                  # LLM abstraction (Ollama / OpenAI / Anthropic),
+│   ├── llm/                  # LLM abstraction (GLM-5.2, OpenAI-compatible),
 │   │                         # ensemble + adversarial + agentic tool-use,
 │   │                         # Platt calibration, RAG over rationales,
 │   │                         # prompt registry + evolution GA
@@ -215,7 +215,7 @@ sequenceDiagram
     participant WS as WebSocket
     participant Ind as Indicators
     participant Anal as Analytics
-    participant LLM as GPT-4o
+    participant LLM as GLM-5.2
     participant Exec as CryptoExecutor
     participant Mon as PositionMonitor
     participant Retrain as RetrainingScheduler
@@ -528,19 +528,17 @@ Cache refreshed daily in `crypto_halal_cache` table.
 
 ---
 
-## LLM Providers
+## LLM Provider
 
 | Provider | Class | JSON Mode | Timeout | Notes |
 |----------|-------|-----------|---------|-------|
-| Ollama | `OllamaLLM` | `format="json"` | 45s | Local, default `qwen2.5:32b`, rejects empty responses |
-| OpenAI | `OpenAILLM` | `response_format=json_object` | 30s | GPT-4o, temp 0.2 |
-| Anthropic | `AnthropicLLM` | Prompt-based | 30s | Claude, `max_tokens=4096` |
+| GLM-5.2 | `GLMLLM` | OpenAI-compatible JSON mode + native tool use | 60s (`GLM_TIMEOUT_SECONDS`) | OpenRouter default (`z-ai/glm-5.2`); Z.ai/Fireworks/Together compatible |
 
-Factory function `create_llm(settings)` selects the provider based on `LLM_PROVIDER` env var.
+Factory function `create_llm(settings)` builds the GLM endpoint chain — there is no `LLM_PROVIDER` switch anymore. The primary endpoint is `GLM_BASE_URL` (default `https://openrouter.ai/api/v1`) with `GLM_API_KEY`. `GLM_THINKING` (default `false`) disables GLM-5.2's upstream reasoning for latency/cost; `GLM_REQUIRE_PARAMETERS` (default `true`) is an OpenRouter-only routing guard so requests only go to hosts honouring `response_format` + tools.
 
 ### Fallback Chain
 
-When `LLM_FALLBACK_PROVIDERS` is configured, `create_llm()` wraps the primary provider in a `FallbackLLM` that tries each provider in order. If all providers in the chain fail, exponential backoff kicks in (60s → 120s → ... → 30min max) before the next attempt. Unknown or unconfigured providers in the fallback list are logged and skipped.
+When `GLM_FALLBACK_BASE_URL` (+ optional `GLM_FALLBACK_MODEL` / `GLM_FALLBACK_API_KEY`) is configured, `create_llm()` wraps the primary endpoint in a `FallbackLLM` that rotates to the second GLM endpoint (e.g. OpenRouter primary, Z.ai direct fallback — note the model id there is `glm-5.2`). If all endpoints in the chain fail, exponential backoff kicks in (60s → 120s → ... → 30min max) before the next attempt.
 
 ---
 
@@ -593,11 +591,13 @@ All settings are loaded from environment variables or `.env` file via Pydantic S
 Key environment variables:
 
 ```bash
-# LLM
-LLM_PROVIDER=openai              # ollama | openai | anthropic
-LLM_MODEL=gpt-4o
-LLM_FALLBACK_PROVIDERS=[]        # Ordered fallback list, e.g. ["ollama", "anthropic"]
-OPENAI_API_KEY=sk-...
+# LLM (GLM-5.2, OpenAI-compatible endpoints)
+GLM_API_KEY=sk-or-...            # Required; an OpenRouter key by default
+GLM_BASE_URL=https://openrouter.ai/api/v1  # Or https://api.z.ai/api/paas/v4 for Z.ai direct
+LLM_MODEL=z-ai/glm-5.2           # glm-5.2 on Z.ai direct
+GLM_FALLBACK_BASE_URL=           # Optional second endpoint for the same model
+GLM_FALLBACK_MODEL=              # e.g. glm-5.2 when the fallback is Z.ai direct
+GLM_FALLBACK_API_KEY=
 
 # Binance (crypto)
 BINANCE_API_KEY=...
@@ -689,9 +689,9 @@ Both executors share the sells-first-then-buys orchestration in
 ## Dependencies
 
 - **Runtime**: Python 3.14+, Postgres 16 + pgvector
-- **Core**: `mcp`, `ollama`, `httpx`, `pydantic-settings`, `click`, `rich`
+- **Core**: `mcp`, `httpx`, `pydantic-settings`, `click`, `rich`
 - **Data**: `sqlmodel`, `asyncpg`, `psycopg`, `alembic`, `pgvector`
 - **Trading**: `python-binance`, `numpy`, `apscheduler`
 - **ML**: `scikit-learn` (IsolationForest for anomaly detection, classifiers for signal prediction); `chronos-forecasting` + `torch` (price forecaster, optional via `[ml]` extra)
-- **LLM**: `openai`, `anthropic`
+- **LLM**: `openai` (the OpenAI-compatible client used to talk to GLM endpoints)
 - **Sentiment**: `praw` / `httpx` (Reddit + CryptoPanic feeds, optional via `[sentiment]` extra)

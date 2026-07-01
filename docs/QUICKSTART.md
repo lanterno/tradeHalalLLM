@@ -30,14 +30,13 @@ None of them require an account.
 | **`just`** | any recent | task runner (optional but assumed) | `cargo install just` or your package manager |
 | **`git`** | any recent | clone | <https://git-scm.com/downloads> |
 
-You also need **one** LLM backend. Pick whichever is easiest for you;
-the rest of the guide works the same.
+You also need an **OpenRouter API key** for the LLM. The bot speaks
+to a single model — GLM-5.2 — over OpenAI-compatible endpoints, and
+OpenRouter is the default host.
 
 | LLM | Cost | Setup |
 |-----|------|-------|
-| **Ollama** (local) | free | `curl -fsSL https://ollama.com/install.sh \| sh` then `ollama pull qwen2.5:32b` |
-| **OpenAI** | pay-per-token | grab a key at <https://platform.openai.com/api-keys> |
-| **Anthropic** | pay-per-token | grab a key at <https://console.anthropic.com/> |
+| **GLM-5.2** (via OpenRouter) | pay-per-token | grab a key at <https://openrouter.ai/keys> |
 
 ## Step 1 — clone + install (≈ 1 minute)
 
@@ -82,22 +81,22 @@ BINANCE_API_KEY=<paste here>
 BINANCE_SECRET_KEY=<paste here>
 BINANCE_TESTNET=true
 
-# Pick ONE of these LLM blocks, leave the others empty:
+# Your OpenRouter key from https://openrouter.ai/keys
+GLM_API_KEY=<paste here>
+```
 
-# Option A — Ollama (free, local)
-LLM_PROVIDER=ollama
-LLM_MODEL=qwen2.5:32b
-OLLAMA_HOST=http://localhost:11434
+That's the whole LLM setup — the defaults (`GLM_BASE_URL=https://openrouter.ai/api/v1`,
+`LLM_MODEL=z-ai/glm-5.2`) do the rest.
 
-# Option B — OpenAI
-LLM_PROVIDER=openai
-LLM_MODEL=gpt-4o-mini
-OPENAI_API_KEY=<paste here>
+Optionally, add a **second GLM endpoint** as a fallback — the bot
+rotates to it automatically if the primary goes down (e.g. Z.ai
+direct; note the model id differs there):
 
-# Option C — Anthropic
-LLM_PROVIDER=anthropic
-LLM_MODEL=claude-haiku-4-5-20251001
-ANTHROPIC_API_KEY=<paste here>
+```bash
+# Optional — Z.ai-direct fallback endpoint
+GLM_FALLBACK_BASE_URL=https://api.z.ai/api/paas/v4
+GLM_FALLBACK_MODEL=glm-5.2
+GLM_FALLBACK_API_KEY=<Z.ai key>
 ```
 
 The `DATABASE_URL`, halal-screening settings, and notification webhooks
@@ -131,7 +130,7 @@ Expected output (abridged):
 [INFO] cycle.start cycle_id=2026-05-01T14:02:11Z
 [INFO] halal.refresh pairs=14 source=coingecko
 [INFO] indicators.computed BTCUSDT rsi=52.1 macd=+0.0014 vol_ratio=0.8x
-[INFO] llm.call provider=ollama model=qwen2.5:32b tokens_in=4231 tokens_out=512
+[INFO] llm.call provider=glm model=z-ai/glm-5.2 tokens_in=4231 tokens_out=512
 [INFO] decision pair=BTCUSDT side=BUY confidence=0.62 size_usd=120.00
 [INFO] order.submitted symbol=BTCUSDT side=BUY qty=0.00200
 [INFO] order.filled fill_price=$59,842.10 filled_at=2026-05-01T14:02:14Z
@@ -195,8 +194,15 @@ head` once to adopt it.
 the Postgres container isn't running. `just pg-up` to start it,
 `docker ps` to confirm.
 
-**`Ollama connection refused`** — `ollama serve` in another terminal,
-or check `OLLAMA_HOST` matches where Ollama is listening.
+**LLM call fails with `401`** — bad or missing `GLM_API_KEY`. Check
+the key at <https://openrouter.ai/keys> and that `.env` was loaded.
+
+**LLM call fails with `402`** — your OpenRouter account is out of
+credits. Top up at <https://openrouter.ai/credits>.
+
+**LLM call fails with `429`** — rate limit. Nothing to do:
+`FallbackLLM` backs off automatically (60s → 30min) and rotates to
+the fallback endpoint if you configured one.
 
 **Halal screener says everything is non-compliant** — the CoinGecko
 free tier is rate-limited; first-cycle requests can be throttled. The

@@ -1,292 +1,247 @@
-"""Tests for :func:`create_llm` factory + fallback chain assembly.
+"""Tests for :func:`create_llm` factory + endpoint-fallback chain assembly.
 
-The actual provider classes (Ollama / OpenAI / Anthropic) are tested
-in their own files; this file pins the wiring: which provider gets
-selected as primary, when the FallbackLLM wrapper is added, and
-how unknown / unconfigured fallback providers are handled.
+The GLMLLM provider itself is tested in `test_glm_usage.py` /
+`test_glm_tool_call.py`; this file pins the wiring: the fail-loud
+missing-key contract, when the FallbackLLM wrapper is added around a
+second GLM *endpoint* (same model family, different host), and the
+classifier stack's determinism pins (temperature 0.0, thinking off).
 """
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from types import SimpleNamespace
 
 import pytest
 
-from halal_trader.config import LLMProvider
-from halal_trader.core.llm.factory import create_llm
+from halal_trader.core.llm.factory import create_classifier_llm, create_llm
 from halal_trader.core.llm.fallback import FallbackLLM
+from halal_trader.core.llm.glm import GLMLLM
 
 
 def _settings(
     *,
-    provider: LLMProvider = LLMProvider.OLLAMA,
-    fallback_providers: list[str] | None = None,
-    openai_key: str = "",
-    anthropic_key: str = "",
-) -> MagicMock:
-    s = MagicMock()
-    s.llm.provider = provider
-    s.llm.model = "test-model"
-    s.llm.fallback_providers = fallback_providers or []
-    s.llm.ollama.host = "http://localhost:11434"
-    s.llm.ollama.fallback_model = ""
-    s.llm.openai.api_key = openai_key
-    s.llm.openai.fallback_model = ""
-    s.llm.anthropic.api_key = anthropic_key
-    s.llm.anthropic.fallback_model = ""
-    return s
+    model: str = "z-ai/glm-5.2",
+    api_key: str = "sk-glm",
+    base_url: str = "https://openrouter.ai/api/v1",
+    fallback_base_url: str = "",
+    fallback_model: str = "",
+    fallback_api_key: str = "",
+    timeout_seconds: int = 60,
+    thinking: bool = False,
+    require_parameters: bool = True,
+) -> SimpleNamespace:
+    """Attribute-only Settings stand-in — the factory reads, never validates."""
+    glm = SimpleNamespace(
+        api_key=api_key,
+        base_url=base_url,
+        fallback_base_url=fallback_base_url,
+        fallback_model=fallback_model,
+        fallback_api_key=fallback_api_key,
+        timeout_seconds=timeout_seconds,
+        thinking=thinking,
+        require_parameters=require_parameters,
+    )
+    return SimpleNamespace(llm=SimpleNamespace(model=model, glm=glm))
 
 
-# ── primary selection ─────────────────────────────────────────
+# ── primary construction ──────────────────────────────────────
 
 
-def test_create_returns_ollama_when_provider_is_ollama():
-    from halal_trader.core.llm.ollama import OllamaLLM
-
-    out = create_llm(_settings(provider=LLMProvider.OLLAMA))
-    assert isinstance(out, OllamaLLM)
+def test_create_returns_glm_primary():
+    out = create_llm(_settings())
+    assert isinstance(out, GLMLLM)
 
 
-def test_create_returns_openai_when_configured():
-    from halal_trader.core.llm.openai import OpenAILLM
-
-    out = create_llm(_settings(provider=LLMProvider.OPENAI, openai_key="sk-test"))
-    assert isinstance(out, OpenAILLM)
-
-
-def test_create_returns_anthropic_when_configured():
-    from halal_trader.core.llm.anthropic import AnthropicLLM
-
-    out = create_llm(_settings(provider=LLMProvider.ANTHROPIC, anthropic_key="sk-ant"))
-    assert isinstance(out, AnthropicLLM)
+def test_create_raises_when_api_key_missing():
+    """No GLM_API_KEY fails loudly at startup — there is no other
+    provider to silently degrade to anymore."""
+    with pytest.raises(ValueError, match="GLM_API_KEY"):
+        create_llm(_settings(api_key=""))
 
 
-def test_create_raises_when_primary_unconfigured():
-    """Selecting OpenAI without an API key fails loudly — better
-    than silently degrading to Ollama."""
-    with pytest.raises(ValueError, match="not configured"):
-        create_llm(_settings(provider=LLMProvider.OPENAI))
+def test_create_passes_settings_through_to_glm():
+    """Every GLM knob flows from Settings into the provider instance —
+    a factory refactor that drops one would silently revert the
+    operator's endpoint config to the class defaults."""
+    out = create_llm(
+        _settings(
+            model="glm-5.2",
+            api_key="sk-custom",
+            base_url="https://api.z.ai/api/paas/v4",
+            timeout_seconds=90,
+            thinking=True,
+            require_parameters=False,
+        )
+    )
+    assert isinstance(out, GLMLLM)
+    assert out.model == "glm-5.2"
+    assert out.api_key == "sk-custom"
+    assert out.base_url == "https://api.z.ai/api/paas/v4"
+    assert out.timeout_seconds == 90
+    assert out.thinking is True
+    assert out.require_parameters is False
 
 
-# ── fallback chain ────────────────────────────────────────────
+def test_strategy_llm_keeps_default_temperature():
+    """Regression guard: the classifier's determinism pin must NOT
+    bleed into the strategy path — create_llm stays at the 0.2 default."""
+    out = create_llm(_settings())
+    assert out.temperature == 0.2
 
 
-def test_no_fallback_returns_primary_directly():
-    """Empty `fallback_providers` → no FallbackLLM wrapper."""
-    out = create_llm(_settings(fallback_providers=[]))
+# ── endpoint-fallback chain ───────────────────────────────────
+
+
+def test_no_fallback_config_returns_bare_primary():
+    """Neither fallback_base_url nor fallback_model set → no wrapper."""
+    out = create_llm(_settings())
+    assert isinstance(out, GLMLLM)
     assert not isinstance(out, FallbackLLM)
 
 
-def test_with_configured_fallback_returns_fallback_wrapper():
+def test_distinct_fallback_base_url_wraps_in_fallback_llm():
+    """A second host for the same weights (e.g. Z.ai direct behind
+    OpenRouter) gives the primary a degraded path."""
     out = create_llm(
         _settings(
-            provider=LLMProvider.OLLAMA,
-            fallback_providers=["openai"],
-            openai_key="sk",
+            fallback_base_url="https://api.z.ai/api/paas/v4",
+            fallback_model="glm-5.2",
         )
     )
     assert isinstance(out, FallbackLLM)
+    assert isinstance(out._primary, GLMLLM)
+    assert out._primary.base_url == "https://openrouter.ai/api/v1"
+    assert [f.base_url for f in out._fallbacks] == ["https://api.z.ai/api/paas/v4"]
+    assert [f.model for f in out._fallbacks] == ["glm-5.2"]
 
 
-def test_unknown_fallback_provider_is_skipped():
-    """Typo in `fallback_providers` shouldn't kill the bot."""
+def test_fallback_model_alone_is_enough_to_chain():
+    """Only fallback_model set → same base_url, different model id —
+    still a distinct endpoint pair, so the chain is built."""
+    out = create_llm(_settings(fallback_model="z-ai/glm-5.2:nitro"))
+    assert isinstance(out, FallbackLLM)
+    assert out._fallbacks[0].model == "z-ai/glm-5.2:nitro"
+    assert out._fallbacks[0].base_url == "https://openrouter.ai/api/v1"
+
+
+def test_fallback_base_url_alone_inherits_primary_model():
+    """Only fallback_base_url set → the fallback reuses the primary's
+    model id (naming may still need an override per host, but the
+    default is the sane one)."""
+    out = create_llm(_settings(fallback_base_url="https://api.fireworks.ai/inference/v1"))
+    assert isinstance(out, FallbackLLM)
+    assert out._fallbacks[0].model == "z-ai/glm-5.2"
+
+
+def test_identical_fallback_endpoint_is_skipped():
+    """A fallback describing the same (base_url, model) pair as the
+    primary is a pointless self-retry leg — warn + bare primary."""
     out = create_llm(
         _settings(
-            provider=LLMProvider.OLLAMA,
-            fallback_providers=["bogus-provider"],
+            fallback_base_url="https://openrouter.ai/api/v1",
+            fallback_model="z-ai/glm-5.2",
         )
     )
-    # Falls back to no-fallback path because the unknown name was skipped.
+    assert isinstance(out, GLMLLM)
     assert not isinstance(out, FallbackLLM)
 
 
-def test_fallback_same_as_primary_is_skipped():
-    """Listing the same provider as primary is a no-op (avoids
-    self-reference cycle)."""
+def test_identical_fallback_ignores_trailing_slash():
+    """Endpoint identity is compared with trailing slashes stripped —
+    `.../v1/` vs `.../v1` is the same host, not a chain."""
     out = create_llm(
         _settings(
-            provider=LLMProvider.OLLAMA,
-            fallback_providers=["ollama"],
+            fallback_base_url="https://openrouter.ai/api/v1/",
+            fallback_model="z-ai/glm-5.2",
         )
     )
     assert not isinstance(out, FallbackLLM)
 
 
-def test_unconfigured_fallback_provider_is_skipped():
-    """Listing 'openai' as a fallback but no API key → skipped, not
-    crash. Bot still runs with primary only."""
+def test_fallback_api_key_defaults_to_primary_key():
+    """Empty fallback_api_key → the fallback reuses the primary key
+    (common when both endpoints are OpenRouter-routed)."""
     out = create_llm(
-        _settings(
-            provider=LLMProvider.OLLAMA,
-            fallback_providers=["openai"],
-            # openai_key intentionally empty
-        )
+        _settings(api_key="sk-primary", fallback_base_url="https://api.z.ai/api/paas/v4")
     )
-    assert not isinstance(out, FallbackLLM)
+    assert isinstance(out, FallbackLLM)
+    assert out._fallbacks[0].api_key == "sk-primary"
 
 
-def test_multiple_fallbacks_all_added_in_order():
+def test_fallback_api_key_used_when_set():
     out = create_llm(
         _settings(
-            provider=LLMProvider.OLLAMA,
-            fallback_providers=["openai", "anthropic"],
-            openai_key="sk-1",
-            anthropic_key="sk-2",
+            api_key="sk-primary",
+            fallback_base_url="https://api.z.ai/api/paas/v4",
+            fallback_api_key="sk-zai",
         )
     )
     assert isinstance(out, FallbackLLM)
+    assert out._fallbacks[0].api_key == "sk-zai"
 
 
-# ── same-provider model fallback ──────────────────────────────
-
-
-def test_same_provider_model_fallback_added_when_explicitly_configured():
-    """An explicit distinct OPENAI_FALLBACK_MODEL gives the OpenAI primary a
-    same-key degraded path (gpt-4o -> gpt-4o-mini) even with an empty
-    fallback_providers list — so a transient gpt-4o timeout doesn't yield a
-    no-action cycle."""
-    from halal_trader.core.llm.openai import OpenAILLM
-
-    s = _settings(provider=LLMProvider.OPENAI, openai_key="sk-test")
-    s.llm.model = "gpt-4o"
-    s.llm.openai.fallback_model = "gpt-4o-mini"
-    out = create_llm(s)
-    assert isinstance(out, FallbackLLM)
-    assert isinstance(out._primary, OpenAILLM)
-    assert out._primary.model == "gpt-4o"
-    assert [f.model for f in out._fallbacks] == ["gpt-4o-mini"]
-
-
-def test_same_provider_model_fallback_skipped_when_unset():
-    """Default (empty fallback_model) → bare primary, no wrapper (unchanged
-    behavior for configs that never opted in)."""
-    s = _settings(provider=LLMProvider.OPENAI, openai_key="sk-test")
-    s.llm.model = "gpt-4o"
-    s.llm.openai.fallback_model = ""
-    out = create_llm(s)
-    assert not isinstance(out, FallbackLLM)
-
-
-def test_same_provider_model_fallback_skipped_when_equal_to_primary():
-    """A fallback model identical to the primary is a no-op (no pointless
-    same-model retry leg)."""
-    s = _settings(provider=LLMProvider.OPENAI, openai_key="sk-test")
-    s.llm.model = "gpt-4o-mini"
-    s.llm.openai.fallback_model = "gpt-4o-mini"
-    out = create_llm(s)
-    assert not isinstance(out, FallbackLLM)
-
-
-def test_same_provider_model_fallback_precedes_cross_provider():
-    """Same-provider model fallback is tried BEFORE switching providers."""
-    s = _settings(
-        provider=LLMProvider.OPENAI,
-        fallback_providers=["anthropic"],
-        openai_key="sk-1",
-        anthropic_key="sk-2",
+def test_fallback_inherits_shared_knobs():
+    """timeout/thinking/require_parameters apply to both chain members —
+    the fallback is the same workload on a different host."""
+    out = create_llm(
+        _settings(
+            fallback_base_url="https://api.z.ai/api/paas/v4",
+            timeout_seconds=45,
+            thinking=True,
+        )
     )
-    s.llm.model = "gpt-4o"
-    s.llm.openai.fallback_model = "gpt-4o-mini"
-    out = create_llm(s)
     assert isinstance(out, FallbackLLM)
-    # gpt-4o -> gpt-4o-mini (same key) -> Anthropic (provider switch).
-    assert [f.model for f in out._fallbacks] == ["gpt-4o-mini", "claude-sonnet-4-20250514"]
+    fb = out._fallbacks[0]
+    assert fb.timeout_seconds == 45
+    assert fb.thinking is True
+    assert fb.require_parameters is True
 
 
 # ── create_classifier_llm — dedicated reactor-classifier chain ──
 
 
-def test_classifier_chain_includes_ollama_floor_always():
-    """Ollama needs no API key — the chain MUST always have a floor so
-    classifier resilience doesn't depend on cloud credentials. This is
-    the structural fix the 2026-05-22 quota incident motivated."""
-    from halal_trader.core.llm.factory import create_classifier_llm
-    from halal_trader.core.llm.ollama import OllamaLLM
-
-    # No cloud keys at all.
+def test_classifier_pins_temperature_to_zero():
+    """The classifier stack must use greedy decoding (temperature=0.0)
+    so the same headline scores reproducibly near the 0.85 entry
+    threshold. The strategy LLM keeps its 0.2 default."""
     out = create_classifier_llm(_settings())
-    # With only Ollama eligible the factory returns a bare OllamaLLM
-    # (no rotation needed when there's only one provider).
-    assert isinstance(out, OllamaLLM)
+    assert isinstance(out, GLMLLM)
+    assert out.temperature == 0.0
 
 
-def test_classifier_chain_prefers_openai_when_configured():
-    """OpenAI is primary by design (cheapest at gpt-4o-mini, fastest
-    classification quality at the 1-line-headline scale)."""
-    from halal_trader.core.llm.factory import create_classifier_llm
-    from halal_trader.core.llm.openai import OpenAILLM
-
-    out = create_classifier_llm(_settings(openai_key="sk-test"))
-    # With two providers (OpenAI + Ollama floor) we get a FallbackLLM.
-    assert isinstance(out, FallbackLLM)
-    assert isinstance(out._primary, OpenAILLM)
-    # Ollama is the only fallback in this scenario.
-    assert len(out._fallbacks) == 1
+def test_classifier_pins_thinking_off_even_when_configured_on():
+    """A 1-line headline needs milliseconds-cheap classification —
+    thinking stays off even when the operator enables it for the
+    strategy path."""
+    out = create_classifier_llm(_settings(thinking=True))
+    assert isinstance(out, GLMLLM)
+    assert out.thinking is False
 
 
-def test_classifier_chain_full_three_providers():
-    """All three configured → OpenAI → Anthropic → Ollama chain."""
-    from halal_trader.core.llm.anthropic import AnthropicLLM
-    from halal_trader.core.llm.factory import create_classifier_llm
-    from halal_trader.core.llm.ollama import OllamaLLM
-    from halal_trader.core.llm.openai import OpenAILLM
-
+def test_classifier_chain_mirrors_endpoint_fallback():
+    """The classifier gets the same endpoint chain as the strategy LLM,
+    with the determinism pins applied to every chain member."""
     out = create_classifier_llm(
-        _settings(openai_key="sk-1", anthropic_key="sk-2")
-    )
-    assert isinstance(out, FallbackLLM)
-    assert isinstance(out._primary, OpenAILLM)
-    assert len(out._fallbacks) == 2
-    assert isinstance(out._fallbacks[0], AnthropicLLM)
-    assert isinstance(out._fallbacks[1], OllamaLLM)
-
-
-def test_classifier_chain_anthropic_primary_when_no_openai():
-    """OpenAI key missing → Anthropic becomes primary, Ollama floor."""
-    from halal_trader.core.llm.anthropic import AnthropicLLM
-    from halal_trader.core.llm.factory import create_classifier_llm
-    from halal_trader.core.llm.ollama import OllamaLLM
-
-    out = create_classifier_llm(_settings(anthropic_key="sk-ant"))
-    assert isinstance(out, FallbackLLM)
-    assert isinstance(out._primary, AnthropicLLM)
-    assert len(out._fallbacks) == 1
-    assert isinstance(out._fallbacks[0], OllamaLLM)
-
-
-def test_classifier_chain_uses_cheap_default_models():
-    """The classifier-specific defaults must NOT be the strategy's
-    heavyweight model — classify is a 1-line task that should burn the
-    cheapest available variant per provider."""
-    from halal_trader.core.llm.factory import create_classifier_llm
-
-    out = create_classifier_llm(
-        _settings(openai_key="sk-1", anthropic_key="sk-2")
-    )
-    assert isinstance(out, FallbackLLM)
-    # OpenAI primary: gpt-4o-mini (not gpt-4o, gpt-5, etc).
-    assert "mini" in out._primary.model.lower()
-    # Anthropic fallback: haiku (cheap), not opus/sonnet.
-    assert "haiku" in out._fallbacks[0].model.lower()
-
-
-def test_classifier_chain_pins_temperature_to_zero():
-    """Every provider in the classifier stack must use greedy decoding
-    (temperature=0.0) so the same headline scores reproducibly. The
-    strategy LLM keeps its 0.2 default — only the classifier needs to
-    be deterministic near the 0.85 entry threshold."""
-    from halal_trader.core.llm.factory import create_classifier_llm
-
-    out = create_classifier_llm(
-        _settings(openai_key="sk-1", anthropic_key="sk-2")
+        _settings(fallback_base_url="https://api.z.ai/api/paas/v4", thinking=True)
     )
     assert isinstance(out, FallbackLLM)
     assert out._primary.temperature == 0.0
+    assert out._primary.thinking is False
     assert all(fb.temperature == 0.0 for fb in out._fallbacks)
+    assert all(fb.thinking is False for fb in out._fallbacks)
 
 
-def test_strategy_llm_keeps_default_temperature():
-    """Regression guard: the determinism change must NOT bleed into the
-    strategy path — create_llm providers stay at the 0.2 default."""
-    out = create_llm(_settings(provider=LLMProvider.OLLAMA))
-    assert out.temperature == 0.2
+def test_classifier_raises_when_api_key_missing():
+    """Same fail-loud contract as create_llm — there is no free local
+    floor anymore, so a missing key must not silently no-op."""
+    with pytest.raises(ValueError, match="GLM_API_KEY"):
+        create_classifier_llm(_settings(api_key=""))
+
+
+def test_classifier_is_separate_instance_from_strategy_llm():
+    """Backoff state and usage accounting must not bleed between the
+    strategy and classifier workloads — distinct instances."""
+    s = _settings()
+    strategy = create_llm(s)
+    classifier = create_classifier_llm(s)
+    assert strategy is not classifier

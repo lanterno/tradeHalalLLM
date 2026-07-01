@@ -119,14 +119,19 @@ class CryptoTradingStrategy(BaseStrategy):
             error,
         )
 
-        # `insufficient_quota` (out of OpenAI/Anthropic credits) is non-
-        # transient — every retry fails with the same error and burns
-        # API attempts. Trip cooldown immediately + log loudly so the
-        # operator can top up. Match by error-message substring because
-        # the SDK exception class isn't always surfaced through our
-        # wrapper layers.
+        # Credit exhaustion is non-transient — every retry fails with
+        # the same error and burns API attempts. Trip cooldown
+        # immediately + log loudly so the operator can top up. Match by
+        # error-message substring because the SDK exception class isn't
+        # always surfaced through our wrapper layers. Markers cover the
+        # OpenAI-compat shape ("insufficient_quota") and OpenRouter's
+        # 402 "Insufficient credits".
         err_text = str(error)
-        if "insufficient_quota" in err_text or "exceeded your current quota" in err_text:
+        if (
+            "insufficient_quota" in err_text
+            or "exceeded your current quota" in err_text
+            or "insufficient credits" in err_text.lower()
+        ):
             self._llm_cooldown_until = time.monotonic() + self._llm_cooldown_seconds
             logger.critical(
                 "LLM provider account out of credits — top up to resume trading "
@@ -269,8 +274,8 @@ class CryptoTradingStrategy(BaseStrategy):
             log_prefix="Crypto",
             prompt_version=_CRYPTO_PROMPT_VERSION.short,
             # Wave E: use native tool-use when the provider supports it
-            # (Anthropic / OpenAI); falls back to generate_json for
-            # Ollama. SUBMIT_DECISIONS_TOOL mirrors the legacy JSON
+            # (native on GLM); falls back to generate_json when the
+            # backend lacks it. SUBMIT_DECISIONS_TOOL mirrors the legacy JSON
             # schema, so CryptoTradingPlan validates either path's
             # output without translation.
             tool=SUBMIT_DECISIONS_TOOL,

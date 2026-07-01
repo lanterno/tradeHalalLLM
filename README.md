@@ -7,7 +7,7 @@ LLM-powered halal trading bot for **stocks** (Alpaca) and **crypto** (Binance). 
 ## Features
 
 ### Stock Trading
-- **LLM-driven trading decisions** -- configurable to use Ollama (local), OpenAI, or Anthropic
+- **LLM-driven trading decisions** -- GLM-5.2 via OpenRouter (OpenAI-compatible)
 - **Halal stock filtering** -- screens stocks via Zoya API before trading
 - **Day trading strategy** -- targets 1%+ daily returns, closes all positions by market close
 - **Alpaca MCP integration** -- executes trades via Alpaca's official MCP server
@@ -29,7 +29,7 @@ LLM-powered halal trading bot for **stocks** (Alpaca) and **crypto** (Binance). 
 
 ### Shared
 - **Full audit trail** -- every LLM decision (with prompt version, token counts, cost) and trade execution lands in Postgres
-- **Configurable LLM backend** -- Ollama, OpenAI, or Anthropic for both stock and crypto, with provider fallback chains
+- **GLM-5.2 LLM backend** -- one model over OpenAI-compatible endpoints (OpenRouter by default) for both stock and crypto, with an optional fallback endpoint chain (e.g. Z.ai direct)
 - **Halal exception queue** -- operator-managed override workflow for borderline assets, persisted to the same database
 - **Live dashboard + WebSocket stream** -- React SPA on `:8082` plus a `/ws/cycle` event stream for real-time cycle observability
 
@@ -54,7 +54,7 @@ Please don't file public issues for vulnerabilities.
 
 - Python 3.14+
 - [uv](https://docs.astral.sh/uv/) package manager
-- [Ollama](https://ollama.ai/) (for local LLM inference)
+- OpenRouter API key ([openrouter.ai/keys](https://openrouter.ai/keys)) -- for GLM-5.2 LLM inference
 - Alpaca paper trading account ([sign up free](https://app.alpaca.markets/paper/dashboard/overview)) -- for stocks
 - Binance testnet account ([testnet.binance.vision](https://testnet.binance.vision)) -- for crypto
 - Zoya API key ([developer.zoya.finance](https://developer.zoya.finance)) -- optional, for stock halal screening
@@ -70,10 +70,7 @@ uv sync
 
 # Copy env template and fill in your API keys
 cp .env.example .env
-# Edit .env with your keys (Alpaca, Binance, LLM, etc.)
-
-# Pull an Ollama model (if using local inference)
-ollama pull qwen2.5:32b
+# Edit .env with your keys (Alpaca, Binance, GLM_API_KEY, etc.)
 
 # Install Alpaca MCP server (for stock trading only)
 uvx alpaca-mcp-server init
@@ -124,7 +121,7 @@ halal-trader crypto screen
 ```
                         ┌─────────────────────────────────────────────────┐
                         │               LLM Agent                        │
-                        │        (Ollama / OpenAI / Anthropic)           │
+                        │          (GLM-5.2 via OpenRouter)              │
                         └──────────┬────────────────────┬────────────────┘
                                    │                    │
                     ┌──────────────▼──────┐  ┌──────────▼──────────────┐
@@ -162,8 +159,9 @@ All settings are managed via `.env` file or environment variables. See `.env.exa
 
 | Variable | Description | Default |
 |---|---|---|
-| `LLM_PROVIDER` | LLM backend: `ollama`, `openai`, `anthropic` | `ollama` |
-| `LLM_MODEL` | Model name | `qwen2.5:32b` |
+| `GLM_API_KEY` | GLM API key (an [OpenRouter key](https://openrouter.ai/keys) by default) | |
+| `GLM_BASE_URL` | OpenAI-compatible endpoint serving GLM-5.2 | `https://openrouter.ai/api/v1` |
+| `LLM_MODEL` | Model name (`glm-5.2` on Z.ai direct) | `z-ai/glm-5.2` |
 | `DATABASE_URL` | Postgres async DSN (asyncpg) | `postgresql+asyncpg://halal:halal@localhost:5433/halal_trader` |
 | `LOG_LEVEL` | Logging level | `INFO` |
 

@@ -1,10 +1,9 @@
-"""Wave E wiring tests — tool-use across providers + strategy integration.
+"""Wave E wiring tests — tool-use capability + strategy integration.
 
-The provider-native ``generate_tool_call`` implementations (Anthropic,
-OpenAI) are covered by existing tests in test_anthropic_tool_call.py;
-this file covers the *wiring*: capability flags, FallbackLLM
-delegation, the new SUBMIT_DECISIONS_TOOL schema, and the
-``BaseStrategy._run_llm_analysis(tool=...)`` branch selection.
+The provider-native ``generate_tool_call`` implementation is covered
+by test_glm_tool_call.py; this file covers the *wiring*: capability
+flags, FallbackLLM delegation, the new SUBMIT_DECISIONS_TOOL schema,
+and the ``BaseStrategy._run_llm_analysis(tool=...)`` branch selection.
 """
 
 from __future__ import annotations
@@ -25,25 +24,11 @@ from halal_trader.core.llm.tools import (
 # ── supports_tool_use capability flags ───────────────────────────
 
 
-def test_anthropic_advertises_tool_use_support() -> None:
-    """AnthropicLLM ships native tool-use via the Messages API."""
-    from halal_trader.core.llm.anthropic import AnthropicLLM
+def test_glm_advertises_tool_use_support() -> None:
+    """GLMLLM ships native tool-use via chat.completions."""
+    from halal_trader.core.llm.glm import GLMLLM
 
-    assert AnthropicLLM.supports_tool_use is True
-
-
-def test_openai_advertises_tool_use_support() -> None:
-    """OpenAILLM ships native tool-use via chat.completions."""
-    from halal_trader.core.llm.openai import OpenAILLM
-
-    assert OpenAILLM.supports_tool_use is True
-
-
-def test_ollama_does_not_advertise_tool_use() -> None:
-    """Ollama lacks native tool-use → falls back to generate_json."""
-    from halal_trader.core.llm.ollama import OllamaLLM
-
-    assert OllamaLLM.supports_tool_use is False
+    assert GLMLLM.supports_tool_use is True
 
 
 def test_base_default_is_false() -> None:
@@ -65,14 +50,6 @@ def test_submit_decisions_tool_required_fields() -> None:
     assert "symbol" in decision["required"]
     assert "quantity" in decision["required"]
     assert decision["properties"]["action"]["enum"] == ["buy", "sell", "hold"]
-
-
-def test_submit_decisions_tool_projects_for_anthropic() -> None:
-    """The provider-native helper produces the Anthropic-shaped dict."""
-    payload = SUBMIT_DECISIONS_TOOL.for_anthropic()
-    assert payload["name"] == "submit_decisions"
-    assert "input_schema" in payload
-    assert payload["input_schema"]["properties"]["decisions"]["type"] == "array"
 
 
 def test_submit_decisions_tool_projects_for_openai() -> None:

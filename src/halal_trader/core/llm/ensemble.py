@@ -15,10 +15,10 @@ useful; combine them by running the ensemble first, then the adversary
 on the consensus plan.
 
 Cost notes:
-* If you use the same Anthropic model with 5-min ephemeral cache and
-  vary only the user-prompt suffix, K parallel calls cost roughly
+* If the endpoint caches the shared prompt prefix and only the
+  user-prompt suffix varies, K parallel calls cost roughly
   ``input_tokens × cache_price + K × output_tokens × output_price``.
-* For 3 variants of a Haiku call this is on the order of pennies a cycle.
+* For 3 GLM-5.2 variants this is on the order of a cent a cycle.
 
 The interface is deliberately data-shape-agnostic so it works for both
 stock ``TradingPlan`` and crypto ``CryptoTradingPlan`` — anything with

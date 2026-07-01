@@ -2,8 +2,8 @@
 the default `generate_tool_call` fallback, and `CallUsage.total_tokens`.
 
 `test_llm_base_helpers.py` already pins the pure `strip_thinking` /
-`_clean_json_body` helpers; `test_anthropic_caching.py` and
-`test_openai_usage.py` cover provider-specific usage. This file pins
+`_clean_json_body` helpers; `test_glm_usage.py` covers
+provider-specific usage. This file pins
 the contract that lives on the abstract base — daily reset semantics,
 the threshold log ladder, and the default tool-call wrapper that
 non-Anthropic providers fall through to.
@@ -270,8 +270,8 @@ async def test_generate_json_clears_last_thinking_when_no_think_block():
 @pytest.mark.asyncio
 async def test_generate_json_strips_markdown_fences() -> None:
     """`_clean_json_body` runs after `strip_thinking` — verify the
-    markdown-fence strip is applied (some Ollama / OpenAI responses
-    wrap JSON in ```json … ``` even when format=json is requested)."""
+    markdown-fence strip is applied (some GLM hosts wrap JSON in
+    ```json … ``` even when JSON mode is requested)."""
     payload = '```json\n{"a":1}\n```'
     llm = _ThinkingLLM(payload)
     parsed = await llm.generate_json("hi")

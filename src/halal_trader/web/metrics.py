@@ -172,7 +172,7 @@ def llm_metrics(
             continue
         provider = str(record.get("provider") or "unknown")
         # Providers emit input_tokens + output_tokens separately (see
-        # openai.py / anthropic.py); a generic "tokens" field is a
+        # core/llm/glm.py); a generic "tokens" field is a
         # legacy shape some adapters still produce. Sum the parts when
         # present; otherwise fall back to "tokens".
         input_t = record.get("input_tokens")

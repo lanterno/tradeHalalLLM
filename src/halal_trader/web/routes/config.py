@@ -21,7 +21,7 @@ def register(app: FastAPI) -> None:
         settings = ctx.settings
         return JSONResponse(
             {
-                "llm_provider": settings.llm.provider.value,
+                "llm_provider": "glm",
                 "llm_model": settings.llm.model,
                 "crypto_pairs": settings.crypto.pairs,
                 "crypto_trading_interval_seconds": settings.crypto.trading_interval_seconds,

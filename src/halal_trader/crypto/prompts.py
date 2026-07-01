@@ -364,7 +364,7 @@ def build_prompts(
     # Append the stable HALAL PAIRS + EXCHANGE TRADING RULES to the
     # system prompt. These sections are stable across calls (halal cache
     # refreshes every 6h; exchange rules change rarely), so moving them
-    # into ``system`` pushes the message above Anthropic's 1024-token
+    # into ``system`` pushes the message above the endpoint's 1024-token
     # cache minimum and lets ``cache_control: ephemeral`` actually fire.
     # The dynamic per-cycle data (indicators, orderbook, etc.) stays in
     # the user message.
