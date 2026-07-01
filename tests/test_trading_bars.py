@@ -93,6 +93,27 @@ def test_bars_to_klines_handles_symbol_keyed_envelope():
     assert klines[0].close > 0
 
 
+def test_bars_to_klines_handles_double_nested_mcp_envelope():
+    """REGRESSION (2026-07-01 live): the Alpaca MCP server now double-nests
+    bars under a security wrapper: {"_alpaca_mcp_security": {...},
+    "data": {"bars": {SYMBOL: [...]}}}. The one-level peel yielded ZERO klines,
+    silently starving indicators/ML and failing the daily recommendation with
+    'no candidate market data available'. Must unwrap data → bars → symbol."""
+    payload = {
+        "_alpaca_mcp_security": {"trust": "untrusted_tool_output"},
+        "data": {"bars": {"NVDA": _series(100, 40)}},
+    }
+    klines = bars_to_klines(payload)
+    assert len(klines) == 40
+    assert klines[-1].close > 0
+
+
+def test_bars_to_klines_handles_data_wrapped_flat_list():
+    """A {"data": {"bars": [...]}} (non-symbol-keyed) variant also round-trips."""
+    payload = {"data": {"bars": _series(50, 30)}}
+    assert len(bars_to_klines(payload)) == 30
+
+
 def test_bars_to_klines_synthetic_timestamps_are_monotonic():
     """Downstream consumers rely on ordered open_time even though the value is synthetic."""
     klines = bars_to_klines(_series(100, 5))

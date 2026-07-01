@@ -35,15 +35,31 @@ def bars_to_klines(bars_for_symbol: Any) -> list[Kline]:
         return []
     raw_bars: list[dict[str, Any]]
     if isinstance(bars_for_symbol, dict):
-        raw_bars = bars_for_symbol.get("bars") or bars_for_symbol.get("data") or []
-        # ``get_stock_bars`` wraps bars under the symbol: {"bars": {"NVDA": [...]}}.
-        # Flatten that symbol level to the underlying bar list.
-        if isinstance(raw_bars, dict):
+        # Peel the response envelopes. The Alpaca MCP server now wraps the
+        # payload under "data" (beside an "_alpaca_mcp_security" sibling), the
+        # bars endpoint nests them under "bars", and again under each symbol:
+        #   {"data": {"bars": {"NVDA": [...]}}}   ← current MCP format
+        #   {"bars": {"NVDA": [...]}}             ← older
+        #   {"bars": [...]} / [...]               ← flat
+        # Unwrap "data" then "bars" until we reach a list or symbol-keyed dict.
+        # (The prior code peeled only one level, so the current double-nested
+        # format silently yielded ZERO klines — starving indicators/ML/the
+        # daily recommendation of all bar data.)
+        payload: Any = bars_for_symbol
+        for key in ("data", "bars"):
+            if isinstance(payload, dict) and key in payload:
+                payload = payload[key]
+        if isinstance(payload, dict):
+            # Symbol-keyed: {"NVDA": [...]} → flatten the underlying lists.
             flattened: list[Any] = []
-            for v in raw_bars.values():
+            for v in payload.values():
                 if isinstance(v, list):
                     flattened.extend(v)
             raw_bars = flattened
+        elif isinstance(payload, list):
+            raw_bars = payload
+        else:
+            return []
     elif isinstance(bars_for_symbol, list):
         raw_bars = bars_for_symbol
     else:
