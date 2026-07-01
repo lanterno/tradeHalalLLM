@@ -40,7 +40,7 @@ Constraints: long-only / no-leverage / no-derivatives (halal, non-negotiable). N
 
 ## Phase 4 — Product / UX depth (parallelizable)
 - [ ] Per-symbol research page (chart + indicators + halal screen + headline sentiment).
-- [ ] What-if simulator: equity curve of taking every stock-of-the-day pick.
+- [x] What-if simulator: equity curve of taking every pick — `scorecard.whatif_equity_curve` + `/api/recommendation/whatif` + CLI line. 2026-07-01. Follow-up: dashboard chart.
 - [ ] "What changed since yesterday" diff + computed signal-attribution badges (not LLM self-weights).
 - [ ] Advisory notification digest (Telegram): daily pick + held-position level alerts.
 
