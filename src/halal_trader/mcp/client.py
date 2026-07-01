@@ -28,6 +28,26 @@ def _flex_get(d: dict[str, Any], *keys: str, default: Any = None) -> Any:
     return default
 
 
+def _unwrap_mcp_envelope(parsed: Any) -> Any:
+    """Strip the Alpaca MCP security wrapper so callers see the real payload.
+
+    The server wraps EVERY tool result as
+    ``{"_alpaca_mcp_security": {...metadata...}, "data": <actual payload>}``.
+    Only unwrap when both keys are present (the exact wrapper signature) so a
+    genuine payload that merely has a ``data`` key is left untouched. Applied
+    centrally in :meth:`call_tool` — 2026-07-01 this envelope silently broke
+    clock (is_open→closed → no cycles), positions (→ 100% reconcile drift),
+    account and bars all at once.
+    """
+    if (
+        isinstance(parsed, dict)
+        and "data" in parsed
+        and "_alpaca_mcp_security" in parsed
+    ):
+        return parsed["data"]
+    return parsed
+
+
 class AlpacaMCPClient:
     """Programmatic MCP client for the Alpaca trading server.
 
@@ -130,9 +150,11 @@ class AlpacaMCPClient:
         combined = "\n".join(str(c) for c in contents)
         logger.debug("Raw MCP response for %s: %s", name, combined[:500])
         try:
-            return json.loads(combined)
-        except json.JSONDecodeError, TypeError:
+            parsed = json.loads(combined)
+        except (json.JSONDecodeError, TypeError):
             return combined
+        # Strip the Alpaca MCP security wrapper centrally (see the helper).
+        return _unwrap_mcp_envelope(parsed)
 
     # ── Convenience wrappers ────────────────────────────────────
 
