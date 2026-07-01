@@ -46,6 +46,16 @@ def register(app: FastAPI) -> None:
         sc = await compute_scorecard(ctx.repo)
         return JSONResponse(serialize(sc))
 
+    @app.get("/api/recommendation/whatif")
+    async def api_recommendation_whatif(
+        ctx: DashboardContext = Depends(get_ctx),
+    ) -> JSONResponse:
+        # Equity curve of taking every scored pick vs the halal benchmark.
+        from halal_trader.recommendation.scorecard import whatif_equity_curve
+
+        curve = await whatif_equity_curve(ctx.repo)
+        return JSONResponse(serialize(curve))
+
     @app.post("/api/recommendation/generate")
     async def api_recommendation_generate(
         ctx: DashboardContext = Depends(get_ctx),

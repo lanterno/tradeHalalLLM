@@ -11,6 +11,7 @@ from halal_trader.recommendation.scorecard import (
     _forward_returns,
     backfill_outcomes,
     compute_scorecard,
+    whatif_equity_curve,
 )
 
 
@@ -151,3 +152,32 @@ async def test_compute_scorecard_empty():
     sc = await compute_scorecard(repo)
     assert sc["available"] is False
     assert sc["n_scored"] == 0
+
+
+@pytest.mark.asyncio
+async def test_whatif_equity_curve_compounds_in_date_order():
+    repo = _FakeRepo([
+        {"id": 1, "symbol": "AAPL", "date": "2026-05-01", "fwd_return_5d": 10.0,
+         "benchmark_return_5d": 2.0},
+        {"id": 2, "symbol": "MSFT", "date": "2026-05-02", "fwd_return_5d": -5.0,
+         "benchmark_return_5d": 1.0},
+        {"id": 3, "symbol": "NVDA", "date": "2026-05-03", "fwd_return_5d": None},  # unscored
+    ])
+    wc = await whatif_equity_curve(repo, start=100.0)
+    assert wc["available"] is True
+    assert wc["n"] == 2  # only the two scored picks
+    # 100 * 1.10 * 0.95 = 104.5
+    assert wc["final_equity"] == pytest.approx(104.5)
+    assert wc["total_return_pct"] == pytest.approx(4.5)
+    # benchmark: 100 * 1.02 * 1.01 = 103.02
+    assert wc["benchmark_return_pct"] == pytest.approx(3.02)
+    assert [p["symbol"] for p in wc["points"]] == ["AAPL", "MSFT"]  # date order
+    assert wc["points"][-1]["equity"] == pytest.approx(104.5)
+
+
+@pytest.mark.asyncio
+async def test_whatif_equity_curve_empty():
+    repo = _FakeRepo([{"id": 1, "symbol": "NVDA", "date": "2026-05-01", "fwd_return_5d": None}])
+    wc = await whatif_equity_curve(repo)
+    assert wc["available"] is False
+    assert wc["points"] == []

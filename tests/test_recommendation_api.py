@@ -87,3 +87,15 @@ def test_history_returns_list_newest_first(client, database_url):
     rows = r.json()
     assert isinstance(rows, list)
     assert [row["symbol"] for row in rows[:2]] == ["MSFT", "AAPL"]
+
+
+def test_scorecard_and_whatif_endpoints(client, database_url):
+    # No scored picks yet → both endpoints return an honest empty state.
+    sc = client.get("/api/recommendation/scorecard")
+    assert sc.status_code == 200
+    assert sc.json()["available"] is False
+    wc = client.get("/api/recommendation/whatif")
+    assert wc.status_code == 200
+    body = wc.json()
+    assert body["available"] is False
+    assert body["points"] == []

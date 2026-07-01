@@ -200,3 +200,49 @@ async def compute_scorecard(repo: Any, *, limit: int = 500) -> dict[str, Any]:
             "fwd_5d": worst["fwd_return_5d"],
         },
     }
+
+
+async def whatif_equity_curve(
+    repo: Any, *, limit: int = 500, start: float = 100.0
+) -> dict[str, Any]:
+    """Equity curve of *taking every scored stock-of-the-day pick*.
+
+    Honest "would this have made money?" — compounds each scored pick's 5-day
+    forward return in date order (buy the pick, hold 5 trading days, repeat),
+    against the same-pick SPUS benchmark. Sequential/non-overlapping is an
+    approximation (real picks overlap), but it's a fair directional read.
+    """
+    rows = await repo.get_recent_recommendations(limit=limit)
+    scored = sorted(
+        (r for r in rows if r.get("fwd_return_5d") is not None),
+        key=lambda r: (r.get("date", ""), r.get("id", 0)),
+    )
+    if not scored:
+        return {"available": False, "n": 0, "points": []}
+
+    equity = start
+    bench_equity = start
+    points: list[dict[str, Any]] = []
+    for r in scored:
+        equity *= 1.0 + r["fwd_return_5d"] / 100.0
+        b = r.get("benchmark_return_5d")
+        if b is not None:
+            bench_equity *= 1.0 + b / 100.0
+        points.append(
+            {
+                "date": r["date"],
+                "symbol": r["symbol"],
+                "equity": round(equity, 2),
+                "benchmark": round(bench_equity, 2),
+            }
+        )
+    return {
+        "available": True,
+        "n": len(scored),
+        "start": start,
+        "final_equity": round(equity, 2),
+        "total_return_pct": round((equity / start - 1.0) * 100, 2),
+        "benchmark_return_pct": round((bench_equity / start - 1.0) * 100, 2),
+        "benchmark": DEFAULT_BENCHMARK,
+        "points": points,
+    }

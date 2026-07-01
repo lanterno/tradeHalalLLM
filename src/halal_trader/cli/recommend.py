@@ -46,7 +46,9 @@ def _pct(v: Any) -> str:
     return f"{v:+.2f}%" if isinstance(v, int | float) else "—"
 
 
-def _print_scorecard(sc: dict[str, Any], backfill: dict[str, int]) -> None:
+def _print_scorecard(
+    sc: dict[str, Any], backfill: dict[str, int], whatif: dict[str, Any]
+) -> None:
     from rich.panel import Panel
 
     if not sc.get("available"):
@@ -79,6 +81,14 @@ def _print_scorecard(sc: dict[str, Any], backfill: dict[str, int]) -> None:
         f"({best.get('date', '')})   "
         f"Worst: [red]{worst.get('symbol', '—')} {_pct(worst.get('fwd_5d'))}[/red] "
         f"({worst.get('date', '')})\n"
+    )
+    if whatif.get("available"):
+        body += (
+            f"What-if (took every pick): "
+            f"[bold]{_pct(whatif.get('total_return_pct'))}[/bold] vs "
+            f"{sc.get('benchmark', 'bench')} {_pct(whatif.get('benchmark_return_pct'))}\n"
+        )
+    body += (
         f"[dim]backfill: {backfill.get('updated', 0)} updated, "
         f"{backfill.get('scored', 0)} newly scored[/dim]"
     )
@@ -126,6 +136,7 @@ def recommend(show: bool, scorecard: bool) -> None:
             from halal_trader.recommendation.scorecard import (
                 backfill_outcomes,
                 compute_scorecard,
+                whatif_equity_curve,
             )
 
             mcp = AlpacaMCPClient()
@@ -136,7 +147,8 @@ def recommend(show: bool, scorecard: bool) -> None:
             finally:
                 await mcp.disconnect()
             sc = await compute_scorecard(repo)
-            _print_scorecard(sc, res)
+            wc = await whatif_equity_curve(repo)
+            _print_scorecard(sc, res, wc)
             return
 
         from halal_trader.mcp.client import AlpacaMCPClient
