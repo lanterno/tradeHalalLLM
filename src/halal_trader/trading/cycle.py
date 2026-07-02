@@ -310,6 +310,19 @@ class TradingCycleService(BaseCycleService):
                     halal_symbols = [
                         s for s in halal_symbols if s.upper() not in droppable
                     ]
+                    # Also drop their market-data sections — the 11:00
+                    # cycle showed the model mining buy candidates out
+                    # of any context that still renders them (it
+                    # proposed gated ADBE from the RECENTLY CLOSED
+                    # block alone). Keep the exit-history line (it
+                    # explains the absence); remove the price action
+                    # that invites a fresh thesis.
+                    snapshots = {
+                        s: v for s, v in snapshots.items() if s.upper() not in droppable
+                    }
+                    bars = {
+                        s: v for s, v in bars.items() if s.upper() not in droppable
+                    }
                     logger.info(
                         "Buy universe filtered: %s inside executor gates "
                         "(%d symbol(s) remain)",
