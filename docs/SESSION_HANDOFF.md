@@ -1,4 +1,19 @@
-# Session handoff — 2026-07-01 (evening ET)
+# Session handoff — updated 2026-07-02 ~02:15 CEST
+
+**UPDATE**: GLM_API_KEY is set (OpenRouter, $10 credit). Live smoke test
+PASSED all three hot-path compat points (json_object 1.5s, forced
+tool_choice honoring schema 2.5s, classifier@temp0 0.8s, ~$0.0005
+total). Stocks bot restarted on the GLM code at 02:06 CEST — startup
+clean (`LLM: GLM z-ai/glm-5.2 via https://openrouter.ai/api/v1`),
+idle until Thu 2026-07-02 09:30 ET open. First LIVE market cycle on GLM
+still needs eyeballing at open. NEW FINDING: the crypto launchd daemon
+(com.halabot.crypto, running since Jun 12 on pre-cutover code) fails
+every 60s cycle since 07-01 18:34 CEST — Binance API keys are EMPTY in
+.env (empty before the cutover too; not caused by it). Operator
+decision pending: supply testnet keys + restart crypto, or stop the
+daemon. Do not disable unilaterally.
+
+# Original handoff — 2026-07-01 (evening ET)
 
 Briefing for continuing the working session on another machine. Give this
 file to Claude Code at the start of the new session ("read
