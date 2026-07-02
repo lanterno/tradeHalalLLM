@@ -523,6 +523,45 @@ def _format_capacity(open_count: int, max_count: int) -> str:
     )
 
 
+def _format_symbol_headroom(
+    positions: list[Position],
+    portfolio_value: float,
+    max_position_pct: float,
+) -> str:
+    """Per-held-symbol dollar headroom under the cumulative size cap.
+
+    Observed 2026-07-02 12:15 ET: the model proposed a third ADBE add
+    ($9.9k on top of $18.1k held) and the executor's 20% cumulative cap
+    rejected it — but a ~$1.7k add would have FIT. Without headroom
+    numbers the model can only guess; with them it can size add-ons
+    that actually fill. Mirrors the executor's math exactly:
+    max_add = max_position_pct * portfolio_value − held_value.
+    """
+    if not positions or portfolio_value <= 0 or max_position_pct <= 0:
+        return ""
+    cap_usd = max_position_pct * portfolio_value
+    lines = [
+        f"Per-symbol size cap: {max_position_pct:.0%} of equity "
+        f"(≈${cap_usd:,.0f} per name, held value + new buy combined). "
+        "Add-on buys beyond a symbol's headroom WILL BE REJECTED — size "
+        "any add-on at or below its headroom:"
+    ]
+    for p in positions:
+        held = p.qty * p.current_price
+        headroom = cap_usd - held
+        if headroom <= 0:
+            lines.append(
+                f"  {p.symbol}: ${held:,.0f} held ({held / portfolio_value:.1%}) "
+                f"— AT CAP, do not propose adds"
+            )
+        else:
+            lines.append(
+                f"  {p.symbol}: ${held:,.0f} held ({held / portfolio_value:.1%}) "
+                f"— max add ≈ ${headroom:,.0f}"
+            )
+    return "\n".join(lines)
+
+
 def _format_snapshots(snapshots: dict[str, Any]) -> str:
     if not snapshots:
         return "No snapshot data available."
@@ -669,8 +708,15 @@ class TradingStrategy(BaseStrategy):
             today_pnl=today_pnl,
             today_pnl_pct=today_pnl_pct,
             positions_text=_format_positions(positions, holding_minutes_by_symbol),
-            capacity_text=_format_capacity(
-                len(positions), self._max_simultaneous_positions
+            capacity_text="\n".join(
+                part
+                for part in (
+                    _format_capacity(len(positions), self._max_simultaneous_positions),
+                    _format_symbol_headroom(
+                        positions, portfolio_value, self._max_position_pct
+                    ),
+                )
+                if part
             ),
             sector_text=_format_sector_exposure(
                 positions, portfolio_value, self._max_sector_pct

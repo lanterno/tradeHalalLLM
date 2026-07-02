@@ -190,3 +190,40 @@ def test_system_prompt_has_transaction_cost_rule():
     assert "HARD EXECUTOR GATE" in SYSTEM_PROMPT
     assert "LONGEST-held position" in SYSTEM_PROMPT
     assert "Stop-loss exits" in SYSTEM_PROMPT  # monitor path still mentioned
+
+
+def test_symbol_headroom_shows_max_add():
+    """2026-07-02 12:15 ET: a third ADBE add was cap-rejected when a
+    smaller one would have fit — the model needs the actual headroom."""
+    from halal_trader.domain.models import Position
+    from halal_trader.trading.strategy import _format_symbol_headroom
+
+    positions = [
+        Position(symbol="ADBE", qty=82, current_price=220.0),   # $18,040 held
+        Position(symbol="INTU", qty=36, current_price=275.0),   # $9,900 held
+    ]
+    out = _format_symbol_headroom(positions, 100_000.0, 0.20)
+    assert "20% of equity" in out
+    assert "ADBE: $18,040 held (18.0%) — max add ≈ $1,960" in out
+    assert "INTU: $9,900 held (9.9%) — max add ≈ $10,100" in out
+    assert "WILL BE REJECTED" in out
+
+
+def test_symbol_headroom_flags_at_cap():
+    from halal_trader.domain.models import Position
+    from halal_trader.trading.strategy import _format_symbol_headroom
+
+    positions = [Position(symbol="AAPL", qty=100, current_price=210.0)]  # $21k > 20% cap
+    out = _format_symbol_headroom(positions, 100_000.0, 0.20)
+    assert "AAPL: $21,000 held (21.0%) — AT CAP, do not propose adds" in out
+
+
+def test_symbol_headroom_empty_inputs_render_nothing():
+    from halal_trader.trading.strategy import _format_symbol_headroom
+
+    assert _format_symbol_headroom([], 100_000.0, 0.20) == ""
+    from halal_trader.domain.models import Position
+
+    pos = [Position(symbol="X", qty=1, current_price=1.0)]
+    assert _format_symbol_headroom(pos, 0.0, 0.20) == ""
+    assert _format_symbol_headroom(pos, 100_000.0, 0.0) == ""
