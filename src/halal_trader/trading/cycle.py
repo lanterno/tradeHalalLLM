@@ -248,10 +248,11 @@ class TradingCycleService(BaseCycleService):
             )
             return
 
-        # Surface the last hour of closed BUYs to the LLM so it can
-        # see what it just exited and avoid same-thesis re-buys. Empty
-        # / failing fetch degrades to the default "no recent closes"
-        # string — never aborts the cycle.
+        # Surface recent exits + their hard buy-gate status to the LLM
+        # so it stops proposing mechanically-blocked re-buys (observed
+        # 2026-07-02: ADBE/INTU proposed and auto-rejected on consecutive
+        # cycles). Empty / failing fetch degrades to the default
+        # "no recent closes" string — never aborts the cycle.
         recent_closed_text = "No closed trades in the last 60 min."
         slippage_text = "No slippage data yet."
         learnings_text = "No prior observations yet."
@@ -273,8 +274,24 @@ class TradingCycleService(BaseCycleService):
 
             repos = RepoBundle.from_engine(self._engine) if self._engine else None
             if repos is not None:
-                rows = await repos.trades.get_recently_closed(minutes=60)
-                recent_closed_text = _format_recent_closed(rows)
+                # Fetch the FULL gate horizon (stop-loss re-entry is the
+                # longest window), not just 60 min — otherwise a symbol
+                # in minutes 61-120 of its re-entry gate vanishes from
+                # the prompt while the executor still rejects it.
+                close_cd = int(
+                    getattr(self._executor, "_recent_close_cooldown_minutes", 30)
+                )
+                reentry_cd = int(
+                    getattr(self._executor, "_stop_loss_reentry_cooldown_minutes", 120)
+                )
+                rows = await repos.trades.get_recently_closed(
+                    minutes=max(60, close_cd, reentry_cd)
+                )
+                recent_closed_text = _format_recent_closed(
+                    rows,
+                    close_cooldown_min=close_cd,
+                    reentry_cooldown_min=reentry_cd,
+                )
                 recent_trades = await repos.trades.get_recent_trades(limit=20)
                 slippage_text = _format_slippage(
                     [r for r in recent_trades if (r.get("side") or "").lower() == "buy"]

@@ -36,20 +36,47 @@ def test_empty_rows_returns_default():
 
 def test_single_recent_close_rendered():
     out = _format_recent_closed([_row("AMZN", 15)])
-    # Header pins the strong-wording version (see commit history —
-    # "Avoid re-entering" was too soft; LLM ignored CSCO re-buy warning
-    # on cycle-a4c37015, prompting the upgrade to "DO NOT re-buy").
-    assert "DO NOT re-buy" in out
+    # Header pins the hard-gate wording (third escalation: "Avoid
+    # re-entering" → "DO NOT re-buy" → mechanical AUTO-REJECTED framing,
+    # after GLM argued past the soft version on 2026-07-02 and burned
+    # consecutive cycles on gated ADBE/INTU buys).
+    assert "AUTO-REJECTED" in out
     assert "AMZN" in out
     assert "15 min ago" in out
 
 
-def test_header_requires_measurable_structure_change():
-    """The header must give the LLM an explicit non-noise out so it
-    doesn't read the warning as absolute and start hallucinating."""
+def test_header_offers_alternatives_not_just_prohibition():
+    """The header must direct the LLM toward viable actions (other
+    halal symbols / hold) so the block reads as guidance, not noise."""
     out = _format_recent_closed([_row("AMZN", 15)])
-    assert "MEASURABLY changed" in out
     assert "halal symbol" in out
+    assert "FRESH" in out
+
+
+def test_gate_flag_inside_close_cooldown():
+    """An exit 15 min ago with a 30-min cooldown shows ~15 min remaining."""
+    out = _format_recent_closed([_row("INTU", 15)], close_cooldown_min=30)
+    assert "⛔ BUY BLOCKED ~15 more min" in out
+
+
+def test_gate_flag_stop_loss_uses_longer_reentry_window():
+    """A stop-out 60 min ago is PAST the 30-min close cooldown but still
+    inside the 120-min re-entry gate — the flag must reflect the gate
+    the executor will actually apply."""
+    row = _row("ADBE", 60)
+    row["exit_reason"] = "stop_loss"
+    out = _format_recent_closed([row], close_cooldown_min=30, reentry_cooldown_min=120)
+    assert "⛔ BUY BLOCKED ~60 more min" in out
+
+
+def test_no_gate_flag_once_window_elapsed():
+    out = _format_recent_closed([_row("MSFT", 45)], close_cooldown_min=30)
+    assert "BUY BLOCKED" not in out.split("\n")[1]  # row line carries no flag
+    # Stop-out past its full window is also clean.
+    row = _row("ADBE", 130)
+    row["exit_reason"] = "stop_loss"
+    out = _format_recent_closed([row], close_cooldown_min=30, reentry_cooldown_min=120)
+    assert "BUY BLOCKED" not in out.split("\n")[1]
 
 
 def test_pnl_pct_included_when_prices_present():

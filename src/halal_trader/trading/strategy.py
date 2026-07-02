@@ -282,14 +282,23 @@ def _format_learnings(observations: list[str]) -> str:
     return "\n".join(lines)
 
 
-def _format_recent_closed(rows: list[dict[str, Any]]) -> str:
-    """Render the last hour of closed BUYs so the LLM can see what it
-    just exited and avoid re-buying the same symbol on a similar thesis.
+def _format_recent_closed(
+    rows: list[dict[str, Any]],
+    *,
+    close_cooldown_min: int = 30,
+    reentry_cooldown_min: int = 120,
+) -> str:
+    """Render recent exits WITH their hard buy-gate status.
 
     Observed 2026-05-21 13:00→13:30: bought AMZN, sold AMZN 15 min
-    later, bought AMZN BACK 15 min after that. Same ticker, same
-    rationale, 30 min churn. The prompt only shows current positions
-    so the LLM couldn't see its own recent exit history.
+    later, bought AMZN BACK 15 min after that — the prompt couldn't see
+    its own exit history. Then observed 2026-07-02 09:45→10:00: the
+    soft "don't re-buy unless structure changed" wording let the LLM
+    argue its way back into ADBE/INTU on consecutive cycles, and every
+    proposal was auto-rejected by the executor gates — wasted cycles.
+    Symbols still inside a gate window are therefore marked as
+    MECHANICALLY BLOCKED with the remaining minutes; the executor gates
+    stay authoritative (this rendering is advisory only).
     """
     if not rows:
         return "No closed trades in the last 60 min."
@@ -297,10 +306,11 @@ def _format_recent_closed(rows: list[dict[str, Any]]) -> str:
 
     now = datetime.now(UTC)
     lines = [
-        "⚠ DO NOT re-buy these symbols this cycle UNLESS market structure has "
-        "MEASURABLY changed since exit (fresh breakout level, new catalyst, "
-        "regime shift). Re-entering on the same macro thesis is whipsaw — "
-        "pick a different halal symbol instead:"
+        "⛔ Symbols marked BUY BLOCKED are inside a mechanical cooldown — any "
+        "buy you propose for them is AUTO-REJECTED by the executor and wastes "
+        "one of this cycle's actions. Do not propose them; pick a different "
+        "halal symbol or hold. Symbols past their window still need a FRESH "
+        "thesis (new catalyst / structure), not the one that already exited:"
     ]
     for row in rows[:8]:  # cap to keep prompt compact
         symbol = row.get("symbol") or "?"
@@ -325,9 +335,19 @@ def _format_recent_closed(rows: list[dict[str, Any]]) -> str:
         if entry and exit_p:
             pnl_pct = f" P&L: {(float(exit_p) - float(entry)) / float(entry):+.2%}"
         reason_str = f" ({reason})" if reason else ""
+        # Mirror the executor's two gates: stop-outs carry the longer
+        # re-entry window; every other exit carries the close cooldown.
+        gate_flag = ""
+        if mins_ago is not None:
+            window = (
+                reentry_cooldown_min if reason == "stop_loss" else close_cooldown_min
+            )
+            remaining = window - mins_ago
+            if remaining > 0:
+                gate_flag = f"  ⛔ BUY BLOCKED ~{remaining:.0f} more min (auto-rejected)"
         lines.append(
             f"  {symbol}: closed {ago} · {qty:g} @ "
-            f"${float(entry):.2f}→${float(exit_p):.2f}{pnl_pct}{reason_str}"
+            f"${float(entry):.2f}→${float(exit_p):.2f}{pnl_pct}{reason_str}{gate_flag}"
         )
     return "\n".join(lines)
 
