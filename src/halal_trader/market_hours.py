@@ -80,18 +80,35 @@ US_MARKET_HOLIDAYS: frozenset[date] = frozenset(
 EARLY_CLOSE_DATES: frozenset[date] = frozenset(
     {
         # Markets close at 1:00 PM ET on these days.
+        #
+        # NYSE rule of thumb: the 1pm early close applies to July 3
+        # ONLY when July 4 falls Tue–Sat (i.e. July 3 is a weekday
+        # session); when July 4 falls on a Saturday the holiday is
+        # observed Friday July 3 (full closure) and Thursday July 2 is
+        # a NORMAL full session — there is no "day before the observed
+        # holiday" early close (cf. 2015, 2020 full sessions on July 2).
+        # Same for Christmas: Dec 24 early-closes only when it's a
+        # weekday session; Dec 23 is never an early close (cf. 2021).
+        # Live incident 2026-07-02 12:30 ET: a wrong entry here engaged
+        # the close lockout 3h early and would have stopped the cycle
+        # AND the SL/TP monitor at 13:00 with positions open. The
+        # broker clock said 16:00 all along — keep this table matched
+        # to the official NYSE calendar, not derived rules.
         # ── 2025 ─────────────────────────────────────────────
-        date(2025, 7, 3),  # Day before Independence Day
+        date(2025, 7, 3),  # July 4 is a Friday → July 3 half day
         date(2025, 11, 28),  # Day after Thanksgiving
-        date(2025, 12, 24),  # Christmas Eve
+        date(2025, 12, 24),  # Christmas Eve (Wednesday)
         # ── 2026 ─────────────────────────────────────────────
-        date(2026, 7, 2),  # Day before Independence Day (observed)
+        # July 4 falls Saturday → observed Fri Jul 3 (closed);
+        # Thu Jul 2 is a FULL session, no early close.
         date(2026, 11, 27),  # Day after Thanksgiving
-        date(2026, 12, 24),  # Christmas Eve
+        date(2026, 12, 24),  # Christmas Eve (Thursday)
         # ── 2027 ─────────────────────────────────────────────
-        date(2027, 7, 2),  # Day before Independence Day (observed)
+        # July 4 falls Sunday → observed Mon Jul 5 (closed);
+        # Fri Jul 2 is a FULL session, no early close.
         date(2027, 11, 26),  # Day after Thanksgiving
-        date(2027, 12, 23),  # Day before Christmas (observed)
+        # Dec 25, 2027 falls Saturday → observed Fri Dec 24 (closed);
+        # Thu Dec 23 is a FULL session, no early close.
     }
 )
 
