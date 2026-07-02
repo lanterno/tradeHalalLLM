@@ -355,6 +355,11 @@ async def build_components(
     alerts = AlertSink(notifier)
     if notifier.enabled:
         logger.info("Telegram notifications enabled")
+    # Operator alert on strategy-LLM credit exhaustion. Attached after
+    # construction because the sink is built later than the strategy
+    # (mirrors BaseLLM.attach_bus). The shadow strategy stays unwired —
+    # a frozen replica shouldn't page the operator.
+    strategy.attach_alert_sink(alerts)
 
     sentiment_manager = _build_sentiment(settings)
     # Wave C: the bot's run() loop wires `sentiment_manager.run()` into

@@ -12,6 +12,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from halal_trader.core.llm.budget import LLMBudget
+from halal_trader.core.llm.quota import is_quota_error
 from halal_trader.core.tracing import tracer
 from halal_trader.db.repos import LlmDecisionRepo
 from halal_trader.domain.ports import LLMBackend
@@ -78,6 +79,20 @@ class BaseStrategy(ABC):
         self._daily_return_target = daily_return_target
         self._max_simultaneous_positions = max_simultaneous_positions
         self._llm_budget = llm_budget
+        # Optional operator alerter (AlertSink) — attached by the
+        # composition root after construction (mirrors BaseLLM.attach_bus;
+        # the crypto root builds its AlertSink after the strategy).
+        self._alert_sink: Any | None = None
+
+    def attach_alert_sink(self, sink: Any) -> None:
+        """Wire the rate-limited operator AlertSink for LLM credit alerts.
+
+        Without it, credit exhaustion on the strategy LLM only reaches
+        the logs — the classifier's quota breaker alerts, but the
+        strategy path (the one that actually trades) stayed silent
+        through the 2026-06 OpenAI 429 storm.
+        """
+        self._alert_sink = sink
 
     async def _run_llm_analysis(
         self,
@@ -199,6 +214,20 @@ class BaseStrategy(ABC):
                 execution_ms=elapsed_ms,
                 prompt_version=prompt_version,
             )
+            if self._alert_sink is not None and is_quota_error(e):
+                # Credit exhaustion is non-transient: without a top-up
+                # every subsequent cycle degrades to a no-action plan.
+                # AlertSink rate-limits per error_type (15-min window),
+                # so 15-min/60s cycle cadences can't spam Telegram.
+                try:
+                    await self._alert_sink.notify(
+                        "llm.quota_exhausted",
+                        f"Strategy LLM out of credits "
+                        f"({self._llm_provider_name}/{self._llm.model}): {e}. "
+                        f"Cycles degrade to no-action plans until topped up.",
+                    )
+                except Exception as alert_err:  # noqa: BLE001 — alerting must never break the cycle
+                    logger.warning("quota alert failed to send: %s", alert_err)
             return make_empty(str(e))
 
     async def _validate_with_repair(

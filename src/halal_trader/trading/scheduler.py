@@ -144,6 +144,10 @@ class TradingBot(BaseTradingBot):
             agentic_max_seconds=self.settings.stocks.agentic_max_seconds,
             agentic_hub=None,
         )
+        # Operator alert on strategy-LLM credit exhaustion (rate-limited
+        # by the sink). The classifier already had this; the strategy
+        # path stayed silent through the 2026-06 quota storm.
+        strategy.attach_alert_sink(self._alerts)
         self.executor = TradeExecutor(
             self.broker,
             repo,

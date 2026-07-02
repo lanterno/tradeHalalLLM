@@ -429,9 +429,6 @@ class StockNewsEventReactor:
 # ── Default LLM classifier (GLM wrapper) ────────────────────────
 
 
-# OpenAI-compat shape ("insufficient_quota") plus OpenRouter's 402
-# "Insufficient credits" — matched case-insensitively below.
-_QUOTA_ERROR_MARKERS = ("insufficient_quota", "exceeded your current quota", "insufficient credits")
 # Default per-UTC-day call ceiling — pure cost backstop (see config.py).
 # Raised 250 -> 1500 on 2026-06-09: a full day is ~700-1000 DISTINCT
 # headlines, so 250 silently starved the reactor once dedup stopped
@@ -450,8 +447,9 @@ def _is_quota_exhausted(error: Exception) -> bool:
     """True when the provider says we're out of credits (vs a rate
     limit / transient 5xx). Quota exhaustion is irrecoverable inside a
     session — the credit gets topped up by a human, not by waiting."""
-    msg = str(error).lower()
-    return any(marker in msg for marker in _QUOTA_ERROR_MARKERS)
+    from halal_trader.core.llm.quota import is_quota_error
+
+    return is_quota_error(error)
 
 
 class GPTHeadlineClassifier:

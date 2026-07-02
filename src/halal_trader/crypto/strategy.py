@@ -121,17 +121,11 @@ class CryptoTradingStrategy(BaseStrategy):
 
         # Credit exhaustion is non-transient — every retry fails with
         # the same error and burns API attempts. Trip cooldown
-        # immediately + log loudly so the operator can top up. Match by
-        # error-message substring because the SDK exception class isn't
-        # always surfaced through our wrapper layers. Markers cover the
-        # OpenAI-compat shape ("insufficient_quota") and OpenRouter's
-        # 402 "Insufficient credits".
-        err_text = str(error)
-        if (
-            "insufficient_quota" in err_text
-            or "exceeded your current quota" in err_text
-            or "insufficient credits" in err_text.lower()
-        ):
+        # immediately + log loudly so the operator can top up (the base
+        # class additionally fires the rate-limited operator alert).
+        from halal_trader.core.llm.quota import is_quota_error
+
+        if is_quota_error(error):
             self._llm_cooldown_until = time.monotonic() + self._llm_cooldown_seconds
             logger.critical(
                 "LLM provider account out of credits — top up to resume trading "
