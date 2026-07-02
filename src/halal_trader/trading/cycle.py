@@ -270,6 +270,7 @@ class TradingCycleService(BaseCycleService):
                 _format_learnings,
                 _format_recent_closed,
                 _format_slippage,
+                gated_buy_symbols,
             )
 
             repos = RepoBundle.from_engine(self._engine) if self._engine else None
@@ -292,6 +293,29 @@ class TradingCycleService(BaseCycleService):
                     close_cooldown_min=close_cd,
                     reentry_cooldown_min=reentry_cd,
                 )
+                # Drop gated symbols from the buy universe shown to the
+                # LLM — three wording escalations later (2026-07-02
+                # 10:15 cycle) the model still proposed flagged symbols,
+                # so they simply can't be presented as buyable. Held
+                # symbols stay visible for position management; the
+                # executor gates remain authoritative either way.
+                gated = gated_buy_symbols(
+                    rows,
+                    close_cooldown_min=close_cd,
+                    reentry_cooldown_min=reentry_cd,
+                )
+                held = {p.symbol.upper() for p in positions}
+                droppable = (gated - held) & {s.upper() for s in halal_symbols}
+                if droppable:
+                    halal_symbols = [
+                        s for s in halal_symbols if s.upper() not in droppable
+                    ]
+                    logger.info(
+                        "Buy universe filtered: %s inside executor gates "
+                        "(%d symbol(s) remain)",
+                        ", ".join(sorted(droppable)),
+                        len(halal_symbols),
+                    )
                 recent_trades = await repos.trades.get_recent_trades(limit=20)
                 slippage_text = _format_slippage(
                     [r for r in recent_trades if (r.get("side") or "").lower() == "buy"]

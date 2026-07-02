@@ -282,6 +282,76 @@ def _format_learnings(observations: list[str]) -> str:
     return "\n".join(lines)
 
 
+def _gate_remaining_minutes(
+    row: dict[str, Any],
+    now: Any,
+    *,
+    close_cooldown_min: int,
+    reentry_cooldown_min: int,
+) -> float | None:
+    """Minutes left inside the executor buy-gate for one closed-trade row.
+
+    Mirrors the executor's two gates (stop-outs carry the longer
+    re-entry window; every other exit carries the close cooldown).
+    Returns None when the row is past its window or undateable.
+    """
+    from datetime import UTC, datetime
+
+    closed_at = row.get("closed_at")
+    if isinstance(closed_at, str):
+        try:
+            closed_at = datetime.fromisoformat(closed_at.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    if not isinstance(closed_at, datetime):
+        return None
+    if closed_at.tzinfo is None:
+        closed_at = closed_at.replace(tzinfo=UTC)
+    mins_ago = (now - closed_at).total_seconds() / 60.0
+    window = (
+        reentry_cooldown_min
+        if str(row.get("exit_reason") or "") == "stop_loss"
+        else close_cooldown_min
+    )
+    remaining = window - mins_ago
+    return remaining if remaining > 0 else None
+
+
+def gated_buy_symbols(
+    rows: list[dict[str, Any]],
+    *,
+    close_cooldown_min: int = 30,
+    reentry_cooldown_min: int = 120,
+) -> set[str]:
+    """Symbols currently inside an executor buy-gate window.
+
+    Used by the cycle to drop gated names from the buy universe shown
+    to the LLM. Escalation history: soft wording (2026-05-21), 'DO NOT
+    re-buy' (2026-05-22), and the mechanical '⛔ AUTO-REJECTED' flag
+    (2026-07-02 16:09) were ALL argued past by the model — the 10:15 ET
+    cycle proposed both gated symbols with the flags plainly rendered.
+    A symbol the model must not buy simply cannot be presented as
+    buyable. The executor gates stay authoritative regardless.
+    """
+    from datetime import UTC, datetime
+
+    now = datetime.now(UTC)
+    gated: set[str] = set()
+    for row in rows:
+        symbol = str(row.get("symbol") or "").upper()
+        if not symbol:
+            continue
+        remaining = _gate_remaining_minutes(
+            row,
+            now,
+            close_cooldown_min=close_cooldown_min,
+            reentry_cooldown_min=reentry_cooldown_min,
+        )
+        if remaining is not None:
+            gated.add(symbol)
+    return gated
+
+
 def _format_recent_closed(
     rows: list[dict[str, Any]],
     *,
@@ -335,16 +405,15 @@ def _format_recent_closed(
         if entry and exit_p:
             pnl_pct = f" P&L: {(float(exit_p) - float(entry)) / float(entry):+.2%}"
         reason_str = f" ({reason})" if reason else ""
-        # Mirror the executor's two gates: stop-outs carry the longer
-        # re-entry window; every other exit carries the close cooldown.
         gate_flag = ""
-        if mins_ago is not None:
-            window = (
-                reentry_cooldown_min if reason == "stop_loss" else close_cooldown_min
-            )
-            remaining = window - mins_ago
-            if remaining > 0:
-                gate_flag = f"  ⛔ BUY BLOCKED ~{remaining:.0f} more min (auto-rejected)"
+        remaining = _gate_remaining_minutes(
+            row,
+            now,
+            close_cooldown_min=close_cooldown_min,
+            reentry_cooldown_min=reentry_cooldown_min,
+        )
+        if remaining is not None:
+            gate_flag = f"  ⛔ BUY BLOCKED ~{remaining:.0f} more min (auto-rejected)"
         lines.append(
             f"  {symbol}: closed {ago} · {qty:g} @ "
             f"${float(entry):.2f}→${float(exit_p):.2f}{pnl_pct}{reason_str}{gate_flag}"

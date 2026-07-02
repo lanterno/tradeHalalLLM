@@ -114,3 +114,29 @@ def test_capped_at_eight_rows():
     out = _format_recent_closed(rows)
     # The warning header is line 1, so 1 + 8 = 9 lines max.
     assert out.count("\n") <= 8
+
+
+def test_gated_buy_symbols_mirrors_gate_windows():
+    from halal_trader.trading.strategy import gated_buy_symbols
+
+    rows = [
+        _row("INTU", 15),  # inside 30-min close cooldown
+        _row("MSFT", 45),  # past it
+    ]
+    sl = _row("ADBE", 60)
+    sl["exit_reason"] = "stop_loss"  # past close cooldown, inside re-entry gate
+    rows.append(sl)
+    old_sl = _row("NVDA", 130)
+    old_sl["exit_reason"] = "stop_loss"  # past both
+    rows.append(old_sl)
+
+    gated = gated_buy_symbols(rows, close_cooldown_min=30, reentry_cooldown_min=120)
+    assert gated == {"INTU", "ADBE"}
+
+
+def test_gated_buy_symbols_handles_bad_rows():
+    from halal_trader.trading.strategy import gated_buy_symbols
+
+    assert gated_buy_symbols([]) == set()
+    assert gated_buy_symbols([{"symbol": "", "closed_at": None}]) == set()
+    assert gated_buy_symbols([{"symbol": "X", "closed_at": "not-a-date"}]) == set()
