@@ -162,3 +162,40 @@ async def test_router_ignores_assetless_and_unknown_safely():
     # A heartbeat with no known assets yet must not raise.
     await bus.publish(new_event(clock, EventType.SYSTEM_HEARTBEAT, source="heartbeat"))
     assert await store.all_active() == []
+
+
+@pytest.mark.asyncio
+async def test_macro_observation_lands_in_catalysts_pending():
+    """observation.macro → router side-channel → BeliefState.catalysts_pending
+    (Task B slice 1 — the formerly dormant seam, end to end through the bus)."""
+    bus, clock, store, captured = _build()
+    scheduled = (T0 + timedelta(days=2)).isoformat()
+    await bus.publish(
+        new_event(
+            clock, EventType.OBSERVATION_MACRO, source="macro-catalysts", asset="NVDA",
+            payload={"kind": "CPI", "asset": "NVDA", "scheduled_for": scheduled,
+                     "expected_impact": 0.9, "actual": None, "consensus": None,
+                     "detail": "CPI release"},
+        )
+    )
+    b = await store.get("NVDA")
+    assert b is not None
+    assert [c.kind for c in b.catalysts_pending] == ["CPI"]
+    assert b.catalysts_pending[0].expected_impact == pytest.approx(0.9)
+    assert any(
+        e.type == EventType.BELIEF_UPDATED and e.source == "belief.catalyst" for e in captured
+    )
+
+
+@pytest.mark.asyncio
+async def test_malformed_macro_observation_dropped_without_belief():
+    bus, clock, store, captured = _build()
+    await bus.publish(
+        new_event(
+            clock, EventType.OBSERVATION_MACRO, source="macro-catalysts", asset="NVDA",
+            payload={"kind": "CPI", "asset": "NVDA", "scheduled_for": "not-a-date",
+                     "expected_impact": 0.9, "actual": None, "consensus": None},
+        )
+    )
+    assert await store.get("NVDA") is None
+    assert captured == []

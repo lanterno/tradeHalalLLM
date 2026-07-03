@@ -25,6 +25,7 @@ from uuid import UUID
 from halabot.belief.evidence import Calendar, decay, has_flag, merge, weighted_sum
 from halabot.belief.schema import (
     BeliefState,
+    Catalyst,
     ComplianceVerdict,
     Direction,
     EvidenceItem,
@@ -98,14 +99,20 @@ def material_shift(
         return True  # regime flip
     if band_index(prev.conviction_raw) != band_index(new_raw):
         return True  # crossed a raw-conviction band edge
-    # NOTE: catalyst-driven refresh is a wired-but-dormant SEAM — no current
-    # interpreter/source populates catalysts_pending (a macro→Catalyst producer
-    # consuming OBSERVATION_MACRO lands later), so this branch is inert today.
-    if any(
-        c.is_imminent(now) and c.expected_impact >= catalyst_impact_threshold
-        for c in prev.catalysts_pending
-    ):
-        return True  # high-impact catalyst landing
+    # Catalyst-driven refresh (live since 2026-07-03 — MacroCatalystSource
+    # populates catalysts_pending via the router's macro side-channel).
+    # Throttled to ONE refresh per catalyst window: without this, every
+    # heartbeat decay-pass during the ±30min imminence window fanned out
+    # an LLM call per asset (adversarial review, 2026-07-03). A thesis
+    # written after the window opened counts as that window's refresh.
+    _window = timedelta(minutes=30)  # keep in sync with Catalyst.is_imminent
+    for c in prev.catalysts_pending:
+        if not (c.is_imminent(now) and c.expected_impact >= catalyst_impact_threshold):
+            continue
+        if prev.last_thesis_refresh is None or prev.last_thesis_refresh < (
+            c.scheduled_for - _window
+        ):
+            return True  # high-impact catalyst landing (first refresh this window)
     if has_open_position and prev.last_thesis_refresh is None:
         return True  # never wrote a thesis for a position we hold
     if (
@@ -194,6 +201,53 @@ class BeliefUpdater:
                 self.clock,
                 EventType.BELIEF_UPDATED,
                 source="belief.compliance",
+                asset=asset,
+                payload=_summary(b),
+                correlation_id=correlation_id,
+            )
+        )
+        return b
+
+    async def set_catalyst(
+        self,
+        asset: str,
+        catalyst: Catalyst,
+        now: datetime,
+        *,
+        correlation_id: UUID | None = None,
+    ) -> BeliefState:
+        """Register an upcoming catalyst on the asset's belief.
+
+        Activates the previously dormant seam consumed by
+        :meth:`material_shift`'s imminent-catalyst branch (spec B.3).
+        Mirrors :meth:`set_compliance`: get-or-neutral → mutate →
+        persist a new version → publish ``belief.updated``.
+
+        Housekeeping done here (the only write path for the list):
+        dedup on (kind, scheduled_for) — calendars re-emit the same
+        release; replace so a revised impact estimate wins — and prune
+        entries more than an hour past their schedule so the list can't
+        grow without bound.
+        """
+        b = await self.store.get(asset) or BeliefState.neutral(asset)
+        stale_before = now - timedelta(hours=1)
+        kept = [
+            c
+            for c in b.catalysts_pending
+            if c.scheduled_for >= stale_before
+            and not (c.kind == catalyst.kind and c.scheduled_for == catalyst.scheduled_for)
+        ]
+        kept.append(catalyst)
+        kept.sort(key=lambda c: c.scheduled_for)
+        b.catalysts_pending = kept
+        b.last_updated = now
+        version = await self.store.put(b)
+        b.version = version
+        await self.bus.publish(
+            new_event(
+                self.clock,
+                EventType.BELIEF_UPDATED,
+                source="belief.catalyst",
                 asset=asset,
                 payload=_summary(b),
                 correlation_id=correlation_id,

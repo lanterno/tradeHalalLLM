@@ -335,3 +335,115 @@ async def test_transient_error_on_held_does_not_force_exit():
         T0 + timedelta(minutes=1),
     )
     assert not any(e.type == EventType.BELIEF_INVALIDATED for e in events)
+
+
+# ── set_catalyst (Task B slice 1 — the previously dormant seam) ──
+
+
+def _cat(kind: str, at: datetime, impact: float = 0.9):
+    from halabot.belief.schema import Catalyst
+
+    return Catalyst(kind=kind, scheduled_for=at, expected_impact=impact, detail=f"{kind} release")
+
+
+@pytest.mark.asyncio
+async def test_set_catalyst_registers_and_publishes():
+    updater, store, events = _build()
+    b = await updater.set_catalyst("NVDA", _cat("CPI", T0 + timedelta(days=2)), T0)
+    assert [c.kind for c in b.catalysts_pending] == ["CPI"]
+    assert b.version == 1
+    stored = await store.get("NVDA")
+    assert stored is not None and len(stored.catalysts_pending) == 1
+    assert [e.type for e in events][-1] == EventType.BELIEF_UPDATED
+    assert events[-1].source == "belief.catalyst"
+
+
+@pytest.mark.asyncio
+async def test_set_catalyst_dedups_on_kind_and_schedule():
+    """Calendars re-emit the same release; a revised impact must replace,
+    not duplicate."""
+    updater, _, _ = _build()
+    at = T0 + timedelta(days=2)
+    await updater.set_catalyst("NVDA", _cat("CPI", at, impact=0.9), T0)
+    b = await updater.set_catalyst("NVDA", _cat("CPI", at, impact=0.7), T0)
+    assert len(b.catalysts_pending) == 1
+    assert b.catalysts_pending[0].expected_impact == pytest.approx(0.7)
+
+
+@pytest.mark.asyncio
+async def test_set_catalyst_prunes_expired_and_sorts():
+    updater, _, _ = _build()
+    await updater.set_catalyst(
+        "NVDA", _cat("CPI", T0 - timedelta(hours=3)), T0 - timedelta(hours=3)
+    )
+    await updater.set_catalyst("NVDA", _cat("GDP", T0 + timedelta(days=5)), T0)
+    b = await updater.set_catalyst("NVDA", _cat("NFP", T0 + timedelta(days=1)), T0)
+    # The 3h-stale CPI is pruned; the rest sort by schedule.
+    assert [c.kind for c in b.catalysts_pending] == ["NFP", "GDP"]
+
+
+@pytest.mark.asyncio
+async def test_imminent_catalyst_triggers_thesis_refresh():
+    """End-to-end through the formerly dormant material_shift branch:
+    an imminent high-impact catalyst + fresh evidence → thesis write."""
+    thesis = FakeThesis()
+    updater, _, _ = _build(
+        thesis=thesis, llm=FakeLLM(), config=UpdaterConfig(llm_thesis_enabled=True)
+    )
+    await updater.set_catalyst("NVDA", _cat("FOMC", T0 + timedelta(minutes=10), impact=0.9), T0)
+    await updater.apply_evidence("NVDA", [_ev(0.2)], T0 + timedelta(minutes=1))
+    assert thesis.calls >= 1
+
+
+@pytest.mark.asyncio
+async def test_low_impact_catalyst_does_not_trigger_refresh():
+    """Below-threshold impact must not fire the catalyst branch. The
+    baseline evidence pass first absorbs the first-update triggers
+    (regime assignment / band crossing) so the delta isolates the
+    catalyst branch."""
+    thesis = FakeThesis()
+    updater, _, _ = _build(
+        thesis=thesis, llm=FakeLLM(), config=UpdaterConfig(llm_thesis_enabled=True)
+    )
+    await updater.apply_evidence("NVDA", [_ev(0.05)], T0)
+    baseline = thesis.calls
+    await updater.set_catalyst("NVDA", _cat("GDP", T0 + timedelta(minutes=10), impact=0.3), T0)
+    await updater.apply_evidence("NVDA", [_ev(0.05)], T0 + timedelta(minutes=1))
+    assert thesis.calls == baseline
+
+
+@pytest.mark.asyncio
+async def test_catalyst_refresh_throttled_to_once_per_window():
+    """During the ±30min imminence window every heartbeat decay-pass hits
+    apply_evidence; without a throttle each one spent an LLM call
+    (adversarial review 2026-07-03). Exactly ONE refresh per window: the
+    first pass after the window opens, and none of the later ones."""
+    thesis = FakeThesis()
+    updater, _, _ = _build(
+        thesis=thesis, llm=FakeLLM(), config=UpdaterConfig(llm_thesis_enabled=True)
+    )
+    await updater.apply_evidence("NVDA", [_ev(0.05)], T0)  # absorb first-update triggers
+    baseline = thesis.calls
+    # Catalyst at T0+45 → window opens T0+15. Heartbeats before the window
+    # open must not fire; the first one inside it fires; the rest are quiet.
+    await updater.set_catalyst("NVDA", _cat("FOMC", T0 + timedelta(minutes=45), impact=0.9), T0)
+    await updater.apply_evidence("NVDA", [], T0 + timedelta(minutes=10))  # pre-window
+    assert thesis.calls == baseline
+    for m in (16, 25, 35, 45):  # four passes inside the window
+        await updater.apply_evidence("NVDA", [], T0 + timedelta(minutes=m))
+    assert thesis.calls == baseline + 1
+
+
+@pytest.mark.asyncio
+async def test_prewindow_thesis_does_not_starve_catalyst_refresh():
+    """A refresh shortly BEFORE the window opens (band cross, regime flip)
+    must not consume the catalyst window's one refresh."""
+    thesis = FakeThesis()
+    updater, _, _ = _build(
+        thesis=thesis, llm=FakeLLM(), config=UpdaterConfig(llm_thesis_enabled=True)
+    )
+    await updater.apply_evidence("NVDA", [_ev(0.05)], T0)  # writes a thesis at T0
+    baseline = thesis.calls
+    await updater.set_catalyst("NVDA", _cat("CPI", T0 + timedelta(minutes=45), impact=0.9), T0)
+    await updater.apply_evidence("NVDA", [], T0 + timedelta(minutes=20))  # in-window
+    assert thesis.calls == baseline + 1

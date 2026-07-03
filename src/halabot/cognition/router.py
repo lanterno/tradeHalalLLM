@@ -12,9 +12,9 @@ Read-only by construction (Phase 2): it produces beliefs, never orders.
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import UTC, datetime
 
-from halabot.belief.schema import ComplianceVerdict, EvidenceItem
+from halabot.belief.schema import Catalyst, ComplianceVerdict, EvidenceItem
 from halabot.belief.updater import BeliefUpdater
 from halabot.cognition.bars import Bar, BarBuffer
 from halabot.cognition.base import Interpreter
@@ -64,6 +64,7 @@ class CognitionRouter:
     def start(self) -> None:
         types = set(self._by_type) | {
             EventType.OBSERVATION_BAR,
+            EventType.OBSERVATION_MACRO,
             EventType.SYSTEM_HEARTBEAT,
             EventType.COMPLIANCE_VERDICT,
         }
@@ -127,6 +128,9 @@ class CognitionRouter:
         if event.type == EventType.COMPLIANCE_VERDICT:
             await self._on_compliance(event)
             return
+        if event.type == EventType.OBSERVATION_MACRO:
+            await self._on_macro(event)
+            return
 
         asset = event.asset
         if event.type == EventType.OBSERVATION_BAR and asset is not None:
@@ -177,6 +181,37 @@ class CognitionRouter:
         )
         await self._sink.compliance(
             asset, verdict, now=event.ts, correlation_id=event.correlation_id
+        )
+
+    async def _on_macro(self, event: Event) -> None:
+        """Fold a macro observation into ``catalysts_pending`` (spec B.3 seam).
+
+        Side-channel like compliance: a scheduled release is belief state,
+        not directional evidence, so it bypasses interpreters. Market-wide
+        events (asset=None) are legal per Appendix A but carry no belief to
+        attach to — sources fan out per-asset upstream; a None here is
+        dropped (matching the belief path's asset requirement).
+        """
+        asset = event.asset
+        if asset is None:
+            return
+        self._known_assets.add(asset)
+        p = event.payload
+        try:
+            scheduled_for = datetime.fromisoformat(str(p["scheduled_for"]))
+            if scheduled_for.tzinfo is None:  # naive producer → assume UTC
+                scheduled_for = scheduled_for.replace(tzinfo=UTC)
+            catalyst = Catalyst(
+                kind=str(p.get("kind", "macro")),
+                scheduled_for=scheduled_for,
+                expected_impact=max(0.0, min(1.0, float(p.get("expected_impact", 0.0)))),
+                detail=str(p.get("detail", ""))[:200],
+            )
+        except (KeyError, ValueError, TypeError) as exc:
+            logger.warning("macro event %s unparseable (dropped): %r", event.id, exc)
+            return
+        await self._sink.catalyst(
+            asset, catalyst, now=event.ts, correlation_id=event.correlation_id
         )
 
 

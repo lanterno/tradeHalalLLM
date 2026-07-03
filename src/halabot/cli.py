@@ -130,6 +130,20 @@ async def _run_shadow(
         )
         sources.append(news_source)
 
+    # Macro release calendar → observation.macro → catalysts_pending
+    # (Task B slice 1; spec L1 row macro/fred). Fresh legacy fetcher
+    # instance — never shared with the running stock bot.
+    fred_key = getattr(getattr(settings, "fred", None), "api_key", "") or ""
+    fred_fetcher = None
+    if fred_key:
+        from halabot.perception.sources.macro_catalysts import MacroCatalystSource
+        from halal_trader.trading.fred_catalysts import FREDReleaseCalendarSource
+
+        fred_fetcher = FREDReleaseCalendarSource(api_key=fred_key)
+        sources.append(
+            MacroCatalystSource(fred_fetcher, universe, clock, dedup_store=dedup)
+        )
+
     zoya_client = None
     if rescreen_compliance:
         from halabot.perception.sources.zoya_compliance import ZoyaComplianceSource
@@ -192,6 +206,8 @@ async def _run_shadow(
         await supervisor.stop()
         if news_source is not None:
             await news_source.aclose()
+        if fred_fetcher is not None:
+            await fred_fetcher.aclose()
         if zoya_client is not None:
             await zoya_client.close()
         await mcp.disconnect()

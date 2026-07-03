@@ -28,7 +28,7 @@ from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
-from halabot.belief.schema import ComplianceVerdict, EvidenceItem
+from halabot.belief.schema import Catalyst, ComplianceVerdict, EvidenceItem
 from halabot.belief.updater import BeliefUpdater
 
 logger = logging.getLogger(__name__)
@@ -48,6 +48,14 @@ class BeliefSink(Protocol):
         self,
         asset: str,
         verdict: ComplianceVerdict,
+        now: datetime,
+        *,
+        correlation_id: UUID | None = None,
+    ) -> None: ...
+    async def catalyst(
+        self,
+        asset: str,
+        catalyst: Catalyst,
         now: datetime,
         *,
         correlation_id: UUID | None = None,
@@ -83,6 +91,16 @@ class InlineBeliefSink:
     ) -> None:
         await self._u.set_compliance(asset, verdict, now, correlation_id=correlation_id)
 
+    async def catalyst(
+        self,
+        asset: str,
+        catalyst: Catalyst,
+        now: datetime,
+        *,
+        correlation_id: UUID | None = None,
+    ) -> None:
+        await self._u.set_catalyst(asset, catalyst, now, correlation_id=correlation_id)
+
 
 @dataclass
 class _Ev:
@@ -101,12 +119,20 @@ class _Co:
     correlation_id: UUID | None = None
 
 
+@dataclass
+class _Ca:
+    asset: str
+    catalyst: Catalyst
+    now: datetime
+    correlation_id: UUID | None = None
+
+
 class CoalescingBeliefWorker:
     """Single serial drain with per-asset ts-coalescing (see module docstring)."""
 
     def __init__(self, updater: BeliefUpdater) -> None:
         self._u = updater
-        self._q: asyncio.Queue[_Ev | _Co] = asyncio.Queue()
+        self._q: asyncio.Queue[_Ev | _Co | _Ca] = asyncio.Queue()
         self._task: asyncio.Task[None] | None = None
         # Serializes batch application so a concurrent drain() (e.g. --once flush
         # or a test) never races the background _run on the same belief version.
@@ -136,6 +162,17 @@ class CoalescingBeliefWorker:
         correlation_id: UUID | None = None,
     ) -> None:
         await self._q.put(_Co(asset, verdict, now, correlation_id))
+        self._signal.set()
+
+    async def catalyst(
+        self,
+        asset: str,
+        catalyst: Catalyst,
+        now: datetime,
+        *,
+        correlation_id: UUID | None = None,
+    ) -> None:
+        await self._q.put(_Ca(asset, catalyst, now, correlation_id))
         self._signal.set()
 
     def start(self) -> None:
@@ -178,9 +215,9 @@ class CoalescingBeliefWorker:
             if jobs:
                 await self._apply(jobs)
 
-    def _drain_batch(self) -> list[_Ev | _Co]:
+    def _drain_batch(self) -> list[_Ev | _Co | _Ca]:
         """Pop everything currently queued (non-blocking). Caller holds the lock."""
-        jobs: list[_Ev | _Co] = []
+        jobs: list[_Ev | _Co | _Ca] = []
         while True:
             try:
                 jobs.append(self._q.get_nowait())
@@ -188,7 +225,7 @@ class CoalescingBeliefWorker:
                 break
         return jobs
 
-    async def _apply(self, jobs: list[_Ev | _Co]) -> None:
+    async def _apply(self, jobs: list[_Ev | _Co | _Ca]) -> None:
         i = 0
         while i < len(jobs):
             job = jobs[i]
@@ -217,11 +254,19 @@ class CoalescingBeliefWorker:
                     )
                 except Exception as exc:  # noqa: BLE001 — isolate this asset, keep the rest
                     logger.error("belief write failed for %s (dropped): %r", asset, exc)
-            else:
+            elif isinstance(job, _Co):
                 try:
                     await self._u.set_compliance(
                         job.asset, job.verdict, job.now, correlation_id=job.correlation_id
                     )
                 except Exception as exc:  # noqa: BLE001 — isolate this asset, keep the rest
                     logger.error("compliance write failed for %s (dropped): %r", job.asset, exc)
+                i += 1
+            else:
+                try:
+                    await self._u.set_catalyst(
+                        job.asset, job.catalyst, job.now, correlation_id=job.correlation_id
+                    )
+                except Exception as exc:  # noqa: BLE001 — isolate this asset, keep the rest
+                    logger.error("catalyst write failed for %s (dropped): %r", job.asset, exc)
                 i += 1

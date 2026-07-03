@@ -20,6 +20,9 @@ REQUIRED_KEYS: dict[EventType, set[str]] = {
     EventType.OBSERVATION_BAR: {"o", "h", "low", "c"},
     EventType.OBSERVATION_NEWS: {"headline", "url"},
     EventType.OBSERVATION_PRICE: {"price"},
+    # NOTE: deliberately absent from the missing-asset check below —
+    # asset=None is legal for market-wide macro events (Appendix A).
+    EventType.OBSERVATION_MACRO: {"kind", "scheduled_for", "expected_impact"},
     EventType.COMPLIANCE_VERDICT: {"status"},
 }
 
