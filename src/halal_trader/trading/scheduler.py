@@ -177,9 +177,23 @@ class TradingBot(BaseTradingBot):
         # depend on its wide trailing stop as their only rule-based exit.
         from halal_trader.trading.monitor import StockPositionMonitor
 
+        # Post-close fan-out: without this the stocks side never wrote the
+        # rag_rationales store, so the retrieval corpus (setup→outcome
+        # memory; halabot slice-2 grounding + query_rag) stayed EMPTY while
+        # crypto was down (found 2026-07-03: store size 0 after weeks of
+        # stocks closes). Recording only — the monitor wraps record_close
+        # in try/except, so a recorder failure can never affect an exit.
+        close_recorders = None
+        if self._engine is not None:
+            from halal_trader.core.llm.rag_db import DBRationaleStore
+            from halal_trader.core.post_close import CloseRecorders
+
+            close_recorders = CloseRecorders(rag_store=DBRationaleStore(self._engine))
+
         self._monitor = StockPositionMonitor(
             mcp=self.broker,
             repo=repo,
+            close_recorders=close_recorders,
             check_interval=self.settings.stocks.monitor_interval_seconds,
             trailing_stop_activation_pct=self.settings.stocks.trailing_stop_activation_pct,
             trailing_stop_distance_pct=self.settings.stocks.trailing_stop_distance_pct,

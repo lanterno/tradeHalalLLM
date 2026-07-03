@@ -190,7 +190,18 @@ async def build_engine(
         from halal_trader.core.llm import create_llm
 
         _llm = create_llm()
-        thesis_writer = LlmThesisWriter(_llm)
+        # Retrieval grounding (Task B slice 2) — reuse the legacy pgvector
+        # rationale store per the spec's rag_grounding row. Deterministic
+        # hashing embedder, same shared DB; failure degrades to "" so it
+        # can never cost a narrative, let alone a belief (INV-1).
+        _retriever = None
+        if s.cognition.retrieval_enabled:
+            from halabot.cognition.retrieval import SetupRetriever
+            from halal_trader.core.llm.rag_db import DBRationaleStore
+
+            _retriever = SetupRetriever(DBRationaleStore(db_engine))
+            logger.info("thesis retrieval grounding enabled (rationale store)")
+        thesis_writer = LlmThesisWriter(_llm, retriever=_retriever)
         if llm_gate is None:
             llm_gate = LlmGate(_llm)
 

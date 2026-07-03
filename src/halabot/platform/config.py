@@ -36,6 +36,12 @@ class BeliefSettings(BaseModel):
 
 class CognitionSettings(BaseModel):
     llm_thesis_enabled: bool = False  # sparse LLM thesis off by default (cheap shadow)
+    # Retrieval-grounded thesis (Task B slice 2): when the sparse thesis fires,
+    # query the legacy pgvector rationale store for analogous past setups and
+    # ground the prompt in their realized outcomes. Deterministic local
+    # retrieval (hashing embedder, no external API); only matters when
+    # llm_thesis_enabled is also on. Env: HALABOT_COGNITION__RETRIEVAL_ENABLED.
+    retrieval_enabled: bool = False
     # Forecaster interpreter (votes source="forecaster"). Default ON with Chronos
     # (B1, greenlit): Amazon's pretrained time-series transformer. A controlled
     # same-bars A/B (2026-05-29, cached bars) showed Chronos vs no-forecaster

@@ -42,17 +42,40 @@ def _prompt(b: BeliefState) -> str:
     )
 
 
+class Retriever(Protocol):
+    """Optional retrieval grounding — ``context_for`` returns a prompt block of
+    analogous past setup→outcomes, or "" (including on ANY internal failure)."""
+
+    async def context_for(self, belief: BeliefState) -> str: ...
+
+
 class LlmThesisWriter:
     """Writes a concise thesis via an injected LLM. An LLM error propagates — the
     BeliefUpdater wraps the write() call in try/except so a failure stales the
-    narrative but never the belief (INV-1). Output is length-bounded."""
+    narrative but never the belief (INV-1). Output is length-bounded.
 
-    def __init__(self, llm: Generator, *, max_chars: int = 400) -> None:
+    With a ``retriever`` (Task B slice 2), the prompt is grounded in the most
+    analogous past setups and their realized outcomes. The retriever degrades
+    to "" on failure, so grounding never costs a narrative."""
+
+    def __init__(
+        self,
+        llm: Generator,
+        *,
+        max_chars: int = 400,
+        retriever: Retriever | None = None,
+    ) -> None:
         self._llm = llm
         self._max = max_chars
+        self._retriever = retriever
 
     async def write(self, belief: BeliefState) -> str:
-        text = await self._llm.generate(_prompt(belief), _SYSTEM)
+        prompt = _prompt(belief)
+        if self._retriever is not None:
+            grounding = await self._retriever.context_for(belief)
+            if grounding:
+                prompt = f"{prompt}\n{grounding}"
+        text = await self._llm.generate(prompt, _SYSTEM)
         return text.strip()[: self._max]
 
 
