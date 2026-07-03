@@ -12,6 +12,7 @@ import {
   ShieldAlert,
   Microscope,
   Star,
+  Telescope,
 } from "lucide-react";
 import { cn } from "../lib/utils";
 import { useHealth } from "../hooks/useSystem";
@@ -19,6 +20,7 @@ import { useHealth } from "../hooks/useSystem";
 const NAV_ITEMS = [
   { to: "/", icon: LayoutDashboard, label: "Dashboard", end: true },
   { to: "/recommendation", icon: Star, label: "Stock of the Day" },
+  { to: "/beliefs", icon: Telescope, label: "Belief Board" },
   { to: "/positions", icon: Crosshair, label: "Positions" },
   { to: "/trades", icon: ArrowLeftRight, label: "Trades" },
   { to: "/analytics", icon: BarChart3, label: "Analytics" },

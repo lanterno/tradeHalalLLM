@@ -5,6 +5,7 @@ import { PageSkeleton } from "./components/PageSkeleton";
 
 const Dashboard = lazy(() => import("./pages/Dashboard"));
 const Recommendation = lazy(() => import("./pages/Recommendation"));
+const BeliefBoard = lazy(() => import("./pages/BeliefBoard"));
 const Positions = lazy(() => import("./pages/Positions"));
 const Trades = lazy(() => import("./pages/Trades"));
 const Analytics = lazy(() => import("./pages/Analytics"));
@@ -32,6 +33,14 @@ export default function App() {
           element={
             <Suspense fallback={<PageSkeleton />}>
               <Recommendation />
+            </Suspense>
+          }
+        />
+        <Route
+          path="beliefs"
+          element={
+            <Suspense fallback={<PageSkeleton />}>
+              <BeliefBoard />
             </Suspense>
           }
         />

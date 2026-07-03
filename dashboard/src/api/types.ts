@@ -225,3 +225,55 @@ export interface RecommendationScorecard {
   best?: { symbol: string; date: string; fwd_5d: number };
   worst?: { symbol: string; date: string; fwd_5d: number };
 }
+
+// ── halabot shadow engine (belief board) ────────────────────────
+
+export interface BeliefCatalyst {
+  kind: string;
+  scheduled_for: string;
+  expected_impact: number;
+  detail: string;
+}
+
+export interface BeliefEvidence {
+  source: string;
+  direction: number;
+  weight: number;
+  detail: string;
+}
+
+export interface Belief {
+  asset: string;
+  version: number;
+  regime: string;
+  regime_confidence: number;
+  direction: string;
+  conviction: number;
+  conviction_raw: number;
+  thesis: string;
+  invalidation: number | null;
+  stop: number | null;
+  support: number | null;
+  resistance: number | null;
+  horizon: string;
+  catalysts_pending: BeliefCatalyst[];
+  halal: string | null;
+  n_evidence: number;
+  top_evidence: BeliefEvidence[];
+  last_updated: string | null;
+}
+
+export interface BeliefBoard {
+  available: boolean;
+  beliefs: Belief[];
+}
+
+export interface ShadowDecision {
+  id: string;
+  type: string;
+  asset: string | null;
+  ts: string;
+  source: string;
+  payload: Record<string, unknown>;
+  correlation_id: string | null;
+}

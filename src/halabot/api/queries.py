@@ -30,6 +30,20 @@ def _belief_dict(b: Any) -> dict[str, Any]:
         "thesis": b.thesis,
         "invalidation": b.levels.invalidation,
         "stop": b.levels.stop,
+        "support": b.levels.support,
+        "resistance": b.levels.resistance,
+        "horizon": str(b.horizon),
+        # Persisted all along; surfaced for the belief board (Task D) now
+        # that Task B slice 1 populates it.
+        "catalysts_pending": [
+            {
+                "kind": c.kind,
+                "scheduled_for": c.scheduled_for.isoformat(),
+                "expected_impact": round(c.expected_impact, 3),
+                "detail": c.detail,
+            }
+            for c in b.catalysts_pending
+        ],
         "halal": (b.halal.status if b.halal else None),
         "n_evidence": len(b.evidence),
         "top_evidence": [
