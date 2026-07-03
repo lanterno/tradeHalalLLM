@@ -1,17 +1,31 @@
-# Session handoff — updated 2026-07-02 ~02:15 CEST
+# Session handoff — updated 2026-07-03 ~14:50 CEST
 
-**UPDATE**: GLM_API_KEY is set (OpenRouter, $10 credit). Live smoke test
-PASSED all three hot-path compat points (json_object 1.5s, forced
-tool_choice honoring schema 2.5s, classifier@temp0 0.8s, ~$0.0005
-total). Stocks bot restarted on the GLM code at 02:06 CEST — startup
-clean (`LLM: GLM z-ai/glm-5.2 via https://openrouter.ai/api/v1`),
-idle until Thu 2026-07-02 09:30 ET open. First LIVE market cycle on GLM
-still needs eyeballing at open. NEW FINDING: the crypto launchd daemon
-(com.halabot.crypto, running since Jun 12 on pre-cutover code) fails
-every 60s cycle since 07-01 18:34 CEST — Binance API keys are EMPTY in
-.env (empty before the cutover too; not caused by it). Operator
-decision pending: supply testnet keys + restart crypto, or stop the
-daemon. Do not disable unilaterally.
+**Current state**: GLM-5.2 cutover fully verified in production (first live
+trading day 2026-07-02: clean, guards worked, spend $0.056/day). Three
+prompt/guard improvements shipped from live observation (gate-aware buy
+universe filtering, per-symbol headroom, market-calendar fix — 2026-07-02
+was wrongly marked an early close; cycles+monitor would have stopped at
+13:00 ET with positions open). Self-tuner cut max_position_pct 20%→5% at
+EOD 07-02 (reasoned: entry-stacking risk) — watch Monday's sizing.
+
+**Holiday build day (07-03, market closed)**: three slices shipped —
+Task B slice 1 (catalyst→thesis loop live: FRED calendar →
+observation.macro → catalysts_pending → throttled thesis refresh; ET
+release-time anchoring), Task B slice 2 (retrieval-grounded thesis over
+the pgvector rationale store + fixed the EMPTY store: stocks monitor now
+records closes), Task D slice 1 (Belief Board page at /beliefs on the
+:8082 dashboard + /api/halabot/* bridge routes).
+
+**Operational notes**: shadow daemon stdout is block-buffered under
+launchd (weeks stale) — trust launchd-shadow.err.log / the 'shadow
+sources wired' log line. SSH signing fails while 1Password is locked —
+push via `git push https://github.com/lanterno/tradeHalalLLM.git main`
+(gh keyring token). Crypto daemon still failing (empty Binance keys) —
+operator decision pending. Zoya prod key + reconcile fix-drift still
+pending (operator).
+
+**Loops**: trading-review /loop active (session-local; re-arm on a new
+machine). Market reopens Mon 2026-07-06 09:30 ET.
 
 # Original handoff — 2026-07-01 (evening ET)
 
