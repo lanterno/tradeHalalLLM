@@ -180,6 +180,10 @@ async def _run_shadow(
             )
 
         click.echo(f"sources: {', '.join(s.name for s in sources)}")
+        # click.echo lands in a block-buffered stdout under launchd and can sit
+        # unflushed for weeks (observed 2026-07-03: log mtime June 12); the
+        # logging handler is the operationally visible channel.
+        logger.info("shadow sources wired: %s", ", ".join(s.name for s in sources))
         if once:
             total = 0
             for s in sources:
