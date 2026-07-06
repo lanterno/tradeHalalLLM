@@ -6,6 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 LLM-powered halal day-trading bot for **stocks** (Alpaca paper trading via MCP) and **crypto** (Binance testnet/prod). Python 3.14+, managed with `uv`. Single-user, paper/testnet only — never real money.
 
+**Read `docs/OPERATOR_CONTEXT.md` first.** It holds the non-code-derivable context any session needs: the working agreement (dev mode — work directly on `main`, autonomous, commit at green checkpoints, surface only operator-only decisions), the stocks strategy intent (**fast in, slow out**), why the sole LLM provider is GLM-5.2 via OpenRouter (don't undo it — the bot won't start without `GLM_API_KEY`), open **operator-gated** issues you can't fix in code (Zoya sandbox → tiny random universe drives symbol fixation; ~100% reconcile drift is ledger-only and the fix-drift tool is destructive/operator-gated — don't touch `_aggregate_stocks_positions`), and hard-won `src/halabot` engineering lessons (validate every edge with `halabot backtest` on disjoint OOS windows; conviction is already near-optimal; the engine is shadow-only and never trades).
+
 ## Common commands
 
 Use the `justfile` recipes (each wraps `uv run halal-trader …`). `just` with no args lists recipes.
