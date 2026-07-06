@@ -1,3 +1,49 @@
+# Machine migration checklist (added 2026-07-06)
+
+`git clone` + the setup docs (`README.md` §Prerequisites, `docs/QUICKSTART.md`)
+are current for GLM-5.2 and get the **code** running. Four things git does
+NOT carry — handle each:
+
+1. **`.env` secrets** (106 keys — gitignored). ✅ Operator already moved it.
+   `.env.example` / `.env.stocks.example` document the shape if you ever
+   rebuild it. `.env.pre-glm.bak` (old OpenAI key) does NOT need to move.
+
+2. **Postgres data** (Docker volume `infra_pg-data`, NOT in git). A fresh
+   machine `just pg-up` + `halal-trader db migrate` gives an EMPTY DB. As of
+   2026-07-06 the live DB holds: 522 paper trades, 8,581 labeled shadow
+   outcomes (the calibrator's training data — it cold-starts to identity
+   without them), 253,167 belief versions, 7 daily recommendations,
+   0 rag_rationales (corpus starts filling on the first Monday close).
+   Paper-only, so a fresh start is *safe* but loses all history + learning.
+   **To keep history**: on the OLD machine
+   `docker exec halal-trader-pg pg_dump -U halal -d halal_trader -Fc -f /tmp/halabot.dump && docker cp halal-trader-pg:/tmp/halabot.dump .`
+   then on the NEW machine after `just pg-up`:
+   `docker cp halabot.dump halal-trader-pg:/tmp/ && docker exec halal-trader-pg pg_restore -U halal -d halal_trader --clean --if-exists /tmp/halabot.dump`
+   (verify the DB role name in your `.env` `DATABASE_URL` first). No `just`
+   recipe for this yet — ask if you want one added.
+
+3. **Claude memory files** (`~/.claude/projects/-Users-nourataha-lab-halabot/memory/`,
+   NOT in the repo). 9 files (MEMORY.md + 8) holding the GLM-5.2 provider
+   verdict, working-style, strategy direction, and known-issue notes. Copy
+   the whole `memory/` dir to the same path on the new machine (adjust the
+   `-Users-...` segment to the new home) if you want Claude's continuity.
+
+4. **launchd wiring** (`infra/launchd/*.plist` ARE in git, but hardcode
+   `/Users/nourataha/lab/halabot` + `/Users/nourataha/.local/bin/uv`). If the
+   new machine has the SAME username, repo path `~/lab/halabot`, and uv at
+   `~/.local/bin/uv`, `just launchd-install` works as-is. If ANY differ, edit
+   the three plists first (WorkingDirectory, program path, log paths).
+   Also: `gh`/SSH git auth is per-machine — SSH push failed here while
+   1Password was locked; `git push https://github.com/lanterno/tradeHalalLLM.git main`
+   with a gh keyring token is the fallback.
+
+Toolchain the new machine needs (per README §Prerequisites): Docker, `uv`,
+`just`, Node/npm (for the dashboard build). Then: `uv sync --extra dev
+--extra all` → `just pg-up` → `halal-trader db migrate` (or restore, step 2)
+→ `cd dashboard && npm install && npm run build` → `just launchd-install`.
+
+---
+
 # Session handoff — updated 2026-07-03 ~14:50 CEST
 
 **Current state**: GLM-5.2 cutover fully verified in production (first live
