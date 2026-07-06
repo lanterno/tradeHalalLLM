@@ -30,19 +30,66 @@ NOT carry — handle each:
    the whole `memory/` dir to the same path on the new machine (adjust the
    `-Users-...` segment to the new home) if you want Claude's continuity.
 
-4. **launchd wiring** (`infra/launchd/*.plist` ARE in git, but hardcode
-   `/Users/nourataha/lab/halabot` + `/Users/nourataha/.local/bin/uv`). If the
-   new machine has the SAME username, repo path `~/lab/halabot`, and uv at
-   `~/.local/bin/uv`, `just launchd-install` works as-is. If ANY differ, edit
-   the three plists first (WorkingDirectory, program path, log paths).
-   Also: `gh`/SSH git auth is per-machine — SSH push failed here while
-   1Password was locked; `git push https://github.com/lanterno/tradeHalalLLM.git main`
+4. **Process supervision.** launchd is macOS-only — it does NOT exist on
+   Linux/WSL2. On the current machine (`/home/green/lab/trader`, Linux/WSL2)
+   the run mechanism is now the **Docker Compose stack**
+   (`infra/docker-compose.yml`), which replaced launchd on 2026-07-06 (commits
+   `886ef46`, `6f5d578`). See the "Run mechanism on this machine" section
+   below for the full launchd→Docker mapping and how to operate it. The
+   `infra/launchd/*.plist` files remain in git but are dead on Linux (kept
+   only in case of a move back to macOS).
+   Also: `gh`/SSH git auth is per-machine — SSH push failed on the old machine
+   while 1Password was locked; `git push https://github.com/lanterno/tradeHalalLLM.git main`
    with a gh keyring token is the fallback.
 
 Toolchain the new machine needs (per README §Prerequisites): Docker, `uv`,
-`just`, Node/npm (for the dashboard build). Then: `uv sync --extra dev
---extra all` → `just pg-up` → `halal-trader db migrate` (or restore, step 2)
-→ `cd dashboard && npm install && npm run build` → `just launchd-install`.
+`just`, Node/npm (for the dashboard build). On Linux/WSL2, the Docker image
+builds its own venv + dashboard, so the only host-side setup for the running
+bots is `.env` (step 1) + the DB (step 2) + `docker compose up -d`; a host
+`uv sync` / `npm build` is only needed for local dev + running the test suite.
+
+---
+
+# Run mechanism on this machine (Docker, since 2026-07-06)
+
+On Linux/WSL2 the bots run as the Docker Compose stack in
+`infra/docker-compose.yml` (compose project name `infra`). This replaced the
+macOS launchd jobs, which don't exist here. Commits `886ef46` (migration) and
+`6f5d578` (full `ml` stack on CPU-only torch).
+
+**Operate it** (from the repo root):
+
+```bash
+docker compose -f infra/docker-compose.yml up -d          # start the default fleet
+docker compose -f infra/docker-compose.yml ps             # status
+docker compose -f infra/docker-compose.yml logs -f trader-stocks
+docker compose -f infra/docker-compose.yml restart trader-stocks   # replaces `just launchd-restart-stocks`
+docker compose -f infra/docker-compose.yml build           # rebuild after a code change, then `up -d`
+```
+
+**launchd → Docker mapping:**
+
+| macOS launchd job | Docker service | Notes |
+|---|---|---|
+| `com.halabot.stocks` | `trader-stocks` | market-hours stock bot |
+| `com.halabot.crypto` | `trader-crypto` | behind `profiles: ["crypto"]` — a plain `up -d` SKIPS it (empty Binance keys). Enable: `docker compose -f infra/docker-compose.yml --profile crypto up -d` |
+| `com.halabot.shadow` | `trader-shadow` | `halabot shadow --interval 900`; keeps `/beliefs` + `hb_*` live |
+| (none — new) | `trader-web` | FastAPI dashboard + `/metrics` on :8082 |
+| launchd watchdog / KeepAlive | `restart: unless-stopped` | Docker restarts crashed containers |
+| (schema) | `trader-migrate` | one-shot `db migrate` to head; gates every bot via `service_completed_successfully` |
+
+**Gotchas:**
+- **Docker-on-boot is the operator's job.** `restart: unless-stopped` only
+  restarts containers once the Docker *daemon* is up — it does not start Docker
+  itself at login. On WSL2 that's Docker Desktop's "Start when you log in"
+  setting (or `systemctl enable docker` if running native docker in WSL). This
+  is the one piece of launchd's auto-start that Docker doesn't replace for free.
+- **torch is pinned to the CPU wheel index** (`[tool.uv.sources]` in
+  `pyproject.toml`) — no GPU passthrough in the runtime, and the CUDA libs
+  would add ~2GB. Keep it CPU-only unless a GPU is actually wired in.
+- The image installs the `ml,sentiment` extras (`build.args.EXTRAS` in the
+  compose file, expanded into repeated `--extra` flags in the Dockerfile —
+  a single comma-joined `--extra ml,sentiment` silently installs neither).
 
 ---
 
@@ -73,7 +120,10 @@ operator decision pending. Zoya prod key + reconcile fix-drift still
 pending (operator).
 
 **Loops**: trading-review /loop active (session-local; re-arm on a new
-machine). Market reopens Mon 2026-07-06 09:30 ET.
+machine — re-armed on the Linux/WSL2 machine 2026-07-06, now restarting the
+bot via `docker compose -f infra/docker-compose.yml restart trader-stocks`
+instead of `just launchd-restart-stocks`). Market reopens Mon 2026-07-06
+09:30 ET.
 
 # Original handoff — 2026-07-01 (evening ET)
 
@@ -137,8 +187,9 @@ pushed. Delete it once confident.
 - **Trading-review loop** (`/loop`, dynamic): after each stocks cycle /
   scored reactor event, review logs, write a 2-5 bullet improvement
   plan, implement actionable items, lint+typecheck+test+commit, restart
-  via `just launchd-restart-stocks`. Pace ~15 min during 9:30–15:45 ET,
-  once ~16:00 ET EOD, sleep otherwise.
+  via `docker compose -f infra/docker-compose.yml restart trader-stocks`
+  (on this Linux machine; was `just launchd-restart-stocks` on macOS). Pace
+  ~15 min during 9:30–15:45 ET, once ~16:00 ET EOD, sleep otherwise.
 - **Roadmap-build cron** (was `13,43 * * * *`): pick the next unchecked
   item in `docs/ROADMAP.md`, build a tested+committed slice, check it
   off. Off-market = safe build window.
