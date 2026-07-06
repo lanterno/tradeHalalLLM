@@ -76,7 +76,14 @@ COPY --from=spa-builder /spa/dist /app/dashboard/dist
 # Non-root user so a container escape doesn't land you on root.
 # We need a real home dir for `uvx` to write its cache when launching
 # the Alpaca MCP subprocess — bot otherwise crashes on stocks startup.
+#
+# /app/logs and /app/data are declared + owned by `trader` here so that when
+# the compose `trader-logs`/`trader-data` named volumes mount over them, Docker
+# seeds the (empty) volumes with `trader` ownership. Without these dirs existing
+# in the image, a fresh named volume is created root-owned and the non-root
+# process hits `PermissionError` on the first log write (crash-loops on start).
 RUN useradd --create-home --uid 1000 trader \
+    && mkdir -p /app/logs /app/data \
     && chown -R trader:trader /app /home/trader
 USER trader
 ENV HOME=/home/trader \

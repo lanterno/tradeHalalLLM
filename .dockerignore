@@ -1,0 +1,45 @@
+# Build context is the repo root (compose `build.context: ..`). The Dockerfile
+# only COPYs pyproject.toml, uv.lock, README.md, src/, alembic/, alembic.ini and
+# dashboard/. Everything below is dead weight or secrets — keep it out so the
+# context stays small (the 218M db dump + .venv + .git would otherwise ship).
+
+# VCS
+.git
+.gitignore
+.github
+
+# Python virtualenv & caches (huge; the image builds its own venv)
+.venv
+**/__pycache__
+**/*.pyc
+.pytest_cache
+.ruff_cache
+.mypy_cache
+
+# Node — dashboard deps + any prior build are rebuilt in the spa-builder stage
+dashboard/node_modules
+dashboard/dist
+
+# Secrets — never ship into the build context (compose reads .env via env_file)
+.env
+.env.*
+!.env.example
+!.env.stocks.example
+
+# Local data / DB dumps / logs (not needed at build time)
+*.dump
+*:Zone.Identifier
+logs
+models
+data
+
+# Docs, tests, editor tooling not needed at runtime
+tests
+docs
+.cursor
+scratchpad
+*.md
+!README.md
+
+# OS cruft
+.DS_Store
