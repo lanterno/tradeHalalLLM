@@ -232,6 +232,24 @@ pg-up:
 pg-down:
     cd infra && docker compose stop postgres
 
+# Dump the whole DB (schema + data + alembic version) to ./halabot-db.dump
+# for moving to another machine. Custom format, compressed. The file is
+# gitignored — copy it to the new machine, then `just db-restore`.
+db-dump file="halabot-db.dump":
+    docker exec halal-trader-pg pg_dump -U trader -d halal_trader -Fc -f /tmp/halabot-db.dump
+    docker cp halal-trader-pg:/tmp/halabot-db.dump {{file}}
+    docker exec halal-trader-pg rm -f /tmp/halabot-db.dump
+    @echo "Wrote {{file}} ($(du -h {{file}} | cut -f1)). Copy it to the new machine, then: just db-restore {{file}}"
+
+# Restore a db-dump into the local Postgres (run `just pg-up` FIRST; do NOT
+# run migrate — the dump carries the schema + alembic head). --clean makes
+# it safe to re-run over an already-migrated DB. ⚠ overwrites local data.
+db-restore file="halabot-db.dump":
+    docker cp {{file}} halal-trader-pg:/tmp/halabot-db.dump
+    docker exec halal-trader-pg pg_restore -U trader -d halal_trader --clean --if-exists --no-owner /tmp/halabot-db.dump
+    docker exec halal-trader-pg rm -f /tmp/halabot-db.dump
+    @echo "Restored {{file}}. Verify: halal-trader db current  (should show head)"
+
 # Drop + recreate the test database (run before pytest if it gets corrupted)
 test-db-reset:
     docker exec halal-trader-pg psql -U trader -d postgres -c 'DROP DATABASE IF EXISTS halal_trader_test'

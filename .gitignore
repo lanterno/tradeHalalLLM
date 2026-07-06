@@ -40,3 +40,4 @@ logs/
 htmlcov/
 coverage.xml
 .env.pre-glm.bak
+*.dump

@@ -12,15 +12,17 @@ NOT carry — handle each:
    machine `just pg-up` + `halal-trader db migrate` gives an EMPTY DB. As of
    2026-07-06 the live DB holds: 522 paper trades, 8,581 labeled shadow
    outcomes (the calibrator's training data — it cold-starts to identity
-   without them), 253,167 belief versions, 7 daily recommendations,
-   0 rag_rationales (corpus starts filling on the first Monday close).
+   without them), 253,167 belief versions, 7 daily recommendations.
    Paper-only, so a fresh start is *safe* but loses all history + learning.
-   **To keep history**: on the OLD machine
-   `docker exec halal-trader-pg pg_dump -U halal -d halal_trader -Fc -f /tmp/halabot.dump && docker cp halal-trader-pg:/tmp/halabot.dump .`
-   then on the NEW machine after `just pg-up`:
-   `docker cp halabot.dump halal-trader-pg:/tmp/ && docker exec halal-trader-pg pg_restore -U halal -d halal_trader --clean --if-exists /tmp/halabot.dump`
-   (verify the DB role name in your `.env` `DATABASE_URL` first). No `just`
-   recipe for this yet — ask if you want one added.
+   **Migrating it (round-trip tested 2026-07-06):**
+   - OLD machine: `just db-dump` → writes `halabot-db.dump` (~228M,
+     gitignored). Already generated and sitting in the repo root.
+   - Copy `halabot-db.dump` to the new machine's repo root (scp/USB/etc).
+   - NEW machine: `just pg-up`, then `just db-restore halabot-db.dump`
+     — do NOT run `db migrate`; the dump carries the schema + alembic head.
+     Verify with `halal-trader db current` (shows head `24fcae369aa0`).
+   The dump includes the pgvector extension and `alembic_version`, so the
+   restored DB is immediately at head and the bot's startup head-check passes.
 
 3. **Claude memory files** (`~/.claude/projects/-Users-nourataha-lab-halabot/memory/`,
    NOT in the repo). 9 files (MEMORY.md + 8) holding the GLM-5.2 provider
