@@ -169,3 +169,18 @@ module = [
     "halal_trader.domain.policies",
 ]
 ignore_errors = true
+
+# ── uv: CPU-only PyTorch ──
+# The default torch wheel on linux/x86_64 drags in ~2GB of nvidia-*-cu12 CUDA
+# libraries as dependencies. Nothing here needs a GPU — Chronos-bolt-small,
+# scikit-learn, xgboost and FinBERT all run fine on CPU — and the Docker
+# runtime has no GPU passthrough, so pin torch to the CPU wheel index. This
+# drops the CUDA libs from the lock and keeps the `ml` image lean. `explicit`
+# scopes the index to torch only (it isn't consulted for other packages).
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu" }]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true

@@ -39,20 +39,26 @@ WORKDIR /app
 # table so it must be present at sync time.
 COPY pyproject.toml uv.lock README.md ./
 
-# Sync core deps; the dashboard / ml / sentiment extras are optional
-# and the operator can rebuild with --build-arg EXTRAS="ml,sentiment".
+# Sync core deps; the dashboard / ml / sentiment extras are optional and the
+# operator can rebuild with --build-arg EXTRAS="ml,sentiment". EXTRAS is
+# comma-separated, but uv's --extra takes ONE name per flag — so expand it into
+# repeated --extra flags. Passing "ml,sentiment" as a single --extra value
+# silently matches no extra and installs neither (base deps only). When EXTRAS
+# is empty the loop adds nothing and this is a plain `uv sync --frozen`.
 ARG EXTRAS=""
-RUN if [ -n "$EXTRAS" ]; then \
-      uv sync --frozen --extra $EXTRAS; \
-    else \
-      uv sync --frozen; \
-    fi
+RUN set --; \
+    for e in $(echo "$EXTRAS" | tr ',' ' '); do set -- "$@" --extra "$e"; done; \
+    uv sync --frozen "$@"
 
 COPY src/ src/
 COPY alembic/ alembic/
 COPY alembic.ini ./
 
-RUN uv sync --frozen
+# Re-sync after copying the source so the project package itself is installed.
+# The extras MUST be repeated here — a bare `uv sync` would prune them back out.
+RUN set --; \
+    for e in $(echo "$EXTRAS" | tr ',' ' '); do set -- "$@" --extra "$e"; done; \
+    uv sync --frozen "$@"
 
 FROM python:3.14-slim AS runtime
 
