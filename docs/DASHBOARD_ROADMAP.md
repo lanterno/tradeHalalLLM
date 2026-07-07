@@ -171,9 +171,10 @@ reconcile.
       see "the bot wanted to buy X but was blocked by Y" without reading logs.
       **Highest-value new panel.** Needs a small backend endpoint (parse from
       decisions/logs or a rejections view).
-- [ ] **True equity curve** from Alpaca account equity (mark-to-market incl.
-      open positions), not the current cumulative-`realized_pnl` proxy. The
-      `DailyPnl` type already carries start/end equity — it's just unused.
+- [x] **True equity curve** from account equity. *(done 2026-07-07)*
+      `EquityCurve` gained a `mode` prop: Dashboard now plots real
+      `ending_equity` (mark-to-market account value, auto Y-domain) instead of
+      the cumulative-`realized_pnl` proxy; Analytics keeps `mode="cumulative"`.
 - [ ] **Per-symbol stock P&L** (realized + unrealized) — a stock analogue of
       the crypto `PairBreakdown`.
 - [ ] **Fill-quality / slippage panel** — the `trades` table already tracks
@@ -185,9 +186,10 @@ reconcile.
       `admin_halal` sector-allocation are built and unconsumed — wire them.
 - [ ] **Market-hours / next-cycle banner** — open/closed, last cycle time,
       next scheduled cycle (stock bot is a 15-min market-hours cron).
-- [ ] **Reconcile-drift annotation** — label the known ~100% stock drift as
-      "ledger-only / expected" (per OPERATOR_CONTEXT) so the red % doesn't
-      false-alarm.
+- [x] **Reconcile-drift annotation** *(done 2026-07-07)* — the Risk page's
+      drift table now carries a note that a large stocks drift is typically
+      ledger-only (broker flat by EOD), not a live mismatch, so the red % isn't
+      alarming.
 - [ ] LLM $/day cost figure somewhere prominent (~$0.05/day today).
 
 ### Phase 3 — Operator control plane (decide: surface or delete)

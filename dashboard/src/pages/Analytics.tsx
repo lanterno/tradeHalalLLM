@@ -173,7 +173,7 @@ export default function Analytics() {
               {pnlError ? (
                 <ErrorState compact error={pnlErr} onRetry={pnlRefetch} />
               ) : pnl ? (
-                <EquityCurve data={pnl} />
+                <EquityCurve data={pnl} mode="cumulative" />
               ) : null}
             </div>
           </div>

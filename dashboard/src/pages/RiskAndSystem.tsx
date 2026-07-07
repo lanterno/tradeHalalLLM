@@ -211,6 +211,19 @@ export default function RiskAndSystem() {
         <h2 className="mb-3 text-sm font-medium uppercase tracking-wider text-muted">
           Recent Reconciliation Drift
         </h2>
+        {/* Cycle + monitor decide off broker truth, not the DB ledger, so a
+            high stocks drift is usually a stale/phantom ledger row (broker is
+            flat by EOD) rather than a real position mismatch — clearing it is
+            an operator-gated fix-drift op. Say so, so the red % isn't alarming. */}
+        {reconcile.data && reconcile.data.length > 0 && (
+          <p className="mb-3 rounded-lg border border-border/60 bg-bg/40 px-3 py-2 text-xs text-muted">
+            Drift is measured DB-ledger vs broker. Trading decisions use broker
+            truth, so a large <span className="text-warning">stocks</span> drift
+            is typically ledger-only (phantom rows; the broker is flat by EOD),
+            not a live mismatch — clearing it is an operator-gated{" "}
+            <span className="font-mono">reconcile fix-drift</span>.
+          </p>
+        )}
         {reconcile.isError ? (
           <ErrorState compact error={reconcile.error} onRetry={reconcile.refetch} />
         ) : reconcile.isLoading ? (
