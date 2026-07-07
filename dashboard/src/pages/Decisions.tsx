@@ -1,10 +1,23 @@
 import { useState } from "react";
 import { useDecisions, useAdjustments } from "../hooks/useDecisions";
+import { ErrorState } from "../components/ErrorState";
 import { formatTime, relativeTime } from "../lib/utils";
 
 export default function Decisions() {
-  const { data: decisions, isLoading: dLoading } = useDecisions(50);
-  const { data: adjustments, isLoading: aLoading } = useAdjustments();
+  const {
+    data: decisions,
+    isLoading: dLoading,
+    isError: dError,
+    error: dErr,
+    refetch: dRefetch,
+  } = useDecisions(50);
+  const {
+    data: adjustments,
+    isLoading: aLoading,
+    isError: aError,
+    error: aErr,
+    refetch: aRefetch,
+  } = useAdjustments();
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
 
   const toggle = (id: number) => {
@@ -25,8 +38,10 @@ export default function Decisions() {
         <h3 className="mb-4 text-sm font-medium uppercase tracking-wider text-muted">
           Strategy Adjustments
         </h3>
-        {aLoading ? (
-          <p className="text-sm text-muted">Loading...</p>
+        {aError ? (
+          <ErrorState compact error={aErr} onRetry={aRefetch} />
+        ) : aLoading ? (
+          <p className="text-sm text-muted">Loading…</p>
         ) : !adjustments?.length ? (
           <p className="text-sm text-muted">No adjustments yet.</p>
         ) : (
@@ -68,8 +83,10 @@ export default function Decisions() {
         <h3 className="mb-4 text-sm font-medium uppercase tracking-wider text-muted">
           Decision Log
         </h3>
-        {dLoading ? (
-          <p className="text-sm text-muted">Loading...</p>
+        {dError ? (
+          <ErrorState compact error={dErr} onRetry={dRefetch} />
+        ) : dLoading ? (
+          <p className="text-sm text-muted">Loading…</p>
         ) : !decisions?.length ? (
           <p className="text-sm text-muted">No decisions logged.</p>
         ) : (

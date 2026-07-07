@@ -1,8 +1,16 @@
 import { useSentiment } from "../hooks/useSentiment";
 import { SentimentGauge } from "../components/SentimentGauge";
+import { ErrorState } from "../components/ErrorState";
 
 export default function Sentiment() {
-  const { data: signals, isLoading } = useSentiment();
+  const { data: signals, isLoading, isError, error, refetch } = useSentiment();
+
+  if (isError)
+    return (
+      <div className="p-6">
+        <ErrorState error={error} onRetry={refetch} />
+      </div>
+    );
 
   return (
     <div className="space-y-6 p-6">

@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { usePositions } from "../hooks/usePositions";
 import { usePriceStream } from "../hooks/usePriceStream";
 import { StatCard } from "../components/StatCard";
+import { ErrorState } from "../components/ErrorState";
 import { cn, entityOf, formatUsd, formatQty, formatTime, pnlColor } from "../lib/utils";
 import { entityLabel, useMarket } from "../lib/market";
 import { CHART_COLORS, CHART_TOOLTIP } from "../lib/charts";
@@ -9,7 +10,7 @@ import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts";
 
 export default function Positions() {
   const { market } = useMarket();
-  const { data: positions, isLoading } = usePositions();
+  const { data: positions, isLoading, isError, error, refetch } = usePositions();
   // Live WS prices are a crypto-only feed; stocks positions are marked at the
   // backend's REST snapshot (current_price = entry until a quote path lands).
   const symbols = useMemo(
@@ -39,6 +40,13 @@ export default function Positions() {
     name: entityOf(p),
     value: p.entry_price * p.quantity,
   }));
+
+  if (isError)
+    return (
+      <div className="p-6">
+        <ErrorState error={error} onRetry={refetch} />
+      </div>
+    );
 
   return (
     <div className="space-y-6 p-6">
@@ -84,7 +92,7 @@ export default function Positions() {
         {/* Positions table */}
         <div className="lg:col-span-2 rounded-xl border border-border bg-surface p-4">
           {isLoading ? (
-            <p className="py-8 text-center text-sm text-muted">Loading...</p>
+            <p className="py-8 text-center text-sm text-muted">Loading…</p>
           ) : !enriched.length ? (
             <p className="py-8 text-center text-sm text-muted">
               No open positions.

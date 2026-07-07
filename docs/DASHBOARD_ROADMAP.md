@@ -143,8 +143,13 @@ reconcile.
       live-price WS is gated off for stocks (positions marked at entry).
 
 ### Phase 1 — Reliability & polish (cheap, high-signal)
-- [ ] Render `isError` on every page + a global React error boundary.
-- [ ] Standardize on skeleton loaders; drop bare "Loading…" text.
+- [x] Render `isError` on every page + a global React error boundary.
+      *(done 2026-07-07)* `components/ErrorState.tsx` (uniform failed-to-load +
+      Retry) on every data query across all 12 pages; `components/ErrorBoundary.tsx`
+      wraps the routed `<Outlet>` (keyed by path) so a page crash stays
+      recoverable and the shell survives.
+- [x] Standardize loading text. *(done 2026-07-07)* All bare "Loading..."
+      replaced with "Loading…"; existing skeleton-pulse loaders kept.
 - [x] Centralize chart theme (tooltip style + color ramp). *(done 2026-07-07)*
       `lib/charts.ts` (`CHART`, `CHART_COLORS`, `CHART_TOOLTIP`, `AXIS_TICK`,
       `pnlFill`) applied to all 5 charts; duplicated hex removed.

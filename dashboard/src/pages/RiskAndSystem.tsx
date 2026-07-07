@@ -8,6 +8,7 @@ import {
   useSetHalt,
 } from "../hooks/useRisk";
 import { StatCard } from "../components/StatCard";
+import { ErrorState } from "../components/ErrorState";
 import { cn } from "../lib/utils";
 
 function formatPct(v: number | null | undefined): string {
@@ -156,7 +157,9 @@ export default function RiskAndSystem() {
           })()}
         </h2>
 
-        {!risk.data?.available ? (
+        {risk.isError ? (
+          <ErrorState compact error={risk.error} onRetry={risk.refetch} />
+        ) : !risk.data?.available ? (
           <div className="rounded-xl border border-border bg-surface p-4 text-sm text-muted">
             No risk state cached yet — wait for the next cycle to populate it.
           </div>
@@ -208,8 +211,10 @@ export default function RiskAndSystem() {
         <h2 className="mb-3 text-sm font-medium uppercase tracking-wider text-muted">
           Recent Reconciliation Drift
         </h2>
-        {reconcile.isLoading ? (
-          <p className="text-sm text-muted">Loading...</p>
+        {reconcile.isError ? (
+          <ErrorState compact error={reconcile.error} onRetry={reconcile.refetch} />
+        ) : reconcile.isLoading ? (
+          <p className="text-sm text-muted">Loading…</p>
         ) : !reconcile.data || reconcile.data.length === 0 ? (
           <p className="text-sm text-accent">No drift recorded — DB and broker agree.</p>
         ) : (
@@ -264,8 +269,10 @@ export default function RiskAndSystem() {
         <h2 className="mb-3 text-sm font-medium uppercase tracking-wider text-muted">
           Daily Backups
         </h2>
-        {backups.isLoading ? (
-          <p className="text-sm text-muted">Loading...</p>
+        {backups.isError ? (
+          <ErrorState compact error={backups.error} onRetry={backups.refetch} />
+        ) : backups.isLoading ? (
+          <p className="text-sm text-muted">Loading…</p>
         ) : !backups.data || backups.data.length === 0 ? (
           <p className="text-sm text-warning">
             No backups found. The bot writes one every EOD; run{" "}

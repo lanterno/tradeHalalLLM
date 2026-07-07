@@ -1,4 +1,4 @@
-import { NavLink, Outlet } from "react-router-dom";
+import { NavLink, Outlet, useLocation } from "react-router-dom";
 import {
   LayoutDashboard,
   Crosshair,
@@ -18,6 +18,7 @@ import { cn } from "../lib/utils";
 import { useMarket } from "../lib/market";
 import type { Market } from "../api/types";
 import { useHealth } from "../hooks/useSystem";
+import { ErrorBoundary } from "./ErrorBoundary";
 
 const NAV_ITEMS = [
   { to: "/", icon: LayoutDashboard, label: "Dashboard", end: true },
@@ -40,6 +41,7 @@ export function Layout() {
   const { data: health } = useHealth();
   const isLive = health?.status === "running";
   const { market, setMarket } = useMarket();
+  const location = useLocation();
 
   return (
     <div className="flex h-screen overflow-hidden">
@@ -120,9 +122,13 @@ export function Layout() {
         </div>
       </aside>
 
-      {/* Main content */}
+      {/* Main content — an ErrorBoundary keyed by path so one crashed page
+          shows a recoverable error (sidebar survives) and navigating away
+          resets it. */}
       <main className="flex-1 overflow-y-auto">
-        <Outlet />
+        <ErrorBoundary key={location.pathname}>
+          <Outlet />
+        </ErrorBoundary>
       </main>
     </div>
   );

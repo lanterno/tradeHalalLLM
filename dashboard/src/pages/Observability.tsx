@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useCycleMetrics, useLlmMetrics } from "../hooks/useMetrics";
 import { StatCard } from "../components/StatCard";
+import { ErrorState } from "../components/ErrorState";
 import { cn } from "../lib/utils";
 
 const CYCLE_WINDOWS = [
@@ -72,33 +73,39 @@ export default function Observability() {
           </div>
         </header>
 
-        <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-          <StatCard label="Completed cycles" value={cycles.data?.count ?? "—"} />
-          <StatCard label="p50" value={formatMs(cycles.data?.p50_ms)} />
-          <StatCard label="p95" value={formatMs(cycles.data?.p95_ms)} />
-          <StatCard label="p99" value={formatMs(cycles.data?.p99_ms)} />
-        </div>
+        {cycles.isError ? (
+          <ErrorState compact error={cycles.error} onRetry={cycles.refetch} />
+        ) : (
+          <>
+            <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+              <StatCard label="Completed cycles" value={cycles.data?.count ?? "—"} />
+              <StatCard label="p50" value={formatMs(cycles.data?.p50_ms)} />
+              <StatCard label="p95" value={formatMs(cycles.data?.p95_ms)} />
+              <StatCard label="p99" value={formatMs(cycles.data?.p99_ms)} />
+            </div>
 
-        <div className="mt-3 grid grid-cols-2 gap-4">
-          <StatCard
-            label="Failed"
-            value={
-              <span className={cn(cycles.data?.failed ? "text-loss" : "text-accent")}>
-                {cycles.data?.failed ?? 0}
-              </span>
-            }
-            sub="cycle.failed"
-          />
-          <StatCard
-            label="Halted"
-            value={
-              <span className={cn(cycles.data?.halted ? "text-warning" : "")}>
-                {cycles.data?.halted ?? 0}
-              </span>
-            }
-            sub="cycle.halted (kill-switch / loss limit)"
-          />
-        </div>
+            <div className="mt-3 grid grid-cols-2 gap-4">
+              <StatCard
+                label="Failed"
+                value={
+                  <span className={cn(cycles.data?.failed ? "text-loss" : "text-accent")}>
+                    {cycles.data?.failed ?? 0}
+                  </span>
+                }
+                sub="cycle.failed"
+              />
+              <StatCard
+                label="Halted"
+                value={
+                  <span className={cn(cycles.data?.halted ? "text-warning" : "")}>
+                    {cycles.data?.halted ?? 0}
+                  </span>
+                }
+                sub="cycle.halted (kill-switch / loss limit)"
+              />
+            </div>
+          </>
+        )}
       </section>
 
       {/* LLM metrics */}
@@ -125,25 +132,29 @@ export default function Observability() {
           </div>
         </header>
 
-        <div className="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-5">
-          <StatCard label="Total calls" value={llm.data?.calls ?? "—"} />
-          <StatCard
-            label="Total tokens"
-            value={llm.data ? formatTokens(llm.data.total_tokens) : "—"}
-            sub={llm.data?.total_tokens ? `${llm.data.total_tokens.toLocaleString()}` : undefined}
-          />
-          <StatCard
-            label="Total cost"
-            value={
-              <span className="text-accent">
-                {llm.data ? formatCost(llm.data.total_cost_usd) : "—"}
-              </span>
-            }
-            sub="GLM via OpenRouter"
-          />
-          <StatCard label="p50 latency" value={formatMs(llm.data?.p50_ms)} />
-          <StatCard label="p95 latency" value={formatMs(llm.data?.p95_ms)} />
-        </div>
+        {llm.isError ? (
+          <ErrorState compact error={llm.error} onRetry={llm.refetch} />
+        ) : (
+          <div className="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-5">
+            <StatCard label="Total calls" value={llm.data?.calls ?? "—"} />
+            <StatCard
+              label="Total tokens"
+              value={llm.data ? formatTokens(llm.data.total_tokens) : "—"}
+              sub={llm.data?.total_tokens ? `${llm.data.total_tokens.toLocaleString()}` : undefined}
+            />
+            <StatCard
+              label="Total cost"
+              value={
+                <span className="text-accent">
+                  {llm.data ? formatCost(llm.data.total_cost_usd) : "—"}
+                </span>
+              }
+              sub="GLM via OpenRouter"
+            />
+            <StatCard label="p50 latency" value={formatMs(llm.data?.p50_ms)} />
+            <StatCard label="p95 latency" value={formatMs(llm.data?.p95_ms)} />
+          </div>
+        )}
       </section>
     </div>
   );

@@ -1,4 +1,5 @@
 import { BeliefCard } from "../components/BeliefCard";
+import { ErrorState } from "../components/ErrorState";
 import { useBeliefBoard, useShadowDecisions } from "../hooks/useBeliefs";
 import { relativeTime } from "../lib/utils";
 
@@ -45,6 +46,11 @@ export default function BeliefBoard() {
         </p>
       </div>
 
+      {board.isError && (
+        <div className="rounded-xl border border-border bg-surface p-6">
+          <ErrorState compact error={board.error} onRetry={board.refetch} />
+        </div>
+      )}
       {board.isLoading && (
         <div className="rounded-xl border border-border bg-surface p-6 text-muted">
           Loading beliefs…
@@ -68,6 +74,9 @@ export default function BeliefBoard() {
         <h2 className="mb-3 text-lg font-semibold text-white">
           Shadow decision stream
         </h2>
+        {decisions.isError ? (
+          <ErrorState compact error={decisions.error} onRetry={decisions.refetch} />
+        ) : (
         <div className="overflow-x-auto">
           <table className="w-full text-left">
             <thead>
@@ -91,6 +100,7 @@ export default function BeliefBoard() {
             </div>
           )}
         </div>
+        )}
       </div>
     </div>
   );

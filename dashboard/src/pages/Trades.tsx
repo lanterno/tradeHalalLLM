@@ -1,6 +1,7 @@
 import { useState, useMemo, useCallback } from "react";
 import { useTrades } from "../hooks/useTrades";
 import { TradesTable } from "../components/TradesTable";
+import { ErrorState } from "../components/ErrorState";
 import { entityOf } from "../lib/utils";
 import { entityLabel, useMarket } from "../lib/market";
 
@@ -34,7 +35,7 @@ export default function Trades() {
     [page, pair, side],
   );
 
-  const { data: trades, isLoading } = useTrades(filters);
+  const { data: trades, isLoading, isError, error, refetch } = useTrades(filters);
   const { data: allTrades } = useTrades({ limit: 500 });
 
   const entities = useMemo(() => {
@@ -133,8 +134,10 @@ export default function Trades() {
 
       {/* Table */}
       <div className="rounded-xl border border-border bg-surface p-4">
-        {isLoading ? (
-          <p className="py-8 text-center text-sm text-muted">Loading...</p>
+        {isError ? (
+          <ErrorState compact error={error} onRetry={refetch} />
+        ) : isLoading ? (
+          <p className="py-8 text-center text-sm text-muted">Loading…</p>
         ) : (
           <TradesTable trades={trades ?? []} showReasoning />
         )}

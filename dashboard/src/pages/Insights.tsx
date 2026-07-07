@@ -1,4 +1,5 @@
 import { StatCard } from "../components/StatCard";
+import { ErrorState } from "../components/ErrorState";
 import {
   useDrift,
   usePurification,
@@ -33,13 +34,48 @@ function EmptyTile({ label, message }: { label: string; message: string }) {
 }
 
 export default function Insights() {
-  const { data: drift } = useDrift();
-  const { data: shadow } = useShadow();
-  const { data: regret } = useRegret(200);
-  const { data: thesis } = useThesis(200);
-  const { data: whale } = useWhale();
-  const { data: velocity } = useVelocity();
-  const { data: purification } = usePurification();
+  const {
+    data: drift,
+    isError: driftIsError,
+    error: driftError,
+    refetch: driftRefetch,
+  } = useDrift();
+  const {
+    data: shadow,
+    isError: shadowIsError,
+    error: shadowError,
+    refetch: shadowRefetch,
+  } = useShadow();
+  const {
+    data: regret,
+    isError: regretIsError,
+    error: regretError,
+    refetch: regretRefetch,
+  } = useRegret(200);
+  const {
+    data: thesis,
+    isError: thesisIsError,
+    error: thesisError,
+    refetch: thesisRefetch,
+  } = useThesis(200);
+  const {
+    data: whale,
+    isError: whaleIsError,
+    error: whaleError,
+    refetch: whaleRefetch,
+  } = useWhale();
+  const {
+    data: velocity,
+    isError: velocityIsError,
+    error: velocityError,
+    refetch: velocityRefetch,
+  } = useVelocity();
+  const {
+    data: purification,
+    isError: purificationIsError,
+    error: purificationError,
+    refetch: purificationRefetch,
+  } = usePurification();
 
   return (
     <div className="space-y-6 p-6">
@@ -50,7 +86,9 @@ export default function Insights() {
 
       {/* Top row: live model-health tiles */}
       <div className="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-4">
-        {drift ? (
+        {driftIsError ? (
+          <ErrorState compact error={driftError} onRetry={driftRefetch} />
+        ) : drift ? (
           <StatCard
             label="Concept Drift"
             value={
@@ -64,7 +102,9 @@ export default function Insights() {
           <EmptyTile label="Concept Drift" message="No residuals yet" />
         )}
 
-        {shadow && shadow.metrics ? (
+        {shadowIsError ? (
+          <ErrorState compact error={shadowError} onRetry={shadowRefetch} />
+        ) : shadow && shadow.metrics ? (
           <StatCard
             label="Shadow Bot"
             value={
@@ -78,7 +118,9 @@ export default function Insights() {
           <EmptyTile label="Shadow Bot" message="Waiting for samples" />
         )}
 
-        {regret && regret.n > 0 ? (
+        {regretIsError ? (
+          <ErrorState compact error={regretError} onRetry={regretRefetch} />
+        ) : regret && regret.n > 0 ? (
           <StatCard
             label="Regret (mean)"
             value={
@@ -100,7 +142,9 @@ export default function Insights() {
           <EmptyTile label="Regret (mean)" message="No closed trades" />
         )}
 
-        {purification ? (
+        {purificationIsError ? (
+          <ErrorState compact error={purificationError} onRetry={purificationRefetch} />
+        ) : purification ? (
           <StatCard
             label="Purification Due"
             value={
@@ -125,7 +169,9 @@ export default function Insights() {
             </span>
           )}
         </header>
-        {!thesis || thesis.rows.length === 0 ? (
+        {thesisIsError ? (
+          <ErrorState compact error={thesisError} onRetry={thesisRefetch} />
+        ) : !thesis || thesis.rows.length === 0 ? (
           <p className="px-4 py-6 text-sm text-muted">
             No closed trades yet — tags accrue as the post-close hook fires.
           </p>
@@ -174,7 +220,9 @@ export default function Insights() {
             On-chain Whale Flows
           </h2>
         </header>
-        {!whale || whale.flows.length === 0 ? (
+        {whaleIsError ? (
+          <ErrorState compact error={whaleError} onRetry={whaleRefetch} />
+        ) : !whale || whale.flows.length === 0 ? (
           <p className="px-4 py-6 text-sm text-muted">
             No flows recorded — set ETHERSCAN_API_KEY to enable.
           </p>
@@ -227,7 +275,9 @@ export default function Insights() {
             Reddit Mention Velocity
           </h2>
         </header>
-        {!velocity || velocity.results.length === 0 ? (
+        {velocityIsError ? (
+          <ErrorState compact error={velocityError} onRetry={velocityRefetch} />
+        ) : !velocity || velocity.results.length === 0 ? (
           <p className="px-4 py-6 text-sm text-muted">
             No velocity results — fetcher runs each crypto cycle.
           </p>

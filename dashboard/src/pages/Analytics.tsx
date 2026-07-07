@@ -6,6 +6,7 @@ import { PnlBarChart } from "../components/PnlBarChart";
 import { EquityCurve } from "../components/EquityCurve";
 import { ExitReasonsChart } from "../components/ExitReasonsChart";
 import { PairBreakdown } from "../components/PairBreakdown";
+import { ErrorState } from "../components/ErrorState";
 import { formatUsd, formatPct, pnlColor } from "../lib/utils";
 import { entityLabel, useMarket } from "../lib/market";
 
@@ -19,9 +20,26 @@ const RANGES = [
 export default function Analytics() {
   const { market } = useMarket();
   const [days, setDays] = useState(30);
-  const { data: stats, isLoading } = useAnalytics(days);
-  const { data: pnl } = useDailyPnl(days);
-  const { data: trades } = useTrades({ limit: 500 });
+  const { data: stats, isLoading, isError, error, refetch } = useAnalytics(days);
+  const {
+    data: pnl,
+    isError: pnlError,
+    error: pnlErr,
+    refetch: pnlRefetch,
+  } = useDailyPnl(days);
+  const {
+    data: trades,
+    isError: tradesError,
+    error: tradesErr,
+    refetch: tradesRefetch,
+  } = useTrades({ limit: 500 });
+
+  if (isError)
+    return (
+      <div className="p-6">
+        <ErrorState error={error} onRetry={refetch} />
+      </div>
+    );
 
   return (
     <div className="space-y-6 p-6">
@@ -142,13 +160,21 @@ export default function Analytics() {
               <h3 className="mb-4 text-sm font-medium uppercase tracking-wider text-muted">
                 Daily P&L
               </h3>
-              {pnl ? <PnlBarChart data={pnl} /> : null}
+              {pnlError ? (
+                <ErrorState compact error={pnlErr} onRetry={pnlRefetch} />
+              ) : pnl ? (
+                <PnlBarChart data={pnl} />
+              ) : null}
             </div>
             <div className="rounded-xl border border-border bg-surface p-4">
               <h3 className="mb-4 text-sm font-medium uppercase tracking-wider text-muted">
                 Cumulative P&L
               </h3>
-              {pnl ? <EquityCurve data={pnl} /> : null}
+              {pnlError ? (
+                <ErrorState compact error={pnlErr} onRetry={pnlRefetch} />
+              ) : pnl ? (
+                <EquityCurve data={pnl} />
+              ) : null}
             </div>
           </div>
 
@@ -163,7 +189,11 @@ export default function Analytics() {
               <h3 className="mb-4 text-sm font-medium uppercase tracking-wider text-muted">
                 P&L by {entityLabel(market)}
               </h3>
-              {trades ? <PairBreakdown trades={trades} /> : null}
+              {tradesError ? (
+                <ErrorState compact error={tradesErr} onRetry={tradesRefetch} />
+              ) : trades ? (
+                <PairBreakdown trades={trades} />
+              ) : null}
             </div>
           </div>
         </>

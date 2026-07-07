@@ -5,6 +5,7 @@ import {
 } from "../hooks/useRecommendation";
 import { RecommendationCard } from "../components/RecommendationCard";
 import { StatCard } from "../components/StatCard";
+import { ErrorState } from "../components/ErrorState";
 import { formatUsd, formatPct } from "../lib/utils";
 
 function usd(v?: number | null) {
@@ -21,9 +22,25 @@ function pctColor(v?: number | null) {
 }
 
 export default function Recommendation() {
-  const { data: pick, isLoading } = useStockOfTheDay();
-  const { data: history } = useRecommendationHistory(30);
-  const { data: sc } = useRecommendationScorecard();
+  const {
+    data: pick,
+    isLoading,
+    isError: pickIsError,
+    error: pickError,
+    refetch: pickRefetch,
+  } = useStockOfTheDay();
+  const {
+    data: history,
+    isError: historyIsError,
+    error: historyError,
+    refetch: historyRefetch,
+  } = useRecommendationHistory(30);
+  const {
+    data: sc,
+    isError: scIsError,
+    error: scError,
+    refetch: scRefetch,
+  } = useRecommendationScorecard();
 
   return (
     <div className="space-y-6 p-6">
@@ -32,7 +49,19 @@ export default function Recommendation() {
         <p className="text-xs text-muted">Advisory halal recommendation</p>
       </div>
 
-      <RecommendationCard pick={pick} isLoading={isLoading} />
+      {pickIsError ? (
+        <div className="rounded-xl border border-border bg-surface p-4">
+          <ErrorState compact error={pickError} onRetry={pickRefetch} />
+        </div>
+      ) : (
+        <RecommendationCard pick={pick} isLoading={isLoading} />
+      )}
+
+      {scIsError ? (
+        <div className="rounded-xl border border-border bg-surface p-3">
+          <ErrorState compact error={scError} onRetry={scRefetch} />
+        </div>
+      ) : null}
 
       {/* Honest track record (forward returns vs halal benchmark) */}
       {sc?.available && sc.sufficient === false ? (
@@ -98,7 +127,9 @@ export default function Recommendation() {
         <h2 className="mb-4 text-sm font-medium uppercase tracking-wider text-muted">
           History
         </h2>
-        {history && history.length > 0 ? (
+        {historyIsError ? (
+          <ErrorState compact error={historyError} onRetry={historyRefetch} />
+        ) : history && history.length > 0 ? (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>

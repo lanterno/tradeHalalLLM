@@ -1,11 +1,17 @@
 import { useHealth, useSystemStatus, useConfig } from "../hooks/useSystem";
 import { StatCard } from "../components/StatCard";
+import { ErrorState } from "../components/ErrorState";
 import { cn } from "../lib/utils";
 
 export default function System() {
   const { data: health, isLoading: hLoading } = useHealth();
   const { data: status } = useSystemStatus();
-  const { data: config } = useConfig();
+  const {
+    data: config,
+    isError: configIsError,
+    error: configError,
+    refetch: refetchConfig,
+  } = useConfig();
 
   return (
     <div className="space-y-6 p-6">
@@ -113,8 +119,10 @@ export default function System() {
               </tbody>
             </table>
           </div>
+        ) : configIsError ? (
+          <ErrorState compact error={configError} onRetry={refetchConfig} />
         ) : (
-          <p className="text-sm text-muted">Loading configuration...</p>
+          <p className="text-sm text-muted">Loading configuration…</p>
         )}
       </div>
     </div>

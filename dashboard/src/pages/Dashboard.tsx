@@ -5,12 +5,29 @@ import { StatCard } from "../components/StatCard";
 import { EquityCurve } from "../components/EquityCurve";
 import { TradesTable } from "../components/TradesTable";
 import { RecommendationCard } from "../components/RecommendationCard";
+import { ErrorState } from "../components/ErrorState";
 import { formatUsd, formatPct, pnlColor } from "../lib/utils";
 
 export default function Dashboard() {
-  const { data: stats, isLoading: statsLoading } = useAnalytics(7);
-  const { data: pnl } = useDailyPnl(30);
-  const { data: trades } = useTrades({ limit: 10 });
+  const {
+    data: stats,
+    isLoading: statsLoading,
+    isError: statsIsError,
+    error: statsError,
+    refetch: statsRefetch,
+  } = useAnalytics(7);
+  const {
+    data: pnl,
+    isError: pnlIsError,
+    error: pnlError,
+    refetch: pnlRefetch,
+  } = useDailyPnl(30);
+  const {
+    data: trades,
+    isError: tradesIsError,
+    error: tradesError,
+    refetch: tradesRefetch,
+  } = useTrades({ limit: 10 });
   const { data: pick, isLoading: pickLoading } = useStockOfTheDay();
 
   return (
@@ -24,7 +41,11 @@ export default function Dashboard() {
       <RecommendationCard pick={pick} isLoading={pickLoading} />
 
       {/* Stats grid */}
-      {statsLoading ? (
+      {statsIsError ? (
+        <div className="rounded-xl border border-border bg-surface p-4">
+          <ErrorState compact error={statsError} onRetry={statsRefetch} />
+        </div>
+      ) : statsLoading ? (
         <div className="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-6">
           {Array.from({ length: 6 }).map((_, i) => (
             <div
@@ -88,7 +109,13 @@ export default function Dashboard() {
         <h2 className="mb-4 text-sm font-medium uppercase tracking-wider text-muted">
           Equity Curve (30d)
         </h2>
-        {pnl ? <EquityCurve data={pnl} /> : <p className="text-sm text-muted">Loading...</p>}
+        {pnlIsError ? (
+          <ErrorState compact error={pnlError} onRetry={pnlRefetch} />
+        ) : pnl ? (
+          <EquityCurve data={pnl} />
+        ) : (
+          <p className="text-sm text-muted">Loading…</p>
+        )}
       </div>
 
       {/* Recent trades */}
@@ -96,10 +123,12 @@ export default function Dashboard() {
         <h2 className="mb-4 text-sm font-medium uppercase tracking-wider text-muted">
           Recent Trades
         </h2>
-        {trades ? (
+        {tradesIsError ? (
+          <ErrorState compact error={tradesError} onRetry={tradesRefetch} />
+        ) : trades ? (
           <TradesTable trades={trades} compact />
         ) : (
-          <p className="text-sm text-muted">Loading...</p>
+          <p className="text-sm text-muted">Loading…</p>
         )}
       </div>
     </div>
