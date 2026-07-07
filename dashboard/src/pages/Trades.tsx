@@ -1,13 +1,28 @@
 import { useState, useMemo, useCallback } from "react";
 import { useTrades } from "../hooks/useTrades";
 import { TradesTable } from "../components/TradesTable";
+import { entityOf } from "../lib/utils";
+import { entityLabel, useMarket } from "../lib/market";
 
 const PAGE_SIZE = 25;
 
 export default function Trades() {
+  const { market } = useMarket();
   const [page, setPage] = useState(0);
   const [pair, setPair] = useState("");
   const [side, setSide] = useState("");
+
+  // Filters are per-market — a symbol picked in stocks would otherwise leak
+  // into crypto (and vice versa) and silently empty the table. Reset them
+  // during render when the market changes (React's blessed alternative to a
+  // setState-in-effect: https://react.dev/learn/you-might-not-need-an-effect).
+  const [prevMarket, setPrevMarket] = useState(market);
+  if (market !== prevMarket) {
+    setPrevMarket(market);
+    setPair("");
+    setSide("");
+    setPage(0);
+  }
 
   const filters = useMemo(
     () => ({
@@ -22,32 +37,45 @@ export default function Trades() {
   const { data: trades, isLoading } = useTrades(filters);
   const { data: allTrades } = useTrades({ limit: 500 });
 
-  const pairs = useMemo(() => {
+  const entities = useMemo(() => {
     if (!allTrades) return [];
-    return [...new Set(allTrades.map((t) => t.pair))].sort();
+    return [...new Set(allTrades.map(entityOf))].filter(Boolean).sort();
   }, [allTrades]);
 
   const exportCsv = useCallback(() => {
     if (!allTrades?.length) return;
     const headers = [
       "timestamp",
-      "pair",
+      "symbol",
       "side",
       "quantity",
       "price",
-      "entry_price",
+      "filled_price",
       "exit_price",
       "exit_reason",
       "status",
       "llm_reasoning",
     ];
+    const cell = (v: unknown) => {
+      const s = v == null ? "" : String(v);
+      // Quote if the value contains a comma, quote, or newline (llm_reasoning
+      // can span lines); double up embedded quotes per RFC 4180.
+      return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
     const rows = allTrades.map((t) =>
-      headers
-        .map((h) => {
-          const v = t[h as keyof typeof t];
-          const s = v == null ? "" : String(v);
-          return s.includes(",") ? `"${s}"` : s;
-        })
+      [
+        t.timestamp,
+        entityOf(t),
+        t.side,
+        t.quantity,
+        t.price,
+        t.filled_price ?? t.entry_price ?? "",
+        t.exit_price ?? "",
+        t.exit_reason ?? "",
+        t.status,
+        t.llm_reasoning,
+      ]
+        .map(cell)
         .join(","),
     );
     const csv = [headers.join(","), ...rows].join("\n");
@@ -82,8 +110,8 @@ export default function Trades() {
           }}
           className="rounded-lg border border-border bg-surface px-3 py-1.5 text-sm text-gray-200 outline-none focus:border-accent"
         >
-          <option value="">All Pairs</option>
-          {pairs.map((p) => (
+          <option value="">All {entityLabel(market)}s</option>
+          {entities.map((p) => (
             <option key={p} value={p}>
               {p}
             </option>

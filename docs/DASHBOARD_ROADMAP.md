@@ -117,12 +117,14 @@ APIs + deployment) — none of it touches live sizing, `core/fills.py`, or
 reconcile.
 
 ### Phase 0 — Make it show the stock bot at all (correctness; do first)
-- [ ] **Global Stocks/Crypto market switch.** Thread a `market` param through
-      `api/trades.ts`, `positions.ts`, `analytics.ts`, `pnl` + their hooks,
-      and add a toggle in `Layout` (persist to `localStorage`/URL). Since the
-      bot is stocks-only today, the fast interim fix is to default the SPA to
-      `market=stocks`. Fixes Dashboard / Positions / Trades / Analytics in one
-      change. **Highest ROI item on this list.**
+- [x] **Global Stocks/Crypto market switch.** *(done 2026-07-07)* `lib/market.tsx`
+      `MarketProvider`/`useMarket` (persists to `localStorage`, defaults to
+      **stocks**) + a sidebar toggle in `Layout`; `market` threaded through the
+      trades/positions/analytics/pnl fetchers + hooks (in each query key so a
+      switch refetches). Lights up Dashboard / Positions / Trades / Analytics
+      at once. Also fixed the stock **P&L basis** (rows carry `filled_price`,
+      not `entry_price`) in `TradesTable`/`PairBreakdown`/CSV — caught by an
+      adversarial review pass (283 closed stock trades were rendering `—`).
 - [ ] **Decide the deployment model** (operator call — see below). Either
       co-host the web app inside the `trader-stocks` process via
       `attach_to_app` (unblocks risk/sentiment/insights/live-cycle/backups), or
@@ -135,9 +137,10 @@ reconcile.
 - [ ] **Fix stubs / mislabels:** real `/api/health`; render stock cadence +
       classifier health from `system/status` (SPA reads the crypto interval);
       make `/api/system/backups` real or remove the panel.
-- [ ] **Reshape Trades/Positions for stocks:** `symbol` (not `pair`) column +
-      filter labels; CSV export uses stock fields (`symbol`, `filled_price`,
-      `exit_reason`).
+- [x] **Reshape Trades/Positions for stocks:** *(done 2026-07-07)* `symbol`
+      (not `pair`) column + filter labels via `entityOf()`/`entityLabel()`;
+      per-market filter reset; CSV export uses stock fields; the crypto-only
+      live-price WS is gated off for stocks (positions marked at entry).
 
 ### Phase 1 — Reliability & polish (cheap, high-signal)
 - [ ] Render `isError` on every page + a global React error boundary.

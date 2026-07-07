@@ -9,28 +9,33 @@ import {
   CartesianGrid,
 } from "recharts";
 import type { Trade } from "../api/types";
-import { formatUsd } from "../lib/utils";
+import { entityOf, formatUsd } from "../lib/utils";
 
 interface PairBreakdownProps {
   trades: Trade[];
 }
 
 export function PairBreakdown({ trades }: PairBreakdownProps) {
-  const pnlByPair: Record<string, number> = {};
+  const pnlByEntity: Record<string, number> = {};
   for (const t of trades) {
-    if (t.exit_price && t.entry_price) {
-      const pnl = (t.exit_price - t.entry_price) * t.quantity;
-      pnlByPair[t.pair] = (pnlByPair[t.pair] ?? 0) + pnl;
+    // Stocks carry filled_price as the entry basis; crypto carry entry_price.
+    const entry = t.entry_price ?? t.filled_price ?? t.price;
+    if (t.exit_price != null && entry != null) {
+      const key = entityOf(t);
+      const pnl = (t.exit_price - entry) * t.quantity;
+      pnlByEntity[key] = (pnlByEntity[key] ?? 0) + pnl;
     }
   }
 
-  const data = Object.entries(pnlByPair)
+  const data = Object.entries(pnlByEntity)
     .map(([pair, pnl]) => ({ pair, pnl }))
     .sort((a, b) => b.pnl - a.pnl);
 
   if (!data.length) {
     return (
-      <p className="py-12 text-center text-sm text-muted">No pair data.</p>
+      <p className="py-12 text-center text-sm text-muted">
+        No per-symbol P&L yet.
+      </p>
     );
   }
 

@@ -1,3 +1,8 @@
+// Which bot's data a market-aware endpoint should return. The backend
+// discriminates trades/positions/analytics/pnl on this; the SPA sends it
+// explicitly (see lib/market.tsx) rather than relying on the crypto default.
+export type Market = "stocks" | "crypto";
+
 export interface AnalyticsStats {
   total_trades: number;
   wins: number;
@@ -19,20 +24,29 @@ export interface AnalyticsStats {
 export interface Trade {
   id: number;
   timestamp: string;
-  pair: string;
+  // Crypto rows carry ``pair``; stocks rows carry ``symbol``. Use
+  // ``entityOf()`` (lib/utils) to read whichever the row has.
+  pair?: string;
+  symbol?: string;
   side: string;
   quantity: number;
   price: number;
   order_id: string;
-  exchange: string;
+  exchange?: string;
   status: string;
   llm_reasoning: string;
-  entry_price: number | null;
+  entry_price?: number | null;
   stop_loss: number | null;
   target_price: number | null;
   exit_price: number | null;
   exit_reason: string | null;
   closed_at: string | null;
+  // Stocks-side fill fields (absent on crypto rows).
+  filled_price?: number | null;
+  filled_quantity?: number | null;
+  submitted_at?: string | null;
+  filled_at?: string | null;
+  entry_type?: string | null;
 }
 
 export interface DailyPnl {
@@ -68,7 +82,10 @@ export interface StrategyAdjustment {
 
 export interface OpenPosition {
   id: number;
+  // Stocks positions are aliased ``pair = symbol`` by the backend; crypto
+  // rows carry a native ``pair``. ``symbol`` is present on stocks rows.
   pair: string;
+  symbol?: string;
   quantity: number;
   entry_price: number;
   stop_loss: number | null;

@@ -7,6 +7,7 @@ import { EquityCurve } from "../components/EquityCurve";
 import { ExitReasonsChart } from "../components/ExitReasonsChart";
 import { PairBreakdown } from "../components/PairBreakdown";
 import { formatUsd, formatPct, pnlColor } from "../lib/utils";
+import { entityLabel, useMarket } from "../lib/market";
 
 const RANGES = [
   { label: "7d", days: 7 },
@@ -16,6 +17,7 @@ const RANGES = [
 ] as const;
 
 export default function Analytics() {
+  const { market } = useMarket();
   const [days, setDays] = useState(30);
   const { data: stats, isLoading } = useAnalytics(days);
   const { data: pnl } = useDailyPnl(days);
@@ -117,7 +119,7 @@ export default function Analytics() {
               }
             />
             <StatCard
-              label="Best Pair"
+              label={`Best ${entityLabel(market)}`}
               value={
                 <span className="text-accent text-lg">
                   {stats.best_pair || "N/A"}
@@ -125,7 +127,7 @@ export default function Analytics() {
               }
             />
             <StatCard
-              label="Worst Pair"
+              label={`Worst ${entityLabel(market)}`}
               value={
                 <span className="text-loss text-lg">
                   {stats.worst_pair || "N/A"}
@@ -159,7 +161,7 @@ export default function Analytics() {
             </div>
             <div className="rounded-xl border border-border bg-surface p-4">
               <h3 className="mb-4 text-sm font-medium uppercase tracking-wider text-muted">
-                P&L by Pair
+                P&L by {entityLabel(market)}
               </h3>
               {trades ? <PairBreakdown trades={trades} /> : null}
             </div>

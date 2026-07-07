@@ -1,6 +1,8 @@
 import { apiFetch } from "./client";
-import type { OpenPosition } from "./types";
+import type { Market, OpenPosition } from "./types";
 
-export async function fetchPositions(): Promise<OpenPosition[]> {
-  return apiFetch<OpenPosition[]>("/api/positions");
+export async function fetchPositions(
+  market: Market = "stocks",
+): Promise<OpenPosition[]> {
+  return apiFetch<OpenPosition[]>(`/api/positions?market=${market}`);
 }

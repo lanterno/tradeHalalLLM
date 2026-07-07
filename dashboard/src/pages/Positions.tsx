@@ -2,23 +2,27 @@ import { useMemo } from "react";
 import { usePositions } from "../hooks/usePositions";
 import { usePriceStream } from "../hooks/usePriceStream";
 import { StatCard } from "../components/StatCard";
-import { cn, formatUsd, formatQty, formatTime, pnlColor } from "../lib/utils";
+import { cn, entityOf, formatUsd, formatQty, formatTime, pnlColor } from "../lib/utils";
+import { entityLabel, useMarket } from "../lib/market";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts";
 
 const COLORS = ["#4ade80", "#60a5fa", "#facc15", "#c084fc", "#fb923c", "#f87171"];
 
 export default function Positions() {
+  const { market } = useMarket();
   const { data: positions, isLoading } = usePositions();
+  // Live WS prices are a crypto-only feed; stocks positions are marked at the
+  // backend's REST snapshot (current_price = entry until a quote path lands).
   const symbols = useMemo(
-    () => (positions ?? []).map((p) => p.pair),
-    [positions],
+    () => (market === "crypto" ? (positions ?? []).map(entityOf) : []),
+    [positions, market],
   );
   const { prices, connected } = usePriceStream(symbols);
 
   const enriched = useMemo(() => {
     if (!positions) return [];
     return positions.map((p) => {
-      const current = prices[p.pair] ?? p.current_price ?? p.entry_price;
+      const current = prices[entityOf(p)] ?? p.current_price ?? p.entry_price;
       const unrealizedPnl = (current - p.entry_price) * p.quantity;
       const unrealizedPct = p.entry_price
         ? (current - p.entry_price) / p.entry_price
@@ -33,7 +37,7 @@ export default function Positions() {
   );
 
   const allocationData = enriched.map((p) => ({
-    name: p.pair,
+    name: entityOf(p),
     value: p.entry_price * p.quantity,
   }));
 
@@ -41,15 +45,19 @@ export default function Positions() {
     <div className="space-y-6 p-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-white">Open Positions</h1>
-        <div className="flex items-center gap-2 text-xs text-muted">
-          <span
-            className={cn(
-              "h-2 w-2 rounded-full",
-              connected ? "bg-accent animate-pulse" : "bg-muted",
-            )}
-          />
-          {connected ? "Live prices" : "Reconnecting..."}
-        </div>
+        {market === "crypto" ? (
+          <div className="flex items-center gap-2 text-xs text-muted">
+            <span
+              className={cn(
+                "h-2 w-2 rounded-full",
+                connected ? "bg-accent animate-pulse" : "bg-muted",
+              )}
+            />
+            {connected ? "Live prices" : "Reconnecting..."}
+          </div>
+        ) : (
+          <span className="text-xs text-muted">Marked at entry (REST snapshot)</span>
+        )}
       </div>
 
       <div className="grid grid-cols-2 gap-4 md:grid-cols-3">
@@ -87,7 +95,7 @@ export default function Positions() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-border text-left text-xs uppercase tracking-wider text-muted">
-                    <th className="px-3 py-2">Pair</th>
+                    <th className="px-3 py-2">{entityLabel(market)}</th>
                     <th className="px-3 py-2 text-right">Qty</th>
                     <th className="px-3 py-2 text-right">Entry</th>
                     <th className="px-3 py-2 text-right">Current</th>
@@ -103,7 +111,7 @@ export default function Positions() {
                       key={p.id}
                       className="border-b border-border/50 hover:bg-surface-hover/50 transition-colors"
                     >
-                      <td className="px-3 py-2 font-medium">{p.pair}</td>
+                      <td className="px-3 py-2 font-medium">{entityOf(p)}</td>
                       <td className="px-3 py-2 text-right font-mono">
                         {formatQty(p.quantity)}
                       </td>
@@ -121,7 +129,7 @@ export default function Positions() {
                       >
                         {formatUsd(p.unrealized_pnl ?? 0)}
                         <span className="ml-1 text-[10px] font-normal">
-                          ({(p.unrealized_pnl_pct! * 100).toFixed(2)}%)
+                          ({((p.unrealized_pnl_pct ?? 0) * 100).toFixed(2)}%)
                         </span>
                       </td>
                       <td className="px-3 py-2 text-right font-mono text-loss">

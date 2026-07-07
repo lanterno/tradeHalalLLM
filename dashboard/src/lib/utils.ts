@@ -18,7 +18,17 @@ export function formatPct(value: number): string {
 }
 
 export function formatQty(value: number, decimals = 6): string {
-  return value.toFixed(decimals);
+  // Trim trailing zeros so stock share counts render as "44" (not
+  // "44.000000") while crypto fractional sizes keep their precision.
+  return parseFloat(value.toFixed(decimals)).toString();
+}
+
+/**
+ * The per-asset key for a row: stocks carry ``symbol``, crypto carry
+ * ``pair``. Returns whichever is present so one template renders both.
+ */
+export function entityOf(row: { symbol?: string | null; pair?: string | null }): string {
+  return row.symbol ?? row.pair ?? "";
 }
 
 export function formatTime(iso: string): string {
