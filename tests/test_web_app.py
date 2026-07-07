@@ -37,6 +37,27 @@ def client(database_url, tmp_path, monkeypatch):
     # Reset the Settings singleton for the next test.
 
 
+# ── SPA static serving / path traversal ────────────────────────
+
+
+def test_resolve_static_serves_and_blocks_traversal(tmp_path):
+    dist = tmp_path / "dist"
+    (dist / "assets").mkdir(parents=True)
+    (dist / "index.html").write_text("<div id=root>")
+    (dist / "app.js").write_text("ok")
+    (dist / "assets" / "x.css").write_text("x")
+    (tmp_path / "secret.txt").write_text("top secret")  # OUTSIDE dist
+
+    # Legit files inside dist resolve.
+    assert web_app._resolve_static(dist, "app.js") == (dist / "app.js").resolve()
+    assert web_app._resolve_static(dist, "assets/x.css") == (dist / "assets" / "x.css").resolve()
+    # Traversal escaping dist is refused (caller falls back to index.html).
+    assert web_app._resolve_static(dist, "../secret.txt") is None
+    assert web_app._resolve_static(dist, "../../etc/passwd") is None
+    # A missing file inside dist is also None (SPA client-route fallback).
+    assert web_app._resolve_static(dist, "does-not-exist.js") is None
+
+
 # ── Health & basic GETs ────────────────────────────────────────
 
 

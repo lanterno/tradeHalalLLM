@@ -32,6 +32,21 @@ logger = logging.getLogger(__name__)
 _DASHBOARD_DIST = Path(__file__).resolve().parent.parent.parent.parent / "dashboard" / "dist"
 
 
+def _resolve_static(dist_root: Path, full_path: str) -> Path | None:
+    """Resolve ``full_path`` under ``dist_root`` for the SPA catch-all.
+
+    Returns the file only if it stays *inside* ``dist_root`` and is a regular
+    file; otherwise ``None`` (the caller serves ``index.html`` for client-side
+    routing). This blocks path-traversal (``../../etc/passwd``) from escaping
+    the static root — a plain ``dist_root / full_path`` + ``exists()`` check
+    would happily serve any file outside dist that the traversal reaches.
+    """
+    candidate = (dist_root / full_path).resolve()
+    if candidate.is_relative_to(dist_root) and candidate.is_file():
+        return candidate
+    return None
+
+
 def create_app() -> Any:
     """Create and configure the FastAPI application."""
     from fastapi import FastAPI, Request
@@ -131,11 +146,13 @@ def create_app() -> Any:
         # Excluded from the OpenAPI schema so the FileResponse return-type
         # forward ref doesn't crash pydantic's schema generation at
         # /openapi.json (and therefore /docs).
+        _dist_root = _DASHBOARD_DIST.resolve()
+
         @app.get("/{full_path:path}", include_in_schema=False)
         async def spa_catch_all(full_path: str) -> FileResponse:
-            file = _DASHBOARD_DIST / full_path
-            if file.exists() and file.is_file():
-                return FileResponse(str(file))
-            return FileResponse(str(_DASHBOARD_DIST / "index.html"))
+            served = _resolve_static(_dist_root, full_path)
+            if served is not None:
+                return FileResponse(str(served))
+            return FileResponse(str(_dist_root / "index.html"))
 
     return app

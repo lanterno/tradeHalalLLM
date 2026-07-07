@@ -212,8 +212,11 @@ reconcile.
 - [ ] Light/dark theming (`data-theme` + token overrides); today it's
       dark-only.
 - [ ] WebSocket auth (currently `/ws/*` bypass the auth/audit middleware).
-- [ ] Path-traversal guard on the SPA catch-all (`Path.resolve()` +
-      `is_relative_to`).
+- [x] Path-traversal guard on the SPA catch-all. *(done 2026-07-07)*
+      `web/app.py:_resolve_static` resolves the requested path and serves it
+      only if it stays inside `dist/` (`is_relative_to`) and is a file — else
+      falls through to `index.html`. Blocks `../../etc/passwd`-style escapes
+      that the old `exists()`-only check would have served. Unit-tested.
 - [ ] Consolidate the two duplicate halal-explain endpoints.
 
 ---
