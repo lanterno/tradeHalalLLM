@@ -165,12 +165,13 @@ reconcile.
       error-states work).
 
 ### Phase 2 — Stock-operator value surfaces (the real gaps)
-- [ ] **Guard / rejection visibility panel** — surface `cycle.no_action` +
-      the rejection reason (20% concentration cap, recent-close cooldown,
-      SL re-entry gate, min-notional, halal fail). Today the operator can't
-      see "the bot wanted to buy X but was blocked by Y" without reading logs.
-      **Highest-value new panel.** Needs a small backend endpoint (parse from
-      decisions/logs or a rejections view).
+- [x] **Guard / rejection visibility panel** *(done 2026-07-07)* —
+      `web/metrics.py:recent_rejections` parses `cycle.no_action.reasons` into
+      `{timestamp, symbol, reason, category}` (categorized: concentration_cap,
+      recent_close_cooldown, stop_loss_reentry, halal_screen, min_notional, …)
+      behind `GET /api/metrics/rejections` (tested). New `GuardRejections`
+      panel on the Decisions page shows "the bot proposed X but guard Y blocked
+      it" — verified against the real log (AAPL 20%-cap, ADBE cooldown).
 - [x] **True equity curve** from account equity. *(done 2026-07-07)*
       `EquityCurve` gained a `mode` prop: Dashboard now plots real
       `ending_equity` (mark-to-market account value, auto Y-domain) instead of

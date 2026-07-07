@@ -217,3 +217,83 @@ def llm_metrics(
         p95_ms=_percentile(elapsed_all, 0.95),
         by_provider=by_provider,
     )
+
+
+# Substring → guard category, checked in order (first match wins). Lets the
+# dashboard group "the bot wanted to trade but a guard blocked it" reasons.
+_GUARD_CATEGORIES: tuple[tuple[str, str], ...] = (
+    ("cooldown", "recent_close_cooldown"),
+    ("re-entry gate", "stop_loss_reentry"),
+    ("stopped out", "stop_loss_reentry"),
+    ("20%", "concentration_cap"),
+    ("exceeds", "concentration_cap"),
+    ("limit", "concentration_cap"),
+    ("halal", "halal_screen"),
+    ("notional", "min_notional"),
+    ("insufficient", "insufficient_funds"),
+    ("balance", "insufficient_funds"),
+)
+
+
+def _categorize_rejection(reason: str) -> str:
+    low = reason.lower()
+    for needle, category in _GUARD_CATEGORIES:
+        if needle in low:
+            return category
+    return "other"
+
+
+def recent_rejections(
+    log_path: Path,
+    *,
+    window_seconds: int = 86400,
+    max_lines: int = DEFAULT_MAX_LINES,
+    now: datetime | None = None,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    """Guard/rejection reasons from ``cycle.no_action`` events, newest-first.
+
+    Each such event carries a ``reasons`` list of ``"SYMBOL:detail"`` strings
+    (the cycle proposed a trade but every action was blocked by a guard —
+    concentration cap, recent-close cooldown, stop-loss re-entry gate, …).
+    We flatten those into rows the dashboard can render so an operator can see
+    *why* the bot didn't trade without reading the logs.
+    """
+    now = now or datetime.now(UTC)
+    since = now - timedelta(seconds=window_seconds)
+
+    out: list[dict[str, Any]] = []
+    for record in _iter_records(log_path, max_lines):
+        if record.get("event") != events.CYCLE_NO_ACTION:
+            continue
+        if not _within(record, since):
+            continue
+        reasons = record.get("reasons")
+        if not isinstance(reasons, list):
+            continue
+        ts = record.get("timestamp")
+        cid = record.get("cycle_id")
+        for raw in reasons:
+            if not isinstance(raw, str):
+                continue
+            symbol: str | None = None
+            reason = raw
+            # Reasons are "SYMBOL:detail"; split on the FIRST colon and only
+            # treat the head as a ticker when it looks like one (the detail can
+            # itself contain colons, e.g. "cooldown: sold 15 min ago").
+            head, sep, tail = raw.partition(":")
+            if sep and head.isupper() and 1 <= len(head) <= 6 and head.isalpha():
+                symbol, reason = head, tail.strip()
+            out.append(
+                {
+                    "timestamp": ts,
+                    "cycle_id": cid,
+                    "symbol": symbol,
+                    "reason": reason,
+                    "category": _categorize_rejection(reason),
+                }
+            )
+
+    # _iter_records yields oldest-first; reverse for newest-first, then cap.
+    out.reverse()
+    return out[:limit]

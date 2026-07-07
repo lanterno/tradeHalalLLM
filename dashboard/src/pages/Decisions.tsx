@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useDecisions, useAdjustments } from "../hooks/useDecisions";
 import { ErrorState } from "../components/ErrorState";
+import { GuardRejections } from "../components/GuardRejections";
 import { formatTime, relativeTime } from "../lib/utils";
 
 export default function Decisions() {
@@ -32,6 +33,9 @@ export default function Decisions() {
   return (
     <div className="space-y-6 p-6">
       <h1 className="text-2xl font-bold text-white">LLM Decisions</h1>
+
+      {/* Guard rejections — why the bot didn't trade */}
+      <GuardRejections />
 
       {/* Strategy adjustments */}
       <div className="rounded-xl border border-border bg-surface p-4">

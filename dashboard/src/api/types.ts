@@ -152,6 +152,15 @@ export interface LlmMetrics {
   p95_ms: number | null;
 }
 
+// A guard/rejection: the cycle proposed a trade but a guard blocked it.
+export interface RejectionRow {
+  timestamp: string;
+  cycle_id: string | null;
+  symbol: string | null;
+  reason: string;
+  category: string;
+}
+
 export interface RiskState {
   available: boolean;
   is_halted?: boolean;

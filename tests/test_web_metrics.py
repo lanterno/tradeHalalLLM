@@ -150,6 +150,62 @@ def test_llm_metrics_sums_cost_usd(tmp_path):
     assert m.total_cost_usd == 0.0008
 
 
+def test_recent_rejections_parses_and_categorizes(tmp_path):
+    now = datetime(2026, 4, 25, 12, 0, tzinfo=UTC)
+    records = [
+        _record(
+            events.CYCLE_NO_ACTION,
+            ts=now - timedelta(minutes=5),
+            cycle_id="cyc-1",
+            reasons=[
+                "AAPL:Position size for AAPL exceeds 20% limit (held $10k)",
+                "ADBE:recent-close cooldown: ADBE sold 15 min ago",
+            ],
+        ),
+        _record(
+            events.CYCLE_NO_ACTION,
+            ts=now,
+            cycle_id="cyc-2",
+            reasons=["INTU:stop-loss re-entry gate: INTU was stopped out 30m ago"],
+        ),
+        # Outside the window — must be excluded.
+        _record(
+            events.CYCLE_NO_ACTION,
+            ts=now - timedelta(hours=48),
+            cycle_id="old",
+            reasons=["MSFT:stale"],
+        ),
+    ]
+    log = _write_log(tmp_path, records)
+    rows = metrics.recent_rejections(log, window_seconds=3600, now=now)
+    assert len(rows) == 3  # 2 from cyc-1 + 1 from cyc-2, old one excluded
+    # Newest-first: cyc-2's row leads.
+    assert rows[0]["symbol"] == "INTU"
+    assert rows[0]["category"] == "stop_loss_reentry"
+    cats = {r["symbol"]: r["category"] for r in rows}
+    assert cats["AAPL"] == "concentration_cap"
+    assert cats["ADBE"] == "recent_close_cooldown"
+    # The "SYMBOL:" prefix is stripped from the surfaced reason.
+    assert rows[0]["reason"].startswith("stop-loss re-entry gate")
+
+
+def test_recent_rejections_ignores_non_ticker_prefix(tmp_path):
+    now = datetime(2026, 4, 25, 12, 0, tzinfo=UTC)
+    records = [
+        _record(
+            events.CYCLE_NO_ACTION,
+            ts=now,
+            cycle_id="c",
+            reasons=["some free-form reason: with a colon but no ticker"],
+        ),
+    ]
+    log = _write_log(tmp_path, records)
+    rows = metrics.recent_rejections(log, window_seconds=3600, now=now)
+    assert len(rows) == 1
+    assert rows[0]["symbol"] is None
+    assert rows[0]["reason"] == "some free-form reason: with a colon but no ticker"
+
+
 def test_llm_metrics_skips_unknown_events(tmp_path):
     now = datetime(2026, 4, 25, 12, 0, tzinfo=UTC)
     records = [

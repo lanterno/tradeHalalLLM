@@ -1,5 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
-import { fetchCycleMetrics, fetchLlmMetrics } from "../api/metrics";
+import {
+  fetchCycleMetrics,
+  fetchLlmMetrics,
+  fetchRejections,
+} from "../api/metrics";
 
 export function useCycleMetrics(windowSeconds: number) {
   return useQuery({
@@ -13,6 +17,14 @@ export function useLlmMetrics(windowSeconds: number) {
   return useQuery({
     queryKey: ["metrics", "llm", windowSeconds],
     queryFn: () => fetchLlmMetrics(windowSeconds),
+    refetchInterval: 30_000,
+  });
+}
+
+export function useRejections(windowSeconds: number) {
+  return useQuery({
+    queryKey: ["metrics", "rejections", windowSeconds],
+    queryFn: () => fetchRejections(windowSeconds),
     refetchInterval: 30_000,
   });
 }

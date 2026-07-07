@@ -49,3 +49,15 @@ def register(app: FastAPI) -> None:
                 "by_provider": m.by_provider,
             }
         )
+
+    @app.get("/api/metrics/rejections")
+    async def api_metrics_rejections(
+        window: int = 86400, ctx: DashboardContext = Depends(get_ctx)
+    ) -> JSONResponse:
+        """Guard/rejection reasons (cycle.no_action) so the operator can see
+        why the bot didn't trade — concentration cap, cooldown, SL re-entry
+        gate, halal screen, etc."""
+        from halal_trader.web.metrics import recent_rejections
+
+        log_path = ctx.settings.log.dir / "halal_trader.log"
+        return JSONResponse(recent_rejections(log_path, window_seconds=window))
