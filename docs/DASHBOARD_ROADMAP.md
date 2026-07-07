@@ -178,10 +178,11 @@ reconcile.
       the cumulative-`realized_pnl` proxy; Analytics keeps `mode="cumulative"`.
 - [ ] **Per-symbol stock P&L** (realized + unrealized) — a stock analogue of
       the crypto `PairBreakdown`.
-- [ ] **Fill-quality / slippage panel** — the `trades` table already tracks
-      `submitted_at`/`filled_at`/`filled_price`/`paper_slippage_pct`; expose
-      submitted-vs-filled and slippage. Also surfaces the cold-start
-      fill-timeout pattern seen at the open.
+- [x] **Fill-quality / slippage panel** *(done 2026-07-07)* — `FillQuality`
+      component on the Trades page computes fill latency (submitted→filled),
+      slippage (bps, from `paper_slippage_pct` or filled-vs-intended price),
+      and an "unfilled" count (surfaces the cold-start fill-timeout pattern),
+      client-side over the last 100 orders of the active market.
 - [ ] **Zoya halal-screen status page** — pass/fail/reason per symbol. Halal
       is non-negotiable; `halal_compliance.py` (AAOIFI summary) and
       `admin_halal` sector-allocation are built and unconsumed — wire them.

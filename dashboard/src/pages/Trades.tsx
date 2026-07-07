@@ -2,6 +2,7 @@ import { useState, useMemo, useCallback } from "react";
 import { useTrades } from "../hooks/useTrades";
 import { TradesTable } from "../components/TradesTable";
 import { ErrorState } from "../components/ErrorState";
+import { FillQuality } from "../components/FillQuality";
 import { entityOf } from "../lib/utils";
 import { entityLabel, useMarket } from "../lib/market";
 
@@ -100,6 +101,9 @@ export default function Trades() {
           Export CSV
         </button>
       </div>
+
+      {/* Execution quality — latency + slippage over recent orders */}
+      <FillQuality />
 
       {/* Filters */}
       <div className="flex flex-wrap gap-3">

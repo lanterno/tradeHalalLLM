@@ -47,6 +47,9 @@ export interface Trade {
   submitted_at?: string | null;
   filled_at?: string | null;
   entry_type?: string | null;
+  paper_slippage_pct?: number | null;
+  predicted_slippage_pct?: number | null;
+  live_slippage_pct?: number | null;
 }
 
 export interface DailyPnl {
