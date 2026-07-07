@@ -11,6 +11,7 @@ const Trades = lazy(() => import("./pages/Trades"));
 const Analytics = lazy(() => import("./pages/Analytics"));
 const Sentiment = lazy(() => import("./pages/Sentiment"));
 const Decisions = lazy(() => import("./pages/Decisions"));
+const Halal = lazy(() => import("./pages/Halal"));
 const System = lazy(() => import("./pages/System"));
 const Observability = lazy(() => import("./pages/Observability"));
 const RiskAndSystem = lazy(() => import("./pages/RiskAndSystem"));
@@ -81,6 +82,14 @@ export default function App() {
           element={
             <Suspense fallback={<PageSkeleton />}>
               <Decisions />
+            </Suspense>
+          }
+        />
+        <Route
+          path="halal"
+          element={
+            <Suspense fallback={<PageSkeleton />}>
+              <Halal />
             </Suspense>
           }
         />

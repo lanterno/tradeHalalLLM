@@ -155,6 +155,25 @@ export interface LlmMetrics {
   p95_ms: number | null;
 }
 
+// AAOIFI halal-compliance summary (GET /api/halal/compliance). DB-backed.
+export interface HalalCompliance {
+  status: "compliant" | "attention" | "violation" | string;
+  is_compliant: boolean;
+  quarter_start: string;
+  month_start: string;
+  today_start: string;
+  trades_today: number;
+  trades_this_month: number;
+  trades_this_quarter: number;
+  halal_screenings_quarter: number;
+  doubtful_screenings_quarter: number;
+  not_halal_screenings_quarter: number;
+  non_halal_fills_quarter: number;
+  purification_accrued_usd: number;
+  purification_disbursed_usd: number;
+  purification_outstanding_usd: number;
+}
+
 // A guard/rejection: the cycle proposed a trade but a guard blocked it.
 export interface RejectionRow {
   timestamp: string;

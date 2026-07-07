@@ -183,9 +183,14 @@ reconcile.
       slippage (bps, from `paper_slippage_pct` or filled-vs-intended price),
       and an "unfilled" count (surfaces the cold-start fill-timeout pattern),
       client-side over the last 100 orders of the active market.
-- [ ] **Zoya halal-screen status page** — pass/fail/reason per symbol. Halal
-      is non-negotiable; `halal_compliance.py` (AAOIFI summary) and
-      `admin_halal` sector-allocation are built and unconsumed — wire them.
+- [x] **Halal compliance page** *(done 2026-07-07)* — new `/halal` page + nav
+      item consuming the DB-backed `/api/halal/compliance` (AAOIFI summary):
+      compliance status banner, trade volume, screening breakdown
+      (halal/doubtful/not-halal/non-halal-fills), and the purification ledger.
+      *Deferred:* per-symbol pass/fail detail (screenings table is empty —
+      Zoya sandbox / no prod key) and `admin_halal` sector-allocation (reads
+      runtime `stock_positions`, empty in the standalone dashboard — tied to
+      the deployment fork). Honest in-page note explains the sandbox gap.
 - [ ] **Market-hours / next-cycle banner** — open/closed, last cycle time,
       next scheduled cycle (stock bot is a 15-min market-hours cron).
 - [x] **Reconcile-drift annotation** *(done 2026-07-07)* — the Risk page's
