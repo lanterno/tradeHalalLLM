@@ -43,6 +43,7 @@ def register(app: FastAPI) -> None:
                 "window_seconds": m.window_seconds,
                 "calls": m.calls,
                 "total_tokens": m.total_tokens,
+                "total_cost_usd": m.total_cost_usd,
                 "p50_ms": m.p50_ms,
                 "p95_ms": m.p95_ms,
                 "by_provider": m.by_provider,

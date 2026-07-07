@@ -58,12 +58,6 @@ export function pnlColor(value: number): string {
   return "text-muted";
 }
 
-export function pnlBg(value: number): string {
-  if (value > 0) return "bg-accent/10";
-  if (value < 0) return "bg-loss/10";
-  return "bg-surface";
-}
-
 export function relativeTime(iso: string): string {
   if (!iso) return "";
   const diff = Date.now() - new Date(iso).getTime();

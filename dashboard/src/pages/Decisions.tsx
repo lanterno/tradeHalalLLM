@@ -78,7 +78,6 @@ export default function Decisions() {
               <thead>
                 <tr className="border-b border-border text-left text-xs uppercase tracking-wider text-muted">
                   <th className="px-3 py-2">Time</th>
-                  <th className="px-3 py-2">Provider</th>
                   <th className="px-3 py-2">Model</th>
                   <th className="px-3 py-2 text-right">Latency</th>
                   <th className="px-3 py-2">Symbols</th>
@@ -117,7 +116,6 @@ export default function Decisions() {
                       <td className="whitespace-nowrap px-3 py-2 text-muted">
                         {formatTime(d.timestamp)}
                       </td>
-                      <td className="px-3 py-2">{d.provider}</td>
                       <td className="px-3 py-2 font-mono text-xs">{d.model}</td>
                       <td className="px-3 py-2 text-right font-mono">
                         {d.execution_ms ? `${d.execution_ms}ms` : "—"}

@@ -10,6 +10,7 @@ import {
 } from "recharts";
 import type { Trade } from "../api/types";
 import { entityOf, formatUsd } from "../lib/utils";
+import { AXIS_TICK, CHART, CHART_TOOLTIP, pnlFill } from "../lib/charts";
 
 interface PairBreakdownProps {
   trades: Trade[];
@@ -42,38 +43,29 @@ export function PairBreakdown({ trades }: PairBreakdownProps) {
   return (
     <ResponsiveContainer width="100%" height={Math.max(200, data.length * 36)}>
       <BarChart data={data} layout="vertical">
-        <CartesianGrid strokeDasharray="3 3" stroke="#1a1a2e" horizontal={false} />
+        <CartesianGrid strokeDasharray="3 3" stroke={CHART.gridStroke} horizontal={false} />
         <XAxis
           type="number"
           tickFormatter={(v: number) => `$${v.toFixed(0)}`}
-          tick={{ fill: "#6b7280", fontSize: 11 }}
+          tick={AXIS_TICK}
           axisLine={false}
           tickLine={false}
         />
         <YAxis
           dataKey="pair"
           type="category"
-          tick={{ fill: "#e0e0e0", fontSize: 11 }}
+          tick={{ fill: CHART.axisText, fontSize: 11 }}
           axisLine={false}
           tickLine={false}
           width={90}
         />
         <Tooltip
-          contentStyle={{
-            background: "#111118",
-            border: "1px solid #1a1a2e",
-            borderRadius: 8,
-            fontSize: 12,
-          }}
+          contentStyle={CHART_TOOLTIP}
           formatter={(value) => [formatUsd(Number(value)), "P&L"]}
         />
         <Bar dataKey="pnl" radius={[0, 4, 4, 0]} barSize={20}>
           {data.map((entry, i) => (
-            <Cell
-              key={i}
-              fill={entry.pnl >= 0 ? "#4ade80" : "#f87171"}
-              fillOpacity={0.8}
-            />
+            <Cell key={i} fill={pnlFill(entry.pnl)} fillOpacity={0.8} />
           ))}
         </Bar>
       </BarChart>

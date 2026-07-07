@@ -145,12 +145,19 @@ reconcile.
 ### Phase 1 — Reliability & polish (cheap, high-signal)
 - [ ] Render `isError` on every page + a global React error boundary.
 - [ ] Standardize on skeleton loaders; drop bare "Loading…" text.
-- [ ] Centralize chart theme (tooltip style + color ramp) into shared
-      constants tied to CSS tokens; delete duplicated hex.
-- [ ] Remove dead weight: `lightweight-charts` dep, `pnlBg`, legacy
-      `provider`/`by_provider` columns, and the 33 stale `.pyc` modules.
-- [ ] Fix the Observability "Cost" tile to show real $ (wire
-      `/api/metrics/llm` cost); a11y pass on nav / status dots / expanders.
+- [x] Centralize chart theme (tooltip style + color ramp). *(done 2026-07-07)*
+      `lib/charts.ts` (`CHART`, `CHART_COLORS`, `CHART_TOOLTIP`, `AXIS_TICK`,
+      `pnlFill`) applied to all 5 charts; duplicated hex removed.
+- [x] Remove dead weight. *(done 2026-07-07)* Dropped `lightweight-charts`
+      dep, `pnlBg`, and the legacy `provider`/`by_provider` columns +
+      `LlmProviderStats` type. *Deferred:* the 33 stale `.pyc` modules
+      (harmless build artifacts) and the 2 pre-existing frontend lint errors
+      (`usePriceStream` self-ref reconnect, `RiskAndSystem` `Date.now` purity)
+      — both need careful React-19 hook restructuring; own slice.
+- [x] Fix the Observability "Cost" tile to show real $. *(done 2026-07-07)*
+      `web/metrics.py` now sums `cost_usd` → `total_cost_usd` (tested); the tile
+      shows real spend (~$0.066/7d). a11y pass still TODO (below, folded into
+      error-states work).
 
 ### Phase 2 — Stock-operator value surfaces (the real gaps)
 - [ ] **Guard / rejection visibility panel** — surface `cycle.no_action` +

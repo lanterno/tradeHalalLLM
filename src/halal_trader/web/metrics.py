@@ -42,6 +42,7 @@ class LlmMetrics:
     window_seconds: int
     calls: int
     total_tokens: int
+    total_cost_usd: float
     p50_ms: float | None
     p95_ms: float | None
     by_provider: dict[str, dict[str, Any]]
@@ -163,6 +164,7 @@ def llm_metrics(
     elapsed_all: list[float] = []
     by_provider: dict[str, dict[str, Any]] = {}
     total_tokens = 0
+    total_cost = 0.0
     calls = 0
 
     for record in _iter_records(log_path, max_lines):
@@ -171,6 +173,9 @@ def llm_metrics(
         if record.get("event") != events.LLM_CALL_COMPLETE:
             continue
         provider = str(record.get("provider") or "unknown")
+        cost = record.get("cost_usd")
+        if isinstance(cost, (int, float)):
+            total_cost += float(cost)
         # Providers emit input_tokens + output_tokens separately (see
         # core/llm/glm.py); a generic "tokens" field is a
         # legacy shape some adapters still produce. Sum the parts when
@@ -207,6 +212,7 @@ def llm_metrics(
         window_seconds=window_seconds,
         calls=calls,
         total_tokens=total_tokens,
+        total_cost_usd=round(total_cost, 6),
         p50_ms=_percentile(elapsed_all, 0.50),
         p95_ms=_percentile(elapsed_all, 0.95),
         by_provider=by_provider,

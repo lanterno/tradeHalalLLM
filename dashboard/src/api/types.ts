@@ -143,19 +143,13 @@ export interface CycleMetrics {
   halted: number;
 }
 
-export interface LlmProviderStats {
-  calls: number;
-  tokens: number;
-  p50_ms: number;
-}
-
 export interface LlmMetrics {
   window_seconds: number;
   calls: number;
   total_tokens: number;
+  total_cost_usd: number;
   p50_ms: number | null;
   p95_ms: number | null;
-  by_provider: Record<string, LlmProviderStats>;
 }
 
 export interface RiskState {

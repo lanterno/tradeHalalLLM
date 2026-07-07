@@ -1,6 +1,5 @@
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, Legend } from "recharts";
-
-const COLORS = ["#4ade80", "#f87171", "#facc15", "#60a5fa", "#c084fc", "#fb923c"];
+import { CHART, CHART_COLORS, CHART_TOOLTIP } from "../lib/charts";
 
 interface ExitReasonsChartProps {
   data: Record<string, number>;
@@ -32,19 +31,12 @@ export function ExitReasonsChart({ data }: ExitReasonsChartProps) {
           stroke="none"
         >
           {entries.map((_, i) => (
-            <Cell key={i} fill={COLORS[i % COLORS.length]} />
+            <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />
           ))}
         </Pie>
-        <Tooltip
-          contentStyle={{
-            background: "#111118",
-            border: "1px solid #1a1a2e",
-            borderRadius: 8,
-            fontSize: 12,
-          }}
-        />
+        <Tooltip contentStyle={CHART_TOOLTIP} />
         <Legend
-          wrapperStyle={{ fontSize: 11, color: "#6b7280" }}
+          wrapperStyle={{ fontSize: 11, color: CHART.muted }}
           iconType="circle"
           iconSize={8}
         />

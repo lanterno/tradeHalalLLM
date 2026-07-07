@@ -27,6 +27,11 @@ function formatTokens(value: number): string {
   return `${(value / 1_000_000).toFixed(2)}M`;
 }
 
+function formatCost(value: number): string {
+  // Costs are tiny (~$0.05/day) — show enough precision to be meaningful.
+  return `$${value.toFixed(value < 10 ? 4 : 2)}`;
+}
+
 export default function Observability() {
   const [cycleWindow, setCycleWindow] = useState<number>(CYCLE_WINDOWS[0].seconds);
   const [llmWindow, setLlmWindow] = useState<number>(LLM_WINDOWS[0].seconds);
@@ -68,11 +73,7 @@ export default function Observability() {
         </header>
 
         <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-          <StatCard
-            label="Completed cycles"
-            value={cycles.data?.count ?? "—"}
-            sub={cycles.isLoading ? "Loading..." : undefined}
-          />
+          <StatCard label="Completed cycles" value={cycles.data?.count ?? "—"} />
           <StatCard label="p50" value={formatMs(cycles.data?.p50_ms)} />
           <StatCard label="p95" value={formatMs(cycles.data?.p95_ms)} />
           <StatCard label="p99" value={formatMs(cycles.data?.p99_ms)} />
@@ -124,49 +125,25 @@ export default function Observability() {
           </div>
         </header>
 
-        <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+        <div className="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-5">
           <StatCard label="Total calls" value={llm.data?.calls ?? "—"} />
           <StatCard
             label="Total tokens"
             value={llm.data ? formatTokens(llm.data.total_tokens) : "—"}
             sub={llm.data?.total_tokens ? `${llm.data.total_tokens.toLocaleString()}` : undefined}
           />
+          <StatCard
+            label="Total cost"
+            value={
+              <span className="text-accent">
+                {llm.data ? formatCost(llm.data.total_cost_usd) : "—"}
+              </span>
+            }
+            sub="GLM via OpenRouter"
+          />
           <StatCard label="p50 latency" value={formatMs(llm.data?.p50_ms)} />
           <StatCard label="p95 latency" value={formatMs(llm.data?.p95_ms)} />
         </div>
-
-        {llm.data && Object.keys(llm.data.by_provider).length > 0 && (
-          <div className="mt-4 rounded-xl border border-border bg-surface p-4">
-            <h3 className="mb-3 text-xs font-medium uppercase tracking-wider text-muted">
-              By Provider
-            </h3>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-border text-left text-xs uppercase tracking-wider text-muted">
-                    <th className="px-3 py-2">Provider</th>
-                    <th className="px-3 py-2 text-right">Calls</th>
-                    <th className="px-3 py-2 text-right">Tokens</th>
-                    <th className="px-3 py-2 text-right">p50</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {Object.entries(llm.data.by_provider).map(([provider, stats]) => (
-                    <tr
-                      key={provider}
-                      className="border-b border-border/50 hover:bg-surface-hover/50 transition-colors"
-                    >
-                      <td className="px-3 py-2 font-mono">{provider}</td>
-                      <td className="px-3 py-2 text-right">{stats.calls}</td>
-                      <td className="px-3 py-2 text-right">{formatTokens(stats.tokens)}</td>
-                      <td className="px-3 py-2 text-right">{formatMs(stats.p50_ms)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
       </section>
     </div>
   );

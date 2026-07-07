@@ -116,6 +116,40 @@ def test_llm_metrics_aggregates_by_provider(tmp_path):
     assert m.by_provider["ollama"]["tokens"] == 0  # None tokens summed as 0
 
 
+def test_llm_metrics_sums_cost_usd(tmp_path):
+    now = datetime(2026, 4, 25, 12, 0, tzinfo=UTC)
+    records = [
+        _record(
+            events.LLM_CALL_COMPLETE,
+            ts=now - timedelta(minutes=5),
+            provider="z-ai/glm-5.2",
+            elapsed_ms=400,
+            tokens=500,
+            cost_usd=0.0003,
+        ),
+        _record(
+            events.LLM_CALL_COMPLETE,
+            ts=now,
+            provider="z-ai/glm-5.2",
+            elapsed_ms=600,
+            tokens=700,
+            cost_usd=0.0005,
+        ),
+        # A record with no cost_usd must not break the sum.
+        _record(
+            events.LLM_CALL_COMPLETE,
+            ts=now,
+            provider="z-ai/glm-5.2",
+            elapsed_ms=500,
+            tokens=100,
+        ),
+    ]
+    log = _write_log(tmp_path, records)
+    m = metrics.llm_metrics(log, window_seconds=3600, now=now)
+    assert m.calls == 3
+    assert m.total_cost_usd == 0.0008
+
+
 def test_llm_metrics_skips_unknown_events(tmp_path):
     now = datetime(2026, 4, 25, 12, 0, tzinfo=UTC)
     records = [

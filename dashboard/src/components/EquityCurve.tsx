@@ -9,6 +9,7 @@ import {
 } from "recharts";
 import type { DailyPnl } from "../api/types";
 import { formatDate, formatUsd } from "../lib/utils";
+import { AXIS_TICK, CHART, CHART_TOOLTIP } from "../lib/charts";
 
 interface EquityCurveProps {
   data: DailyPnl[];
@@ -44,32 +45,27 @@ export function EquityCurve({ data }: EquityCurveProps) {
       <AreaChart data={chartData}>
         <defs>
           <linearGradient id="pnlGrad" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="5%" stopColor="#4ade80" stopOpacity={0.3} />
-            <stop offset="95%" stopColor="#4ade80" stopOpacity={0} />
+            <stop offset="5%" stopColor={CHART.accent} stopOpacity={0.3} />
+            <stop offset="95%" stopColor={CHART.accent} stopOpacity={0} />
           </linearGradient>
         </defs>
-        <CartesianGrid strokeDasharray="3 3" stroke="#1a1a2e" />
+        <CartesianGrid strokeDasharray="3 3" stroke={CHART.gridStroke} />
         <XAxis
           dataKey="date"
           tickFormatter={formatDate}
-          tick={{ fill: "#6b7280", fontSize: 11 }}
-          axisLine={{ stroke: "#1a1a2e" }}
+          tick={AXIS_TICK}
+          axisLine={{ stroke: CHART.gridStroke }}
           tickLine={false}
         />
         <YAxis
           tickFormatter={(v: number) => `$${v.toFixed(0)}`}
-          tick={{ fill: "#6b7280", fontSize: 11 }}
+          tick={AXIS_TICK}
           axisLine={false}
           tickLine={false}
           width={60}
         />
         <Tooltip
-          contentStyle={{
-            background: "#111118",
-            border: "1px solid #1a1a2e",
-            borderRadius: 8,
-            fontSize: 12,
-          }}
+          contentStyle={CHART_TOOLTIP}
           formatter={(value, name) => [
             formatUsd(Number(value)),
             name === "cumulative" ? "Cumulative" : "Daily P&L",
@@ -79,7 +75,7 @@ export function EquityCurve({ data }: EquityCurveProps) {
         <Area
           type="monotone"
           dataKey="cumulative"
-          stroke="#4ade80"
+          stroke={CHART.accent}
           fill="url(#pnlGrad)"
           strokeWidth={2}
           dot={false}

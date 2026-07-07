@@ -4,9 +4,8 @@ import { usePriceStream } from "../hooks/usePriceStream";
 import { StatCard } from "../components/StatCard";
 import { cn, entityOf, formatUsd, formatQty, formatTime, pnlColor } from "../lib/utils";
 import { entityLabel, useMarket } from "../lib/market";
+import { CHART_COLORS, CHART_TOOLTIP } from "../lib/charts";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts";
-
-const COLORS = ["#4ade80", "#60a5fa", "#facc15", "#c084fc", "#fb923c", "#f87171"];
 
 export default function Positions() {
   const { market } = useMarket();
@@ -168,16 +167,11 @@ export default function Positions() {
                   stroke="none"
                 >
                   {allocationData.map((_, i) => (
-                    <Cell key={i} fill={COLORS[i % COLORS.length]} />
+                    <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />
                   ))}
                 </Pie>
                 <Tooltip
-                  contentStyle={{
-                    background: "#111118",
-                    border: "1px solid #1a1a2e",
-                    borderRadius: 8,
-                    fontSize: 12,
-                  }}
+                  contentStyle={CHART_TOOLTIP}
                   formatter={(value) => [formatUsd(Number(value)), "Value"]}
                 />
               </PieChart>
