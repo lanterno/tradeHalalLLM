@@ -2,6 +2,12 @@
 
 Working backlog for the autonomous build loop. **Pick the next unchecked item, build a tested+committed slice, check it off.** Thesis: halal long-only strips the short leg from every factor premium, so the highest-leverage work is (1) validation rigor, (2) risk-adjusted sizing, (3) orthogonal alt-data, (4) honest outcome tracking — not more indicators.
 
+Sibling backlog: `docs/QUANT_PREDICTION_ROADMAP.md` — quantitative high/low
+price-range forecasting (PriceOutlook engine) grounding the daily
+recommendation and the live stock cycle's levels. It consumes this file's
+Phase-1 sizing loop (vol engine feeds it, wiring stays here) and it **owns**
+the per-symbol research page (this file's Phase-4 entry points there).
+
 Constraints: long-only / no-leverage / no-derivatives (halal, non-negotiable). Never change live trading/sizing paths without offline validation. Advisory + infra + validation work is preferred for autonomous slices.
 
 ## Phase 0 — Foundations & honesty (do first)
@@ -39,7 +45,7 @@ Constraints: long-only / no-leverage / no-derivatives (halal, non-negotiable). N
 - [ ] Realistic stock transaction-cost & slippage sweep in backtests.
 
 ## Phase 4 — Product / UX depth (parallelizable)
-- [ ] Per-symbol research page (chart + indicators + halal screen + headline sentiment).
+- [ ] Per-symbol research page (chart + indicators + halal screen + headline sentiment) — *owned by `docs/QUANT_PREDICTION_ROADMAP.md` Phase 5 (adds level map + bands); build it there.*
 - [x] What-if simulator: equity curve of taking every pick — `scorecard.whatif_equity_curve` + `/api/recommendation/whatif` + CLI line. 2026-07-01. Follow-up: dashboard chart.
 - [ ] "What changed since yesterday" diff + computed signal-attribution badges (not LLM self-weights).
 - [ ] Advisory notification digest (Telegram): daily pick + held-position level alerts.
