@@ -64,10 +64,9 @@ daily bars: chg5d/chg20d = % change over the last 5/20 daily bars; rsi =
 RSI-14; macd_h = MACD histogram; bb = position in the Bollinger band (0 low ..
 1 high); vol = volume vs 20-day average; atr = ATR-14; adx = ADX-14; from_hi =
 % below the recent high. Quantitative range model (Yang-Zhang/HAR volatility):
-band5d = statistical 5-day low..high price band (±1.28σ√h — UNCALIBRATED, an
-approximation, not a measured-coverage interval); rng1d = expected 1-day
-trading range as % of price; vpct = current volatility percentile vs the
-symbol's own history (0 calm .. 1 extreme).
+band5d = statistical 5-day low..high price band ({band_semantics}); rng1d =
+expected 1-day trading range as % of price; vpct = current volatility
+percentile vs the symbol's own history (0 calm .. 1 extreme).
 
 {table}
 
@@ -177,6 +176,7 @@ class DailyRecommendationEngine:
         ``candidates`` JSONB so the scorecard can label band coverage later.
         Degrades to ``{}`` when the series is too thin for any estimator.
         """
+        from halal_trader.quant.calibration import load_default_artifact
         from halal_trader.quant.outlook import build_outlook
 
         try:
@@ -186,6 +186,7 @@ class DailyRecommendationEngine:
                 [k.low for k in klines],
                 [k.close for k in klines],
                 atr=ind.get("atr_14"),
+                calibration=load_default_artifact(),
             )
         except ValueError as exc:
             logger.debug("recommendation: outlook failed: %s", exc)
@@ -202,11 +203,15 @@ class DailyRecommendationEngine:
                     "high": round(hb.band.high, 4),
                     "expected_range": round(hb.band.expected_range, 4),
                     "sigma_daily": round(hb.band.sigma_daily, 6),
+                    "z": round(hb.band.z, 3),
                     "source": hb.sigma_source,
                 }
                 for h, hb in outlook.bands.items()
             }
-            | {"z": outlook.z, "calibrated": outlook.calibrated},
+            | {
+                "calibrated": outlook.calibrated,
+                "calibration_version": outlook.calibration_version,
+            },
         }
         five = outlook.bands.get(5)
         if five is not None:
@@ -259,10 +264,26 @@ class DailyRecommendationEngine:
         )
 
     async def _pick(self, candidates: dict[str, dict[str, Any]]) -> dict[str, Any]:
+        from halal_trader.quant.calibration import load_default_artifact
+
         date = datetime.now(_ET).strftime("%Y-%m-%d")
         factor_block = self._apply_factors(candidates)
+        artifact = load_default_artifact()
+        if artifact is not None:
+            band_semantics = (
+                f"coverage-calibrated to contain the 5-day price path "
+                f"~{artifact.target_coverage:.0%} of the time on walk-forward "
+                f"history; {artifact.version}"
+            )
+        else:
+            band_semantics = (
+                "±1.28σ√h — UNCALIBRATED, an approximation, not a measured-coverage interval"
+            )
         user = USER_PROMPT_TEMPLATE.format(
-            date=date, n=len(candidates), table=self._format_table(candidates)
+            date=date,
+            n=len(candidates),
+            table=self._format_table(candidates),
+            band_semantics=band_semantics,
         )
         user += "\n\n" + factor_block
         raw = await self._llm.generate_json(user, system=SYSTEM_PROMPT)

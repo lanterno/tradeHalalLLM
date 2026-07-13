@@ -100,7 +100,10 @@ async def test_generate_picks_and_persists():
 
 
 @pytest.mark.asyncio
-async def test_quant_range_bands_reach_prompt_and_candidates():
+async def test_quant_range_bands_reach_prompt_and_candidates(monkeypatch):
+    import halal_trader.quant.calibration as qcal
+
+    monkeypatch.setattr(qcal, "load_default_artifact", lambda: None)
     llm = _FakeLLM(
         {
             "symbol": "NVDA",
@@ -120,11 +123,50 @@ async def test_quant_range_bands_reach_prompt_and_candidates():
     assert nvda["rng1d_pct"] > 0
     qb = nvda["quant_bands"]
     assert qb["calibrated"] is False
+    assert qb["calibration_version"] is None
     assert qb["5"]["source"] == "yz_current"
     assert qb["5"]["low"] < qb["5"]["high"]
     # The prompt shows the band and explains its (uncalibrated) semantics.
     assert "band5d=" in llm.last_prompt
     assert "UNCALIBRATED" in llm.last_prompt
+
+
+@pytest.mark.asyncio
+async def test_calibration_artifact_flips_prompt_semantics(monkeypatch):
+    import halal_trader.quant.calibration as qcal
+    from halal_trader.quant.calibration import CalibrationArtifact, HorizonCalibration
+
+    artifact = CalibrationArtifact(
+        version="zcal-test",
+        created_at="2026-07-13T00:00:00+00:00",
+        target_coverage=0.8,
+        horizons={
+            1: HorizonCalibration(z=1.9, n=100, target_coverage=0.8),
+            5: HorizonCalibration(z=2.1, n=100, target_coverage=0.8),
+        },
+        symbols=("AAPL",),
+    )
+    monkeypatch.setattr(qcal, "load_default_artifact", lambda: artifact)
+    llm = _FakeLLM(
+        {
+            "symbol": "NVDA",
+            "conviction": 0.6,
+            "thesis": "t",
+            "halal_note": "h",
+            "suggested_entry": 130.0,
+            "suggested_target": 140.0,
+            "suggested_stop": 125.0,
+        }
+    )
+    eng = _engine(llm)
+    rec = await eng.generate()
+    qb = rec["candidates"]["NVDA"]["quant_bands"]
+    assert qb["calibrated"] is True
+    assert qb["calibration_version"] == "zcal-test"
+    assert qb["5"]["z"] == pytest.approx(2.1)
+    assert "coverage-calibrated" in llm.last_prompt
+    assert "zcal-test" in llm.last_prompt
+    assert "UNCALIBRATED" not in llm.last_prompt
 
 
 @pytest.mark.asyncio

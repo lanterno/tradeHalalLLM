@@ -5,7 +5,19 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from halal_trader.quant.calibration import CalibrationArtifact, HorizonCalibration
 from halal_trader.quant.outlook import DEFAULT_Z, build_outlook
+
+ARTIFACT = CalibrationArtifact(
+    version="zcal-test",
+    created_at="2026-07-13T00:00:00+00:00",
+    target_coverage=0.8,
+    horizons={
+        1: HorizonCalibration(z=1.9, n=100, target_coverage=0.8),
+        5: HorizonCalibration(z=2.1, n=100, target_coverage=0.8),
+    },
+    symbols=("AAPL",),
+)
 
 
 def _gbm_ohlc(n: int, sigma: float = 0.02, seed: int = 0):
@@ -30,7 +42,32 @@ class TestBuildOutlook:
         assert out.bands[1].sigma_source == "har_yz"
         assert out.bands[5].sigma_source == "har_yz"
         assert out.calibrated is False
-        assert out.z == DEFAULT_Z
+        assert out.calibration_version is None
+        assert out.bands[1].band.z == DEFAULT_Z
+
+    def test_calibration_artifact_overrides_z(self):
+        o, h, lo, c = _gbm_ohlc(250)
+        out = build_outlook(o, h, lo, c, calibration=ARTIFACT)
+        assert out.calibrated is True
+        assert out.calibration_version == "zcal-test"
+        assert out.bands[1].band.z == pytest.approx(1.9)
+        assert out.bands[5].band.z == pytest.approx(2.1)
+
+    def test_partial_artifact_demotes_to_uncalibrated(self):
+        partial = CalibrationArtifact(
+            version="zcal-partial",
+            created_at="2026-07-13T00:00:00+00:00",
+            target_coverage=0.8,
+            horizons={1: HorizonCalibration(z=1.9, n=100, target_coverage=0.8)},
+            symbols=(),
+        )
+        o, h, lo, c = _gbm_ohlc(250)
+        out = build_outlook(o, h, lo, c, calibration=partial)
+        # h=5 fell back to DEFAULT_Z → the outlook must not claim calibration.
+        assert out.calibrated is False
+        assert out.calibration_version is None
+        assert out.bands[1].band.z == pytest.approx(1.9)
+        assert out.bands[5].band.z == DEFAULT_Z
 
     def test_band_geometry_is_sane(self):
         o, h, lo, c = _gbm_ohlc(250)

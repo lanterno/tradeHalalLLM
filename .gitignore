@@ -29,6 +29,10 @@ Thumbs.db
 halal_trader.pid
 # News-reactor cross-restart state (dedup set + notify cooldowns)
 data/reactor_state.json
+# Quant runtime artifacts: band calibration + cached research bars (derived
+# data — regenerate with `halal-trader quant calibrate`)
+data/analytics/
+data/bar_cache/
 
 # Logs
 *.log

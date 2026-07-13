@@ -222,7 +222,7 @@ measurement harness *before* the level families it measures.
   need non-overlapping evaluation windows. 2026-07-13 (`quant/bands.py:
   fit_har` — direct per-horizon, log-space, half-variance correction,
   refuses <60 rows).
-- [~] **Band conversion with empirical calibration** — `quant/bands.py`:
+- [x] **Band conversion with empirical calibration** — `quant/bands.py`:
   `close·exp(±z·σ̂·√h)` with **z calibrated per horizon on walk-forward
   realized max-high/min-low coverage** — this one calibration step absorbs
   the path-extreme, fat-tail, and estimator-bias corrections. The research
@@ -234,9 +234,17 @@ measurement harness *before* the level families it measures.
   `E[range] ≈ 1.596·σ̂·√h` and the ATR-multiple band as the naive baseline
   every model must beat. Primitives done 2026-07-13 (`quant/bands.py:
   price_bands`, `atr_band`, `calibrate_z` — binding-z quantile over
-  realized path extremes). Remaining: run the pooled walk-forward
-  calibration on real universe bars (needs the bar cache) and store the
-  versioned calibration artifact.
+  realized path extremes). Completed 2026-07-13: `quant/calibration.py`
+  (expanding-window walk-forward HAR refit, pooled across the AAOIFI-20,
+  versioned JSON artifact + mtime-cached loader the outlook consumes) +
+  `halal-trader quant calibrate` (writes `data/analytics/
+  band_calibration.json`, caches bars under `data/bar_cache/`). First
+  real run zcal-20260713-c80: z(1d)=1.65, z(5d)=1.84 at 80 % path
+  coverage (n≈3.2k pooled; per-symbol residuals 73–89 %) — vs textbook
+  1.28, confirming the path-extreme/fat-tail under-coverage. NOTE the
+  artifact is host-local runtime data (gitignored): the containerized
+  daily job needs `quant calibrate` run in-container (or a shared
+  volume) to pick it up. Per-symbol shrinkage stays a future item.
 - [ ] **Volatility cone guardrail** — per-symbol percentile cone of rolling
   YZ vol over window lengths [5, 10, 21, 42, 63] (2+ years of dailies,
   Hodges-Tompkins overlapping-window correction); when current vol sits at a

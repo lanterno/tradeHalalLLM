@@ -29,6 +29,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from halal_trader.quant.bands import PriceBands, atr_band, fit_har, price_bands
+from halal_trader.quant.calibration import CalibrationArtifact
 from halal_trader.quant.volatility import FloatArray, ewma_vol, yang_zhang
 
 DEFAULT_HORIZONS = (1, 5)
@@ -58,8 +59,11 @@ class PriceOutlook:
     ``atr_baseline_5d`` is the naive ATR band every model must beat (None
     when the caller has no ATR); ``vol_percentile`` ranks the current
     Yang-Zhang vol against the symbol's own available history (None below
-    ``60`` finite points — a thin percentile is worse than none);
-    ``calibrated`` is False until the walk-forward z artifact ships.
+    ``60`` finite points — a thin percentile is worse than none).
+    ``calibrated`` is True only when EVERY band's multiplier came from a
+    walk-forward :class:`~halal_trader.quant.calibration.CalibrationArtifact`
+    (whose version is then in ``calibration_version``); otherwise the bands
+    use ``DEFAULT_Z`` and must be presented as uncalibrated approximations.
     """
 
     close: float
@@ -67,8 +71,8 @@ class PriceOutlook:
     bands: dict[int, HorizonBand]
     atr_baseline_5d: PriceBands | None
     vol_percentile: float | None
-    z: float
     calibrated: bool
+    calibration_version: str | None
 
 
 def build_outlook(
@@ -79,7 +83,7 @@ def build_outlook(
     *,
     horizons: tuple[int, ...] = DEFAULT_HORIZONS,
     atr: float | None = None,
-    z: float = DEFAULT_Z,
+    calibration: "CalibrationArtifact | None" = None,
 ) -> PriceOutlook | None:
     """Build the outlook from ascending daily OHLC arrays.
 
@@ -87,7 +91,9 @@ def build_outlook(
     estimators (< 25 bars) — callers treat that as "no quantitative view",
     not an error. Raises ``ValueError`` on malformed inputs (mismatched
     lengths, non-positive prices), which indicates a broken feed rather
-    than a thin one.
+    than a thin one. When ``calibration`` is provided, each horizon's z
+    comes from the artifact (falling back to ``DEFAULT_Z`` for horizons it
+    doesn't cover — which also demotes the outlook to uncalibrated).
     """
     c_arr = np.asarray(closes, dtype=np.float64)
     if c_arr.ndim != 1:
@@ -101,11 +107,16 @@ def build_outlook(
     yz_finite = yz[np.isfinite(yz) & (yz > 0)]
 
     bands: dict[int, HorizonBand] = {}
+    all_calibrated = True
     for h in horizons:
         sigma, source = _sigma_for_horizon(yz, yz_finite, c_arr, h)
         if sigma is None or source is None:
             continue
-        bands[h] = HorizonBand(band=price_bands(close, sigma, h, z), sigma_source=source)
+        z_h = calibration.z_for(h) if calibration is not None else None
+        if z_h is None:
+            z_h = DEFAULT_Z
+            all_calibrated = False
+        bands[h] = HorizonBand(band=price_bands(close, sigma, h, z_h), sigma_source=source)
     if not bands:
         return None
 
@@ -118,14 +129,17 @@ def build_outlook(
     if atr is not None and atr > 0:
         baseline = atr_band(close, float(atr), horizon=5, multiple=1.0)
 
+    version: str | None = None
+    if calibration is not None and all_calibrated:
+        version = calibration.version
     return PriceOutlook(
         close=close,
         n_bars=n,
         bands=bands,
         atr_baseline_5d=baseline,
         vol_percentile=vol_percentile,
-        z=float(z),
-        calibrated=False,
+        calibrated=version is not None,
+        calibration_version=version,
     )
 
 
