@@ -112,7 +112,7 @@ def build_outlook(
         sigma, source = _sigma_for_horizon(yz, yz_finite, c_arr, h)
         if sigma is None or source is None:
             continue
-        z_h = calibration.z_for(h) if calibration is not None else None
+        z_h = calibration.effective_z(h) if calibration is not None else None
         if z_h is None:
             z_h = DEFAULT_Z
             all_calibrated = False

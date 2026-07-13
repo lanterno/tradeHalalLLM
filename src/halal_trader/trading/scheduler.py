@@ -425,6 +425,32 @@ class TradingBot(BaseTradingBot):
                     res.get("scored", 0),
                     res.get("skipped", 0),
                 )
+            # Adaptive-conformal band maintenance: matured candidate
+            # outcomes nudge the band multiplier; a Kupiec coverage-drift
+            # failure is operator-alertable (the action hook the roadmap
+            # requires — never observation-only).
+            from halal_trader.core import events
+            from halal_trader.quant.conformal import update_band_conformal
+
+            aci = await update_band_conformal(self._repo)
+            if aci.get("drift"):
+                logger.warning(
+                    "Band coverage drift: trailing breach rate fails Kupiec "
+                    "(p=%.4f, n=%d); ACI alpha now %.4f (z_eff %.3f)",
+                    aci.get("drift_p") or 0.0,
+                    aci.get("trailing_n", 0),
+                    aci.get("alpha") or 0.0,
+                    aci.get("effective_z") or 0.0,
+                    extra={"event": events.BAND_COVERAGE_DRIFT},
+                )
+                if self._alerts is not None:
+                    await self._alerts.notify(
+                        "band.coverage_drift",
+                        f"5d band coverage drifted (Kupiec p={aci.get('drift_p'):.4f}, "
+                        f"n={aci.get('trailing_n')}); ACI widened to "
+                        f"z={aci.get('effective_z')}",
+                        market="stocks",
+                    )
         except Exception as exc:  # noqa: BLE001 — advisory; never break the bot
             logger.warning("Daily recommendation generation failed: %s", exc)
             if self._alerts is not None:

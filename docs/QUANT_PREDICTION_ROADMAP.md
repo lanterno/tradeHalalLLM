@@ -379,17 +379,28 @@ disjoint OOS windows.
   fail`. Salvage path if revisited: GARCH as a σ source under the SAME
   empirical z-calibration — never the sim-joint band. The engine keeps
   the HAR-calibrated bands, now validated best-of-three on disjoint OOS.
-- [ ] **Conformal calibration layer** — rolling-window split conformal per
+- [x] **Conformal calibration layer** — rolling-window split conformal per
   horizon on whichever band source serves (Phase 1 HAR bands included);
   MAPIE (`mapie>=1.4`, pure Python, BSD) or a ~15-line hand-rolled adaptive
   conformal (ACI) update in house style. Verify coverage *conditional on vol
   regime* — marginal coverage hides exactly the failure that matters.
-- [ ] **Coverage-drift action hook** — don't reproduce the repo's
+  Done 2026-07-13 (`quant/conformal.py`, hand-rolled Gibbs–Candès ACI, no
+  MAPIE): the artifact stores a binding-z quantile grid; matured
+  candidate outcomes nudge alpha (gamma=0.005 — batched arrivals);
+  `effective_z` serves the adapted multiplier to the outlook. Vol-regime
+  conditional coverage still pending (needs vol_pctl bucketing in the
+  scorecard).
+- [x] **Coverage-drift action hook** — don't reproduce the repo's
   DriftRiskPolicy open loop (fitted-but-unconsumed): define the trigger now.
   Rolling coverage breach (e.g. PICP > ±5 pts off nominal over the trailing
   window) → widen bands / bump ACI γ / suppress the band source, plus an
   `AlertSink.notify` and a `core/events` constant. Ship with the conformal
-  layer, not after it.
+  layer, not after it. Done 2026-07-13: Kupiec LR test on the trailing 60
+  outcomes (±5 pp thresholds false-alarm at these sample sizes; the LR
+  test does not) → `band.coverage_drift` event + AlertSink in the 09:05
+  job, while the ACI is already widening. Chosen action = widen+alert;
+  suppression deliberately not automated (an over-eager suppressor is
+  its own failure mode).
 - [ ] **Chronos for stocks (a wrapper rewrite, not a version bump)** — the
   repo has *two* Chronos wrappers: `ml/forecaster.py` (hardcodes
   `chronos-t5-small`, sample-path `predict()`, quantiles discarded after

@@ -17,6 +17,9 @@ CYCLE_HALTED: Final[str] = "cycle.halted"
 CYCLE_FAILED: Final[str] = "cycle.failed"
 CYCLE_NO_ACTION: Final[str] = "cycle.no_action"
 
+# ── Quant band maintenance (advisory) ──────────────────────────
+BAND_COVERAGE_DRIFT: Final[str] = "band.coverage_drift"
+
 # ── Trades ──────────────────────────────────────────────────────
 TRADE_BUY_PLACED: Final[str] = "trade.buy.placed"
 TRADE_SELL_PLACED: Final[str] = "trade.sell.placed"

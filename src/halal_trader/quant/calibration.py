@@ -47,11 +47,34 @@ _MIN_HISTORY = 110
 
 @dataclass(frozen=True, slots=True)
 class HorizonCalibration:
-    """Calibrated multiplier for one horizon: z, sample size, target."""
+    """Calibrated multiplier for one horizon: z, sample size, target.
+
+    ``z_grid`` holds the binding-z quantiles at levels 0.50..0.99 (1 %
+    steps) from the pooled calibration sample — the lookup table the ACI
+    conformal layer (`quant/conformal.py`) interpolates to widen/narrow
+    the band online as live coverage evidence arrives.
+    """
 
     z: float
     n: int
     target_coverage: float
+    z_grid: tuple[float, ...] | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class AciState:
+    """Adaptive-conformal state for one horizon (runtime band maintenance).
+
+    ``alpha`` is the ADAPTED miscoverage rate (Gibbs–Candès ACI): each
+    matured band outcome nudges it by ``gamma`` toward the rate that
+    delivers the target coverage under the current regime. ``last_rec_id``
+    marks consumption so an observation is never fed twice.
+    """
+
+    alpha: float
+    n_obs: int
+    last_rec_id: int
+    updated_at: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,10 +90,29 @@ class CalibrationArtifact:
     target_coverage: float
     horizons: dict[int, HorizonCalibration]
     symbols: tuple[str, ...]
+    aci: dict[int, AciState] | None = None
 
     def z_for(self, horizon: int) -> float | None:
+        """The BASE calibrated z (ignores any ACI adaptation)."""
         cal = self.horizons.get(horizon)
         return cal.z if cal is not None else None
+
+    def effective_z(self, horizon: int) -> float | None:
+        """The z to actually band with: ACI-adapted when state exists.
+
+        Falls back to the base z when there is no ACI state or no z_grid
+        for the horizon (e.g. a pre-grid artifact).
+        """
+        base = self.z_for(horizon)
+        if base is None:
+            return None
+        state = (self.aci or {}).get(horizon)
+        cal = self.horizons[horizon]
+        if state is None or cal.z_grid is None:
+            return base
+        from halal_trader.quant.conformal import z_from_grid
+
+        return z_from_grid(cal.z_grid, state.alpha)
 
 
 def save_artifact(artifact: CalibrationArtifact, path: Path = DEFAULT_ARTIFACT_PATH) -> Path:
@@ -81,10 +123,24 @@ def save_artifact(artifact: CalibrationArtifact, path: Path = DEFAULT_ARTIFACT_P
         "created_at": artifact.created_at,
         "target_coverage": artifact.target_coverage,
         "horizons": {
-            str(h): {"z": c.z, "n": c.n, "target_coverage": c.target_coverage}
+            str(h): {
+                "z": c.z,
+                "n": c.n,
+                "target_coverage": c.target_coverage,
+                "z_grid": list(c.z_grid) if c.z_grid is not None else None,
+            }
             for h, c in artifact.horizons.items()
         },
         "symbols": list(artifact.symbols),
+        "aci": {
+            str(h): {
+                "alpha": a.alpha,
+                "n_obs": a.n_obs,
+                "last_rec_id": a.last_rec_id,
+                "updated_at": a.updated_at,
+            }
+            for h, a in (artifact.aci or {}).items()
+        },
     }
     path.write_text(json.dumps(payload, indent=2))
     logger.info("band calibration saved: %s -> %s", artifact.version, path)
@@ -104,10 +160,24 @@ def load_artifact(path: Path = DEFAULT_ARTIFACT_PATH) -> CalibrationArtifact | N
                     z=float(c["z"]),
                     n=int(c["n"]),
                     target_coverage=float(c["target_coverage"]),
+                    z_grid=(tuple(float(x) for x in c["z_grid"]) if c.get("z_grid") else None),
                 )
                 for h, c in raw["horizons"].items()
             },
             symbols=tuple(raw.get("symbols", ())),
+            aci=(
+                {
+                    int(h): AciState(
+                        alpha=float(a["alpha"]),
+                        n_obs=int(a["n_obs"]),
+                        last_rec_id=int(a["last_rec_id"]),
+                        updated_at=str(a["updated_at"]),
+                    )
+                    for h, a in raw["aci"].items()
+                }
+                if raw.get("aci")
+                else None
+            ),
         )
     except FileNotFoundError:
         return None
@@ -215,7 +285,16 @@ def run_pooled_calibration(
         highs = np.concatenate([p[2] for p in pooled])
         lows = np.concatenate([p[3] for p in pooled])
         cal = calibrate_z(closes, sigmas, highs, lows, h, target_coverage=target_coverage)
-        horizons_cal[h] = HorizonCalibration(z=cal.z, n=cal.n, target_coverage=target_coverage)
+        # Binding-z quantile grid (levels 0.50..0.99) — the ACI layer's
+        # alpha → z lookup table (quant/conformal.py).
+        scale_all = sigmas * np.sqrt(h)
+        z_binding = np.maximum(
+            np.log(highs / closes) / scale_all, -np.log(lows / closes) / scale_all
+        )
+        grid = tuple(float(np.quantile(z_binding, 0.50 + 0.01 * i)) for i in range(50))
+        horizons_cal[h] = HorizonCalibration(
+            z=cal.z, n=cal.n, target_coverage=target_coverage, z_grid=grid
+        )
         # Per-symbol residual coverage of the pooled z.
         for sym, by_h in per_symbol.items():
             sym_obs = by_h.get(h)
