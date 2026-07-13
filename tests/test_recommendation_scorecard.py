@@ -303,6 +303,91 @@ async def test_backfill_skips_pick_older_than_window():
 
 
 @pytest.mark.asyncio
+async def test_backfill_labels_candidate_universe():
+    symbols = ["NVDA", "AAPL", "MSFT", "AMZN", "META", "ORCL"]
+    broker = _FakeBroker(
+        {sym: _bars(100.0 + 10 * i, 1.0 * i, DATES, spread=2.0) for i, sym in enumerate(symbols)}
+    )
+    candidates = {
+        sym: {"price": 100.0, "quant_bands": {"5": {"low": 1.0, "high": 10_000.0}}}
+        for sym in symbols
+    }
+    repo = _FakeRepo(
+        [
+            {
+                "id": 1,
+                "symbol": "MSFT",
+                "date": "2026-05-01",
+                "outcome_status": "pending",
+                "candidates": candidates,
+            },
+        ]
+    )
+    await backfill_outcomes(broker, repo)
+    row = repo.rows[1]
+    outs = {s: d.get("outcome") for s, d in row["candidates"].items()}
+    assert all(o is not None for o in outs.values())
+    # Flat symbol (i=0): 0% fwd return; steepest (i=5): 5/day from 150.
+    assert outs["NVDA"]["fwd_return_5d"] == pytest.approx(0.0)
+    assert outs["ORCL"]["fwd_return_5d"] > 10.0
+    # The generous stored band covered every path.
+    assert all(o["band_covered_5d"] is True for o in outs.values())
+    # Bar cache: 6 candidate symbols + benchmark = 7 fetches, not 7 + pick
+    # (the pick is also a candidate and reuses its cached bars).
+    assert len(broker.requested_days) == 7
+
+
+@pytest.mark.asyncio
+async def test_candidate_labels_are_frozen_once_written():
+    broker = _FakeBroker({"NVDA": _bars(100.0, 1.0, DATES)})
+    frozen = {"fwd_return_5d": 42.0, "band_covered_5d": False}
+    repo = _FakeRepo(
+        [
+            {
+                "id": 1,
+                "symbol": "NVDA",
+                "date": "2026-05-01",
+                "outcome_status": "pending",
+                "candidates": {"NVDA": {"outcome": dict(frozen)}},
+            },
+        ]
+    )
+    await backfill_outcomes(broker, repo)
+    # The already-written label is never recomputed.
+    assert repo.rows[1]["candidates"]["NVDA"]["outcome"]["fwd_return_5d"] == 42.0
+
+
+@pytest.mark.asyncio
+async def test_compute_scorecard_candidate_coverage_and_pick_percentile():
+    def _cand(ret, covered=True):
+        return {"outcome": {"fwd_return_5d": ret, "band_covered_5d": covered}}
+
+    repo = _FakeRepo(
+        [
+            {
+                "id": 1,
+                "symbol": "NVDA",
+                "date": "2026-05-01",
+                "fwd_return_5d": 5.0,
+                "candidates": {
+                    "NVDA": _cand(5.0),
+                    "AAPL": _cand(1.0),
+                    "MSFT": _cand(-2.0, covered=False),
+                    "AMZN": _cand(0.5),
+                    "META": _cand(3.0),
+                },
+            },
+        ]
+    )
+    sc = await compute_scorecard(repo)
+    assert sc["candidate_band_n"] == 5
+    assert sc["candidate_band_coverage_5d"] == pytest.approx(0.8)  # 4 of 5
+    # NVDA beat all 4 rivals → percentile 1.0.
+    assert sc["pick_percentile_n"] == 1
+    assert sc["avg_pick_percentile_5d"] == pytest.approx(1.0)
+
+
+@pytest.mark.asyncio
 async def test_audit_repairs_mislabeled_scored_row():
     # Row was scored against a wrong entry (the old bug); audit with a
     # covering window recomputes and repairs entry_close + adds path stats.

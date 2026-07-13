@@ -197,12 +197,16 @@ forecasting work ships before the measurement loop can score it.
   our intraday-only stock strategy structurally forfeits (most equity drift
   accrues overnight) and contextualizes the bot's own fills. Diagnostic
   panel only — expectations-setting for the operator, not a signal.
-- [ ] **Label all candidates, not just the pick** — outcome-label the whole
+- [x] **Label all candidates, not just the pick** — outcome-label the whole
   `candidates` JSONB universe per rec (open-anchored forward returns +
   realized high/low). Gives counterfactual evaluation ("did the LLM pick the
   best candidate?") and the pooled training panel Phase 2 needs. Mind
   `get_recommendations_to_score`'s newest-first `limit=500` cap once
-  candidate labeling multiplies pending work.
+  candidate labeling multiplies pending work. Done 2026-07-13: outcomes
+  written into `candidates[sym]["outcome"]` JSONB (no migration), one
+  cached bar fetch per symbol per run; scorecard gains
+  `candidate_band_coverage_5d` (~20× the coverage sample) and
+  `avg_pick_percentile_5d` (counterfactual: 0.5 = random picking).
 - [ ] **Data hygiene: adjusted bars** — split/dividend-unadjusted OHLC
   corrupts overnight terms in vol estimators, shifts historical levels, and
   distorts return labels. Establish what adjustment the Alpaca MCP bars

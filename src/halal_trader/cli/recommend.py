@@ -107,11 +107,21 @@ def _print_scorecard(sc: dict[str, Any], backfill: dict[str, int], whatif: dict[
             f"  first hit: {fh} · avg MFE {_pct(sc.get('avg_mfe_5d'))} · "
             f"avg MAE {_pct(sc.get('avg_mae_5d'))}\n"
         )
-    if sc.get("band_n"):
+    if sc.get("band_n") or sc.get("candidate_band_n"):
         cov = sc.get("band_coverage_5d")
         cov_s = f"{cov:.0%}" if isinstance(cov, int | float) else "—"
+        ccov = sc.get("candidate_band_coverage_5d")
+        ccov_s = f"{ccov:.0%}" if isinstance(ccov, int | float) else "—"
         body += (
-            f"Quant band coverage (5d path): [bold]{cov_s}[/bold] of {sc['band_n']} banded picks\n"
+            f"Quant band coverage (5d path): picks [bold]{cov_s}[/bold] "
+            f"(n={sc.get('band_n', 0)}) · all candidates [bold]{ccov_s}[/bold] "
+            f"(n={sc.get('candidate_band_n', 0)})\n"
+        )
+    pick_pct = sc.get("avg_pick_percentile_5d")
+    if isinstance(pick_pct, int | float):
+        body += (
+            f"Counterfactual: pick at the [bold]{pick_pct:.0%}[/bold] percentile "
+            f"of its candidates (0.5 = random; n={sc.get('pick_percentile_n', 0)})\n"
         )
     body += (
         f"[dim]backfill: {backfill.get('updated', 0)} updated, "

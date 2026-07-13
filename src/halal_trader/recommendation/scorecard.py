@@ -238,6 +238,81 @@ def _outcome_fields(fr: dict[Any, Any]) -> dict[str, Any]:
     return fields
 
 
+async def _fetch_ohlc_cached(
+    broker: Any,
+    symbol: str,
+    cache: dict[str, list[tuple[str, float, float, float, float]]],
+) -> list[tuple[str, float, float, float, float]]:
+    """Fetch + parse a symbol's daily bars at most once per backfill run."""
+    if symbol in cache:
+        return cache[symbol]
+    try:
+        bars = await broker.get_stock_bars(symbol, days=_BARS_LOOKBACK_DAYS, timeframe="1Day")
+        cache[symbol] = _ohlc_by_date(bars)
+    except Exception as exc:  # noqa: BLE001 — skip a flaky symbol
+        logger.debug("scorecard: bars for %s failed: %s", symbol, exc)
+        cache[symbol] = []
+    return cache[symbol]
+
+
+async def _label_candidates(
+    broker: Any,
+    rec: dict[str, Any],
+    ohlc_cache: dict[str, list[tuple[str, float, float, float, float]]],
+) -> dict[str, Any] | None:
+    """Outcome-label the whole candidate universe of one rec (in JSONB).
+
+    Every candidate — not just the pick — gets 5d forward return, realized
+    high/low and per-candidate band coverage written into its
+    ``candidates[sym]["outcome"]`` sub-dict once matured. This is the
+    counterfactual sample ("did the LLM pick the best candidate?"), a ~20×
+    larger band-coverage feed than pick-only scoring, and the pooled
+    training panel Phase 2's quantile models need. Idempotent: already
+    labeled candidates are never recomputed (their band was frozen at
+    generation time; recomputing would leak). Returns the mutated dict or
+    ``None`` when nothing new matured.
+    """
+    cands = rec.get("candidates")
+    if not isinstance(cands, dict) or not cands:
+        return None
+    changed = False
+    for sym, data in cands.items():
+        if not isinstance(data, dict):
+            continue
+        if (data.get("outcome") or {}).get("fwd_return_5d") is not None:
+            continue  # already labeled — frozen
+        ohlc = await _fetch_ohlc_cached(broker, sym, ohlc_cache)
+        if not ohlc:
+            continue
+        fr = _forward_outcomes(ohlc, rec["date"], horizons=(5,))
+        if fr is None or fr.get("window_missed") or fr.get(5) is None:
+            continue  # not matured (or unlabelable) yet
+        b5 = (data.get("quant_bands") or {}).get("5")
+        covered: bool | None = None
+        if (
+            isinstance(b5, dict)
+            and fr.get("realized_high_5d") is not None
+            and fr.get("realized_low_5d") is not None
+        ):
+            try:
+                covered = bool(
+                    fr["realized_low_5d"] >= float(b5["low"])
+                    and fr["realized_high_5d"] <= float(b5["high"])
+                )
+            except KeyError, TypeError, ValueError:
+                covered = None
+        data["outcome"] = {
+            "entry_close": fr["entry_close"],
+            "entry_open": fr.get("entry_open"),
+            "fwd_return_5d": fr.get(5),
+            "realized_high_5d": fr.get("realized_high_5d"),
+            "realized_low_5d": fr.get("realized_low_5d"),
+            "band_covered_5d": covered,
+        }
+        changed = True
+    return cands if changed else None
+
+
 async def backfill_outcomes(
     broker: Any, repo: Any, *, benchmark: str = DEFAULT_BENCHMARK
 ) -> dict[str, int]:
@@ -252,28 +327,21 @@ async def backfill_outcomes(
     if not pending:
         return {"updated": 0, "scored": 0, "skipped": 0}
 
-    bench_ohlc: list[tuple[str, float, float, float]] = []
-    try:
-        bench_bars = await broker.get_stock_bars(
-            benchmark, days=_BARS_LOOKBACK_DAYS, timeframe="1Day"
-        )
-        bench_ohlc = _ohlc_by_date(bench_bars)
-    except Exception as exc:  # noqa: BLE001 — benchmark is optional
-        logger.debug("scorecard: benchmark %s unavailable: %s", benchmark, exc)
+    # Per-run bar cache: the pick, the benchmark and every candidate symbol
+    # are fetched at most once per backfill regardless of how many pending
+    # recs reference them.
+    ohlc_cache: dict[str, list[tuple[str, float, float, float, float]]] = {}
+    bench_ohlc = await _fetch_ohlc_cached(broker, benchmark, ohlc_cache)
 
     updated = 0
     scored = 0
     skipped = 0
     for rec in pending:
-        try:
-            bars = await broker.get_stock_bars(
-                rec["symbol"], days=_BARS_LOOKBACK_DAYS, timeframe="1Day"
-            )
-        except Exception as exc:  # noqa: BLE001 — skip a flaky symbol
-            logger.debug("scorecard: bars for %s failed: %s", rec.get("symbol"), exc)
+        ohlc = await _fetch_ohlc_cached(broker, rec["symbol"], ohlc_cache)
+        if not ohlc:
             continue
         fr = _forward_outcomes(
-            _ohlc_by_date(bars),
+            ohlc,
             rec["date"],
             target=rec.get("suggested_target"),
             stop=rec.get("suggested_stop"),
@@ -303,6 +371,9 @@ async def backfill_outcomes(
             fields["outcome_status"] = "scored"
             fields["scored_at"] = datetime.now(UTC)
             scored += 1
+        labeled_cands = await _label_candidates(broker, rec, ohlc_cache)
+        if labeled_cands is not None:
+            fields["candidates"] = labeled_cands
         await repo.update_recommendation_outcome(rec["id"], **fields)
         updated += 1
 
@@ -456,6 +527,31 @@ async def compute_scorecard(repo: Any, *, limit: int = 500) -> dict[str, Any]:
     band_results = [b for b in band_covered if b is not None]
     plan_exits = [r["plan_exit"] for r in labeled if r.get("plan_exit")]
     plan_exit_counts = {k: plan_exits.count(k) for k in sorted(set(plan_exits))}
+    # Candidate-universe outcomes: pooled band coverage (a ~20× larger
+    # sample than pick-only) and the counterfactual pick percentile —
+    # where the picked symbol's 5d return ranked among all labeled
+    # candidates that day (1.0 = best possible pick, 0.5 = random).
+    cand_covered: list[bool] = []
+    pick_pcts: list[float] = []
+    for r in labeled:
+        cands = r.get("candidates") or {}
+        if not isinstance(cands, dict):
+            continue
+        outs = {
+            sym: d["outcome"]
+            for sym, d in cands.items()
+            if isinstance(d, dict) and isinstance(d.get("outcome"), dict)
+        }
+        cand_covered.extend(
+            o["band_covered_5d"] for o in outs.values() if o.get("band_covered_5d") is not None
+        )
+        rets = {
+            sym: o["fwd_return_5d"] for sym, o in outs.items() if o.get("fwd_return_5d") is not None
+        }
+        pick_ret = rets.get(r.get("symbol"))
+        if pick_ret is not None and len(rets) >= 5:
+            worse = sum(1 for v in rets.values() if v < pick_ret)
+            pick_pcts.append(worse / (len(rets) - 1))
     return {
         "available": True,
         "n_total": len(rows),
@@ -488,6 +584,17 @@ async def compute_scorecard(repo: Any, *, limit: int = 500) -> dict[str, Any]:
         # ── Plan-anchored outcome (entry@open, bracket exits) ──
         "avg_plan_return_5d": _avg(labeled, "plan_return_5d"),
         "plan_exit_counts": plan_exit_counts,
+        # ── Candidate-universe outcomes (counterfactual + pooled bands) ──
+        "candidate_band_n": len(cand_covered),
+        "candidate_band_coverage_5d": (
+            round(sum(1 for b in cand_covered if b) / len(cand_covered), 4)
+            if cand_covered
+            else None
+        ),
+        "pick_percentile_n": len(pick_pcts),
+        "avg_pick_percentile_5d": (
+            round(sum(pick_pcts) / len(pick_pcts), 4) if pick_pcts else None
+        ),
         "best": {
             "symbol": best["symbol"],
             "date": best["date"],
