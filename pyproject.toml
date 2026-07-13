@@ -46,6 +46,10 @@ ml = [
     "scikit-learn",
     "xgboost",
     "chronos-forecasting",
+    # GARCH-FHS path-extreme bands (quant roadmap Phase 2). Pulls
+    # pandas/scipy/statsmodels transitively — acceptable inside [ml] only;
+    # the deterministic quant/ core stays pure numpy.
+    "arch>=8.0",
 ]
 sentiment = [
     "praw",

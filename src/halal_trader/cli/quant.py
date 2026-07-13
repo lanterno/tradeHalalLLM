@@ -425,5 +425,18 @@ def outlook(symbol: str, days: int) -> None:
         if out.atr_baseline_5d is not None:
             a = out.atr_baseline_5d
             console.print(f"  ATR baseline 5d: ${a.low:,.2f} .. ${a.high:,.2f}")
+        # Experimental: GARCH-FHS path extremes ([ml] extra; research display
+        # only — ships into the engine only after `quant compare-bands`
+        # evidence per the roadmap's validation gates).
+        import numpy as np
+
+        from halal_trader.quant.garch import garch_fhs_path_extremes
+
+        g = garch_fhs_path_extremes(np.asarray(data[3]), 5, n_sims=2000)
+        if g is not None:
+            glo, ghi = g.band(0.8)
+            console.print(
+                f"  [dim]GARCH-FHS 5d (experimental, 80% joint): ${glo:,.2f} .. ${ghi:,.2f}[/dim]"
+            )
 
     asyncio.run(_run())

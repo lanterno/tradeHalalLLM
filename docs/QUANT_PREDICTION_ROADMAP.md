@@ -351,7 +351,7 @@ Only starts once Phase 0 metrics exist, because every model here ships only if
 it beats the Phase 1 ATR/HAR baseline on pinball + Winkler + coverage on
 disjoint OOS windows.
 
-- [ ] **GARCH-FHS Monte Carlo of path extremes** — add `arch>=8.0` to `[ml]`
+- [~] **GARCH-FHS Monte Carlo of path extremes** — add `arch>=8.0` to `[ml]`
   (cp314 wheels reported by two of three research passes — verify at
   `uv lock`; pure-Python `ARCH_NO_BINARY=1` fallback exists; note arch pulls
   pandas/scipy/statsmodels transitively into `[ml]`, acceptable under extras
