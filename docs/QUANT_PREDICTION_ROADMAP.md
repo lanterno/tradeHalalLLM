@@ -367,6 +367,18 @@ disjoint OOS windows.
   correct with an empirical high-vs-close ratio, or document that the
   conformal layer absorbs it). Constant-vol GBM Monte Carlo (20 lines numpy,
   no deps) as the sanity baseline.
+  Built 2026-07-13 (`quant/garch.py`, arch 8.0 clean on cp314;
+  experimental display in `quant outlook` only). **Ship-gate verdict:
+  FAIL** (`quant compare-bands`, 900 d × 20 sym, 480 same-rows obs, 2
+  disjoint OOS windows): garch_fhs 63 % coverage / 30.38 % Winkler —
+  worse than the naive ATR baseline (65 % / 29.60 %) — while the shipped
+  har_cal band hit 78 % coverage vs the 80 % target (29.82 %). Mechanism
+  = exactly the intraday-extreme warning above: the sim-joint band
+  trusts daily-close paths; the HAR band's z is calibrated on realized
+  extremes and absorbs the bias. Ledger: `bands.garch_fhs.vs_har_atr =
+  fail`. Salvage path if revisited: GARCH as a σ source under the SAME
+  empirical z-calibration — never the sim-joint band. The engine keeps
+  the HAR-calibrated bands, now validated best-of-three on disjoint OOS.
 - [ ] **Conformal calibration layer** — rolling-window split conformal per
   horizon on whichever band source serves (Phase 1 HAR bands included);
   MAPIE (`mapie>=1.4`, pure Python, BSD) or a ~15-line hand-rolled adaptive
