@@ -206,19 +206,23 @@ Everything here is 10–40 lines of numpy, offline-testable, and consumable by
 both bots. Ship behind the outlook API with per-piece validation. Build the
 measurement harness *before* the level families it measures.
 
-- [ ] **Range-based vol estimators** — `quant/volatility.py`: Parkinson,
+- [x] **Range-based vol estimators** — `quant/volatility.py`: Parkinson,
   Garman-Klass, Rogers-Satchell, **Yang-Zhang** (the default: minimum-variance
   OHLC estimator, handles the overnight gaps that dominate large-cap risk),
   plus EWMA (λ=0.94) on the YZ series. Requires adjusted bars (Phase 0
-  hygiene item). Unit-test against published values.
-- [ ] **HAR range/vol forecaster** — HAR(1, 5, 22) OLS on log YZ-vol, one
+  hygiene item). Unit-test against published values. 2026-07-13
+  (`quant/volatility.py`: close-to-close baseline + Parkinson, GK, RS,
+  Yang-Zhang, EWMA; daily units, NaN warm-ups).
+- [x] **HAR range/vol forecaster** — HAR(1, 5, 22) OLS on log YZ-vol, one
   direct model per horizon (h=1, 5). Pure-numpy least squares; ~30 lines.
   Captures *most of* the documented 35–40 % HAR-RV error reduction over
   GARCH at 1–5 d horizons (the full figure needs intraday realized vol; the
   daily-OHLC range proxy retains most of the gain). Fit in logs with the
   half-variance bias correction on exponentiation; direct multi-step models
-  need non-overlapping evaluation windows.
-- [ ] **Band conversion with empirical calibration** — `quant/bands.py`:
+  need non-overlapping evaluation windows. 2026-07-13 (`quant/bands.py:
+  fit_har` — direct per-horizon, log-space, half-variance correction,
+  refuses <60 rows).
+- [~] **Band conversion with empirical calibration** — `quant/bands.py`:
   `close·exp(±z·σ̂·√h)` with **z calibrated per horizon on walk-forward
   realized max-high/min-low coverage** — this one calibration step absorbs
   the path-extreme, fat-tail, and estimator-bias corrections. The research
@@ -228,7 +232,11 @@ measurement harness *before* the level families it measures.
   accrue, and track per-symbol coverage residuals in the scorecard** to know
   when pooling is costing accuracy. Also expose expected range
   `E[range] ≈ 1.596·σ̂·√h` and the ATR-multiple band as the naive baseline
-  every model must beat.
+  every model must beat. Primitives done 2026-07-13 (`quant/bands.py:
+  price_bands`, `atr_band`, `calibrate_z` — binding-z quantile over
+  realized path extremes). Remaining: run the pooled walk-forward
+  calibration on real universe bars (needs the bar cache) and store the
+  versioned calibration artifact.
 - [ ] **Volatility cone guardrail** — per-symbol percentile cone of rolling
   YZ vol over window lengths [5, 10, 21, 42, 63] (2+ years of dailies,
   Hodges-Tompkins overlapping-window correction); when current vol sits at a
