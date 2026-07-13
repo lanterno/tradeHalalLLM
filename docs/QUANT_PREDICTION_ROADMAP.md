@@ -279,13 +279,18 @@ measurement harness *before* the level families it measures.
   (`close / rolling_max(close, 252)`). Both validated via
   `core/signal_eval.py` IC with t-stat > 3 on disjoint windows before
   entering any prompt; framed as tilts, never as forecasts.
-- [ ] **Wire into the recommendation engine — advisory slice** — outlook
+- [~] **Wire into the recommendation engine — advisory slice** — outlook
   fields into the candidate table (expected 1d/5d band, nearest support
   below / resistance above with hold rates, vol percentile) + a
   "quantitative context" prompt block; persist per-candidate bands in
   `candidates` JSONB and pick-level typed columns
   (`predicted_low_5d`/`predicted_high_5d` + model tag + calibration
-  version). No level authority yet.
+  version). No level authority yet. Bands half done 2026-07-13
+  (`quant/outlook.py:build_outlook` + engine wiring: band5d/rng1d/vpct
+  in the prompt table with an UNCALIBRATED label, full per-horizon
+  bands in `candidates` JSONB, 200-day fetch for HAR). Remaining:
+  level map fields (needs `quant/levels.py`) and pick-level typed
+  columns once the calibration artifact exists.
 - [ ] **Recommendation-level grounding — authority slice (separate, later)**
   — after the advisory slice has accrued Phase 0 metrics: floor the LLM stop
   at the calibrated lower band (**widen-only**), flag targets outside the

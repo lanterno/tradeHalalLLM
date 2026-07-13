@@ -100,6 +100,34 @@ async def test_generate_picks_and_persists():
 
 
 @pytest.mark.asyncio
+async def test_quant_range_bands_reach_prompt_and_candidates():
+    llm = _FakeLLM(
+        {
+            "symbol": "NVDA",
+            "conviction": 0.6,
+            "thesis": "t",
+            "halal_note": "h",
+            "suggested_entry": 130.0,
+            "suggested_target": 140.0,
+            "suggested_stop": 125.0,
+        }
+    )
+    eng = _engine(llm)
+    rec = await eng.generate()
+    nvda = rec["candidates"]["NVDA"]
+    # 60 fake bars → HAR refuses → current Yang-Zhang estimate still bands.
+    assert nvda["band5d_lo"] < nvda["price"] < nvda["band5d_hi"]
+    assert nvda["rng1d_pct"] > 0
+    qb = nvda["quant_bands"]
+    assert qb["calibrated"] is False
+    assert qb["5"]["source"] == "yz_current"
+    assert qb["5"]["low"] < qb["5"]["high"]
+    # The prompt shows the band and explains its (uncalibrated) semantics.
+    assert "band5d=" in llm.last_prompt
+    assert "UNCALIBRATED" in llm.last_prompt
+
+
+@pytest.mark.asyncio
 async def test_rejects_symbol_outside_universe():
     llm = _FakeLLM({"symbol": "TSLA", "conviction": 0.9, "thesis": "x", "halal_note": "y"})
     eng = _engine(llm)
@@ -133,8 +161,15 @@ async def test_skips_symbols_with_insufficient_bars():
     # MSFT has too few bars → excluded from candidates; pick must be a kept name.
     broker = _FakeBroker(bars_by_symbol={"MSFT": _bars(50.0, 0.1, n=5)})
     llm = _FakeLLM(
-        {"symbol": "NVDA", "conviction": 0.6, "thesis": "t", "halal_note": "h",
-         "suggested_entry": 130.0, "suggested_target": 140.0, "suggested_stop": 125.0}
+        {
+            "symbol": "NVDA",
+            "conviction": 0.6,
+            "thesis": "t",
+            "halal_note": "h",
+            "suggested_entry": 130.0,
+            "suggested_target": 140.0,
+            "suggested_stop": 125.0,
+        }
     )
     eng = _engine(llm, broker=broker)
     rec = await eng.generate()

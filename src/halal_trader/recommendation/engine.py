@@ -60,12 +60,21 @@ USER_PROMPT_TEMPLATE = """\
 Date: {date} (US/Eastern).
 
 Candidate universe — {n} AAOIFI Shariah-compliant large-caps. Metrics are from
-daily bars (≈60 trading days): chg5d/chg20d = % change over the last 5/20 daily
-bars; rsi = RSI-14; macd_h = MACD histogram; bb = position in the Bollinger band
-(0 low .. 1 high); vol = volume vs 20-day average; atr = ATR-14; adx = ADX-14;
-from_hi = % below the 60-day high.
+daily bars: chg5d/chg20d = % change over the last 5/20 daily bars; rsi =
+RSI-14; macd_h = MACD histogram; bb = position in the Bollinger band (0 low ..
+1 high); vol = volume vs 20-day average; atr = ATR-14; adx = ADX-14; from_hi =
+% below the recent high. Quantitative range model (Yang-Zhang/HAR volatility):
+band5d = statistical 5-day low..high price band (±1.28σ√h — UNCALIBRATED, an
+approximation, not a measured-coverage interval); rng1d = expected 1-day
+trading range as % of price; vpct = current volatility percentile vs the
+symbol's own history (0 calm .. 1 extreme).
 
 {table}
+
+Ground suggested_target and suggested_stop in the range model: a
+suggested_target beyond band5d's high needs an explicit catalyst in the
+thesis, and the stop must sit wide enough that ordinary 1-day noise (rng1d)
+cannot hit it.
 
 Pick the single most promising BUY for today and return the JSON object."""
 
@@ -128,9 +137,9 @@ class DailyRecommendationEngine:
         out: dict[str, dict[str, Any]] = {}
         for sym in self._universe:
             try:
-                bars = await self._broker.get_stock_bars(
-                    sym, days=60, timeframe="1Day"
-                )
+                # 200 calendar days ≈ 138 trading bars — enough for the HAR
+                # vol forecaster (needs ~110+); indicators use the tail.
+                bars = await self._broker.get_stock_bars(sym, days=200, timeframe="1Day")
             except Exception as exc:  # noqa: BLE001 — skip a flaky symbol, keep the rest
                 logger.debug("recommendation: bars fetch failed for %s: %s", sym, exc)
                 continue
@@ -145,12 +154,8 @@ class DailyRecommendationEngine:
             last = closes[-1]
             summary = {
                 "price": round(last, 2),
-                "chg5d": round((last / closes[-6] - 1) * 100, 2)
-                if len(closes) >= 6
-                else None,
-                "chg20d": round((last / closes[-21] - 1) * 100, 2)
-                if len(closes) >= 21
-                else None,
+                "chg5d": round((last / closes[-6] - 1) * 100, 2) if len(closes) >= 6 else None,
+                "chg20d": round((last / closes[-21] - 1) * 100, 2) if len(closes) >= 21 else None,
                 "rsi": ind.get("rsi_14"),
                 "macd_h": ind.get("macd_histogram"),
                 "bb": ind.get("bb_position"),
@@ -159,8 +164,58 @@ class DailyRecommendationEngine:
                 "adx": ind.get("adx_14"),
                 "from_hi": round((last / max(highs) - 1) * 100, 2) if highs else None,
             }
+            summary.update(self._quant_fields(klines, ind))
             out[sym] = summary
         return out
+
+    @staticmethod
+    def _quant_fields(klines: list[Any], ind: dict[str, Any]) -> dict[str, Any]:
+        """Quantitative range-model fields for one candidate (advisory).
+
+        Prompt-facing scalars (band5d_lo/hi, rng1d_pct, vol_pctl) plus the
+        full per-horizon band dict under ``quant_bands`` — persisted in the
+        ``candidates`` JSONB so the scorecard can label band coverage later.
+        Degrades to ``{}`` when the series is too thin for any estimator.
+        """
+        from halal_trader.quant.outlook import build_outlook
+
+        try:
+            outlook = build_outlook(
+                [k.open for k in klines],
+                [k.high for k in klines],
+                [k.low for k in klines],
+                [k.close for k in klines],
+                atr=ind.get("atr_14"),
+            )
+        except ValueError as exc:
+            logger.debug("recommendation: outlook failed: %s", exc)
+            return {}
+        if outlook is None:
+            return {}
+        fields: dict[str, Any] = {
+            "vol_pctl": round(outlook.vol_percentile, 2)
+            if outlook.vol_percentile is not None
+            else None,
+            "quant_bands": {
+                str(h): {
+                    "low": round(hb.band.low, 4),
+                    "high": round(hb.band.high, 4),
+                    "expected_range": round(hb.band.expected_range, 4),
+                    "sigma_daily": round(hb.band.sigma_daily, 6),
+                    "source": hb.sigma_source,
+                }
+                for h, hb in outlook.bands.items()
+            }
+            | {"z": outlook.z, "calibrated": outlook.calibrated},
+        }
+        five = outlook.bands.get(5)
+        if five is not None:
+            fields["band5d_lo"] = round(five.band.low, 2)
+            fields["band5d_hi"] = round(five.band.high, 2)
+        one = outlook.bands.get(1)
+        if one is not None and outlook.close > 0:
+            fields["rng1d_pct"] = round(one.band.expected_range / outlook.close * 100, 2)
+        return fields
 
     def _format_table(self, candidates: dict[str, dict[str, Any]]) -> str:
         def _f(v: Any) -> str:
@@ -168,12 +223,19 @@ class DailyRecommendationEngine:
 
         lines = []
         for sym, c in candidates.items():
-            lines.append(
+            line = (
                 f"{sym:6} ${_f(c['price'])}  chg5d={_f(c['chg5d'])}% "
                 f"chg20d={_f(c['chg20d'])}% rsi={_f(c['rsi'])} "
                 f"macd_h={_f(c['macd_h'])} bb={_f(c['bb'])} vol={_f(c['vol'])}x "
                 f"atr={_f(c['atr'])} adx={_f(c['adx'])} from_hi={_f(c['from_hi'])}%"
             )
+            if c.get("band5d_lo") is not None:
+                line += (
+                    f" band5d={_f(c['band5d_lo'])}..{_f(c['band5d_hi'])}"
+                    f" rng1d={_f(c.get('rng1d_pct'))}%"
+                    f" vpct={_f(c.get('vol_pctl'))}"
+                )
+            lines.append(line)
         return "\n".join(lines)
 
     def _apply_factors(self, candidates: dict[str, dict[str, Any]]) -> str:
@@ -193,8 +255,7 @@ class DailyRecommendationEngine:
         ]
         return (
             "Cross-sectional factor leaders (z-scored momentum + low-vol + "
-            "trend-quality across the universe; higher = stronger long tilt):\n"
-            + "\n".join(lines)
+            "trend-quality across the universe; higher = stronger long tilt):\n" + "\n".join(lines)
         )
 
     async def _pick(self, candidates: dict[str, dict[str, Any]]) -> dict[str, Any]:
@@ -212,9 +273,7 @@ class DailyRecommendationEngine:
     ) -> dict[str, Any]:
         symbol = str(raw.get("symbol", "")).upper().strip()
         if symbol not in candidates:
-            raise ValueError(
-                f"LLM picked {symbol!r} which is not in the candidate universe"
-            )
+            raise ValueError(f"LLM picked {symbol!r} which is not in the candidate universe")
         price = candidates[symbol].get("price")
         entry = _as_float(raw.get("suggested_entry")) or price
         target = _as_float(raw.get("suggested_target"))
@@ -243,5 +302,5 @@ def _as_float(v: Any) -> float | None:
         return None
     try:
         return float(v)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
