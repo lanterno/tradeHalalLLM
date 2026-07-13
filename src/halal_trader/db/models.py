@@ -346,6 +346,13 @@ class DailyRecommendation(SQLModel, table=True):
     # Which level was touched first: target | stop | both_same_bar | none.
     # Daily bars can't sequence within a day — both_same_bar is honest ignorance.
     first_hit: str | None = None
+    # ── Plan-anchored outcome: the actionable plan buys at the entry bar's
+    # OPEN (the rec lands pre-market) and bracket-exits at target/stop, with
+    # a time exit after 5 sessions (entry day included). Same-bar ties
+    # resolve to the stop — pessimistic, honest for a long plan.
+    entry_open: float | None = None  # open of the entry bar (plan fill proxy)
+    plan_return_5d: float | None = None  # % outcome of the stated plan
+    plan_exit: str | None = None  # target | stop | time
 
 
 class QuantTrial(SQLModel, table=True):

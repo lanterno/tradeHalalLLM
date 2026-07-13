@@ -37,20 +37,21 @@ DATES = [f"2026-05-{day:02d}" for day in range(1, 26)]  # 25 consecutive (test) 
 def test_ohlc_by_date_handles_envelopes():
     flat = _bars(100.0, 1.0, ["2026-05-02", "2026-05-01"])  # out of order
     out = _ohlc_by_date(flat)
-    assert [d for d, _, _, _ in out] == ["2026-05-01", "2026-05-02"]  # sorted ascending
+    assert [d for d, *_ in out] == ["2026-05-01", "2026-05-02"]  # sorted ascending
     # symbol-keyed envelope
     wrapped = {"bars": {"NVDA": _bars(50.0, 0.0, ["2026-05-01"])}}
-    assert _ohlc_by_date(wrapped) == [("2026-05-01", 50.0, 50.0, 50.0)]
+    assert _ohlc_by_date(wrapped) == [("2026-05-01", 50.0, 50.0, 50.0, 50.0)]
     # long-key 'close' variant; missing h/l falls back to close
     assert _ohlc_by_date([{"timestamp": "2026-05-01", "close": 7.0}]) == [
-        ("2026-05-01", 7.0, 7.0, 7.0)
+        ("2026-05-01", 7.0, 7.0, 7.0, 7.0)
     ]
 
 
 def test_ohlc_by_date_sanitizes_bad_prints():
     # high < low is a bad print — sanitized so low <= close <= high
     rows = _ohlc_by_date([{"t": "2026-05-01", "c": 10.0, "h": 8.0, "l": 12.0}])
-    _, high, low, close = rows[0]
+    _, open_, high, low, close = rows[0]
+    assert low <= open_ <= high
     assert low <= close <= high
 
 
@@ -149,6 +150,44 @@ def test_target_stop_same_bar_is_honest_ignorance():
     assert fr["first_hit"] == "both_same_bar"
 
 
+def test_plan_bracket_target_exit_and_time_exit():
+    # Rising tape, o == c per bar: entry open 100 (bar 0), target 130 gapped
+    # through at bar 3's open (o=130 >= target) → exit at the open price.
+    ohlc = _ohlc_by_date(_bars(100.0, 10.0, DATES))
+    fr = _forward_outcomes(ohlc, "2026-05-01", target=130.0, stop=50.0)
+    assert fr["entry_open"] == 100.0
+    assert fr["plan_exit"] == "target"
+    assert fr["plan_return_5d"] == pytest.approx(30.0)
+    # No levels → pure 5-session hold from the open (time exit at bar 4).
+    fr2 = _forward_outcomes(ohlc, "2026-05-01")
+    assert fr2["plan_exit"] == "time"
+    assert fr2["plan_return_5d"] == pytest.approx(40.0)  # close 140 vs open 100
+
+
+def test_plan_bracket_same_bar_tie_resolves_to_stop():
+    # One wide bar (bar 1) touches both levels intrabar → pessimistic stop.
+    bars = [
+        {"t": "2026-05-01", "o": 100.0, "c": 100.0, "h": 100.0, "l": 100.0},
+        {"t": "2026-05-02", "o": 100.0, "c": 100.0, "h": 120.0, "l": 80.0},
+        *_bars(100.0, 0.0, DATES[2:8]),
+    ]
+    fr = _forward_outcomes(_ohlc_by_date(bars), "2026-05-01", target=110.0, stop=90.0)
+    assert fr["plan_exit"] == "stop"
+    assert fr["plan_return_5d"] == pytest.approx(-10.0)  # exit at the stop price
+
+
+def test_plan_bracket_gap_through_stop_exits_at_open():
+    # Bar 1 gaps open far below the stop: exit at the open, not the stop.
+    bars = [
+        {"t": "2026-05-01", "o": 100.0, "c": 100.0, "h": 101.0, "l": 99.0},
+        {"t": "2026-05-02", "o": 80.0, "c": 82.0, "h": 83.0, "l": 79.0},
+        *_bars(85.0, 0.0, DATES[2:8]),
+    ]
+    fr = _forward_outcomes(_ohlc_by_date(bars), "2026-05-01", target=150.0, stop=95.0)
+    assert fr["plan_exit"] == "stop"
+    assert fr["plan_return_5d"] == pytest.approx(-20.0)  # 80/100 - 1
+
+
 def test_no_levels_means_unknown_not_false():
     ohlc = _ohlc_by_date(_bars(100.0, 10.0, DATES, spread=5.0))
     fr = _forward_outcomes(ohlc, "2026-05-01")  # no target/stop supplied
@@ -224,6 +263,11 @@ async def test_backfill_marks_scored_when_20d_available():
     assert row["target_hit"] is True
     assert row["stop_hit"] is False
     assert row["first_hit"] == "target"
+    # Plan-anchored outcome persisted too: entry open 100, target 130 gapped
+    # through at bar 3's open (o=130) → exit at the open.
+    assert row["entry_open"] == 100.0
+    assert row["plan_exit"] == "target"
+    assert row["plan_return_5d"] == pytest.approx(30.0)
 
 
 @pytest.mark.asyncio
@@ -381,6 +425,8 @@ async def test_compute_scorecard_aggregates():
     assert sc["first_hit_counts"] == {"stop": 1, "target": 1}
     assert sc["avg_mfe_5d"] == pytest.approx(3.5)
     assert sc["avg_mae_5d"] == pytest.approx(-2.5)
+    assert sc["avg_plan_return_5d"] is None  # no plan labels in this fixture
+    assert sc["plan_exit_counts"] == {}
 
 
 @pytest.mark.asyncio
@@ -456,6 +502,33 @@ async def test_whatif_equity_curve_compounds_in_date_order():
     assert wc["benchmark_return_pct"] == pytest.approx(3.02)
     assert [p["symbol"] for p in wc["points"]] == ["AAPL", "MSFT"]  # date order
     assert wc["points"][-1]["equity"] == pytest.approx(104.5)
+
+
+@pytest.mark.asyncio
+async def test_whatif_plan_curve_compounds_bracket_outcomes():
+    repo = _FakeRepo(
+        [
+            {
+                "id": 1,
+                "symbol": "AAPL",
+                "date": "2026-05-01",
+                "fwd_return_5d": 10.0,
+                "plan_return_5d": 8.0,
+            },
+            {
+                "id": 2,
+                "symbol": "MSFT",
+                "date": "2026-05-02",
+                "fwd_return_5d": -5.0,
+                "plan_return_5d": -6.0,
+            },
+            {"id": 3, "symbol": "NVDA", "date": "2026-05-03", "fwd_return_5d": 2.0},
+        ]
+    )
+    wc = await whatif_equity_curve(repo, start=100.0)
+    assert wc["plan_n"] == 2  # the third pick predates plan labeling
+    # 100 * 1.08 * 0.94 = 101.52
+    assert wc["plan_return_pct"] == pytest.approx(1.52)
 
 
 @pytest.mark.asyncio

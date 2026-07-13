@@ -45,14 +45,14 @@ _BARS_LOOKBACK_DAYS = 90
 _AUDIT_MAX_LOOKBACK_DAYS = 730
 
 
-def _ohlc_by_date(bars: Any) -> list[tuple[str, float, float, float]]:
-    """Extract ascending ``(YYYY-MM-DD, high, low, close)`` from a bars payload.
+def _ohlc_by_date(bars: Any) -> list[tuple[str, float, float, float, float]]:
+    """Extract ascending ``(YYYY-MM-DD, open, high, low, close)`` per bar.
 
     Unlike ``bars_to_klines`` (which synthesises monotonic timestamps and so
     loses real dates), this preserves the real session date — required to
-    align forward outcomes to the recommendation date. Missing high/low fall
-    back to the close (degraded but defined); bad prints are sanitized so
-    ``low <= close <= high`` always holds.
+    align forward outcomes to the recommendation date. Missing open/high/low
+    fall back to the close (degraded but defined); bad prints are sanitized
+    so ``low <= open/close <= high`` always holds.
     """
     raw = bars
     if isinstance(bars, dict):
@@ -65,7 +65,7 @@ def _ohlc_by_date(bars: Any) -> list[tuple[str, float, float, float]]:
             raw = flat
     if not isinstance(raw, list):
         return []
-    out: list[tuple[str, float, float, float]] = []
+    out: list[tuple[str, float, float, float, float]] = []
     for bar in raw:
         if not isinstance(bar, dict):
             continue
@@ -75,21 +75,22 @@ def _ohlc_by_date(bars: Any) -> list[tuple[str, float, float, float]]:
             continue
         try:
             close = float(c)
+            open_ = float(bar.get("o", bar.get("open", close)))
             high = float(bar.get("h", bar.get("high", close)))
             low = float(bar.get("l", bar.get("low", close)))
         except TypeError, ValueError:
             continue
-        if close <= 0:
+        if close <= 0 or open_ <= 0:
             continue
-        high = max(high, low, close)
-        low = min(high, low, close)
-        out.append((str(t)[:10], high, low, close))
+        high = max(high, low, open_, close)
+        low = min(high, low, open_, close)
+        out.append((str(t)[:10], open_, high, low, close))
     out.sort(key=lambda x: x[0])
     return out
 
 
 def _forward_outcomes(
-    ohlc_by_date: list[tuple[str, float, float, float]],
+    ohlc_by_date: list[tuple[str, float, float, float, float]],
     rec_date: str,
     horizons: tuple[int, ...] = HORIZONS,
     *,
@@ -107,10 +108,11 @@ def _forward_outcomes(
     """
     if not ohlc_by_date:
         return None
-    dates = [d for d, _, _, _ in ohlc_by_date]
-    highs = [h for _, h, _, _ in ohlc_by_date]
-    lows = [lo for _, _, lo, _ in ohlc_by_date]
-    closes = [c for _, _, _, c in ohlc_by_date]
+    dates = [d for d, _, _, _, _ in ohlc_by_date]
+    opens = [o for _, o, _, _, _ in ohlc_by_date]
+    highs = [h for _, _, h, _, _ in ohlc_by_date]
+    lows = [lo for _, _, _, lo, _ in ohlc_by_date]
+    closes = [c for _, _, _, _, c in ohlc_by_date]
     entry_idx = next((i for i, d in enumerate(dates) if d >= rec_date), None)
     if entry_idx is None:
         return None
@@ -123,7 +125,12 @@ def _forward_outcomes(
     if entry_close <= 0:
         return None
     # Mixed keys by design: str metadata + integer horizons.
-    res: dict[Any, Any] = {"entry_close": entry_close, "window_missed": False}
+    entry_open = opens[entry_idx]
+    res: dict[Any, Any] = {
+        "entry_close": entry_close,
+        "entry_open": round(entry_open, 4),
+        "window_missed": False,
+    }
     for h in horizons:
         j = entry_idx + h
         res[h] = round((closes[j] / entry_close - 1) * 100, 4) if j < len(closes) else None
@@ -160,7 +167,50 @@ def _forward_outcomes(
             res["first_hit"] = "stop"
         else:  # same bar — daily data can't order intraday touches
             res["first_hit"] = "both_same_bar"
+        # Plan-anchored bracket outcome: the actionable plan buys at the
+        # ENTRY BAR's open (the rec lands pre-market), so its 5-session
+        # window INCLUDES the entry day — unlike the close-anchored path
+        # stats above, which start the next session.
+        plan_ret, plan_exit = _plan_bracket(
+            opens, highs, lows, closes, entry_idx, target=target, stop=stop
+        )
+        res["plan_return_5d"] = plan_ret
+        res["plan_exit"] = plan_exit
     return res
+
+
+def _plan_bracket(
+    opens: list[float],
+    highs: list[float],
+    lows: list[float],
+    closes: list[float],
+    entry_idx: int,
+    *,
+    target: float | None,
+    stop: float | None,
+) -> tuple[float, str]:
+    """Simulate the stated plan: buy at the entry bar's open, bracket-exit.
+
+    Sessions ``entry_idx .. entry_idx + PATH_HORIZON - 1``. Per session, a
+    gap through a level exits at the OPEN price (gaps don't fill at the
+    level), then intrabar touches exit at the level itself. When one bar
+    touches both levels, the stop wins — daily bars can't sequence
+    intraday, and pessimism is the honest tie-break for a long plan. No
+    touch by the window's end exits at its close (``time``).
+    """
+    entry_open = opens[entry_idx]
+    last = entry_idx + PATH_HORIZON - 1
+    for j in range(entry_idx, last + 1):
+        o = opens[j]
+        if stop is not None and o <= stop:
+            return round((o / entry_open - 1) * 100, 4), "stop"
+        if target is not None and o >= target:
+            return round((o / entry_open - 1) * 100, 4), "target"
+        if stop is not None and lows[j] <= stop:  # same-bar tie → stop
+            return round((stop / entry_open - 1) * 100, 4), "stop"
+        if target is not None and highs[j] >= target:
+            return round((target / entry_open - 1) * 100, 4), "target"
+    return round((closes[last] / entry_open - 1) * 100, 4), "time"
 
 
 def _outcome_fields(fr: dict[Any, Any]) -> dict[str, Any]:
@@ -171,6 +221,7 @@ def _outcome_fields(fr: dict[Any, Any]) -> dict[str, Any]:
         "fwd_return_5d": fr.get(5),
         "fwd_return_20d": fr.get(20),
     }
+    fields["entry_open"] = fr.get("entry_open")
     for key in (
         "realized_high_5d",
         "realized_low_5d",
@@ -179,6 +230,8 @@ def _outcome_fields(fr: dict[Any, Any]) -> dict[str, Any]:
         "target_hit",
         "stop_hit",
         "first_hit",
+        "plan_return_5d",
+        "plan_exit",
     ):
         if key in fr:
             fields[key] = fr[key]
@@ -401,6 +454,8 @@ async def compute_scorecard(repo: Any, *, limit: int = 500) -> dict[str, Any]:
     # contain the realized path? The live coverage feed for quant/calibration.
     band_covered = [_band_covered_5d(r) for r in labeled]
     band_results = [b for b in band_covered if b is not None]
+    plan_exits = [r["plan_exit"] for r in labeled if r.get("plan_exit")]
+    plan_exit_counts = {k: plan_exits.count(k) for k in sorted(set(plan_exits))}
     return {
         "available": True,
         "n_total": len(rows),
@@ -430,6 +485,9 @@ async def compute_scorecard(repo: Any, *, limit: int = 500) -> dict[str, Any]:
             if band_results
             else None
         ),
+        # ── Plan-anchored outcome (entry@open, bracket exits) ──
+        "avg_plan_return_5d": _avg(labeled, "plan_return_5d"),
+        "plan_exit_counts": plan_exit_counts,
         "best": {
             "symbol": best["symbol"],
             "date": best["date"],
@@ -463,12 +521,18 @@ async def whatif_equity_curve(
 
     equity = start
     bench_equity = start
+    plan_equity = start
+    plan_n = 0
     points: list[dict[str, Any]] = []
     for r in scored:
         equity *= 1.0 + r["fwd_return_5d"] / 100.0
         b = r.get("benchmark_return_5d")
         if b is not None:
             bench_equity *= 1.0 + b / 100.0
+        p = r.get("plan_return_5d")
+        if p is not None:
+            plan_equity *= 1.0 + p / 100.0
+            plan_n += 1
         points.append(
             {
                 "date": r["date"],
@@ -485,5 +549,9 @@ async def whatif_equity_curve(
         "total_return_pct": round((equity / start - 1.0) * 100, 2),
         "benchmark_return_pct": round((bench_equity / start - 1.0) * 100, 2),
         "benchmark": DEFAULT_BENCHMARK,
+        # The stated plan (buy at the open, bracket at target/stop, time-exit
+        # at 5 sessions) — vs the buy-close-hold-5d curve above.
+        "plan_n": plan_n,
+        "plan_return_pct": (round((plan_equity / start - 1.0) * 100, 2) if plan_n else None),
         "points": points,
     }

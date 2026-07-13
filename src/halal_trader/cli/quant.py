@@ -182,11 +182,13 @@ def validate_levels(days: int, horizon: int, cache_read: bool, placebo_seed: int
             rows = _ohlc_by_date(payload)
             if len(rows) < 60:
                 continue
+            # rows are (date, open, high, low, close); the harness wants
+            # (dates, highs, lows, closes).
             series[sym] = (
                 [r[0] for r in rows],
-                np.asarray([r[1] for r in rows]),
                 np.asarray([r[2] for r in rows]),
                 np.asarray([r[3] for r in rows]),
+                np.asarray([r[4] for r in rows]),
             )
         if not series:
             console.print("[red]No usable bar data — aborting.[/red]")

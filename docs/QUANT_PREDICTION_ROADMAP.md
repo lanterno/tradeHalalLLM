@@ -162,12 +162,16 @@ forecasting work ships before the measurement loop can score it.
   the baseline scorecard below is untrustworthy until this runs.
   Done 2026-07-13: guard + `skipped` status + `halal-trader recommend
   --audit-outcomes` (operator should run it once).
-- [ ] **Anchor outcomes to the plan, not the close** — forward returns are
+- [x] **Anchor outcomes to the plan, not the close** — forward returns are
   currently anchored to the rec-date close, not `suggested_entry` or the
   open, and `whatif_equity_curve` ignores stops/targets entirely. Add
   open-anchored (and, where marketable, entry-anchored) variants plus a
   bracket-aware what-if (entry → first of target/stop/time-exit) so the
-  scorecard scores the *stated plan*.
+  scorecard scores the *stated plan*. Done 2026-07-13 (migration
+  d4b8f0a2c6e5): `entry_open` + `_plan_bracket` simulation (gap-through
+  exits at the open; same-bar ties resolve to the stop — pessimistic),
+  `plan_return_5d`/`plan_exit` columns, plan equity curve in the
+  what-if + `plan_exit_counts`/`avg_plan_return_5d` in the scorecard.
 - [x] **Baseline scorecard for the LLM's own levels** — target-hit rate,
   stop-hit rate, which-first stats, implied-R vs realized-R, all
   `SampleGate`-gated. This is the baseline every quant method must beat.

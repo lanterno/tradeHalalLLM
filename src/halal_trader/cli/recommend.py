@@ -84,6 +84,14 @@ def _print_scorecard(sc: dict[str, Any], backfill: dict[str, int], whatif: dict[
             f"[bold]{_pct(whatif.get('total_return_pct'))}[/bold] vs "
             f"{sc.get('benchmark', 'bench')} {_pct(whatif.get('benchmark_return_pct'))}\n"
         )
+        if whatif.get("plan_n"):
+            exits = sc.get("plan_exit_counts") or {}
+            ex = ", ".join(f"{k} {v}" for k, v in exits.items()) or "—"
+            body += (
+                f"Plan what-if (entry@open, bracket): "
+                f"[bold]{_pct(whatif.get('plan_return_pct'))}[/bold] "
+                f"over {whatif['plan_n']} picks · exits: {ex}\n"
+            )
     if sc.get("n_with_levels"):
         first_hits = sc.get("first_hit_counts") or {}
         fh = ", ".join(f"{k} {v}" for k, v in first_hits.items()) or "—"
