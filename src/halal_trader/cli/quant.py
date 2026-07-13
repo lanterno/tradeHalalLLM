@@ -189,6 +189,88 @@ def overnight(days: int, cache_read: bool) -> None:
     asyncio.run(_run())
 
 
+@quant.command("compare-bands")
+@click.option("--days", default=900, show_default=True, help="Calendar days of daily bars")
+@click.option("--horizon", default=5, show_default=True)
+@click.option("--windows", default=3, show_default=True, help="Disjoint OOS windows")
+@click.option("--sims", default=1000, show_default=True, help="GARCH bootstrap simulations")
+@click.option("--cache-read", is_flag=True, help="Reuse cached bars instead of fetching")
+def compare_bands(days: int, horizon: int, windows: int, sims: int, cache_read: bool) -> None:
+    """Disjoint-OOS A/B of band sources — the GARCH-FHS ship-gate.
+
+    Scores atr / har_cal / garch_fhs on identical walk-forward
+    observations across disjoint OOS windows and records the verdict in
+    the trials ledger. GARCH enters the engine only on a `pass`.
+    """
+
+    async def _run() -> None:
+        from halal_trader.halal.cache import DEFAULT_HALAL_SYMBOLS
+        from halal_trader.quant.band_compare import (
+            build_rows,
+            compare_band_sources,
+            garch_verdict,
+        )
+        from halal_trader.recommendation.scorecard import _ohlc_by_date
+
+        payloads = await _fetch_universe_bars(
+            list(DEFAULT_HALAL_SYMBOLS), days, cache_read=cache_read
+        )
+        rows_by_symbol = {}
+        for sym, payload in payloads.items():
+            parsed = _ohlc_by_date(payload)
+            if len(parsed) < 300:
+                continue
+            console.print(f"[dim]{sym}: building walk-forward rows…[/dim]")
+            rows_by_symbol[sym] = build_rows(
+                [r[0] for r in parsed],
+                [r[1] for r in parsed],
+                [r[2] for r in parsed],
+                [r[3] for r in parsed],
+                [r[4] for r in parsed],
+                horizon=horizon,
+                garch_sims=sims,
+            )
+        rows_by_symbol = {s: r for s, r in rows_by_symbol.items() if r}
+        if not rows_by_symbol:
+            console.print("[red]No usable rows — need ~900d of bars per symbol.[/red]")
+            return
+        try:
+            results = compare_band_sources(rows_by_symbol, horizon=horizon, n_windows=windows)
+        except ValueError as exc:
+            console.print(f"[red]{exc}[/red]")
+            return
+        for label, scores in results.items():
+            console.print(f"[bold]{label}[/bold]")
+            for src, sc in scores.items():
+                console.print(
+                    f"  {src:10} coverage {sc.coverage:.0%} "
+                    f"(err {sc.coverage_error:.1%}) · winkler {sc.winkler:.2f}% "
+                    f"· n={sc.n}"
+                )
+        verdict = garch_verdict(results)
+        color = {"pass": "green", "fail": "red"}.get(verdict, "yellow")
+        console.print(f"GARCH-FHS ship verdict: [{color}]{verdict}[/{color}]")
+        agg = results["aggregate"]
+        await _record_trial(
+            name="bands.garch_fhs.vs_har_atr",
+            kind="band_ab",
+            config={"days": days, "horizon": horizon, "windows": windows, "sims": sims},
+            window=f"{days}d x {len(rows_by_symbol)}sym daily, {windows} disjoint OOS",
+            metrics={
+                src: {"coverage": sc.coverage, "winkler": sc.winkler, "n": sc.n}
+                for src, sc in agg.items()
+            },
+            criterion=(
+                "aggregate Winkler < har_cal, coverage error <= har_cal, "
+                "majority of OOS windows not worse (pre-registered in "
+                "quant/band_compare.garch_verdict)"
+            ),
+            verdict=verdict,
+        )
+
+    asyncio.run(_run())
+
+
 @quant.command("validate-levels")
 @click.option("--days", default=400, show_default=True, help="Calendar days of daily bars")
 @click.option("--horizon", default=5, show_default=True, help="Forward test window (bars)")
