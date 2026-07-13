@@ -335,6 +335,17 @@ class DailyRecommendation(SQLModel, table=True):
     fwd_return_5d: float | None = None  # % forward return, 5 trading days
     fwd_return_20d: float | None = None  # % forward return, 20 trading days
     benchmark_return_5d: float | None = None  # halal benchmark (SPUS) over 5d
+    # ── Path outcomes over the 5-day anchor window (bars AFTER the entry bar).
+    # These score the LLM's *plan* (suggested_target/stop), not just direction.
+    realized_high_5d: float | None = None  # max bar high over the 5d window
+    realized_low_5d: float | None = None  # min bar low over the 5d window
+    mfe_pct: float | None = None  # max favorable excursion % vs entry_close
+    mae_pct: float | None = None  # max adverse excursion % vs entry_close (≤0)
+    target_hit: bool | None = None  # any bar high ≥ suggested_target within 5d
+    stop_hit: bool | None = None  # any bar low ≤ suggested_stop within 5d
+    # Which level was touched first: target | stop | both_same_bar | none.
+    # Daily bars can't sequence within a day — both_same_bar is honest ignorance.
+    first_hit: str | None = None
 
 
 class RuntimeConfig(SQLModel, table=True):

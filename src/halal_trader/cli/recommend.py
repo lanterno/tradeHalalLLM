@@ -37,18 +37,14 @@ def _print_rec(rec: dict[str, Any]) -> None:
         body += f"\n\n[bold]Catalysts[/bold]\n{rec['catalysts']}"
     if rec.get("risks"):
         body += f"\n\n[bold]Risks[/bold]\n{rec['risks']}"
-    console.print(
-        Panel(body, title="📈 Halal Stock of the Day (advisory)", border_style="green")
-    )
+    console.print(Panel(body, title="📈 Halal Stock of the Day (advisory)", border_style="green"))
 
 
 def _pct(v: Any) -> str:
     return f"{v:+.2f}%" if isinstance(v, int | float) else "—"
 
 
-def _print_scorecard(
-    sc: dict[str, Any], backfill: dict[str, int], whatif: dict[str, Any]
-) -> None:
+def _print_scorecard(sc: dict[str, Any], backfill: dict[str, int], whatif: dict[str, Any]) -> None:
     from rich.panel import Panel
 
     if not sc.get("available"):
@@ -88,13 +84,27 @@ def _print_scorecard(
             f"[bold]{_pct(whatif.get('total_return_pct'))}[/bold] vs "
             f"{sc.get('benchmark', 'bench')} {_pct(whatif.get('benchmark_return_pct'))}\n"
         )
+    if sc.get("n_with_levels"):
+        first_hits = sc.get("first_hit_counts") or {}
+        fh = ", ".join(f"{k} {v}" for k, v in first_hits.items()) or "—"
+        levels_caveat = "" if sc.get("levels_sufficient") else " [yellow]⚠ thin[/yellow]"
+
+        def _rate_s(v: Any) -> str:
+            return f"{v:.0%}" if isinstance(v, int | float) else "—"
+
+        body += (
+            f"Plan quality ({sc['n_with_levels']} picks with levels{levels_caveat}): "
+            f"target hit [green]{_rate_s(sc.get('target_hit_rate'))}[/green] · "
+            f"stop hit [red]{_rate_s(sc.get('stop_hit_rate'))}[/red]\n"
+            f"  first hit: {fh} · avg MFE {_pct(sc.get('avg_mfe_5d'))} · "
+            f"avg MAE {_pct(sc.get('avg_mae_5d'))}\n"
+        )
     body += (
         f"[dim]backfill: {backfill.get('updated', 0)} updated, "
-        f"{backfill.get('scored', 0)} newly scored[/dim]"
+        f"{backfill.get('scored', 0)} newly scored, "
+        f"{backfill.get('skipped', 0)} skipped[/dim]"
     )
-    console.print(
-        Panel(body, title="📊 Recommendation Scorecard (advisory)", border_style="cyan")
-    )
+    console.print(Panel(body, title="📊 Recommendation Scorecard (advisory)", border_style="cyan"))
 
 
 @click.command()
@@ -108,7 +118,15 @@ def _print_scorecard(
     is_flag=True,
     help="Backfill matured picks' forward returns and print the track record (no LLM call)",
 )
-def recommend(show: bool, scorecard: bool) -> None:
+@click.option(
+    "--audit-outcomes",
+    is_flag=True,
+    help=(
+        "Re-label already-scored picks against a bar window that covers their "
+        "rec date (repairs rows mislabeled by the old close-window anchoring)"
+    ),
+)
+def recommend(show: bool, scorecard: bool, audit_outcomes: bool) -> None:
     """Generate (or --show / --scorecard) the daily halal stock-of-the-day."""
 
     async def _run() -> None:
@@ -129,6 +147,24 @@ def recommend(show: bool, scorecard: bool) -> None:
                 )
                 return
             _print_rec(rec)
+            return
+
+        if audit_outcomes:
+            from halal_trader.mcp.client import AlpacaMCPClient
+            from halal_trader.recommendation.scorecard import audit_scored_outcomes
+
+            mcp = AlpacaMCPClient()
+            await mcp.connect()
+            try:
+                console.print("[dim]Auditing scored picks against covering bar windows…[/dim]")
+                res = await audit_scored_outcomes(mcp, repo)
+            finally:
+                await mcp.disconnect()
+            console.print(
+                f"Audit: [bold]{res['audited']}[/bold] audited, "
+                f"[bold]{res['repaired']}[/bold] repaired, "
+                f"{res['skipped']} marked skipped"
+            )
             return
 
         if scorecard:

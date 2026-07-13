@@ -35,9 +35,7 @@ class DailyRecommendationRepoImpl:
     async def get_latest_recommendation(self) -> dict[str, Any] | None:
         async with AsyncSession(self._engine) as session:
             statement = (
-                select(DailyRecommendation)
-                .order_by(col(DailyRecommendation.id).desc())
-                .limit(1)
+                select(DailyRecommendation).order_by(col(DailyRecommendation.id).desc()).limit(1)
             )
             results = await session.exec(statement)
             row = results.first()
@@ -53,27 +51,25 @@ class DailyRecommendationRepoImpl:
             results = await session.exec(statement)
             return [r.model_dump() for r in results.all()]
 
-    async def get_recommendations_to_score(
-        self, limit: int = 500
-    ) -> list[dict[str, Any]]:
-        """Picks not yet fully scored (outcome_status != 'scored').
+    async def get_recommendations_to_score(self, limit: int = 500) -> list[dict[str, Any]]:
+        """Picks not yet fully scored (nor written off as ``skipped``).
 
         Progressive: a pick is revisited each backfill until its 20-day
-        forward return is available, then marked 'scored'.
+        forward return is available, then marked 'scored'. Picks whose bar
+        window can no longer cover their rec date are marked 'skipped' and
+        never revisited.
         """
         async with AsyncSession(self._engine) as session:
             statement = (
                 select(DailyRecommendation)
-                .where(col(DailyRecommendation.outcome_status) != "scored")
+                .where(col(DailyRecommendation.outcome_status).not_in(["scored", "skipped"]))
                 .order_by(col(DailyRecommendation.id).desc())
                 .limit(limit)
             )
             results = await session.exec(statement)
             return [r.model_dump() for r in results.all()]
 
-    async def update_recommendation_outcome(
-        self, rec_id: int, **fields: Any
-    ) -> bool:
+    async def update_recommendation_outcome(self, rec_id: int, **fields: Any) -> bool:
         async with AsyncSession(self._engine) as session:
             row = await session.get(DailyRecommendation, rec_id)
             if row is None:

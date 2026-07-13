@@ -418,11 +418,12 @@ class TradingBot(BaseTradingBot):
             from halal_trader.recommendation.scorecard import backfill_outcomes
 
             res = await backfill_outcomes(self.broker, self._repo)
-            if res.get("updated"):
+            if res.get("updated") or res.get("skipped"):
                 logger.info(
-                    "Recommendation scorecard backfill: %d updated, %d scored",
-                    res["updated"],
+                    "Recommendation scorecard backfill: %d updated, %d scored, %d skipped",
+                    res.get("updated", 0),
                     res.get("scored", 0),
+                    res.get("skipped", 0),
                 )
         except Exception as exc:  # noqa: BLE001 — advisory; never break the bot
             logger.warning("Daily recommendation generation failed: %s", exc)
