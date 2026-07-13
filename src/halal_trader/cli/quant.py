@@ -136,6 +136,59 @@ def trials(prefix: str | None, limit: int) -> None:
     asyncio.run(_run())
 
 
+@quant.command()
+@click.option("--days", default=400, show_default=True, help="Calendar days of daily bars")
+@click.option("--cache-read", is_flag=True, help="Reuse cached bars instead of fetching")
+def overnight(days: int, cache_read: bool) -> None:
+    """Overnight vs intraday drift decomposition (diagnostic, not a signal).
+
+    Quantifies how much of the universe's drift accrues close→open — the
+    structural headwind any intraday-only stock strategy fights.
+    """
+
+    async def _run() -> None:
+        from halal_trader.halal.cache import DEFAULT_HALAL_SYMBOLS
+        from halal_trader.quant.diagnostics import (
+            overnight_intraday_split,
+            suspect_split_gaps,
+        )
+
+        payloads = await _fetch_universe_bars(
+            list(DEFAULT_HALAL_SYMBOLS), days, cache_read=cache_read
+        )
+        ohlc = _payloads_to_ohlc(payloads)
+        if not ohlc:
+            console.print("[red]No usable bar data — aborting.[/red]")
+            return
+        total_on = 0.0
+        total_in = 0.0
+        n = 0
+        for sym, (o, _h, _lo, c) in sorted(ohlc.items()):
+            split = overnight_intraday_split(o, c)
+            gaps = suspect_split_gaps(o, c)
+            gap_note = f" [yellow]⚠ {len(gaps)} suspect split gap(s)[/yellow]" if gaps else ""
+            console.print(
+                f"  {sym:6} overnight {split.cum_overnight_pct:+7.1f}% · "
+                f"intraday {split.cum_intraday_pct:+7.1f}% "
+                f"({split.n_days}d){gap_note}"
+            )
+            total_on += split.mean_overnight_pct
+            total_in += split.mean_intraday_pct
+            n += 1
+        console.print(
+            f"[bold]Universe mean per day:[/bold] overnight "
+            f"{total_on / n:+.3f}% · intraday {total_in / n:+.3f}%"
+        )
+        console.print(
+            "[dim]Diagnostic only. If the overnight leg dominates, an "
+            "intraday-only strategy forfeits most of the drift — an "
+            "expectations anchor, not a signal (capturing overnight drift "
+            "at retail costs is a known non-starter).[/dim]"
+        )
+
+    asyncio.run(_run())
+
+
 @quant.command("validate-levels")
 @click.option("--days", default=400, show_default=True, help="Calendar days of daily bars")
 @click.option("--horizon", default=5, show_default=True, help="Forward test window (bars)")

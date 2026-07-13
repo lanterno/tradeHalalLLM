@@ -192,11 +192,14 @@ forecasting work ships before the measurement loop can score it.
   swing_zones fail, prior_extremes/round_numbers inconclusive).
   Scorecard now also reports `band_coverage_5d` from the bands stored
   in candidates JSONB (live coverage feed, no recompute leakage).
-- [ ] **Overnight-vs-intraday decomposition diagnostic** — trivial from daily
+- [x] **Overnight-vs-intraday decomposition diagnostic** — trivial from daily
   OHLC (`open/prev_close − 1` vs `close/open − 1`): reports how much drift
   our intraday-only stock strategy structurally forfeits (most equity drift
   accrues overnight) and contextualizes the bot's own fills. Diagnostic
-  panel only — expectations-setting for the operator, not a signal.
+  panel only — expectations-setting for the operator, not a signal. Done
+  2026-07-13 (`quant/diagnostics.py` + `halal-trader quant overnight`).
+  First run confirms the headwind on our universe: mean +0.091 %/day
+  overnight vs +0.015 %/day intraday.
 - [x] **Label all candidates, not just the pick** — outcome-label the whole
   `candidates` JSONB universe per rec (open-anchored forward returns +
   realized high/low). Gives counterfactual evaluation ("did the LLM pick the
@@ -207,12 +210,20 @@ forecasting work ships before the measurement loop can score it.
   cached bar fetch per symbol per run; scorecard gains
   `candidate_band_coverage_5d` (~20× the coverage sample) and
   `avg_pick_percentile_5d` (counterfactual: 0.5 = random picking).
-- [ ] **Data hygiene: adjusted bars** — split/dividend-unadjusted OHLC
+- [~] **Data hygiene: adjusted bars** — split/dividend-unadjusted OHLC
   corrupts overnight terms in vol estimators, shifts historical levels, and
   distorts return labels. Establish what adjustment the Alpaca MCP bars
   carry, request adjusted bars if available, and record the convention in
   the bar cache; add a corporate-action sanity check (gap > x % with no
-  news) to labeling.
+  news) to labeling. 2026-07-13: verified against the live MCP tool
+  schema — `get_stock_bars` exposes NO adjustment parameter, so bars are
+  RAW; the split-gap guard (`quant/diagnostics.py:suspect_split_gaps`,
+  40 % threshold chosen so real crash days are never excluded) now
+  blocks labeling/audit/candidate labeling across suspect gaps.
+  Remaining (operator/upstream): adjusted bars need alpaca-mcp-server
+  support or a direct alpaca-py data path. Bonus finding: the MCP
+  server ships `get_option_bars` (+ option snapshot tools) — Phase 3's
+  chain access is confirmed reachable via MCP.
 
 ## Phase 1 — Deterministic range + levels engine (pure math, no new deps)
 

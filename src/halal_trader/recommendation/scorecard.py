@@ -30,6 +30,7 @@ from typing import Any
 
 from halal_trader.core.sample_guard import SampleGate
 from halal_trader.core.signal_eval import information_coefficient
+from halal_trader.quant.diagnostics import SPLIT_GAP_THRESHOLD
 
 logger = logging.getLogger(__name__)
 
@@ -124,6 +125,13 @@ def _forward_outcomes(
     entry_close = closes[entry_idx]
     if entry_close <= 0:
         return None
+    # Raw-bars split guard: the Alpaca MCP bars carry no adjustment, so a
+    # corporate action inside the outcome window would label a fake ±50 %
+    # move (see quant/diagnostics). Refuse to label across such a gap.
+    last_needed = min(entry_idx + max(horizons), len(closes) - 1)
+    for j in range(entry_idx + 1, last_needed + 1):
+        if abs(opens[j] / closes[j - 1] - 1.0) > SPLIT_GAP_THRESHOLD:
+            return {"suspect_gap": True}
     # Mixed keys by design: str metadata + integer horizons.
     entry_open = opens[entry_idx]
     res: dict[Any, Any] = {
@@ -285,7 +293,7 @@ async def _label_candidates(
         if not ohlc:
             continue
         fr = _forward_outcomes(ohlc, rec["date"], horizons=(5,))
-        if fr is None or fr.get("window_missed") or fr.get(5) is None:
+        if fr is None or fr.get("window_missed") or fr.get("suspect_gap") or fr.get(5) is None:
             continue  # not matured (or unlabelable) yet
         b5 = (data.get("quant_bands") or {}).get("5")
         covered: bool | None = None
@@ -348,7 +356,12 @@ async def backfill_outcomes(
         )
         if fr is None:
             continue
-        if fr.get("window_missed"):
+        if fr.get("window_missed") or fr.get("suspect_gap"):
+            reason = (
+                "predates the bar window"
+                if fr.get("window_missed")
+                else "corporate-action gap in the outcome window (raw bars)"
+            )
             await repo.update_recommendation_outcome(
                 rec["id"],
                 outcome_status="skipped",
@@ -356,10 +369,11 @@ async def backfill_outcomes(
             )
             skipped += 1
             logger.warning(
-                "scorecard: pick %s (%s %s) predates the bar window — skipped",
+                "scorecard: pick %s (%s %s) %s — skipped",
                 rec["id"],
                 rec.get("symbol"),
                 rec.get("date"),
+                reason,
             )
             continue
         fields = _outcome_fields(fr)
@@ -426,7 +440,7 @@ async def audit_scored_outcomes(broker: Any, repo: Any, *, limit: int = 500) -> 
             stop=rec.get("suggested_stop"),
         )
         audited += 1
-        if fr is None or fr.get("window_missed"):
+        if fr is None or fr.get("window_missed") or fr.get("suspect_gap"):
             await repo.update_recommendation_outcome(rec["id"], outcome_status="skipped")
             skipped += 1
             continue

@@ -129,8 +129,9 @@ def test_target_stop_hit_detection_and_sequencing():
     assert fr["target_hit"] is True
     assert fr["stop_hit"] is False
     assert fr["first_hit"] == "target"
-    # Falling tape mirrors to a stop-first outcome
-    down = _ohlc_by_date(_bars(100.0, -5.0, DATES, spread=2.0))
+    # Falling tape mirrors to a stop-first outcome (gentle slope — a
+    # steeper one would rightly trip the raw-bars split-gap guard)
+    down = _ohlc_by_date(_bars(100.0, -2.0, DATES, spread=2.0))
     fr2 = _forward_outcomes(down, "2026-05-01", target=200.0, stop=90.0)
     assert fr2["target_hit"] is False
     assert fr2["stop_hit"] is True
