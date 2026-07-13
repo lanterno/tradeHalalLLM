@@ -348,6 +348,34 @@ class DailyRecommendation(SQLModel, table=True):
     first_hit: str | None = None
 
 
+class QuantTrial(SQLModel, table=True):
+    """One evaluated strategy/forecast variant — the anti-overfitting ledger.
+
+    Every quant experiment (level-family validation, band calibration,
+    backtest arm, …) records a row, INCLUDING failures: the Deflated Sharpe
+    Ratio needs an honest trial count, and with ~10-20 tried variants the
+    expected max in-sample Sharpe of pure noise already exceeds 1.0
+    (docs/QUANT_PREDICTION_ROADMAP.md, honest foundations). Advisory
+    bookkeeping — never read by any trading path.
+    """
+
+    __tablename__ = "quant_trials"
+
+    id: int | None = Field(default=None, primary_key=True)
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(UTC), sa_type=sa.DateTime(timezone=True)
+    )
+    name: str = Field(index=True)  # e.g. "levels.swing_zones.touch_hold_5d"
+    kind: str  # level_family | band_calibration | backtest | signal
+    config_hash: str  # short digest of the config dict (dedup/count aid)
+    config: dict | None = Field(default=None, sa_column=sa.Column("config", JSONB, nullable=True))
+    window: str = ""  # human description of the data window
+    metrics: dict | None = Field(default=None, sa_column=sa.Column("metrics", JSONB, nullable=True))
+    # Success criterion decided BEFORE looking at results (pre-registration).
+    criterion: str | None = None
+    verdict: str | None = None  # pass | fail | inconclusive
+
+
 class RuntimeConfig(SQLModel, table=True):
     """Runtime overlay for ``Settings`` knobs.
 

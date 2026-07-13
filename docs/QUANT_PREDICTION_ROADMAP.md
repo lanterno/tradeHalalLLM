@@ -178,10 +178,16 @@ forecasting work ships before the measurement loop can score it.
   pinball loss, interval coverage (PICP), Winkler score, Kupiec/
   Christoffersen coverage tests, coverage-by-regime splits. Unit-tested
   against known values; shared by scorecard and backtests. 2026-07-13.
-- [ ] **Trials ledger** — a small Postgres table recording every strategy /
+- [x] **Trials ledger** — a small Postgres table recording every strategy /
   forecast variant evaluated (name, config hash, window, metrics,
   pre-registered success criterion), so `deflated_sharpe_ratio` gets an
-  honest trial count. CLI: `halal-trader quant trials`.
+  honest trial count. CLI: `halal-trader quant trials`. Done
+  2026-07-13 (`quant_trials` table, migration c7a2e9f4d1b3;
+  `db/repos/quant_trials.py`; `quant calibrate`/`validate-levels`
+  self-record with pre-registered criteria — first rows: zcal pass,
+  swing_zones fail, prior_extremes/round_numbers inconclusive).
+  Scorecard now also reports `band_coverage_5d` from the bands stored
+  in candidates JSONB (live coverage feed, no recompute leakage).
 - [ ] **Overnight-vs-intraday decomposition diagnostic** — trivial from daily
   OHLC (`open/prev_close − 1` vs `close/open − 1`): reports how much drift
   our intraday-only stock strategy structurally forfeits (most equity drift

@@ -384,6 +384,40 @@ async def test_compute_scorecard_aggregates():
 
 
 @pytest.mark.asyncio
+async def test_compute_scorecard_band_coverage_from_stored_bands():
+    def _row(rid, sym, lo5, hi5, band_lo, band_hi):
+        return {
+            "id": rid,
+            "symbol": sym,
+            "date": f"2026-05-0{rid}",
+            "fwd_return_5d": 1.0,
+            "realized_low_5d": lo5,
+            "realized_high_5d": hi5,
+            "candidates": {sym: {"quant_bands": {"5": {"low": band_lo, "high": band_hi}}}},
+        }
+
+    repo = _FakeRepo(
+        [
+            _row(1, "NVDA", 95.0, 105.0, 90.0, 110.0),  # covered
+            _row(2, "AAPL", 95.0, 115.0, 90.0, 110.0),  # high breached band
+            # No stored band → excluded from the coverage sample.
+            {
+                "id": 3,
+                "symbol": "MSFT",
+                "date": "2026-05-03",
+                "fwd_return_5d": 1.0,
+                "realized_low_5d": 95.0,
+                "realized_high_5d": 105.0,
+                "candidates": {},
+            },
+        ]
+    )
+    sc = await compute_scorecard(repo)
+    assert sc["band_n"] == 2
+    assert sc["band_coverage_5d"] == pytest.approx(0.5)
+
+
+@pytest.mark.asyncio
 async def test_compute_scorecard_empty():
     repo = _FakeRepo([{"id": 1, "symbol": "NVDA", "date": "2026-05-01", "fwd_return_5d": None}])
     sc = await compute_scorecard(repo)

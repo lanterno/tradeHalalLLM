@@ -87,9 +87,53 @@ def _payloads_to_ohlc(
     return out
 
 
+async def _record_trial(**kwargs: Any) -> None:
+    """Best-effort write to the quant_trials ledger (never blocks the tool)."""
+    try:
+        from halal_trader.config import get_settings
+        from halal_trader.db.models import init_db
+        from halal_trader.db.repos.quant_trials import QuantTrialRepoImpl
+
+        engine = await init_db(get_settings().database_url)
+        await QuantTrialRepoImpl(engine).record_trial(**kwargs)
+        await engine.dispose()
+    except Exception as exc:  # noqa: BLE001 — the ledger must not block research
+        console.print(f"[yellow]trials ledger write failed: {exc}[/yellow]")
+
+
 @click.group()
 def quant() -> None:
     """Quantitative range-model tools (advisory — never trades)."""
+
+
+@quant.command()
+@click.option("--prefix", default=None, help="Filter by name prefix (e.g. levels.)")
+@click.option("--limit", default=20, show_default=True)
+def trials(prefix: str | None, limit: int) -> None:
+    """List the quant trials ledger (the honest variant count for DSR)."""
+
+    async def _run() -> None:
+        from halal_trader.config import get_settings
+        from halal_trader.db.models import init_db
+        from halal_trader.db.repos.quant_trials import QuantTrialRepoImpl
+
+        engine = await init_db(get_settings().database_url)
+        repo = QuantTrialRepoImpl(engine)
+        rows = await repo.get_trials(name_prefix=prefix, limit=limit)
+        total = await repo.count_trials(name_prefix=prefix)
+        await engine.dispose()
+        scope = f" matching {prefix!r}" if prefix else ""
+        console.print(f"[bold]{total}[/bold] recorded trials{scope} (showing {len(rows)})")
+        for r in rows:
+            verdict = r.get("verdict") or "—"
+            color = {"pass": "green", "fail": "red"}.get(verdict, "yellow")
+            created = str(r.get("created_at") or "")[:16]
+            console.print(
+                f"  [{color}]{verdict:12}[/{color}] {r['name']}  "
+                f"[dim]{r['kind']} · {r['window']} · {created} · cfg {r['config_hash']}[/dim]"
+            )
+
+    asyncio.run(_run())
 
 
 @quant.command("validate-levels")
@@ -189,10 +233,38 @@ def validate_levels(days: int, horizon: int, cache_read: bool, placebo_seed: int
                 f"(touch {real.touches}, decided {real.decided}) · "
                 f"placebo {_hr(placebo)} (decided {placebo.decided}) → {verdict}"
             )
+            # Ledger verdict: "pass" is reserved for disjoint-OOS runs —
+            # a single-window screen can at best be inconclusive.
+            ledger_verdict = "inconclusive"
+            if uplift is not None and uplift <= 0:
+                ledger_verdict = "fail"
+            await _record_trial(
+                name=f"levels.{name}.touch_hold",
+                kind="level_family",
+                config={
+                    "horizon": horizon,
+                    "days": days,
+                    "placebo_seed": placebo_seed,
+                    "eps_atr": 0.25,
+                    "hold_atr": 1.0,
+                },
+                window=f"{days}d x {len(series)}sym daily (single window)",
+                metrics={
+                    "hold_rate": real.hold_rate,
+                    "placebo_hold_rate": placebo.hold_rate,
+                    "uplift": uplift,
+                    "touches": real.touches,
+                    "decided": real.decided,
+                },
+                criterion=(
+                    "hold rate beats distance-matched placebo on disjoint "
+                    "OOS windows with sufficient sample"
+                ),
+                verdict=ledger_verdict,
+            )
         console.print(
-            "[dim]Prompt inclusion requires beating placebo on DISJOINT OOS "
-            "windows with a sufficient sample — record the verdict in the "
-            "trials ledger before wiring anything.[/dim]"
+            "[dim]Verdicts recorded in the trials ledger (`quant trials`). "
+            "Prompt inclusion additionally requires DISJOINT OOS windows.[/dim]"
         )
 
     asyncio.run(_run())
@@ -237,6 +309,22 @@ def calibrate(days: int, coverage: float, cache_read: bool) -> None:
         console.print(
             "[dim]Watch for symbols far from the target — that is the signal "
             "pooling needs per-symbol shrinkage.[/dim]"
+        )
+        deviations = [
+            abs(v["coverage"] - coverage) for by_h in report.values() for v in by_h.values()
+        ]
+        await _record_trial(
+            name="bands.zcal.pooled_walkforward",
+            kind="band_calibration",
+            config={"days": days, "coverage": coverage, "horizons": [1, 5]},
+            window=f"{days}d x {len(ohlc)}sym daily",
+            metrics={
+                "version": artifact.version,
+                **{f"z_{h}d": cal.z for h, cal in sorted(artifact.horizons.items())},
+                "max_symbol_coverage_deviation": max(deviations) if deviations else None,
+            },
+            criterion="per-symbol coverage of the pooled z within ±10pp of target",
+            verdict=("pass" if deviations and max(deviations) <= 0.10 else "inconclusive"),
         )
 
     asyncio.run(_run())

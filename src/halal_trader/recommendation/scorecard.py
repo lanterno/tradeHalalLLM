@@ -332,6 +332,28 @@ async def audit_scored_outcomes(broker: Any, repo: Any, *, limit: int = 500) -> 
     return {"audited": audited, "repaired": repaired, "skipped": skipped}
 
 
+def _band_covered_5d(rec: dict[str, Any]) -> bool | None:
+    """Did the pick's stored 5d quant band contain the realized path?
+
+    Reads the band the engine persisted in ``candidates`` JSONB at
+    generation time (never recomputed — recomputing would leak today's
+    calibration into yesterday's prediction). ``None`` when the pick has
+    no stored band or its path outcomes haven't matured.
+    """
+    hi = rec.get("realized_high_5d")
+    lo = rec.get("realized_low_5d")
+    if hi is None or lo is None:
+        return None
+    cand = (rec.get("candidates") or {}).get(rec.get("symbol") or "") or {}
+    b5 = (cand.get("quant_bands") or {}).get("5")
+    if not isinstance(b5, dict):
+        return None
+    try:
+        return bool(float(lo) >= float(b5["low"]) and float(hi) <= float(b5["high"]))
+    except KeyError, TypeError, ValueError:
+        return None
+
+
 def _avg(rows: list[dict[str, Any]], key: str) -> float | None:
     vals = [r[key] for r in rows if r.get(key) is not None]
     return round(sum(vals) / len(vals), 4) if vals else None
@@ -374,6 +396,11 @@ async def compute_scorecard(repo: Any, *, limit: int = 500) -> dict[str, Any]:
     ]
     first_hits = [r["first_hit"] for r in labeled if r.get("first_hit")]
     first_hit_counts = {k: first_hits.count(k) for k in sorted(set(first_hits))}
+    # Band coverage: did the pick's own stored 5d quant band (written into
+    # candidates JSONB at generation time — leakage-safe by construction)
+    # contain the realized path? The live coverage feed for quant/calibration.
+    band_covered = [_band_covered_5d(r) for r in labeled]
+    band_results = [b for b in band_covered if b is not None]
     return {
         "available": True,
         "n_total": len(rows),
@@ -396,6 +423,13 @@ async def compute_scorecard(repo: Any, *, limit: int = 500) -> dict[str, Any]:
         "first_hit_counts": first_hit_counts,
         "avg_mfe_5d": _avg(labeled, "mfe_pct"),
         "avg_mae_5d": _avg(labeled, "mae_pct"),
+        # ── Quant band coverage (stored band vs realized 5d path) ──
+        "band_n": len(band_results),
+        "band_coverage_5d": (
+            round(sum(1 for b in band_results if b) / len(band_results), 4)
+            if band_results
+            else None
+        ),
         "best": {
             "symbol": best["symbol"],
             "date": best["date"],

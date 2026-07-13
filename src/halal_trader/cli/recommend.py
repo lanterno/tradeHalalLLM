@@ -99,6 +99,12 @@ def _print_scorecard(sc: dict[str, Any], backfill: dict[str, int], whatif: dict[
             f"  first hit: {fh} · avg MFE {_pct(sc.get('avg_mfe_5d'))} · "
             f"avg MAE {_pct(sc.get('avg_mae_5d'))}\n"
         )
+    if sc.get("band_n"):
+        cov = sc.get("band_coverage_5d")
+        cov_s = f"{cov:.0%}" if isinstance(cov, int | float) else "—"
+        body += (
+            f"Quant band coverage (5d path): [bold]{cov_s}[/bold] of {sc['band_n']} banded picks\n"
+        )
     body += (
         f"[dim]backfill: {backfill.get('updated', 0)} updated, "
         f"{backfill.get('scored', 0)} newly scored, "
