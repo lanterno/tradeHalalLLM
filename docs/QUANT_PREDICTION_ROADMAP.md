@@ -143,7 +143,7 @@ The scorecard discards highs/lows (`scorecard.py:_closes_by_date` keeps only
 closes), so nobody knows whether today's LLM targets/stops are any good. No
 forecasting work ships before the measurement loop can score it.
 
-- [ ] **Keep OHLC in outcome labeling** — extend `_closes_by_date` →
+- [x] **Keep OHLC in outcome labeling** — extend `_closes_by_date` →
   `(date, high, low, close)`; in `backfill_outcomes()` compute per-horizon
   realized max-high / min-low, MFE/MAE, `target_hit` / `stop_hit` /
   `first_hit` (touch sequencing), time-to-hit. New outcome columns on
@@ -151,7 +151,7 @@ forecasting work ships before the measurement loop can score it.
   `mfe_pct`, `mae_pct`, `target_hit`, `stop_hit`, `first_hit`). They flow
   through `update_recommendation_outcome`'s hasattr-guarded setattr loop —
   the model change alone is sufficient, no repo change.
-- [ ] **Fix silent mislabeling of stale picks** — the real bug is worse than
+- [x] **Fix silent mislabeling of stale picks** — the real bug is worse than
   "never scored": `_forward_returns` anchors on the *first bar ≥ rec date*,
   so a pick older than the 90-day fetch window scores against the window's
   first bar — wrong entry, plausible-looking returns, `scored` status.
@@ -160,19 +160,24 @@ forecasting work ships before the measurement loop can score it.
   nothing sets it today, no migration needed). Include a **one-time audit /
   re-label of already-scored rows** whose rec date predates their bar window;
   the baseline scorecard below is untrustworthy until this runs.
+  Done 2026-07-13: guard + `skipped` status + `halal-trader recommend
+  --audit-outcomes` (operator should run it once).
 - [ ] **Anchor outcomes to the plan, not the close** — forward returns are
   currently anchored to the rec-date close, not `suggested_entry` or the
   open, and `whatif_equity_curve` ignores stops/targets entirely. Add
   open-anchored (and, where marketable, entry-anchored) variants plus a
   bracket-aware what-if (entry → first of target/stop/time-exit) so the
   scorecard scores the *stated plan*.
-- [ ] **Baseline scorecard for the LLM's own levels** — target-hit rate,
+- [x] **Baseline scorecard for the LLM's own levels** — target-hit rate,
   stop-hit rate, which-first stats, implied-R vs realized-R, all
   `SampleGate`-gated. This is the baseline every quant method must beat.
-- [ ] **Forecast-evaluation primitives** — `quant/eval.py` (pure numpy):
+  Done 2026-07-13 (target/stop hit rates, first-hit counts, MFE/MAE in
+  `compute_scorecard` + CLI panel); implied-R vs realized-R still open
+  with the plan-anchoring item above.
+- [x] **Forecast-evaluation primitives** — `quant/eval.py` (pure numpy):
   pinball loss, interval coverage (PICP), Winkler score, Kupiec/
   Christoffersen coverage tests, coverage-by-regime splits. Unit-tested
-  against known values; shared by scorecard and backtests.
+  against known values; shared by scorecard and backtests. 2026-07-13.
 - [ ] **Trials ledger** — a small Postgres table recording every strategy /
   forecast variant evaluated (name, config hash, window, metrics,
   pre-registered success criterion), so `deflated_sharpe_ratio` gets an
