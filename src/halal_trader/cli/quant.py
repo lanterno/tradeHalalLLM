@@ -92,6 +92,112 @@ def quant() -> None:
     """Quantitative range-model tools (advisory — never trades)."""
 
 
+@quant.command("validate-levels")
+@click.option("--days", default=400, show_default=True, help="Calendar days of daily bars")
+@click.option("--horizon", default=5, show_default=True, help="Forward test window (bars)")
+@click.option("--cache-read", is_flag=True, help="Reuse cached bars instead of fetching")
+@click.option("--placebo-seed", default=7, show_default=True, help="Placebo RNG seed")
+def validate_levels(days: int, horizon: int, cache_read: bool, placebo_seed: int) -> None:
+    """Touch-and-hold validation of each level family vs a placebo.
+
+    A family earns a prompt slot only if its walk-forward hold rate beats
+    the distance-matched placebo (daily-bar approximation — intraday bars
+    are the honest mode; treat these numbers as a first screen).
+    """
+
+    async def _run() -> None:
+        import numpy as np
+
+        from halal_trader.core.sample_guard import SampleGate
+        from halal_trader.halal.cache import DEFAULT_HALAL_SYMBOLS
+        from halal_trader.quant.level_eval import (
+            evaluate_family,
+            merge_stats,
+            placebo_uplift,
+        )
+        from halal_trader.quant.levels import (
+            prior_extreme_levels,
+            round_number_levels,
+            swing_zones,
+        )
+        from halal_trader.recommendation.scorecard import _ohlc_by_date
+
+        families = {
+            "prior_extremes": lambda d, h, lo, c, atr: [
+                lvl.price for lvl in prior_extreme_levels(d, h, lo)
+            ],
+            "swing_zones": lambda d, h, lo, c, atr: [z.price for z in swing_zones(h, lo, atr)],
+            "round_numbers": lambda d, h, lo, c, atr: [
+                r.price for r in round_number_levels(float(c[-1]))
+            ],
+        }
+        symbols = list(DEFAULT_HALAL_SYMBOLS)
+        payloads = await _fetch_universe_bars(symbols, days, cache_read=cache_read)
+        series: dict[str, tuple[list[str], Any, Any, Any]] = {}
+        for sym, payload in payloads.items():
+            rows = _ohlc_by_date(payload)
+            if len(rows) < 60:
+                continue
+            series[sym] = (
+                [r[0] for r in rows],
+                np.asarray([r[1] for r in rows]),
+                np.asarray([r[2] for r in rows]),
+                np.asarray([r[3] for r in rows]),
+            )
+        if not series:
+            console.print("[red]No usable bar data — aborting.[/red]")
+            return
+        console.print(
+            f"[dim]{len(series)} symbols · horizon {horizon} bars · daily-bar "
+            f"approximation (touch=±0.25·ATR, reject=1·ATR, reach ≤3·ATR)[/dim]"
+        )
+        for name, fn in families.items():
+            real_parts = []
+            placebo_parts = []
+            for dates, h, lo, c in series.values():
+                real_parts.append(evaluate_family(dates, h, lo, c, fn, label=name, horizon=horizon))
+                placebo_parts.append(
+                    evaluate_family(
+                        dates,
+                        h,
+                        lo,
+                        c,
+                        fn,
+                        label=f"{name}:placebo",
+                        horizon=horizon,
+                        placebo_seed=placebo_seed,
+                    )
+                )
+            real = merge_stats(name, real_parts)
+            placebo = merge_stats(f"{name}:placebo", placebo_parts)
+            uplift = placebo_uplift(real, placebo)
+            gate = SampleGate(real.decided)
+            verdict = "—"
+            if uplift is not None:
+                if not gate.sufficient:
+                    verdict = "[yellow]thin sample[/yellow]"
+                elif uplift > 0:
+                    verdict = f"[green]+{uplift:.1%} vs placebo[/green]"
+                else:
+                    verdict = f"[red]{uplift:.1%} vs placebo[/red]"
+
+            def _hr(s: Any) -> str:
+                return f"{s.hold_rate:.0%}" if s.hold_rate is not None else "—"
+
+            console.print(
+                f"[bold]{name:15}[/bold] hold {_hr(real)} "
+                f"(touch {real.touches}, decided {real.decided}) · "
+                f"placebo {_hr(placebo)} (decided {placebo.decided}) → {verdict}"
+            )
+        console.print(
+            "[dim]Prompt inclusion requires beating placebo on DISJOINT OOS "
+            "windows with a sufficient sample — record the verdict in the "
+            "trials ledger before wiring anything.[/dim]"
+        )
+
+    asyncio.run(_run())
+
+
 @quant.command()
 @click.option("--days", default=400, show_default=True, help="Calendar days of daily bars")
 @click.option("--coverage", default=0.8, show_default=True, help="Target two-sided path coverage")

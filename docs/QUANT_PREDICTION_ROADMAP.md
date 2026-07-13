@@ -258,7 +258,7 @@ measurement harness *before* the level families it measures.
   daily returns as the fat-tail-honest "how low can it go" cross-check on
   the lower band; surface disagreement with the Gaussian band as a tail-risk
   flag.
-- [ ] **Touch-and-hold validation harness (build FIRST in the levels track)**
+- [x] **Touch-and-hold validation harness (build FIRST in the levels track)**
   — the shared honesty tool for every level family: touch = enter level ±
   0.25·ATR; outcomes = reject (≥1·ATR reversal) / break-hold / break-fail;
   always condition on touch; always compare against distance/width-matched
@@ -266,8 +266,10 @@ measurement harness *before* the level families it measures.
   beats placebo. Honest *intraday* touch/hold measurement needs the intraday
   bars enabling fix (below) — daily-bar approximations are a stopgap and
   must be labeled as such. Results feed the trials ledger with
-  pre-registered criteria.
-- [ ] **Level map: prior-extreme family first** — `quant/levels.py`: prior
+  pre-registered criteria. Done 2026-07-13 (`quant/level_eval.py` +
+  `halal-trader quant validate-levels`, daily-bar approximation,
+  same-side distance-band placebo, seeded).
+- [~] **Level map: prior-extreme family first** — `quant/levels.py`: prior
   day/week/month high/low (zero parameters; Osler documents the
   stop-clustering *mechanism*; the 55–70 % first-touch respect rates are
   practitioner-measured intraday numbers — treat as upper bounds pending our
@@ -278,6 +280,14 @@ measurement harness *before* the level families it measures.
   bug) + clustering of touches into zones ranked by touch count.
   Classic/Camarilla pivots as free extra features. **Skip Fibonacci**
   (peer-reviewed: no better than width-matched random zones).
+  Families built 2026-07-13 (`quant/levels.py`: prior extremes, round
+  numbers, swing zones + `level_map` with round-snap; AVWAP still open).
+  **First validation verdict (400d × 20 symbols, daily approximation):
+  swing_zones FAIL placebo (−1.8pp — the halabot per-asset-structure
+  lesson repeats); prior_extremes +2.1pp and round_numbers +2.8pp are
+  positive but ~1σ — insufficient. NO family is prompt-wired.** Next:
+  re-test on disjoint OOS windows and with intraday bars before any
+  wiring; treat the current uplifts as a screen, not evidence.
 - [ ] **Direction tilt (the only return-side item, and it is small)** —
   regime-gated short-term reversal: RSI(2)-style oversold entries in liquid
   large caps, gated by SPY-vs-200d-SMA *and* a vol-regime cap (the gate is
