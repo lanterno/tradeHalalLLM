@@ -123,6 +123,68 @@ export default function Recommendation() {
         </div>
       ) : null}
 
+      {/* Quant grounding: plan quality (LLM levels vs realized path) +
+          band coverage + the counterfactual pick percentile. Populates as
+          picks mature; tiles render only where their data exists. */}
+      {sc?.available &&
+      (sc.n_with_levels || sc.band_n || sc.candidate_band_n || sc.pick_percentile_n) ? (
+        <div className="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-5">
+          {typeof sc.avg_plan_return_5d === "number" ? (
+            <StatCard
+              label="Plan Return (5d)"
+              value={
+                <span className={pctColor(sc.avg_plan_return_5d)}>
+                  {pct(sc.avg_plan_return_5d)}
+                </span>
+              }
+              sub="entry@open → bracket"
+            />
+          ) : null}
+          {typeof sc.target_hit_rate === "number" ? (
+            <StatCard
+              label="Target / Stop Hit"
+              value={
+                <span className="text-sm">
+                  <span className="text-accent">{formatPct(sc.target_hit_rate)}</span>
+                  {" / "}
+                  <span className="text-loss">
+                    {typeof sc.stop_hit_rate === "number"
+                      ? formatPct(sc.stop_hit_rate)
+                      : "—"}
+                  </span>
+                </span>
+              }
+              sub={`${sc.n_with_levels ?? 0} picks w/ levels`}
+            />
+          ) : null}
+          {typeof sc.band_coverage_5d === "number" ? (
+            <StatCard
+              label="Band Coverage (5d)"
+              value={formatPct(sc.band_coverage_5d)}
+              sub={`pick n=${sc.band_n ?? 0}`}
+            />
+          ) : null}
+          {typeof sc.candidate_band_coverage_5d === "number" ? (
+            <StatCard
+              label="Band Cov · all cand."
+              value={formatPct(sc.candidate_band_coverage_5d)}
+              sub={`n=${sc.candidate_band_n ?? 0}`}
+            />
+          ) : null}
+          {typeof sc.avg_pick_percentile_5d === "number" ? (
+            <StatCard
+              label="Pick Percentile"
+              value={
+                <span className={pctColor(sc.avg_pick_percentile_5d - 0.5)}>
+                  {formatPct(sc.avg_pick_percentile_5d)}
+                </span>
+              }
+              sub="0.5 = random"
+            />
+          ) : null}
+        </div>
+      ) : null}
+
       <div className="rounded-xl border border-border bg-surface p-4">
         <h2 className="mb-4 text-sm font-medium uppercase tracking-wider text-muted">
           History

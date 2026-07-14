@@ -283,6 +283,22 @@ export interface RecommendationScorecard {
   benchmark?: string;
   best?: { symbol: string; date: string; fwd_5d: number };
   worst?: { symbol: string; date: string; fwd_5d: number };
+  // Plan quality (LLM suggested_target/stop vs the realized path).
+  n_with_levels?: number;
+  levels_sufficient?: boolean;
+  target_hit_rate?: number | null;
+  stop_hit_rate?: number | null;
+  avg_mfe_5d?: number | null;
+  avg_mae_5d?: number | null;
+  avg_plan_return_5d?: number | null;
+  // Quant band coverage (stored band vs realized 5d path).
+  band_n?: number;
+  band_coverage_5d?: number | null;
+  candidate_band_n?: number;
+  candidate_band_coverage_5d?: number | null;
+  // Counterfactual: where the pick ranked among its candidates (0.5 = random).
+  pick_percentile_n?: number;
+  avg_pick_percentile_5d?: number | null;
 }
 
 // ── halabot shadow engine (belief board) ────────────────────────
