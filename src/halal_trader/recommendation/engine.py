@@ -322,8 +322,31 @@ class DailyRecommendationEngine:
             band_semantics=band_semantics,
         )
         user += "\n\n" + factor_block
+        regime_block = await self._regime_block()
+        if regime_block:
+            user = regime_block + "\n\n" + user
         raw = await self._llm.generate_json(user, system=SYSTEM_PROMPT)
         return self._validate(raw, candidates)
+
+    async def _regime_block(self) -> str:
+        """VIX term-structure market-regime line for the prompt (or "").
+
+        Defensive: a CBOE outage returns "" and the pick proceeds without a
+        regime line. This is the roadmap's market-relative signal — the
+        class that historically survived OOS — so it leads the prompt.
+        """
+        from halal_trader.quant.regime import fetch_vix_term_structure, format_for_prompt
+
+        reading = await fetch_vix_term_structure()
+        if reading is None:
+            return ""
+        logger.info(
+            "Recommendation market regime: %s (VIX %.1f, VIX/VIX3M %.2f)",
+            reading.regime,
+            reading.vix,
+            reading.r_slow,
+        )
+        return format_for_prompt(reading)
 
     def _validate(
         self, raw: dict[str, Any], candidates: dict[str, dict[str, Any]]

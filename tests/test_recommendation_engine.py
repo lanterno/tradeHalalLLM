@@ -132,6 +132,60 @@ async def test_quant_range_bands_reach_prompt_and_candidates(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_market_regime_block_leads_the_prompt(monkeypatch):
+    import halal_trader.quant.regime as qregime
+    from halal_trader.quant.regime import RegimeReading
+
+    async def _fake_regime():
+        return RegimeReading(
+            regime="risk_off", r_slow=1.05, r_fast=1.1, fast_inverted=True, vix=28.0
+        )
+
+    monkeypatch.setattr(qregime, "fetch_vix_term_structure", _fake_regime)
+    llm = _FakeLLM(
+        {
+            "symbol": "NVDA",
+            "conviction": 0.6,
+            "thesis": "t",
+            "halal_note": "h",
+            "suggested_entry": 130.0,
+            "suggested_target": 140.0,
+            "suggested_stop": 125.0,
+        }
+    )
+    eng = _engine(llm)
+    await eng.generate()
+    # The regime block leads the prompt (before the candidate table).
+    assert "MARKET REGIME: RISK-OFF" in llm.last_prompt
+    assert llm.last_prompt.index("MARKET REGIME") < llm.last_prompt.index("Candidate universe")
+
+
+@pytest.mark.asyncio
+async def test_regime_outage_does_not_break_generation(monkeypatch):
+    import halal_trader.quant.regime as qregime
+
+    async def _no_regime():
+        return None
+
+    monkeypatch.setattr(qregime, "fetch_vix_term_structure", _no_regime)
+    llm = _FakeLLM(
+        {
+            "symbol": "NVDA",
+            "conviction": 0.6,
+            "thesis": "t",
+            "halal_note": "h",
+            "suggested_entry": 130.0,
+            "suggested_target": 140.0,
+            "suggested_stop": 125.0,
+        }
+    )
+    eng = _engine(llm)
+    rec = await eng.generate()
+    assert rec["symbol"] == "NVDA"
+    assert "MARKET REGIME" not in llm.last_prompt
+
+
+@pytest.mark.asyncio
 async def test_calibration_artifact_flips_prompt_semantics(monkeypatch):
     import halal_trader.quant.calibration as qcal
     from halal_trader.quant.calibration import CalibrationArtifact, HorizonCalibration

@@ -475,7 +475,7 @@ feeding IV/skew/expected-move context into prompts raises the odds the LLM
 refuses non-equity instruments) ships before or with the first options-data
 prompt block.
 
-- [ ] **VIX term-structure regime gate** — VIX9D/VIX and VIX/VIX3M ratios →
+- [x] **VIX term-structure regime gate** — VIX9D/VIX and VIX/VIX3M ratios →
   3-state regime (risk-on / caution / risk-off) with 2-day hysteresis; free
   index history (CBOE CSV primary, yfinance fallback). Fetch runs
   out-of-cycle on the scheduler with cached last-good values — a fetch
@@ -484,7 +484,7 @@ prompt block.
   before a scheduled event (CPI/FOMC) is *expectation, not stress* — gate on
   the slow ratio, use the fast ratio as color. Cheapest, most robust
   options-derived input, and exactly the market-relative signal class that
-  survived halabot OOS.
+  survived halabot OOS. Done 2026-07-14 (`quant/regime.py`): data-source probe resolved it — Alpaca serves no indices and Yahoo is 429-blocked here, but the **CBOE CDN** serves VIX9D/VIX/VIX3M history as clean CSV (no auth, no dep — httpx). r_slow=VIX/VIX3M gates (backwardation=risk-off), r_fast=VIX9D/VIX is color only, 2-day hysteresis, stateless. Fetch degrades to last-good then None. Wired as the LEADING prompt block in the recommendation (defensive). Live: risk_on, VIX 17.2, both ratios ~0.87.
 - [!] **CORRECTION — no greeks/IV on this account's indicative feed.**
   Verified 2026-07-14 against the live MCP: `get_option_chain(...,
   feed="indicative")` returns per-contract `latestQuote`/`latestTrade`/
