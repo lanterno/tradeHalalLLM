@@ -33,11 +33,44 @@ def _print_rec(rec: dict[str, Any]) -> None:
         f"Target [green]{_lvl(rec.get('suggested_target'))}[/green]   "
         f"Stop [red]{_lvl(rec.get('suggested_stop'))}[/red]"
     )
+    quant = _quant_line(rec)
+    if quant:
+        body += f"\n{quant}"
     if rec.get("catalysts"):
         body += f"\n\n[bold]Catalysts[/bold]\n{rec['catalysts']}"
     if rec.get("risks"):
         body += f"\n\n[bold]Risks[/bold]\n{rec['risks']}"
     console.print(Panel(body, title="📈 Halal Stock of the Day (advisory)", border_style="green"))
+
+
+def _quant_line(rec: dict[str, Any]) -> str:
+    """The pick's quantitative range grounding, read from candidates JSONB.
+
+    Shows the calibrated 5-day statistical band and the options-implied
+    move that the LLM saw when it chose its levels — the "how high / how
+    low" context behind the pick. Returns "" when no quant data was stored
+    (older recs, or the outlook was unavailable).
+    """
+    cand = (rec.get("candidates") or {}).get(rec.get("symbol") or "") or {}
+    parts: list[str] = []
+    lo, hi = cand.get("band5d_lo"), cand.get("band5d_hi")
+    if isinstance(lo, int | float) and isinstance(hi, int | float):
+        qb = cand.get("quant_bands") or {}
+        tag = "cal" if qb.get("calibrated") else "uncal"
+        vpct = cand.get("vol_pctl")
+        vtxt = f" · vol pctl {vpct:.0%}" if isinstance(vpct, int | float) else ""
+        parts.append(f"5d band [cyan]${lo:,.2f}..${hi:,.2f}[/cyan] ({tag}){vtxt}")
+    impl_pct = cand.get("impl_move_pct")
+    if isinstance(impl_pct, int | float):
+        il, ih = cand.get("impl_low"), cand.get("impl_high")
+        dte = cand.get("impl_dte")
+        band = (
+            f" (${il:,.2f}..${ih:,.2f})"
+            if isinstance(il, int | float) and isinstance(ih, int | float)
+            else ""
+        )
+        parts.append(f"implied ±{impl_pct:.1f}%/{dte}d{band}")
+    return "[dim]Range: " + "  ·  ".join(parts) + "[/dim]" if parts else ""
 
 
 def _pct(v: Any) -> str:
