@@ -485,18 +485,23 @@ prompt block.
   the slow ratio, use the fast ratio as color. Cheapest, most robust
   options-derived input, and exactly the market-relative signal class that
   survived halabot OOS.
-- [ ] **Revive the options-IV feed on Alpaca's indicative feed** — the
-  retired `trading/options_iv.py` + `options_catalyst_adapter.py`
-  scaffolding is intact (prompt formatting, Catalyst kinds,
-  CatalystRiskPolicy 0.5× pre-event sizing all reactivate on re-wiring);
-  only the dead Yahoo fetcher needs replacing. Alpaca's **free/paper tier
-  includes option chains with pre-computed greeks + IV** (indicative feed;
-  snapshot-only, no history; delayed/modified quotes). Route: alpaca-py
-  `OptionHistoricalDataClient` directly, or a new MCP tool wrapper if the
-  installed `alpaca-mcp-server` exposes chains — check its tool list at
-  connect, and remember this integration's history of breaking on MCP
-  tool/arg renames (`mcp/client.py` comments). Liquidity filters mandatory
-  (max spread, min OI).
+- [!] **CORRECTION — no greeks/IV on this account's indicative feed.**
+  Verified 2026-07-14 against the live MCP: `get_option_chain(...,
+  feed="indicative")` returns per-contract `latestQuote`/`latestTrade`/
+  `dailyBar` but **NO `greeks` and NO `impliedVolatility`** — the
+  research's "free tier includes pre-computed greeks + IV" assumption is
+  wrong here. Consequence: IV-based signals (IV rank/percentile, 25Δ skew,
+  GEX, put-call-parity spread) all need **self-computed Black–Scholes
+  inversion** from the mids (py_vollib or ~30 lines) and are deferred. The
+  expected-move item below needs none of that — the straddle mid is the
+  signal — so it moved first. The `get_option_bars` + option snapshot/
+  chain tools ARE all present (12 option tools total).
+- [ ] **Revive the options-IV catalyst scaffolding** — the retired
+  `trading/options_iv.py` + `options_catalyst_adapter.py` (prompt
+  formatting, Catalyst kinds, CatalystRiskPolicy 0.5× pre-event sizing)
+  still needs a real IV source; since the indicative feed has none, this
+  now depends on the self-computed-IV work above rather than a drop-in
+  fetch. Deferred behind the expected-move + BS-inversion slices.
 - [ ] **IV history persistence — ship with the fetcher, before any consumer**
   — Alpaca gives no historical IV, so every day not persisted is signal
   lost, and a *silent* fetch/persist failure is irrecoverable data loss:
@@ -505,7 +510,7 @@ prompt block.
   25Δ skew, PCR, OI. Alembic table + daily job slot in the existing
   scheduler. Seed the IV-percentile cold start with 20-day realized vol as
   a proxy until ~60 d of real IV history accrues.
-- [ ] **Options expected move → `PriceOutlook.implied`** — EM = S·σ_ATM·√T
+- [~] **Options expected move → `PriceOutlook.implied`** — EM = S·σ_ATM·√T
   (0.85×straddle cross-check; pick ONE day-count convention — calendar vs
   trading days differ by ~√(365/252) ≈ 20 % — and record it). **Never serve
   the front-expiry EM as a normal-day band when earnings fall before
@@ -515,6 +520,14 @@ prompt block.
   premium). IV over-forecasts realized vol ~10–20 % *in calm markets* (vol
   risk premium — the bias shrinks or inverts under stress), so treat it as
   a conservative envelope and validate coverage like any other band source.
+  Core built 2026-07-14 (`quant/expected_move.py`, pure straddle method —
+  no IV needed): OCC-symbol parse, ATM straddle at the nearest ≥2-DTE
+  expiry, spread-gated mids, `EM = 0.85·straddle`. Validated live: AAPL
+  ±$6.28 (2.0 %), NVDA ±$6.34 (3.1 %), MSFT ±$10.69 (2.7 %) to the next
+  weekly. Remaining: fetch adapter + wire into the recommendation
+  (advisory display), then coverage measurement vs the realized path
+  (mind the expiry-vs-5d horizon mismatch), and the earnings-week guard
+  (needs the earnings calendar).
 - [ ] **IV-derived context bundle** (same fetch, marginal cost ~zero): IV
   percentile (size/stop-width modulator once history accrues), 25Δ put skew
   (entry *veto* on names pricing crash risk — cross-sectional rank,
