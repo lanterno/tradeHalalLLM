@@ -591,11 +591,17 @@ universe for anything statistical).
 
 ## Phase 5 — Product surfaces
 
-- [ ] **Recommendation page: bands + levels** — predicted high/low band
+- [~] **Recommendation page: bands + levels** — predicted high/low band
   (statistical + implied) vs realized path per pick; hit/coverage badges in
   the history table (it already renders suggested vs fwd returns side by
   side); scorecard tiles for coverage %, pinball trend, target/stop hit
-  rates.
+  rates. Card band+implied display done 2026-07-14 (`RecommendationCard`
+  `QuantRange` reads the pick's `candidates` JSONB; `CandidateQuant` type;
+  dashboard builds clean). Also in the CLI (`recommend --show`). Remaining:
+  realized-path/coverage badges in the history table + scorecard coverage
+  tiles (need matured outcome data — the `band_coverage_5d` /
+  `candidate_band_coverage_5d` scorecard fields already exist, unwired to
+  the UI).
 - [ ] **Per-symbol research view** — chart with level map (prior extremes,
   AVWAPs, swing zones with hold rates), current bands per horizon, vol
   percentile, IV context. **This roadmap owns the item**; `docs/ROADMAP.md`

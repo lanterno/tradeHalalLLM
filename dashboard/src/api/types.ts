@@ -227,6 +227,21 @@ export interface BackupRow {
 // Daily halal "stock of the day" recommendation (advisory — never traded).
 // The latest endpoint returns { available: false } when none has been
 // generated yet; otherwise available is true and the fields are populated.
+// Per-candidate quantitative range grounding, stored in the `candidates`
+// JSONB at generation time (see quant/outlook + expected_move). Only the
+// fields the UI reads are typed; the object carries more.
+export interface CandidateQuant {
+  band5d_lo?: number;
+  band5d_hi?: number;
+  vol_pctl?: number | null;
+  impl_move_pct?: number;
+  impl_dte?: number;
+  impl_low?: number;
+  impl_high?: number;
+  quant_bands?: { calibrated?: boolean; calibration_version?: string | null };
+  [key: string]: unknown;
+}
+
 export interface StockOfTheDay {
   available: boolean;
   id?: number;
@@ -243,6 +258,8 @@ export interface StockOfTheDay {
   universe_size?: number;
   model?: string | null;
   created_at?: string;
+  // Per-symbol context the model weighed, incl. quant range fields.
+  candidates?: Record<string, CandidateQuant>;
   // Outcome tracking (populated by the scorecard backfill once matured).
   outcome_status?: string;
   fwd_return_1d?: number | null;
