@@ -35,6 +35,7 @@ import numpy as np
 from halal_trader.quant.bands import fit_har
 from halal_trader.quant.garch import garch_fhs_path_extremes
 from halal_trader.quant.levels import atr_series
+from halal_trader.quant.qgbm import fit_qgbm, predict_bands
 from halal_trader.quant.volatility import FloatArray, yang_zhang
 
 logger = logging.getLogger(__name__)
@@ -47,6 +48,7 @@ _MIN_Z_OBS = 40  # a window needs this many prior obs to calibrate har z
 @dataclass(frozen=True, slots=True)
 class _Row:
     date: str
+    symbol: str
     close: float
     realized_high: float
     realized_low: float
@@ -54,6 +56,9 @@ class _Row:
     atr: float
     garch_low: float
     garch_high: float
+    # Leakage-safe feature vector computed from data <= t (see build_rows) —
+    # the training input for learned band sources (quant/qgbm.py).
+    features: tuple[float, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,6 +78,7 @@ def build_rows(
     lows: FloatArray,
     closes: FloatArray,
     *,
+    symbol: str = "?",
     horizon: int = 5,
     step: int | None = None,
     garch_sims: int = 1000,
@@ -115,6 +121,7 @@ def build_rows(
         rows.append(
             _Row(
                 date=dates[t],
+                symbol=symbol,
                 close=float(c_arr[t]),
                 realized_high=float(h_arr[t + 1 : t + 1 + horizon].max()),
                 realized_low=float(l_arr[t + 1 : t + 1 + horizon].min()),
@@ -122,9 +129,40 @@ def build_rows(
                 atr=atr_t,
                 garch_low=g_lo,
                 garch_high=g_hi,
+                features=_features_at(t, yz, atr, c_arr),
             )
         )
     return rows
+
+
+def _features_at(
+    t: int,
+    yz: np.ndarray,
+    atr: np.ndarray,
+    closes: np.ndarray,
+) -> tuple[float, ...]:
+    """Leakage-safe feature vector at ``t`` for learned band sources.
+
+    Deliberately small and vol-centric (the predictable quantity): log
+    Yang-Zhang vol at 1/5/22-day aggregation (the HAR trio), relative ATR,
+    recent returns and a 20-day range position. Everything uses bars ≤ t.
+    """
+    c = float(closes[t])
+    yz_now = float(yz[t])
+    yz5 = float(np.nanmean(yz[max(t - 4, 0) : t + 1]))
+    yz22 = float(np.nanmean(yz[max(t - 21, 0) : t + 1]))
+    win = closes[max(t - 19, 0) : t + 1]
+    rng = float(win.max() - win.min())
+    return (
+        float(np.log(max(yz_now, 1e-8))),
+        float(np.log(max(yz5, 1e-8))),
+        float(np.log(max(yz22, 1e-8))),
+        float(atr[t] / c),
+        float(c / closes[t - 5] - 1.0) if t >= 5 else 0.0,
+        float(c / closes[t - 20] - 1.0) if t >= 20 else 0.0,
+        float(abs(c / closes[t - 1] - 1.0)) if t >= 1 else 0.0,
+        float((c - win.min()) / rng) if rng > 0 else 0.5,
+    )
 
 
 def _score(bands: list[tuple[float, float]], rows: list[_Row], target: float) -> SourceScore:
@@ -181,8 +219,8 @@ def compare_band_sources(
         )
     windows = np.array_split(np.asarray(pooled, dtype=object), n_windows)
     results: dict[str, dict[str, SourceScore]] = {}
-    agg_rows: list[_Row] = []
-    agg_bands: dict[str, list[tuple[float, float]]] = {"atr": [], "har_cal": [], "garch_fhs": []}
+    agg: dict[str, tuple[list[tuple[float, float]], list[_Row]]] = {}
+    n_scored = 0
     sqrt_h = float(np.sqrt(horizon))
     for k in range(1, n_windows):
         prior: list[_Row] = [r for w in windows[:k] for r in list(w)]
@@ -201,34 +239,81 @@ def compare_band_sources(
             ],
             "garch_fhs": [(r.garch_low, r.garch_high) for r in w_rows],
         }
+        # Learned source: refit per window on PRIOR rows only, with a
+        # per-symbol embargo (each symbol's latest prior row may share
+        # future bars with the window's earliest targets — drop it).
+        models = fit_qgbm(_embargo_last_per_symbol(prior))
+        if models is not None:
+            bands["qgbm"] = predict_bands(models, w_rows)
+        n_scored += 1
         results[f"window_{k}"] = {src: _score(b, w_rows, target) for src, b in bands.items()}
-        agg_rows.extend(w_rows)
         for src, b in bands.items():
-            agg_bands[src].extend(b)
+            got = agg.setdefault(src, ([], []))
+            got[0].extend(b)
+            got[1].extend(w_rows)
     if not results:
         raise ValueError("no window had enough prior observations to calibrate z")
-    results["aggregate"] = {src: _score(b, agg_rows, target) for src, b in agg_bands.items()}
+    # Aggregate only sources present in EVERY scored window — a source that
+    # skipped a window would otherwise be pooled on an easier subset.
+    counts: dict[str, int] = {}
+    for scores in results.values():
+        for src in scores:
+            counts[src] = counts.get(src, 0) + 1
+    results["aggregate"] = {
+        src: _score(agg[src][0], agg[src][1], target)
+        for src, count in counts.items()
+        if count == n_scored
+    }
     return results
 
 
-def garch_verdict(results: dict[str, dict[str, SourceScore]]) -> str:
-    """Pre-registered ship rule for GARCH-FHS vs the deterministic bands.
+def _embargo_last_per_symbol(rows: list[_Row]) -> list[_Row]:
+    """Drop each symbol's latest row — its target window may extend past the
+    train/test boundary and share future bars with early test targets."""
+    latest: dict[str, str] = {}
+    for r in rows:
+        if r.date > latest.get(r.symbol, ""):
+            latest[r.symbol] = r.date
+    return [r for r in rows if r.date != latest.get(r.symbol)]
 
-    ``pass``: aggregate Winkler strictly better than har_cal AND aggregate
-    coverage error no worse, AND not worse on Winkler in a majority of
-    individual windows. ``fail``: aggregate Winkler worse than the naive
-    ATR baseline. Anything else: ``inconclusive``.
+
+def ship_verdict(
+    results: dict[str, dict[str, SourceScore]],
+    candidate: str,
+    *,
+    target: float = 0.8,
+) -> str:
+    """Pre-registered ship rule for ``candidate`` vs the deterministic bands.
+
+    Pooled over the windows the candidate PARTICIPATED in (a learned source
+    may skip early windows for lack of training rows — it is compared to
+    har_cal/atr on exactly those shared windows, never on an easier
+    subset). ``pass``: pooled Winkler strictly better than har_cal AND
+    pooled coverage error no worse, AND not worse on Winkler in a majority
+    of shared windows. ``fail``: pooled Winkler worse than the naive ATR
+    baseline. Anything else: ``inconclusive``.
     """
-    agg = results["aggregate"]
-    g, h, a = agg["garch_fhs"], agg["har_cal"], agg["atr"]
-    if g.winkler > a.winkler:
+    shared = [v for k, v in results.items() if k != "aggregate" and candidate in v]
+    if not shared:
+        return "inconclusive"
+
+    def pooled(src: str) -> tuple[float, float]:
+        n = sum(w[src].n for w in shared)
+        wink = sum(w[src].winkler * w[src].n for w in shared) / n
+        cov = sum(w[src].coverage * w[src].n for w in shared) / n
+        return wink, abs(cov - target)
+
+    c_wink, c_err = pooled(candidate)
+    h_wink, h_err = pooled("har_cal")
+    a_wink, _ = pooled("atr")
+    if c_wink > a_wink:
         return "fail"
-    windows = [v for k, v in results.items() if k != "aggregate"]
-    better_windows = sum(1 for w in windows if w["garch_fhs"].winkler <= w["har_cal"].winkler)
-    if (
-        g.winkler < h.winkler
-        and g.coverage_error <= h.coverage_error
-        and better_windows * 2 > len(windows)
-    ):
+    better = sum(1 for w in shared if w[candidate].winkler <= w["har_cal"].winkler)
+    if c_wink < h_wink and c_err <= h_err and better * 2 > len(shared):
         return "pass"
     return "inconclusive"
+
+
+def garch_verdict(results: dict[str, dict[str, SourceScore]]) -> str:
+    """Back-compat wrapper: the GARCH-FHS ship rule via :func:`ship_verdict`."""
+    return ship_verdict(results, "garch_fhs")

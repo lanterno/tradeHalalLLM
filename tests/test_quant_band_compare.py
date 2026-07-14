@@ -29,10 +29,21 @@ def _gbm_ohlc(n: int, sigma: float = 0.02, seed: int = 0):
 
 
 def _mk_row(
-    i: int, *, close=100.0, hi=104.0, lo=97.0, sigma=0.02, atr=2.0, g_lo=95.0, g_hi=106.0
+    i: int,
+    *,
+    close=100.0,
+    hi=104.0,
+    lo=97.0,
+    sigma=0.02,
+    atr=2.0,
+    g_lo=95.0,
+    g_hi=106.0,
+    symbol="AAA",
+    features=(),
 ) -> _Row:
     return _Row(
         date=f"2024-01-{i:04d}",
+        symbol=symbol,
         close=close,
         realized_high=hi,
         realized_low=lo,
@@ -40,6 +51,7 @@ def _mk_row(
         atr=atr,
         garch_low=g_lo,
         garch_high=g_hi,
+        features=features,
     )
 
 
@@ -71,6 +83,7 @@ class TestBuildRows:
             h,
             lo,
             c,
+            symbol="TST",
             horizon=5,
             garch_sims=200,
             garch_min_returns=150,
@@ -80,6 +93,9 @@ class TestBuildRows:
             assert r.garch_low < r.close < r.garch_high
             assert r.realized_low <= r.realized_high
             assert r.sigma_har > 0 and r.atr > 0
+            assert r.symbol == "TST"
+            assert len(r.features) == 8
+            assert all(np.isfinite(f) for f in r.features)
 
 
 class TestCompare:
@@ -121,14 +137,14 @@ class TestCompare:
 
 
 class TestVerdict:
-    def _results(self, g_wink, h_wink, a_wink, g_cov_err=0.02, h_cov_err=0.05):
-        def s(w, c_err):
-            return SourceScore(coverage=0.8, coverage_error=c_err, winkler=w, n=100)
+    def _results(self, g_wink, h_wink, a_wink, g_cov=0.78, h_cov=0.75):
+        def s(w, cov):
+            return SourceScore(coverage=cov, coverage_error=abs(cov - 0.8), winkler=w, n=100)
 
         window = {
-            "garch_fhs": s(g_wink, g_cov_err),
-            "har_cal": s(h_wink, h_cov_err),
-            "atr": s(a_wink, 0.1),
+            "garch_fhs": s(g_wink, g_cov),
+            "har_cal": s(h_wink, h_cov),
+            "atr": s(a_wink, 0.65),
         }
         return {"window_1": window, "window_2": window, "aggregate": window}
 
@@ -142,5 +158,86 @@ class TestVerdict:
         assert garch_verdict(self._results(9.5, 9.0, 12.0)) == "inconclusive"
 
     def test_inconclusive_when_coverage_error_worse(self):
-        r = self._results(8.0, 9.0, 12.0, g_cov_err=0.09, h_cov_err=0.02)
+        # garch coverage 0.71 (err 0.09) vs har 0.78 (err 0.02).
+        r = self._results(8.0, 9.0, 12.0, g_cov=0.71, h_cov=0.78)
         assert garch_verdict(r) == "inconclusive"
+
+
+class TestEmbargoAndQgbm:
+    def test_embargo_drops_each_symbols_latest_row(self):
+        from halal_trader.quant.band_compare import _embargo_last_per_symbol
+
+        rows = [
+            _mk_row(1, symbol="AAA"),
+            _mk_row(2, symbol="AAA"),
+            _mk_row(1, symbol="BBB"),
+        ]
+        kept = _embargo_last_per_symbol(rows)
+        assert len(kept) == 1
+        assert kept[0].symbol == "AAA" and kept[0].date.endswith("0001")
+
+    def test_qgbm_fit_predict_learns_conditional_width(self):
+        pytest.importorskip("sklearn")
+        from halal_trader.quant.qgbm import fit_qgbm, predict_bands
+
+        rng = np.random.default_rng(0)
+        rows = []
+        for i in range(600):
+            # Feature 0 carries the true (log) vol; extremes scale with it.
+            vol = 0.01 if i % 2 == 0 else 0.04
+            feats = (float(np.log(vol)), 0.0, 0.0, 0.02, 0.0, 0.0, 0.0, 0.5)
+            hi = 100.0 * float(np.exp(abs(rng.normal(0, vol)) * 2))
+            lo = 100.0 * float(np.exp(-abs(rng.normal(0, vol)) * 2))
+            rows.append(_mk_row(i, hi=hi, lo=lo, features=feats))
+        models = fit_qgbm(rows)
+        assert models is not None
+        calm = [_mk_row(0, features=(float(np.log(0.01)), 0.0, 0.0, 0.02, 0.0, 0.0, 0.0, 0.5))]
+        wild = [_mk_row(1, features=(float(np.log(0.04)), 0.0, 0.0, 0.02, 0.0, 0.0, 0.0, 0.5))]
+        (c_lo, c_hi) = predict_bands(models, calm)[0]
+        (w_lo, w_hi) = predict_bands(models, wild)[0]
+        assert (w_hi - w_lo) > 1.5 * (c_hi - c_lo)  # conditional width learned
+
+    def test_qgbm_refuses_thin_training(self):
+        pytest.importorskip("sklearn")
+        from halal_trader.quant.qgbm import fit_qgbm
+
+        rows = [_mk_row(i, features=(0.0,) * 8) for i in range(50)]
+        assert fit_qgbm(rows) is None
+
+    def test_compare_includes_qgbm_when_trainable(self):
+        pytest.importorskip("sklearn")
+        rng = np.random.default_rng(1)
+        rows = []
+        for i in range(900):
+            sigma = 0.02
+            feats = (float(np.log(sigma)), 0.0, 0.0, 0.02, 0.0, 0.0, 0.0, 0.5)
+            z_up = abs(rng.normal(0, 1.0))
+            z_dn = abs(rng.normal(0, 1.0))
+            rows.append(
+                _mk_row(
+                    i,
+                    hi=100.0 * float(np.exp(z_up * sigma * np.sqrt(5))),
+                    lo=100.0 * float(np.exp(-z_dn * sigma * np.sqrt(5))),
+                    sigma=sigma,
+                    features=feats,
+                )
+            )
+        results = compare_band_sources({"AAA": rows}, n_windows=3)
+        # 300 prior rows in window_1's train set (minus embargo) → qgbm fits.
+        assert "qgbm" in results["window_1"]
+        assert "qgbm" in results["aggregate"]
+
+    def test_ship_verdict_on_shared_windows_only(self):
+        from halal_trader.quant.band_compare import SourceScore, ship_verdict
+
+        def sc(w, err=0.02):
+            return SourceScore(coverage=0.8, coverage_error=err, winkler=w, n=100)
+
+        results = {
+            "window_1": {"har_cal": sc(9.0), "atr": sc(12.0)},  # no qgbm here
+            "window_2": {"har_cal": sc(9.0), "atr": sc(12.0), "qgbm": sc(8.0)},
+            "aggregate": {"har_cal": sc(9.0), "atr": sc(12.0)},
+        }
+        # qgbm judged only on window_2, where it beats har_cal.
+        assert ship_verdict(results, "qgbm") == "pass"
+        assert ship_verdict(results, "missing") == "inconclusive"

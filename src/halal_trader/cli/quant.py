@@ -208,7 +208,7 @@ def compare_bands(days: int, horizon: int, windows: int, sims: int, cache_read: 
         from halal_trader.quant.band_compare import (
             build_rows,
             compare_band_sources,
-            garch_verdict,
+            ship_verdict,
         )
         from halal_trader.recommendation.scorecard import _ohlc_by_date
 
@@ -227,6 +227,7 @@ def compare_bands(days: int, horizon: int, windows: int, sims: int, cache_read: 
                 [r[2] for r in parsed],
                 [r[3] for r in parsed],
                 [r[4] for r in parsed],
+                symbol=sym,
                 horizon=horizon,
                 garch_sims=sims,
             )
@@ -247,26 +248,27 @@ def compare_bands(days: int, horizon: int, windows: int, sims: int, cache_read: 
                     f"(err {sc.coverage_error:.1%}) · winkler {sc.winkler:.2f}% "
                     f"· n={sc.n}"
                 )
-        verdict = garch_verdict(results)
-        color = {"pass": "green", "fail": "red"}.get(verdict, "yellow")
-        console.print(f"GARCH-FHS ship verdict: [{color}]{verdict}[/{color}]")
         agg = results["aggregate"]
-        await _record_trial(
-            name="bands.garch_fhs.vs_har_atr",
-            kind="band_ab",
-            config={"days": days, "horizon": horizon, "windows": windows, "sims": sims},
-            window=f"{days}d x {len(rows_by_symbol)}sym daily, {windows} disjoint OOS",
-            metrics={
-                src: {"coverage": sc.coverage, "winkler": sc.winkler, "n": sc.n}
-                for src, sc in agg.items()
-            },
-            criterion=(
-                "aggregate Winkler < har_cal, coverage error <= har_cal, "
-                "majority of OOS windows not worse (pre-registered in "
-                "quant/band_compare.garch_verdict)"
-            ),
-            verdict=verdict,
-        )
+        for candidate in ("garch_fhs", "qgbm"):
+            verdict = ship_verdict(results, candidate)
+            color = {"pass": "green", "fail": "red"}.get(verdict, "yellow")
+            console.print(f"{candidate} ship verdict: [{color}]{verdict}[/{color}]")
+            await _record_trial(
+                name=f"bands.{candidate}.vs_har_atr",
+                kind="band_ab",
+                config={"days": days, "horizon": horizon, "windows": windows, "sims": sims},
+                window=f"{days}d x {len(rows_by_symbol)}sym daily, {windows} disjoint OOS",
+                metrics={
+                    src: {"coverage": sc.coverage, "winkler": sc.winkler, "n": sc.n}
+                    for src, sc in agg.items()
+                },
+                criterion=(
+                    "pooled Winkler < har_cal on shared windows, coverage error "
+                    "<= har_cal, majority of windows not worse (pre-registered "
+                    "in quant/band_compare.ship_verdict)"
+                ),
+                verdict=verdict,
+            )
 
     asyncio.run(_run())
 
