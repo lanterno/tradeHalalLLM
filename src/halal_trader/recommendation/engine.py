@@ -66,7 +66,12 @@ RSI-14; macd_h = MACD histogram; bb = position in the Bollinger band (0 low ..
 % below the recent high. Quantitative range model (Yang-Zhang/HAR volatility):
 band5d = statistical 5-day low..high price band ({band_semantics}); rng1d =
 expected 1-day trading range as % of price; vpct = current volatility
-percentile vs the symbol's own history (0 calm .. 1 extreme).
+percentile vs the symbol's own history (0 calm .. 1 extreme). impl (when
+present) = the OPTIONS-implied expected move ±%/DTE-days to the nearest
+weekly expiry with the implied low..high band — the market's own range
+forecast. When impl is materially WIDER than the statistical band, the
+options market is pricing an event (often earnings) inside that window:
+treat the extra width as event risk, not opportunity.
 
 {table}
 
@@ -164,8 +169,34 @@ class DailyRecommendationEngine:
                 "from_hi": round((last / max(highs) - 1) * 100, 2) if highs else None,
             }
             summary.update(self._quant_fields(klines, ind))
+            if self._settings.stocks.recommendation_expected_move:
+                summary.update(await self._implied_fields(sym, last))
             out[sym] = summary
         return out
+
+    async def _implied_fields(self, symbol: str, spot: float) -> dict[str, Any]:
+        """Options-implied expected move for one candidate (advisory).
+
+        Fully defensive: an options-feed outage returns ``{}`` and the pick
+        proceeds on the statistical band alone. The implied band's horizon
+        (nearest weekly expiry) differs from the statistical 5-day band, so
+        both the % move and its DTE are surfaced — disagreement between the
+        implied and statistical ranges flags an event premium.
+        """
+        from datetime import datetime as _dt
+
+        from halal_trader.quant.expected_move import fetch_expected_move
+
+        today = _dt.now(_ET).date()
+        em = await fetch_expected_move(self._broker, symbol, spot, today=today)
+        if em is None:
+            return {}
+        return {
+            "impl_move_pct": em.move_pct,
+            "impl_dte": em.dte,
+            "impl_low": em.low,
+            "impl_high": em.high,
+        }
 
     @staticmethod
     def _quant_fields(klines: list[Any], ind: dict[str, Any]) -> dict[str, Any]:
@@ -239,6 +270,11 @@ class DailyRecommendationEngine:
                     f" band5d={_f(c['band5d_lo'])}..{_f(c['band5d_hi'])}"
                     f" rng1d={_f(c.get('rng1d_pct'))}%"
                     f" vpct={_f(c.get('vol_pctl'))}"
+                )
+            if c.get("impl_move_pct") is not None:
+                line += (
+                    f" impl=±{_f(c['impl_move_pct'])}%/{_f(c.get('impl_dte'))}d"
+                    f"({_f(c.get('impl_low'))}..{_f(c.get('impl_high'))})"
                 )
             lines.append(line)
         return "\n".join(lines)

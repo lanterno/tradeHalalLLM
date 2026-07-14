@@ -510,7 +510,7 @@ prompt block.
   25Δ skew, PCR, OI. Alembic table + daily job slot in the existing
   scheduler. Seed the IV-percentile cold start with 20-day realized vol as
   a proxy until ~60 d of real IV history accrues.
-- [~] **Options expected move → `PriceOutlook.implied`** — EM = S·σ_ATM·√T
+- [x] **Options expected move → `PriceOutlook.implied`** — EM = S·σ_ATM·√T
   (0.85×straddle cross-check; pick ONE day-count convention — calendar vs
   trading days differ by ~√(365/252) ≈ 20 % — and record it). **Never serve
   the front-expiry EM as a normal-day band when earnings fall before

@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -191,3 +191,39 @@ def expected_move_from_chain(
 
 def _usable(q: OptionQuote) -> bool:
     return q.mid is not None and (q.spread_frac is None or q.spread_frac <= _MAX_SPREAD_FRAC)
+
+
+async def fetch_expected_move(
+    broker: Any,
+    symbol: str,
+    spot: float,
+    *,
+    today: date,
+    max_dte: int = 30,
+) -> ExpectedMove | None:
+    """Fetch a near-ATM chain and compute the expected move (fully defensive).
+
+    Returns ``None`` — never raises — when the broker can't serve option
+    chains (``get_option_chain`` absent), the fetch fails, or no clean ATM
+    straddle exists. The caller (the advisory recommendation) must degrade
+    silently: an options outage can't break the daily pick.
+    """
+    fetch = getattr(broker, "get_option_chain", None)
+    if fetch is None or spot <= 0:
+        return None
+    try:
+        chain = await fetch(
+            symbol,
+            feed="indicative",
+            expiration_date_gte=(today + timedelta(days=_MIN_DTE)).isoformat(),
+            expiration_date_lte=(today + timedelta(days=max_dte)).isoformat(),
+            strike_price_gte=spot * 0.9,
+            strike_price_lte=spot * 1.1,
+        )
+    except Exception as exc:  # noqa: BLE001 — advisory; options outage is non-fatal
+        logger.debug("expected move: chain fetch failed for %s: %s", symbol, exc)
+        return None
+    snaps = chain.get("snapshots", {}) if isinstance(chain, dict) else {}
+    if not isinstance(snaps, dict) or not snaps:
+        return None
+    return expected_move_from_chain(snaps, spot, today=today, min_dte=_MIN_DTE)

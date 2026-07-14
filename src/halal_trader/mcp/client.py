@@ -39,11 +39,7 @@ def _unwrap_mcp_envelope(parsed: Any) -> Any:
     clock (is_open→closed → no cycles), positions (→ 100% reconcile drift),
     account and bars all at once.
     """
-    if (
-        isinstance(parsed, dict)
-        and "data" in parsed
-        and "_alpaca_mcp_security" in parsed
-    ):
+    if isinstance(parsed, dict) and "data" in parsed and "_alpaca_mcp_security" in parsed:
         return parsed["data"]
     return parsed
 
@@ -151,7 +147,7 @@ class AlpacaMCPClient:
         logger.debug("Raw MCP response for %s: %s", name, combined[:500])
         try:
             parsed = json.loads(combined)
-        except (json.JSONDecodeError, TypeError):
+        except json.JSONDecodeError, TypeError:
             return combined
         # Strip the Alpaca MCP security wrapper centrally (see the helper).
         return _unwrap_mcp_envelope(parsed)
@@ -276,9 +272,7 @@ class AlpacaMCPClient:
         today = today_eastern()
         start_value = start or today.isoformat()
         end_value = end or (today + timedelta(days=30)).isoformat()
-        return await self.call_tool(
-            "get_calendar", {"start": start_value, "end": end_value}
-        )
+        return await self.call_tool("get_calendar", {"start": start_value, "end": end_value})
 
     async def get_all_positions(self) -> list[Position]:
         raw = await self.call_tool("get_all_positions")
@@ -367,6 +361,39 @@ class AlpacaMCPClient:
             "get_stock_bars",
             {"symbols": symbol, "days": days, "timeframe": timeframe},
         )
+
+    async def get_option_chain(
+        self,
+        underlying: str,
+        *,
+        feed: str = "indicative",
+        expiration_date_gte: str | None = None,
+        expiration_date_lte: str | None = None,
+        strike_price_gte: float | None = None,
+        strike_price_lte: float | None = None,
+        limit: int = 200,
+    ) -> Any:
+        """Option chain snapshots for ``underlying`` (read-only market data).
+
+        NOTE (verified 2026-07-14): on the free ``indicative`` feed the
+        snapshots carry quotes/trades/bars but NO greeks/IV — the ATM
+        straddle mid is still present, which is all the expected-move
+        computation needs (`quant/expected_move.py`).
+        """
+        args: dict[str, Any] = {
+            "underlying_symbol": underlying,
+            "feed": feed,
+            "limit": limit,
+        }
+        if expiration_date_gte:
+            args["expiration_date_gte"] = expiration_date_gte
+        if expiration_date_lte:
+            args["expiration_date_lte"] = expiration_date_lte
+        if strike_price_gte is not None:
+            args["strike_price_gte"] = strike_price_gte
+        if strike_price_lte is not None:
+            args["strike_price_lte"] = strike_price_lte
+        return await self.call_tool("get_option_chain", args)
 
     async def place_order(
         self,

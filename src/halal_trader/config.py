@@ -214,6 +214,12 @@ class StockSettings(BaseSettings):
     correlation_reduction_factor: float = Field(default=0.5, ge=0.1, le=1.0)
     atr_baseline: float = Field(default=0.02, gt=0)
 
+    # Advisory options-implied expected move on the daily recommendation
+    # (quant/expected_move.py). One option-chain fetch per candidate on the
+    # 09:05 job — degrades silently on any failure. Turn off if the ~20
+    # extra fetches make the job too slow.
+    recommendation_expected_move: bool = Field(default=True)
+
     # Wave H stocks-side agentic mode. Off by default; opt in to drive
     # the LLM through a bounded tool-calling loop (query_rag,
     # query_regime_memory, submit_decisions) before each cycle's

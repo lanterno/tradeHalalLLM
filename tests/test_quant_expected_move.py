@@ -126,3 +126,61 @@ class TestExpectedMove:
         # straddle = 5.4 + 5.0 = 10.4 → move 8.84
         assert em.straddle == pytest.approx(10.4, abs=0.02)
         assert em.move_abs == pytest.approx(8.84, abs=0.02)
+
+
+class _FakeBroker:
+    def __init__(self, chain=None, raises=False, has_method=True):
+        self._chain = chain
+        self._raises = raises
+        self.calls = []
+        if not has_method:
+            del self.get_option_chain  # type: ignore[misc]
+
+    async def get_option_chain(self, underlying, **kwargs):
+        self.calls.append((underlying, kwargs))
+        if self._raises:
+            raise RuntimeError("options feed down")
+        return self._chain
+
+
+class TestFetchExpectedMove:
+    async def _run(self, broker, spot=100.0):
+        from halal_trader.quant.expected_move import fetch_expected_move
+
+        return await fetch_expected_move(broker, "AAPL", spot, today=TODAY)
+
+    @pytest.mark.asyncio
+    async def test_happy_path(self):
+        chain = {"snapshots": _chain(100.0, "260710", {100.0: 6.0})}
+        em = await self._run(_FakeBroker(chain))
+        assert em is not None and em.move_abs == pytest.approx(5.1, abs=0.02)
+
+    @pytest.mark.asyncio
+    async def test_fetch_failure_returns_none(self):
+        assert await self._run(_FakeBroker(raises=True)) is None
+
+    @pytest.mark.asyncio
+    async def test_broker_without_option_method_returns_none(self):
+        class Bare:
+            pass
+
+        assert await self._run(Bare()) is None
+
+    @pytest.mark.asyncio
+    async def test_empty_snapshots_returns_none(self):
+        assert await self._run(_FakeBroker({"snapshots": {}})) is None
+
+    @pytest.mark.asyncio
+    async def test_bad_spot_returns_none_without_fetching(self):
+        broker = _FakeBroker({"snapshots": {}})
+        assert await self._run(broker, spot=0.0) is None
+        assert broker.calls == []  # never hit the network
+
+    @pytest.mark.asyncio
+    async def test_passes_expiry_and_strike_window(self):
+        broker = _FakeBroker({"snapshots": _chain(100.0, "260710", {100.0: 6.0})})
+        await self._run(broker)
+        _, kwargs = broker.calls[0]
+        assert kwargs["strike_price_gte"] == pytest.approx(90.0)
+        assert kwargs["strike_price_lte"] == pytest.approx(110.0)
+        assert kwargs["expiration_date_gte"] >= TODAY.isoformat()
