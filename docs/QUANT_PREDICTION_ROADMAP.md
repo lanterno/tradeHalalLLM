@@ -420,7 +420,7 @@ disjoint OOS windows.
   Published finance evidence says zero-shot TSFMs *lose to GBMs on returns*
   and only *match* HAR on vol — Chronos enters as one conformalized ensemble
   member, capped effort, not the centerpiece.
-- [ ] **Quantile GBM on path-extreme targets** — train directly on
+- [~] **Quantile GBM on path-extreme targets** — train directly on
   `y_high = max(High[t+1..t+k])/Close_t − 1` and `y_low = min(Low…)` at
   q10/q50/q90, pooled cross-sectionally across the whole universe
   (per-symbol data is far too thin), vol-normalized features and targets.
@@ -430,6 +430,20 @@ disjoint OOS windows.
   monotonize crossing quantiles; conformalize the output. Features largely
   exist (indicators, YZ vols, gap stats; + day-of-week once `bars.py` stops
   discarding real timestamps — see enabling fixes).
+  Built 2026-07-13 (`quant/qgbm.py`: sklearn HistGB q10/q90 on the
+  vol-centric feature vector, per-window refit with per-symbol embargo).
+  **Ship-gate verdict: FAIL** (`quant compare-bands`, same 900d × 20 sym,
+  480 same-rows obs, 2 disjoint OOS windows): qgbm 62 % coverage /
+  32.11 % Winkler — worse than *both* the naive ATR baseline (65 % /
+  29.60 %) and the shipped har_cal band (78 % / 29.82 %). This is the
+  THIRD rejected model after swing_zones and GARCH-FHS; the deterministic
+  HAR-calibrated band is now validated best-of-four on disjoint OOS. The
+  honest read: at ~300 pooled training rows per window with 8 noisy
+  features, the learned quantiles overfit their own window and don't
+  transfer — exactly the small-data warning in the honest foundations.
+  Ledger: `bands.qgbm.vs_har_atr = fail`. Revisit only if the training
+  panel grows a lot (broader universe via the Zoya prod key) or gains
+  genuinely orthogonal features (options IV — Phase 3).
 - [ ] **Vol-forecast ensemble** — simple average of HAR and GARCH σ̂ (hard to
   beat), with Chronos/GBM members admitted only on OOS evidence; per-member
   and ensemble pinball/coverage tracked continuously in the scorecard.
