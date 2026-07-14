@@ -55,6 +55,20 @@ class _FakeLLM:
         return self._response
 
 
+@pytest.fixture(autouse=True)
+def _no_network_regime(monkeypatch):
+    """Stub the CBOE VIX fetch so no test hits the network by default.
+
+    Regime-specific tests override this with their own reading.
+    """
+    import halal_trader.quant.regime as qregime
+
+    async def _none():
+        return None
+
+    monkeypatch.setattr(qregime, "fetch_vix_term_structure", _none)
+
+
 def _engine(llm: _FakeLLM, broker: _FakeBroker | None = None, universe=None):
     from unittest.mock import MagicMock
 
