@@ -95,5 +95,5 @@ USER trader
 ENV HOME=/home/trader \
     UV_CACHE_DIR=/home/trader/.cache/uv
 
-# Default to the crypto bot; override at run time for stocks or web.
-CMD ["halal-trader", "crypto", "start"]
+# Default to the stock bot; override at run time for web or the shadow engine.
+CMD ["halal-trader", "start"]

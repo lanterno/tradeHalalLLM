@@ -4,17 +4,11 @@ from typing import Any
 
 from halal_trader.config import (
     AlpacaSettings,
-    BinanceSettings,
-    CoinGeckoSettings,
-    CryptoPanicSettings,
-    CryptoSettings,
     GLMSettings,
     LiveModeSettings,
     LLMSettings,
     LogSettings,
     MLSettings,
-    RedditSettings,
-    SentimentSettings,
     Settings,
     StockSettings,
     TelegramSettings,
@@ -31,20 +25,12 @@ def _isolated_settings(**overrides: Any) -> Settings:
     """
     defaults = {
         "alpaca": AlpacaSettings(_env_file=None),
-        "binance": BinanceSettings(_env_file=None),
         "zoya": ZoyaSettings(_env_file=None),
-        "coingecko": CoinGeckoSettings(_env_file=None),
         "llm": LLMSettings(
             _env_file=None,
             glm=GLMSettings(_env_file=None),
         ),
         "stocks": StockSettings(_env_file=None),
-        "crypto": CryptoSettings(_env_file=None),
-        "sentiment": SentimentSettings(
-            _env_file=None,
-            reddit=RedditSettings(_env_file=None),
-            cryptopanic=CryptoPanicSettings(_env_file=None),
-        ),
         "ml": MLSettings(_env_file=None),
         "telegram": TelegramSettings(_env_file=None),
         "live_mode": LiveModeSettings(_env_file=None),

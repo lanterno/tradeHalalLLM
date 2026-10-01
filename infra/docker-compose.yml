@@ -3,12 +3,11 @@
 # Services:
 #   * postgres        — Postgres 16 + pgvector for the canonical DB.
 #   * trader-migrate  — one-shot Alembic migrate (init container).
-#   * trader-crypto   — the 24/7 crypto bot.
 #   * trader-stocks   — the market-hours stock bot.
+#   * trader-shadow   — the halabot shadow engine (never trades).
 #   * trader-web      — the FastAPI dashboard + Prometheus /metrics.
 #
-# All three bot services share the same Postgres instance — multi-bot
-# concurrent writes are first-class now (no SQLite WAL limits).
+# Every service shares the same Postgres instance.
 #
 # trader-migrate runs `halal-trader db migrate` to head, exits cleanly,
 # and gates every bot's startup (`depends_on: condition: service_completed_successfully`)
@@ -57,36 +56,14 @@ services:
       postgres:
         condition: service_healthy
 
-  trader-crypto:
-    image: halal-trader:latest
-    container_name: trader-crypto
-    restart: unless-stopped
-    # Opt-in: a plain `docker compose up -d` SKIPS this service. Binance keys
-    # are empty by default, so it would crash-loop. Once BINANCE_API_KEY /
-    # BINANCE_SECRET_KEY are set in .env, start it with either
-    #   docker compose --profile crypto up -d
-    # or by name: docker compose up -d trader-crypto
-    profiles: ["crypto"]
-    env_file:
-      - ../.env
-    # Override the host's DATABASE_URL — inside the compose network the
-    # bot reaches Postgres at the service hostname on its internal port.
-    environment:
-      DATABASE_URL: postgresql+asyncpg://trader:${POSTGRES_PASSWORD:-trader-dev-only}@postgres:5432/halal_trader
-    volumes:
-      - trader-data:/app/data
-      - trader-logs:/app/logs
-    command: ["halal-trader", "crypto", "start"]
-    depends_on:
-      trader-migrate:
-        condition: service_completed_successfully
-
   trader-stocks:
     image: halal-trader:latest
     container_name: trader-stocks
     restart: unless-stopped
     env_file:
       - ../.env
+    # Override the host's DATABASE_URL — inside the compose network the
+    # bot reaches Postgres at the service hostname on its internal port.
     environment:
       DATABASE_URL: postgresql+asyncpg://trader:${POSTGRES_PASSWORD:-trader-dev-only}@postgres:5432/halal_trader
     volumes:

@@ -34,8 +34,8 @@ def test_schema_includes_well_known_envvars(client):
     assert "GLM_API_KEY" in env_names
     assert "GLM_BASE_URL" in env_names
     assert "LLM_MODEL" in env_names
-    assert "BINANCE_API_KEY" in env_names
     assert "ALPACA_API_KEY" in env_names
+    assert "ZOYA_API_KEY" in env_names
     assert "LLM_DAILY_USD_CAP" in env_names
 
 
@@ -43,8 +43,8 @@ def test_schema_flags_secrets(client):
     rows = client.get("/api/config/schema").json()
     by_name = {r["env_name"]: r for r in rows}
     # Anything with api_key / secret in the name is a secret; defaults aren't.
-    assert by_name["BINANCE_API_KEY"]["secret"] is True
-    assert by_name["BINANCE_SECRET_KEY"]["secret"] is True
+    assert by_name["ALPACA_API_KEY"]["secret"] is True
+    assert by_name["ALPACA_SECRET_KEY"]["secret"] is True
     assert by_name["GLM_API_KEY"]["secret"] is True
     assert by_name["LLM_MODEL"]["secret"] is False
     assert by_name["GLM_BASE_URL"]["secret"] is False
@@ -53,5 +53,5 @@ def test_schema_flags_secrets(client):
 def test_schema_default_for_simple_int_field(client):
     rows = client.get("/api/config/schema").json()
     by_name = {r["env_name"]: r for r in rows}
-    # Crypto trading interval ships at 60s by default.
-    assert by_name["CRYPTO_TRADING_INTERVAL_SECONDS"]["default"] == 60
+    # The stock cycle ships at 15 minutes by default.
+    assert by_name["TRADING_INTERVAL_MINUTES"]["default"] == 15
