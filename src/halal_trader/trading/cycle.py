@@ -59,6 +59,10 @@ class TradingCycleService(BaseCycleService):
         # one (None = not halted). The news reactor enters between cycles and
         # reads this, so a cycle-level risk halt also stops reactor entries.
         self.last_risk_halt: str | None = None
+        # The latest portfolio risk read, for the dashboard. The web is a
+        # separate process, so the scheduler publishes this in the cycle
+        # heartbeat's detail (core/heartbeat.py) rather than in memory.
+        self.last_risk_snapshot: dict[str, Any] | None = None
         # Optional StockCatalystFeed (Phase 3.5) — gives the LLM live news,
         # earnings, insider activity. Cycle proceeds normally if absent.
         self._catalyst_feed = catalyst_feed
@@ -188,6 +192,15 @@ class TradingCycleService(BaseCycleService):
             stop_on_halt=True,
         )
         rs = state.risk_state
+        if rs is not None:
+            self.last_risk_snapshot = {
+                "portfolio_heat_pct": getattr(rs, "portfolio_heat_pct", None),
+                "drawdown_pct": getattr(rs, "drawdown_pct", None),
+                "avg_correlation": getattr(rs, "avg_correlation", None),
+                "is_halted": bool(getattr(rs, "is_halted", False)),
+                "halt_reason": getattr(rs, "halt_reason", "") or "",
+                "summary": state.risk_text,
+            }
         self.last_risk_halt = (
             str(getattr(rs, "halt_reason", "") or "unspecified") if state.halt else None
         )

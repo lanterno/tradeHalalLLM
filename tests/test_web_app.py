@@ -165,32 +165,48 @@ def test_risk_state_unavailable_when_unset(client):
     assert r.json() == {"available": False}
 
 
-def test_risk_state_round_trips_cached_value(client):
-    client.app.state.ctx.runtime.risk_state = {
-        "is_halted": False,
-        "halt_reason": None,
-        "portfolio_heat_pct": 0.012,
-        "drawdown_pct": 0.04,
-        "avg_correlation": 0.55,
-        "summary": "all clear",
-    }
+def test_risk_state_round_trips_cached_value(client, database_url):
+    from halal_trader.core.heartbeat import STOCK_CYCLE
+    from tests._beats import write_beat
+
+    write_beat(
+        database_url,
+        STOCK_CYCLE,
+        {
+            "risk": {
+                "is_halted": False,
+                "halt_reason": "",
+                "portfolio_heat_pct": 0.012,
+                "drawdown_pct": 0.04,
+                "avg_correlation": 0.55,
+                "summary": "all clear",
+            }
+        },
+    )
     r = client.get("/api/risk/state")
     body = r.json()
     assert body["available"] is True
     assert body["portfolio_heat_pct"] == 0.012
 
 
-def test_risk_state_passes_market_discriminator_through(client):
-    """The cycle pushes ``risk_state["market"]``; the route must echo it
-    so the frontend can label whose risk this snapshot is."""
-    client.app.state.ctx.runtime.risk_state = {
-        "market": "stocks",
-        "is_halted": True,
-        "halt_reason": "drawdown_breach",
-        "portfolio_heat_pct": 0.03,
-        "drawdown_pct": 0.08,
-        "summary": "halted",
-    }
+def test_risk_state_passes_market_discriminator_through(client, database_url):
+    """The route labels whose risk the snapshot is, for the frontend."""
+    from halal_trader.core.heartbeat import STOCK_CYCLE
+    from tests._beats import write_beat
+
+    write_beat(
+        database_url,
+        STOCK_CYCLE,
+        {
+            "risk": {
+                "is_halted": True,
+                "halt_reason": "drawdown_breach",
+                "portfolio_heat_pct": 0.03,
+                "drawdown_pct": 0.08,
+                "summary": "halted",
+            }
+        },
+    )
     body = client.get("/api/risk/state").json()
     assert body["market"] == "stocks"
     assert body["is_halted"] is True

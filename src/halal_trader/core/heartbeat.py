@@ -95,6 +95,16 @@ async def read_beats(engine: AsyncEngine) -> dict[str, Beat]:
         return {r.component: Beat(r.component, r.beat_at, r.detail) for r in rows}
 
 
+async def cycle_risk(engine: AsyncEngine) -> tuple[dict[str, Any] | None, datetime | None]:
+    """The risk snapshot the last trading cycle published, and when."""
+    beats = await read_beats(engine)
+    cycle = beats.get(STOCK_CYCLE)
+    if cycle is None:
+        return None, None
+    risk = (cycle.detail or {}).get("risk")
+    return (risk if isinstance(risk, dict) else None), cycle.beat_at
+
+
 def bot_liveness(
     beats: dict[str, Beat], *, now: datetime, cycles_due: bool
 ) -> tuple[bool, str | None]:

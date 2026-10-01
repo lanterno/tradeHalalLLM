@@ -815,7 +815,10 @@ class TradingBot(BaseTradingBot):
                 logger.debug("Stocks self-review trigger check failed: %s", exc)
 
         await cycle_service.run_cycle()
-        await beat(self._engine, STOCK_CYCLE)
+        # The cycle's latest risk read rides along with its heartbeat: that is
+        # how the dashboard (another process) gets heat and drawdown.
+        risk = getattr(cycle_service, "last_risk_snapshot", None)
+        await beat(self._engine, STOCK_CYCLE, {"risk": risk} if risk else None)
 
     async def sync_broker_ledger(self) -> None:
         """After-close job: copy Alpaca's record into the ledger and check ours.

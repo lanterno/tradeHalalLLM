@@ -34,12 +34,38 @@ async def _build_summary(ctx: DashboardContext) -> dict[str, Any]:
     except Exception as e:
         logger.debug("halt status read failed: %s", e)
 
-    risk = ctx.runtime.risk_state or {}
-    drawdown = risk.get("drawdown_pct") if isinstance(risk, dict) else None
-    # The risk_state push carries which bot wrote it ("stocks" / absent →
-    # unknown) so a glance at the mobile summary tells the operator which
-    # cycle the drawdown belongs to.
-    risk_market = risk.get("market") if isinstance(risk, dict) else None
+    # Everything below comes from the database: the web is its own process
+    # and in-process runtime state never reaches it.
+    from sqlalchemy import text
+
+    from halal_trader.core.heartbeat import STOCK_CYCLE, cycle_risk
+    from halal_trader.web.routes.system import _bot_liveness
+
+    risk: dict[str, Any] | None = None
+    try:
+        risk, _ = await cycle_risk(ctx.engine)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("risk read failed: %s", e)
+    drawdown = risk.get("drawdown_pct") if risk else None
+    risk_market = "stocks" if risk else None
+    alive, components = await _bot_liveness(ctx)
+    cycle_beat = (components or {}).get(STOCK_CYCLE)
+    llm_cost_today: float | None = None
+    try:
+        async with ctx.engine.connect() as conn:
+            llm_cost_today = float(
+                (
+                    await conn.execute(
+                        text(
+                            "SELECT coalesce(sum(spent_usd), 0) FROM llm_spend "
+                            "WHERE day = (now() AT TIME ZONE 'UTC')::date"
+                        )
+                    )
+                ).scalar()
+                or 0.0
+            )
+    except Exception as e:  # noqa: BLE001
+        logger.debug("llm spend read failed: %s", e)
 
     # Today's realized P&L — the most recent stocks ``daily_pnl`` row.
     pnl_today_usd: float | None = None
@@ -59,13 +85,13 @@ async def _build_summary(ctx: DashboardContext) -> dict[str, Any]:
     return {
         "ts": time.time(),
         "halt": halt_payload,
-        "bot_running": ctx.runtime.bot_running,
-        "last_cycle": ctx.runtime.last_cycle,
+        "bot_running": alive,
+        "last_cycle": cycle_beat["beat_at"] if cycle_beat else None,
         "drawdown_pct": drawdown,
         "drawdown_market": risk_market,
         "open_positions_by_asset": dict(ctx.runtime.open_positions_by_asset),
         "pnl_today_usd": pnl_today_usd,
-        "llm_cost_today_usd": ctx.runtime.llm_cost_today_usd,
+        "llm_cost_today_usd": llm_cost_today,
     }
 
 
