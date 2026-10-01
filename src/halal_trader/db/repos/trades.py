@@ -211,11 +211,10 @@ class TradeRepoImpl:
     async def get_completed_stock_round_trips(
         self, limit: int = 100, lookback_days: int | None = None
     ) -> list[dict[str, Any]]:
-        """Closed stock round-trips reshaped for cross-asset analytics.
+        """Closed stock round-trips reshaped for the analytics layer.
 
-        Returns the same dict shape ``CryptoTradeRepoImpl.get_completed_round_trips``
-        does (with ``pair`` set to the symbol) so a single analytics
-        module can consume either source.
+        Returns the canonical round-trip dict shape (with ``pair`` set to
+        the symbol) that ``portfolio.analytics`` and the self-review read.
         """
         async with AsyncSession(self._engine) as session:
             statement = (

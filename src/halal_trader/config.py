@@ -1,7 +1,7 @@
 """Application configuration via nested Pydantic Settings sub-models.
 
-The top-level ``Settings`` exposes domain-grouped sub-models (``settings.binance``,
-``settings.crypto``, ``settings.llm.glm``, …). Each sub-model is its own
+The top-level ``Settings`` exposes domain-grouped sub-models (``settings.alpaca``,
+``settings.stocks``, ``settings.llm.glm``, …). Each sub-model is its own
 ``BaseSettings`` class with an ``env_prefix`` chosen to match the existing
 ``.env`` variable names so operators don't have to migrate their config.
 """
@@ -53,13 +53,6 @@ class AlpacaSettings(BaseSettings):
     mcp_server_command: str = Field(default="")
 
 
-class BinanceSettings(BaseSettings):
-    model_config = SettingsConfigDict(**_BASE_CONFIG, env_prefix="BINANCE_")
-    api_key: str = Field(default="")
-    secret_key: str = Field(default="")
-    testnet: bool = Field(default=True)
-
-
 # ── Halal Screening ────────────────────────────────────────────
 
 
@@ -69,11 +62,6 @@ class ZoyaSettings(BaseSettings):
     # Default to sandbox so a fresh checkout doesn't burn the operator's
     # paid quota on first run. Flip to ``false`` once a prod key is wired.
     use_sandbox: bool = Field(default=True)
-
-
-class CoinGeckoSettings(BaseSettings):
-    model_config = SettingsConfigDict(**_BASE_CONFIG, env_prefix="COINGECKO_")
-    api_key: str = Field(default="")
 
 
 class FinnhubSettings(BaseSettings):
@@ -113,19 +101,6 @@ class EDGARSettings(BaseSettings):
 
     model_config = SettingsConfigDict(**_BASE_CONFIG, env_prefix="EDGAR_")
     user_agent: str = Field(default="")
-
-
-class EtherscanSettings(BaseSettings):
-    """Etherscan (free) — used for on-chain whale-flow signals.
-
-    Drives a crypto-side feature that watches large stablecoin /
-    token transfers to/from major exchanges. Free tier is 5 req/sec,
-    enough to poll the top halal pairs each cycle. Empty key disables
-    the feed cleanly.
-    """
-
-    model_config = SettingsConfigDict(**_BASE_CONFIG, env_prefix="ETHERSCAN_")
-    api_key: str = Field(default="")
 
 
 class HalalSettings(BaseSettings):
@@ -170,8 +145,8 @@ class GLMSettings(BaseSettings):
     fallback_model: str = Field(default="")
     fallback_api_key: str = Field(default="")
     # Client-side ceiling per call. GLM-5.2 with thinking disabled
-    # answers our prompts well inside this; the crypto cycle budget is
-    # interval*2 (120s), so 60s leaves room for the rest of the cycle.
+    # answers our prompts well inside this, leaving most of the 15-min
+    # stock cycle for everything else.
     timeout_seconds: int = Field(default=60, gt=0)
     # GLM-5.2 thinks by default upstream — the bot turns it off for
     # cycle latency and cost. Flip on for offline research runs only.
@@ -187,7 +162,7 @@ class LLMSettings(BaseSettings):
     model: str = Field(default="z-ai/glm-5.2")
     # Hard ceiling on per-UTC-day cumulative spend across all endpoints.
     # 0 disables the cap (useful in tests). When the cap trips it
-    # engages the kill-switch so both bots stop entering new positions
+    # engages the kill-switch so the bot stops entering new positions
     # until the operator clears it.
     daily_usd_cap: float = Field(default=0.0)
     # Adversarial co-bot — runs a cheap follow-up LLM call that critiques
@@ -220,17 +195,15 @@ class StockSettings(BaseSettings):
     max_simultaneous_positions: int = Field(default=5, ge=1)
 
     # Position monitor — polls open trades against SL/TP between LLM
-    # cycles (cycle is 15min; the monitor fills the gap). Mirrors the
-    # crypto-side knobs but at coarser cadence: stocks aren't 24/7 and
-    # spreads are tighter, so a 30s loop is plenty.
+    # cycles (cycle is 15min; the monitor fills the gap). Stocks aren't
+    # 24/7 and spreads are tight, so a 30s loop is plenty.
     monitor_interval_seconds: float = Field(default=30.0, gt=0)
     trailing_stop_activation_pct: float | None = Field(default=None)
     trailing_stop_distance_pct: float = Field(default=0.005, gt=0)
 
     # Portfolio-risk knobs (used by ``trading/risk.py``). Default values
     # are tuned for daily equity bars; the operator can override per
-    # deployment. Round-4 wave 0.C moved these from CryptoSettings so
-    # stocks + crypto have independent volatility regimes.
+    # deployment.
     max_portfolio_heat_pct: float = Field(default=0.05, ge=0.01, le=0.5)
     max_drawdown_pct: float = Field(default=0.08, ge=0.01, le=0.5)
     high_correlation_threshold: float = Field(default=0.7, ge=0.0, le=1.0)
@@ -246,7 +219,7 @@ class StockSettings(BaseSettings):
     # Wave H stocks-side agentic mode. Off by default; opt in to drive
     # the LLM through a bounded tool-calling loop (query_rag,
     # query_regime_memory, submit_decisions) before each cycle's
-    # decision. Mirrors the crypto knobs.
+    # decision.
     agentic_enabled: bool = Field(default=False)
     agentic_max_turns: int = Field(default=5, ge=1, le=20)
     agentic_max_seconds: float = Field(default=30.0, gt=0, le=120.0)
@@ -314,82 +287,6 @@ class StockSettings(BaseSettings):
     # stock each time the cooldown elapses (observed 2026-05-27:
     # MSFT stopped out twice with an LLM re-buy between). 0 disables.
     stop_loss_reentry_cooldown_minutes: int = Field(default=120, ge=0)
-
-
-class CryptoSettings(BaseSettings):
-    model_config = SettingsConfigDict(**_BASE_CONFIG, env_prefix="CRYPTO_")
-    trading_interval_seconds: int = Field(default=60, ge=5)
-    pairs: list[str] = Field(default_factory=lambda: ["BTCUSDT", "ETHUSDT", "SOLUSDT", "ADAUSDT"])
-    max_position_pct: float = Field(default=0.25, gt=0, le=1.0)
-    daily_loss_limit: float = Field(default=0.03, ge=0, le=0.5)
-    daily_return_target: float = Field(default=0.01, gt=0, le=0.5)
-    max_simultaneous_positions: int = Field(default=4, ge=1)
-    min_market_cap: float = Field(default=1_000_000_000, ge=0)
-    max_pairs_per_cycle: int = Field(default=10, ge=1)
-
-    # Portfolio risk
-    max_portfolio_heat_pct: float = Field(default=0.05, ge=0.01, le=0.5)
-    max_drawdown_pct: float = Field(default=0.08, ge=0.01, le=0.5)
-    high_correlation_threshold: float = Field(default=0.7, ge=0.0, le=1.0)
-    correlation_reduction_factor: float = Field(default=0.5, ge=0.1, le=1.0)
-    atr_baseline: float = Field(default=0.02, gt=0)
-
-    # Flat-market skip
-    flat_price_threshold: float = Field(default=0.03, ge=0)
-    flat_rsi_lower: float = Field(default=40.0, ge=0, le=50)
-    flat_rsi_upper: float = Field(default=60.0, ge=50, le=100)
-    flat_vol_threshold: float = Field(default=1.2, ge=1.0)
-    max_consecutive_flat_skips: int = Field(default=5, ge=1)
-
-    # Trailing stop / monitor
-    trailing_stop_activation_pct: float = Field(default=0.005, ge=0)
-    trailing_stop_distance_pct: float = Field(default=0.003, gt=0)
-    monitor_interval: float = Field(default=2.0, gt=0)
-
-    # Per-pair circuit breaker
-    circuit_breaker_threshold: int = Field(default=5, ge=1)
-    circuit_breaker_window: int = Field(default=600, ge=60)
-    circuit_breaker_cooldown: int = Field(default=1800, ge=60)
-
-    # LLM circuit breaker
-    llm_failure_threshold: int = Field(default=5, ge=1)
-    llm_cooldown_seconds: int = Field(default=600, ge=60)
-
-    # Agentic mode (Wave H) — when on, the LLM gets a toolbelt and
-    # decides whether to fetch more context before submitting its
-    # plan. Per-cycle budget caps cost.
-    agentic_enabled: bool = Field(default=False)
-    agentic_max_turns: int = Field(default=5, ge=1, le=20)
-    agentic_max_seconds: float = Field(default=30.0, gt=0, le=120.0)
-
-    # Prompt evolution (Wave F) — once-per-day GA sweep that scores
-    # candidate prompts against recent replay snapshots and persists
-    # them to ``prompt_genomes`` for one-click promotion. The bot
-    # never auto-promotes; the operator is always in the loop.
-    prompt_evo_generations: int = Field(default=8, ge=1, le=50)
-    prompt_evo_population: int = Field(default=12, ge=4, le=64)
-    prompt_evo_snapshots: int = Field(default=200, ge=20, le=1000)
-
-
-# ── Sentiment ──────────────────────────────────────────────────
-
-
-class RedditSettings(BaseSettings):
-    model_config = SettingsConfigDict(**_BASE_CONFIG, env_prefix="REDDIT_")
-    client_id: str = Field(default="")
-    client_secret: str = Field(default="")
-
-
-class CryptoPanicSettings(BaseSettings):
-    model_config = SettingsConfigDict(**_BASE_CONFIG, env_prefix="CRYPTOPANIC_")
-    api_key: str = Field(default="")
-
-
-class SentimentSettings(BaseSettings):
-    model_config = SettingsConfigDict(**_BASE_CONFIG, env_prefix="SENTIMENT_")
-    update_interval_seconds: int = Field(default=300)
-    reddit: RedditSettings = Field(default_factory=RedditSettings)
-    cryptopanic: CryptoPanicSettings = Field(default_factory=CryptoPanicSettings)
 
 
 # ── ML / Notifications / Live-mode / Logging ──────────────────
@@ -480,19 +377,14 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(**_BASE_CONFIG)
 
     alpaca: AlpacaSettings = Field(default_factory=AlpacaSettings)
-    binance: BinanceSettings = Field(default_factory=BinanceSettings)
     zoya: ZoyaSettings = Field(default_factory=ZoyaSettings)
-    coingecko: CoinGeckoSettings = Field(default_factory=CoinGeckoSettings)
     fred: FREDSettings = Field(default_factory=FREDSettings)
     finnhub: FinnhubSettings = Field(default_factory=FinnhubSettings)
     edgar: EDGARSettings = Field(default_factory=EDGARSettings)
-    etherscan: EtherscanSettings = Field(default_factory=EtherscanSettings)
     halal: HalalSettings = Field(default_factory=HalalSettings)
     web: WebSettings = Field(default_factory=WebSettings)
     llm: LLMSettings = Field(default_factory=LLMSettings)
     stocks: StockSettings = Field(default_factory=StockSettings)
-    crypto: CryptoSettings = Field(default_factory=CryptoSettings)
-    sentiment: SentimentSettings = Field(default_factory=SentimentSettings)
     ml: MLSettings = Field(default_factory=MLSettings)
     telegram: TelegramSettings = Field(default_factory=TelegramSettings)
     slack: SlackSettings = Field(default_factory=SlackSettings)

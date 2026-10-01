@@ -4,27 +4,13 @@ import { TradesTable } from "../components/TradesTable";
 import { ErrorState } from "../components/ErrorState";
 import { FillQuality } from "../components/FillQuality";
 import { entityOf } from "../lib/utils";
-import { entityLabel, useMarket } from "../lib/market";
 
 const PAGE_SIZE = 25;
 
 export default function Trades() {
-  const { market } = useMarket();
   const [page, setPage] = useState(0);
   const [pair, setPair] = useState("");
   const [side, setSide] = useState("");
-
-  // Filters are per-market — a symbol picked in stocks would otherwise leak
-  // into crypto (and vice versa) and silently empty the table. Reset them
-  // during render when the market changes (React's blessed alternative to a
-  // setState-in-effect: https://react.dev/learn/you-might-not-need-an-effect).
-  const [prevMarket, setPrevMarket] = useState(market);
-  if (market !== prevMarket) {
-    setPrevMarket(market);
-    setPair("");
-    setSide("");
-    setPage(0);
-  }
 
   const filters = useMemo(
     () => ({
@@ -115,7 +101,7 @@ export default function Trades() {
           }}
           className="rounded-lg border border-border bg-surface px-3 py-1.5 text-sm text-gray-200 outline-none focus:border-accent"
         >
-          <option value="">All {entityLabel(market)}s</option>
+          <option value="">All Symbols</option>
           {entities.map((p) => (
             <option key={p} value={p}>
               {p}

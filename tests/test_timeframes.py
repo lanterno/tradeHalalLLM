@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from halal_trader.crypto.timeframes import TimeframeAnalyzer, format_timeframes_for_prompt
+from halal_trader.signals.timeframes import TimeframeAnalyzer, format_timeframes_for_prompt
 
 
 def _ind(

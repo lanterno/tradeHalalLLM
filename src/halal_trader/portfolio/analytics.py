@@ -1,4 +1,10 @@
-"""Performance analytics — computes rolling trading metrics from completed round-trips."""
+"""Performance analytics — computes rolling trading metrics from completed round-trips.
+
+Reads closed stock round-trips (``TradeRepo.get_completed_stock_round_trips``)
+and reduces them to win rate, profit factor, drawdown, streak and the
+per-symbol best/worst. The stock cycle's ``BuildPerformanceStage`` renders
+the result into the prompt; ``/api/analytics`` serves it to the dashboard.
+"""
 
 from __future__ import annotations
 
@@ -6,7 +12,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
-from halal_trader.db.repos import CryptoTradeRepo
+from halal_trader.db.repos import TradeRepo
 
 logger = logging.getLogger(__name__)
 
@@ -37,15 +43,18 @@ class PerformanceStats:
 class PerformanceAnalytics:
     """Computes trading performance metrics from the database."""
 
-    def __init__(self, repo: CryptoTradeRepo) -> None:
+    def __init__(self, repo: TradeRepo) -> None:
         self._repo = repo
 
     async def compute_stats(self, lookback_days: int = 7) -> PerformanceStats:
         """Compute rolling performance metrics over the last N days."""
-        round_trips = await self._repo.get_completed_round_trips(
+        round_trips = await self._repo.get_completed_stock_round_trips(
             limit=500, lookback_days=lookback_days
         )
+        return self.stats_from_round_trips(round_trips)
 
+    def stats_from_round_trips(self, round_trips: list[dict[str, Any]]) -> PerformanceStats:
+        """Reduce a list of round-trip dicts to :class:`PerformanceStats`."""
         stats = PerformanceStats()
         if not round_trips:
             return stats
@@ -90,9 +99,9 @@ class PerformanceAnalytics:
 
         # Best/worst pair
         if pair_pnl:
-            stats.best_pair = max(pair_pnl, key=pair_pnl.get)
+            stats.best_pair = max(pair_pnl, key=lambda k: pair_pnl[k])
             stats.best_pair_pnl = pair_pnl[stats.best_pair]
-            stats.worst_pair = min(pair_pnl, key=pair_pnl.get)
+            stats.worst_pair = min(pair_pnl, key=lambda k: pair_pnl[k])
             stats.worst_pair_pnl = pair_pnl[stats.worst_pair]
 
         # Max drawdown (peak-to-trough on cumulative P&L)
@@ -139,8 +148,8 @@ class PerformanceAnalytics:
     def _compute_max_drawdown(round_trips: list[dict[str, Any]]) -> float:
         """Compute max drawdown as a fraction from chronological round-trips.
 
-        Compounds each trade's ``pnl_pct`` (already a fraction in both the
-        crypto and stock round-trip dicts) into a unit equity curve and takes
+        Compounds each trade's ``pnl_pct`` (already a fraction in the
+        round-trip dicts) into a unit equity curve and takes
         the worst peak-to-trough drop relative to the running peak — bounded
         in [0, 1) by construction.
 

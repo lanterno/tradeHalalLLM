@@ -1,7 +1,6 @@
 """Stocks-side LLM self-improvement loop.
 
-Thin subclass of :class:`TradeSelfReviewBase` — mirrors
-:mod:`halal_trader.crypto.self_improve` but with a smaller knob menu
+Thin subclass of :class:`TradeSelfReviewBase` with a small knob menu
 because the stocks :class:`TradingStrategy` doesn't expose global
 SL/TP fallbacks (the LLM emits SL/TP per decision; there's no
 ``stop_loss_pct`` instance attribute to override).

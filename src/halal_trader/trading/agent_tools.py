@@ -1,16 +1,9 @@
 """Wave H agentic tool handlers for the stocks strategy.
 
-Stocks-side counterpart to ``crypto/agent_tools.py`` — builds the
-handler dict ``run_agent`` dispatches to. Only the asset-agnostic
-tools (``query_rag``, ``query_regime_memory``) are wired here; the
-crypto-specific ones (``analyze_pair`` reading kline-buffer data,
-``compute_var_95`` building returns from minute klines) don't have
-stocks-shaped equivalents and are skipped — the strategy's
-``tools=[...]`` list omits them.
-
-The shape is intentionally narrower than crypto's because stocks
-threads its prompt context directly through ``analyze()`` kwargs
-rather than a frozen ``PromptContext`` dataclass.
+Builds the handler dict ``run_agent`` dispatches to. Only the
+asset-agnostic tools (``query_rag``, ``query_regime_memory``) are
+wired; the stocks strategy threads its prompt context directly
+through ``analyze()`` kwargs, so there is no per-symbol data tool.
 """
 
 from __future__ import annotations
@@ -34,8 +27,7 @@ def build_agent_handlers(
 ) -> dict[str, ToolHandler]:
     """Build the handler dict the stocks agent loop dispatches to.
 
-    Mirrors :func:`crypto.agent_tools.build_agent_handlers` but only
-    covers the asset-agnostic tools. ``hub`` is the
+    Covers the asset-agnostic tools. ``hub`` is the
     :class:`InsightsHub` exposing the RAG + regime memory stores.
     """
     return {

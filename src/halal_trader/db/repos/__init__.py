@@ -20,16 +20,11 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from halal_trader.db.repos.protocols import (
-    CryptoTradeRepo,
     DailyRecommendationRepo,
-    HalalCacheRepo,
     HalalScreeningRepo,
     IndicatorSnapshotRepo,
     LlmDecisionRepo,
-    PairPauseRepo,
-    PnlRepo,
     PurificationRepo,
-    ResearchJobRepo,
     RuntimeConfigRepo,
     StockHalalCacheRepo,
     StockPnlRepo,
@@ -48,42 +43,32 @@ class RepoBundle:
 
     Each field is a narrow Protocol satisfied by a dedicated
     ``*RepoImpl`` class. Consumers should accept the field type they
-    actually use (e.g. ``ResearchJobRepo``) rather than the full
+    actually use (e.g. ``TradeRepo``) rather than the full
     bundle.
     """
 
     trades: TradeRepo
-    crypto_trades: CryptoTradeRepo
-    pnl: PnlRepo
     stock_pnl: StockPnlRepo
-    halal_cache: HalalCacheRepo
     stock_halal_cache: StockHalalCacheRepo
     halal_screening: HalalScreeningRepo
     runtime_config: RuntimeConfigRepo
-    research_jobs: ResearchJobRepo
     daily_recommendations: DailyRecommendationRepo
     web_audit: WebAuditRepo
     indicator_snapshots: IndicatorSnapshotRepo
     llm_decisions: LlmDecisionRepo
     purification: PurificationRepo
-    pair_pauses: PairPauseRepo
     strategy_adjustments: StrategyAdjustmentRepo
 
     @classmethod
     def from_engine(cls, engine: "AsyncEngine") -> "RepoBundle":
         """Build a bundle directly from an engine (no Repository needed)."""
-        from halal_trader.db.repos.crypto_trades import CryptoTradeRepoImpl
         from halal_trader.db.repos.daily_recommendations import (
             DailyRecommendationRepoImpl,
         )
-        from halal_trader.db.repos.halal_cache import HalalCacheRepoImpl
         from halal_trader.db.repos.halal_screening import HalalScreeningRepoImpl
         from halal_trader.db.repos.indicator_snapshots import IndicatorSnapshotRepoImpl
         from halal_trader.db.repos.llm_decisions import LlmDecisionRepoImpl
-        from halal_trader.db.repos.pair_pause import PairPauseRepoImpl
-        from halal_trader.db.repos.pnl import PnlRepoImpl
         from halal_trader.db.repos.purification import PurificationRepoImpl
-        from halal_trader.db.repos.research_jobs import ResearchJobRepoImpl
         from halal_trader.db.repos.runtime_config import RuntimeConfigRepoImpl
         from halal_trader.db.repos.stock_halal_cache import StockHalalCacheRepoImpl
         from halal_trader.db.repos.stock_pnl import StockPnlRepoImpl
@@ -93,36 +78,26 @@ class RepoBundle:
 
         return cls(
             trades=TradeRepoImpl(engine),
-            crypto_trades=CryptoTradeRepoImpl(engine),
-            pnl=PnlRepoImpl(engine),
             stock_pnl=StockPnlRepoImpl(engine),
-            halal_cache=HalalCacheRepoImpl(engine),
             stock_halal_cache=StockHalalCacheRepoImpl(engine),
             halal_screening=HalalScreeningRepoImpl(engine),
             runtime_config=RuntimeConfigRepoImpl(engine),
-            research_jobs=ResearchJobRepoImpl(engine),
             daily_recommendations=DailyRecommendationRepoImpl(engine),
             web_audit=WebAuditRepoImpl(engine),
             indicator_snapshots=IndicatorSnapshotRepoImpl(engine),
             llm_decisions=LlmDecisionRepoImpl(engine),
             purification=PurificationRepoImpl(engine),
-            pair_pauses=PairPauseRepoImpl(engine),
             strategy_adjustments=StrategyAdjustmentRepoImpl(engine),
         )
 
 
 __all__ = [
-    "CryptoTradeRepo",
     "DailyRecommendationRepo",
-    "HalalCacheRepo",
     "HalalScreeningRepo",
     "IndicatorSnapshotRepo",
     "LlmDecisionRepo",
-    "PairPauseRepo",
-    "PnlRepo",
     "PurificationRepo",
     "RepoBundle",
-    "ResearchJobRepo",
     "RuntimeConfigRepo",
     "StockHalalCacheRepo",
     "StockPnlRepo",

@@ -577,14 +577,12 @@ def build_ml_signals_text(
 ) -> str:
     """Run anomaly + signal classifier over the per-symbol indicators.
 
-    Shared between :class:`CryptoCycleService` and ``TradingCycleService``
-    so both bots produce identical ML-signal blocks. Symbols whose
+    Called by the stock cycle's ``BuildMlSignalsStage``. Symbols whose
     indicators carry an ``error`` key are skipped — their bars failed
     parse / didn't have enough history.
 
     ``forecasts_text`` is an optional pre-computed forecasts block (the
-    crypto cycle runs Chronos before this; stocks doesn't have enough
-    daily-bar history for the forecaster). When all three signals are
+    stock cycle has none: daily bars are too sparse for the forecaster). When all three signals are
     absent, returns ``forecasts_text`` so any pre-computed forecast
     survives.
     """

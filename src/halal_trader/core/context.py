@@ -27,8 +27,8 @@ if TYPE_CHECKING:
     from halal_trader.config import Settings
     from halal_trader.core.event_bus import EventBus
     from halal_trader.core.insights_hub import InsightsHub
-    from halal_trader.crypto.analytics import PerformanceAnalytics
     from halal_trader.db.repository import Repository
+    from halal_trader.portfolio.analytics import PerformanceAnalytics
 
 
 @dataclass
@@ -50,19 +50,14 @@ class RuntimeView:
     stock_positions: list[dict[str, Any]] = field(default_factory=list)
     open_positions_by_asset: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     llm_cost_today_usd: float | None = None
-    # Optional WS / sentiment refs for live-only routes (price stream,
-    # sentiment recent feed). The dashboard-only process leaves them None.
-    ws_manager: Any = None
-    sentiment_manager: Any = None
     # Stocks news-momentum reactor — populated by the trading scheduler
     # when the bot is co-hosted with the web app, so /api/system/status
     # can surface classifier health (provider rotation, quota state,
     # daily call volume) without grepping JSON logs.
     stocks_news_reactor: Any = None
-    # Broker handles for the operator-intervention endpoints
+    # Broker handle for the operator-intervention endpoints
     # (force-close, cancel-orders). Only populated when the bot is
     # co-hosted with the web app.
-    crypto_broker: Any = None
     stock_broker: Any = None
 
 
@@ -88,10 +83,9 @@ class DashboardContext:
 class BotContext:
     """Same primitives as the dashboard plus the bot-only deps.
 
-    Built once by ``crypto/components.py:build_components`` (and the
-    stocks counterpart). Passed into every cycle / monitor /
-    background loop so nothing has to reach for ``get_settings()``
-    ad-hoc.
+    Built once by the bot's composition root. Passed into every
+    cycle / monitor / background loop so nothing has to reach for
+    ``get_settings()`` ad-hoc.
     """
 
     engine: "AsyncEngine"

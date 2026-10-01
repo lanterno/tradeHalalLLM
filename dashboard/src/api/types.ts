@@ -1,8 +1,3 @@
-// Which bot's data a market-aware endpoint should return. The backend
-// discriminates trades/positions/analytics/pnl on this; the SPA sends it
-// explicitly (see lib/market.tsx) rather than relying on the crypto default.
-export type Market = "stocks" | "crypto";
-
 export interface AnalyticsStats {
   total_trades: number;
   wins: number;
@@ -24,8 +19,8 @@ export interface AnalyticsStats {
 export interface Trade {
   id: number;
   timestamp: string;
-  // Crypto rows carry ``pair``; stocks rows carry ``symbol``. Use
-  // ``entityOf()`` (lib/utils) to read whichever the row has.
+  // Stock rows carry ``symbol``; ``pair`` survives from the old crypto
+  // shape. Use ``entityOf()`` (lib/utils) to read whichever the row has.
   pair?: string;
   symbol?: string;
   side: string;
@@ -41,7 +36,7 @@ export interface Trade {
   exit_price: number | null;
   exit_reason: string | null;
   closed_at: string | null;
-  // Stocks-side fill fields (absent on crypto rows).
+  // Fill fields.
   filled_price?: number | null;
   filled_quantity?: number | null;
   submitted_at?: string | null;
@@ -85,8 +80,7 @@ export interface StrategyAdjustment {
 
 export interface OpenPosition {
   id: number;
-  // Stocks positions are aliased ``pair = symbol`` by the backend; crypto
-  // rows carry a native ``pair``. ``symbol`` is present on stocks rows.
+  // The backend aliases ``pair = symbol`` on stock positions.
   pair: string;
   symbol?: string;
   quantity: number;
@@ -99,16 +93,6 @@ export interface OpenPosition {
   unrealized_pnl_pct?: number;
 }
 
-export interface SentimentSignal {
-  pair: string;
-  score: number;
-  buzz: number;
-  confidence: number;
-  top_narratives: string[];
-  news_headlines: string[];
-  data_sources: string[];
-}
-
 export interface HealthStatus {
   status: string;
   timestamp: string;
@@ -118,20 +102,18 @@ export interface HealthStatus {
 export interface SystemStatus {
   bot_running: boolean;
   last_cycle: string | null;
-  cycle_interval_seconds: number;
-  ws_health: Record<string, unknown>;
+  stocks_cycle_interval_seconds: number;
   uptime_seconds: number | null;
 }
 
 export interface AppConfig {
   llm_provider: string;
   llm_model: string;
-  crypto_pairs: string[];
-  crypto_trading_interval_seconds: number;
-  crypto_max_position_pct: number;
-  crypto_daily_loss_limit: number;
-  crypto_daily_return_target: number;
-  db_path: string;
+  stocks_trading_interval_minutes: number;
+  stocks_max_position_pct: number;
+  stocks_daily_loss_limit: number;
+  stocks_daily_return_target: number;
+  database: string;
 }
 
 // ── Phase 2 / 3 surfaces ─────────────────────────────────────

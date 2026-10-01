@@ -32,14 +32,14 @@ def test_runtime_config_initially_empty(client):
 
 def test_patch_runtime_config_round_trips(client):
     r = client.patch(
-        "/api/admin/config/runtime/CRYPTO_MAX_POSITION_PCT",
+        "/api/admin/config/runtime/MAX_POSITION_PCT",
         json={"value": 0.15},
     )
     assert r.status_code == 200
     assert r.json()["value"] == 0.15
 
     listing = client.get("/api/admin/config/runtime").json()
-    assert listing["CRYPTO_MAX_POSITION_PCT"] == 0.15
+    assert listing["MAX_POSITION_PCT"] == 0.15
 
 
 def test_patch_unknown_key_404(client):
@@ -53,7 +53,7 @@ def test_patch_unknown_key_404(client):
 def test_patch_out_of_range_pct_rejected(client):
     """0.99 might be acceptable but 1.5 should be — verify the >1 guard."""
     r = client.patch(
-        "/api/admin/config/runtime/CRYPTO_MAX_POSITION_PCT",
+        "/api/admin/config/runtime/MAX_POSITION_PCT",
         json={"value": 1.5},
     )
     assert r.status_code == 422
@@ -61,7 +61,7 @@ def test_patch_out_of_range_pct_rejected(client):
 
 def test_patch_negative_pct_rejected(client):
     r = client.patch(
-        "/api/admin/config/runtime/CRYPTO_MAX_POSITION_PCT",
+        "/api/admin/config/runtime/MAX_POSITION_PCT",
         json={"value": -0.1},
     )
     assert r.status_code == 422
@@ -69,7 +69,7 @@ def test_patch_negative_pct_rejected(client):
 
 def test_patch_string_value_for_int_field_rejected(client):
     r = client.patch(
-        "/api/admin/config/runtime/CRYPTO_TRADING_INTERVAL_SECONDS",
+        "/api/admin/config/runtime/TRADING_INTERVAL_MINUTES",
         json={"value": "not-a-number"},
     )
     assert r.status_code == 422
@@ -77,16 +77,16 @@ def test_patch_string_value_for_int_field_rejected(client):
 
 def test_delete_runtime_config_reverts(client):
     client.patch(
-        "/api/admin/config/runtime/CRYPTO_MAX_POSITION_PCT",
+        "/api/admin/config/runtime/MAX_POSITION_PCT",
         json={"value": 0.15},
     )
-    r = client.delete("/api/admin/config/runtime/CRYPTO_MAX_POSITION_PCT")
+    r = client.delete("/api/admin/config/runtime/MAX_POSITION_PCT")
     assert r.status_code == 200
     assert client.get("/api/admin/config/runtime").json() == {}
 
 
 def test_delete_unknown_key_404(client):
-    r = client.delete("/api/admin/config/runtime/CRYPTO_MAX_POSITION_PCT")
+    r = client.delete("/api/admin/config/runtime/MAX_POSITION_PCT")
     assert r.status_code == 404
 
 
@@ -98,13 +98,13 @@ def test_list_prompts_includes_strategy_modules(client):
     assert r.status_code == 200
     rows = r.json()
     names = {row["name"] for row in rows}
-    assert "crypto.strategy.system" in names
     assert "trading.strategy.system" in names
+    assert "trading.strategy.user" in names
 
 
 def test_set_active_prompt_round_trips(client):
     rows = client.get("/api/admin/prompts").json()
-    target = next(r for r in rows if r["name"] == "crypto.strategy.system")
+    target = next(r for r in rows if r["name"] == "trading.strategy.system")
     r = client.post("/api/admin/prompts/active", json={"version": target["short"]})
     assert r.status_code == 200
     # After setting, the listing should mark this version active.

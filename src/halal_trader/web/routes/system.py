@@ -73,11 +73,6 @@ def register(app: FastAPI) -> None:
         started = ctx.runtime.started_at
         uptime = (datetime.now(UTC) - started).total_seconds() if started else None
 
-        ws_health: dict[str, Any] = {}
-        ws_mgr = ctx.runtime.ws_manager
-        if ws_mgr and hasattr(ws_mgr, "health_status"):
-            ws_health = ws_mgr.health_status()
-
         # Classifier health — added after the 2026-05-22 quota incident
         # so "is the brain healthy" is one HTTP call instead of grepping
         # JSON logs. None when bot is dashboard-only or reactor isn't
@@ -92,12 +87,6 @@ def register(app: FastAPI) -> None:
                 except Exception:  # noqa: BLE001
                     classifier_health = None
 
-        # Both market cadences — crypto runs every 60s by default,
-        # stocks on a 15-min cron. Frontends used to read only the
-        # crypto value and showed "60s" for stocks operators.
-        # ``cycle_interval_seconds`` is preserved (= crypto) so legacy
-        # frontends keep working; ``stocks_cycle_interval_seconds`` is
-        # the new field a market-aware dashboard reads.
         from halal_trader.core.heartbeat import STOCK_CYCLE
 
         alive, components = await _bot_liveness(ctx)
@@ -109,10 +98,7 @@ def register(app: FastAPI) -> None:
                 "bot_running": alive,
                 "last_cycle": ctx.runtime.last_cycle
                 or (cycle_beat["beat_at"] if cycle_beat else None),
-                "cycle_interval_seconds": ctx.settings.crypto.trading_interval_seconds,
-                "crypto_cycle_interval_seconds": ctx.settings.crypto.trading_interval_seconds,
                 "stocks_cycle_interval_seconds": ctx.settings.stocks.trading_interval_minutes * 60,
-                "ws_health": ws_health,
                 "classifier_health": classifier_health,
                 "uptime_seconds": uptime,
             }

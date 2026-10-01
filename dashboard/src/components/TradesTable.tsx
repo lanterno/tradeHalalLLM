@@ -1,6 +1,5 @@
 import type { Trade } from "../api/types";
 import { cn, entityOf, formatTime, formatUsd, formatQty, pnlColor } from "../lib/utils";
-import { entityLabel, useMarket } from "../lib/market";
 
 interface TradesTableProps {
   trades: Trade[];
@@ -13,8 +12,6 @@ export function TradesTable({
   showReasoning = false,
   compact = false,
 }: TradesTableProps) {
-  const { market } = useMarket();
-
   if (!trades.length) {
     return (
       <p className="py-8 text-center text-sm text-muted">No trades yet.</p>
@@ -27,7 +24,7 @@ export function TradesTable({
         <thead>
           <tr className="border-b border-border text-left text-xs uppercase tracking-wider text-muted">
             <th className="px-3 py-2">Time</th>
-            <th className="px-3 py-2">{entityLabel(market)}</th>
+            <th className="px-3 py-2">Symbol</th>
             <th className="px-3 py-2">Side</th>
             <th className="px-3 py-2 text-right">Qty</th>
             <th className="px-3 py-2 text-right">Price</th>
@@ -44,7 +41,7 @@ export function TradesTable({
         </thead>
         <tbody>
           {trades.map((t) => {
-            // Entry basis: crypto rows carry entry_price, stocks rows carry
+            // Entry basis: entry_price when the row carries one, else
             // filled_price. Use != null (not truthiness) so a legit 0 isn't
             // dropped. Mirrors the CSV export basis in Trades.tsx.
             const entry = t.entry_price ?? t.filled_price ?? t.price;

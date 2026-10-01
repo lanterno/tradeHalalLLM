@@ -5,7 +5,7 @@ interpreters compute over it. All functions return ``None`` on insufficient
 data rather than raising, so a cold-start asset degrades cleanly. These are the
 LLM-free signals that keep beliefs current when the LLM is unavailable.
 
-(The richer indicator suite in ``halal_trader/crypto/indicators.py`` folds in
+(The richer indicator suite in ``halal_trader/signals/indicators.py`` folds in
 later; this is a self-contained minimal set to get the loop running.)
 """
 

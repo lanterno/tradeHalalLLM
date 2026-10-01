@@ -12,10 +12,10 @@ speeches. The shipping principle is the same: pure stdlib, no
 HuggingFace install, deterministic + fast (we score every news item
 on every cycle, so a transformer model would be overkill).
 
-Output is the three :class:`NewsEvent.sentiment` labels the
-CryptoPanic path already emits — ``"positive"``, ``"negative"``,
-``"neutral"`` — so downstream consumers (the prompt formatter, the
-news-event reactor) don't need to discriminate by source.
+Output is one of the three :class:`NewsEvent.sentiment` labels —
+``"positive"``, ``"negative"``, ``"neutral"`` — so downstream consumers
+(the prompt formatter, the news-event reactor) don't need to
+discriminate by source.
 """
 
 from __future__ import annotations
@@ -188,10 +188,9 @@ def classify_headline(headline: str) -> Polarity:
     conservative threshold — a confused weak-signal headline lands
     on neutral, not on a hallucinated polarity.
 
-    The output strings match :class:`NewsEvent.sentiment` literals
-    that the CryptoPanic path already emits, so the downstream
-    consumers (prompt formatter, event reactor) handle both sources
-    identically.
+    The output strings match the :class:`NewsEvent.sentiment` literals,
+    so the downstream consumers (prompt formatter, event reactor) handle
+    every source identically.
     """
     positive, negative = score_headline(headline)
     net = positive - negative

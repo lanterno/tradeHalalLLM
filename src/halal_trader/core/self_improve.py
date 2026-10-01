@@ -1,31 +1,22 @@
 """Asset-agnostic core for the LLM self-improvement loop.
 
-Crypto and stocks both review their own closed trades through an LLM
-and convert observations into bounded parameter overrides. The
-orchestration (cooldown, exec-failure tracking, prompt assembly,
-parse/clamp/apply) is identical; only three things vary:
+The bot reviews its own closed trades through an LLM and converts
+observations into bounded parameter overrides. The orchestration
+(cooldown, exec-failure tracking, prompt assembly, parse/clamp/apply)
+lives here; a subclass supplies three things:
 
-1. **Which repo fetches the round-trip list** — crypto pulls from
-   :class:`CryptoTradeRepo.get_completed_round_trips`; stocks pull
-   from :class:`TradeRepo.get_completed_stock_round_trips`.
+1. **Which repo fetches the round-trip list** — the stocks subclass
+   pulls from :class:`TradeRepo.get_completed_stock_round_trips`.
 2. **The knob menu** (``_SAFE_BOUNDS``) the LLM is allowed to tune —
-   crypto has 6 knobs (RSI thresholds, SL/TP percentages, vol-SL
-   multiplier, position size); stocks has 2 (position size + daily
-   loss limit) because the strategy doesn't carry global SL/TP
-   fallbacks.
-3. **The review system prompt's JSON schema and asset label** —
-   the LLM needs to be told whether it's reviewing crypto or stock
-   decisions and which knobs it can suggest.
+   stocks has 2 (position size + daily loss limit) because the
+   strategy doesn't carry global SL/TP fallbacks.
+3. **The review system prompt's JSON schema and asset label.**
 
-The three asset-specific bits are class attributes / one abstract
-method; everything else lives on :class:`TradeSelfReviewBase`.
-Subclasses are thin (~60 lines each).
+The asset-specific bits are class attributes / one abstract method;
+everything else lives on :class:`TradeSelfReviewBase`.
 
-Round-trip dict shape is asset-agnostic by construction:
-``TradeRepo.get_completed_stock_round_trips`` already reshapes
-stocks to the same dict crypto emits (with ``pair`` set to the
-symbol), so the prompt formatter and trigger logic work over
-either source without a switch.
+Round-trip dicts carry ``pair`` set to the symbol, so the prompt
+formatter and trigger logic need no per-source switch.
 """
 
 from __future__ import annotations
@@ -423,9 +414,9 @@ Analyze these trades and execution failures, and suggest improvements.
     ) -> list[dict[str, Any]]:
         """Pull closed round-trips from the asset's trade repo.
 
-        Crypto calls :meth:`CryptoTradeRepo.get_completed_round_trips`;
-        stocks calls :meth:`TradeRepo.get_completed_stock_round_trips`.
-        Both return the same canonical dict shape (``pair``,
+        The stocks subclass calls
+        :meth:`TradeRepo.get_completed_stock_round_trips`, which returns
+        the canonical dict shape (``pair``,
         ``buy_price``, ``sell_price``, ``pnl``, ``pnl_pct``,
         ``duration_minutes``, ``exit_reason``).
         """

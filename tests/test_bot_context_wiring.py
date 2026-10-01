@@ -79,8 +79,7 @@ def test_runtime_view_defaults_are_safe() -> None:
     assert rv.bot_running is False
     assert rv.started_at is None
     assert rv.last_cycle is None
-    assert rv.ws_manager is None
-    assert rv.crypto_broker is None
+    assert rv.stock_broker is None
 
 
 # ── BaseTradingBot owns the runtime ─────────────────────────────
@@ -89,13 +88,8 @@ def test_runtime_view_defaults_are_safe() -> None:
 def test_base_trading_bot_init_creates_runtime_and_no_ctx_yet() -> None:
     """Before ``_create_components`` runs, the bot has an empty
     ``RuntimeView`` but no ``BotContext`` yet (engine isn't built)."""
-    import os
 
     from halal_trader.core.scheduler import BaseTradingBot
-
-    # Set required env var so settings construction succeeds.
-    os.environ.setdefault("BINANCE_API_KEY", "test")
-    os.environ.setdefault("BINANCE_SECRET_KEY", "test")
 
     class _DummyBot(BaseTradingBot):
         async def _create_components(self) -> None: ...
@@ -205,13 +199,9 @@ def test_attach_to_app_raises_before_initialize() -> None:
     """``attach_to_app`` is a post-initialize operation — calling it
     before ``initialize()`` has built ``self._ctx`` is a programming
     error that should surface loudly, not silently succeed."""
-    import os
     from types import SimpleNamespace
 
     from halal_trader.core.scheduler import BaseTradingBot
-
-    os.environ.setdefault("BINANCE_API_KEY", "test")
-    os.environ.setdefault("BINANCE_SECRET_KEY", "test")
 
     class _DummyBot(BaseTradingBot):
         async def _create_components(self) -> None: ...
@@ -233,14 +223,10 @@ def test_attach_to_app_projects_bot_ctx_onto_app_state() -> None:
     DashboardContext projection onto the FastAPI app's state. The
     projection MUST share the same RuntimeView so cycle writes are
     visible via the dashboard's ctx.runtime reads."""
-    import os
     from types import SimpleNamespace
 
     from halal_trader.core.context import BotContext, RuntimeView
     from halal_trader.core.scheduler import BaseTradingBot
-
-    os.environ.setdefault("BINANCE_API_KEY", "test")
-    os.environ.setdefault("BINANCE_SECRET_KEY", "test")
 
     class _DummyBot(BaseTradingBot):
         async def _create_components(self) -> None: ...
@@ -283,7 +269,6 @@ def test_dashboard_lifespan_skips_build_when_ctx_preinstalled(monkeypatch, tmp_p
     lifespan, the lifespan must NOT rebuild a parallel DashboardContext
     — it sees the pre-installed ``app.state.ctx`` and yields straight
     through. Pinning this so a co-hosted bot owns the engine."""
-    import os
     from types import SimpleNamespace
 
     from fastapi.testclient import TestClient
@@ -291,8 +276,6 @@ def test_dashboard_lifespan_skips_build_when_ctx_preinstalled(monkeypatch, tmp_p
     from halal_trader.core.context import DashboardContext, RuntimeView
     from halal_trader.web import app as web_app
 
-    os.environ.setdefault("BINANCE_API_KEY", "test")
-    os.environ.setdefault("BINANCE_SECRET_KEY", "test")
     monkeypatch.setenv("LOG_DIR", str(tmp_path / "logs"))
 
     sentinel_engine = SimpleNamespace(name="bot_engine")

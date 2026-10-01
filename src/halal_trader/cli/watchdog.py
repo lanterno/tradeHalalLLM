@@ -53,9 +53,9 @@ def _find_last_activity(
     ``label`` is the matched logger name (or the event tag, if present)
     purely for the alert message. Returning "any recent activity" rather
     than only ``cycle.start``/``cycle.complete`` avoids false-negatives
-    during pre-market/EOD windows and false-positives from a parallel
-    bot that fires the same generic event names (e.g. crypto cycles
-    failing every 60 s would otherwise mask a stocks-side hang).
+    during pre-market/EOD windows and false-positives from another
+    process that fires the same generic event names into the shared log
+    (it would otherwise mask a stocks-side hang).
     """
     # Scan the current file first, then the most recent rotated sibling
     # (``.log.1``). Reading moments after a rotation would otherwise see a
@@ -155,8 +155,7 @@ async def _send_telegram(message: str) -> bool:
     "--logger-prefix",
     default="halal_trader.trading.",
     show_default=True,
-    help="Only count log lines whose ``name`` starts with this prefix as "
-    "evidence of life. Use halal_trader.crypto. for a crypto watchdog.",
+    help="Only count log lines whose ``name`` starts with this prefix as evidence of life.",
 )
 @click.option(
     "--dry-run",

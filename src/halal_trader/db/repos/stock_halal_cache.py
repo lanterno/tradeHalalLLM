@@ -1,7 +1,7 @@
 """Stock halal-screening cache repository.
 
-Wave D extraction. Mirrors :class:`HalalCacheRepoImpl` (crypto) over the
-``halal_cache`` table — symbol → compliance verdict from Zoya/AAOIFI.
+Wave D extraction. Reads and writes the ``halal_cache`` table —
+symbol → compliance verdict from Zoya/AAOIFI.
 Matching ``StockHalalCacheRepo`` Protocol in ``protocols.py``.
 """
 

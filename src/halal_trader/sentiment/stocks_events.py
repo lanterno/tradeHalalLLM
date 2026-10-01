@@ -1,11 +1,11 @@
 """Stocks news-momentum event reactor.
 
-Ports the crypto :class:`NewsEventReactor` pattern (CryptoPanic →
-emergency-cycle callback) to the stocks side, with two key changes:
+Polls a news source and fires an emergency-cycle callback on a
+high-impact headline. Two design points:
 
 1. **Per-symbol polling.** Finnhub's company-news endpoint is keyed
    on a single ticker, so the reactor polls each watchlist symbol in
-   turn rather than the bulk-currency CryptoPanic feed.
+   turn.
 
 2. **LLM-scored headlines, not exchange-vote sentiment.** Each new
    headline goes through a :class:`HeadlineClassifier` (default is
@@ -88,7 +88,7 @@ class StockNewsEventReactor:
     """Polls Finnhub per-symbol, scores headlines via an injected
     classifier, fires callbacks on high-score events.
 
-    Lifecycle mirrors the crypto reactor:
+    Lifecycle:
       * :meth:`run` — long-lived poll loop, supervised by the bot.
       * :meth:`stop` — graceful shutdown, closes the HTTP client.
       * :meth:`on_event` — register a callback (e.g. the scheduler's

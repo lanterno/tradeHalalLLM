@@ -8,7 +8,6 @@ import { ExitReasonsChart } from "../components/ExitReasonsChart";
 import { PairBreakdown } from "../components/PairBreakdown";
 import { ErrorState } from "../components/ErrorState";
 import { formatUsd, formatPct, pnlColor } from "../lib/utils";
-import { entityLabel, useMarket } from "../lib/market";
 
 const RANGES = [
   { label: "7d", days: 7 },
@@ -18,7 +17,6 @@ const RANGES = [
 ] as const;
 
 export default function Analytics() {
-  const { market } = useMarket();
   const [days, setDays] = useState(30);
   const { data: stats, isLoading, isError, error, refetch } = useAnalytics(days);
   const {
@@ -137,7 +135,7 @@ export default function Analytics() {
               }
             />
             <StatCard
-              label={`Best ${entityLabel(market)}`}
+              label="Best Symbol"
               value={
                 <span className="text-accent text-lg">
                   {stats.best_pair || "N/A"}
@@ -145,7 +143,7 @@ export default function Analytics() {
               }
             />
             <StatCard
-              label={`Worst ${entityLabel(market)}`}
+              label="Worst Symbol"
               value={
                 <span className="text-loss text-lg">
                   {stats.worst_pair || "N/A"}
@@ -187,7 +185,7 @@ export default function Analytics() {
             </div>
             <div className="rounded-xl border border-border bg-surface p-4">
               <h3 className="mb-4 text-sm font-medium uppercase tracking-wider text-muted">
-                P&L by {entityLabel(market)}
+                P&L by Symbol
               </h3>
               {tradesError ? (
                 <ErrorState compact error={tradesErr} onRetry={tradesRefetch} />

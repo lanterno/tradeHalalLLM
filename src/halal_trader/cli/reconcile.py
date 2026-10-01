@@ -1,6 +1,6 @@
 """DB-vs-broker drift reconciliation commands.
 
-``halal-trader reconcile check {crypto|stocks}`` — one-shot drift pass.
+``halal-trader reconcile check [stocks]``        — one-shot drift pass.
 ``halal-trader reconcile fix-orphans``           — backfill stale pending
 Trade rows so the reconciler stops flagging them as phantom positions.
 """
@@ -22,7 +22,7 @@ def reconcile() -> None:
 
 
 @reconcile.command("check")
-@click.argument("market", type=click.Choice(["crypto", "stocks"]))
+@click.argument("market", type=click.Choice(["stocks"]), default="stocks", required=False)
 @click.option(
     "--threshold",
     default=0.01,
@@ -40,33 +40,16 @@ def reconcile_check(market: str, threshold: float) -> None:
         settings = get_settings()
         engine = await init_db(settings.database_url)
         try:
-            if market == "crypto":
-                from halal_trader.crypto.exchange import BinanceClient
+            from halal_trader.mcp.client import AlpacaMCPClient
 
-                broker = BinanceClient(
-                    api_key=settings.binance.api_key,
-                    secret_key=settings.binance.secret_key,
-                    testnet=settings.binance.testnet,
-                    configured_pairs=settings.crypto.pairs,
+            broker = AlpacaMCPClient()
+            await broker.connect()
+            try:
+                report = await recon.reconcile_stocks(
+                    engine=engine, broker=broker, threshold_pct=threshold
                 )
-                await broker.connect()
-                try:
-                    report = await recon.reconcile_crypto(
-                        engine=engine, broker=broker, threshold_pct=threshold
-                    )
-                finally:
-                    await broker.disconnect()
-            else:
-                from halal_trader.mcp.client import AlpacaMCPClient
-
-                broker = AlpacaMCPClient()
-                await broker.connect()
-                try:
-                    report = await recon.reconcile_stocks(
-                        engine=engine, broker=broker, threshold_pct=threshold
-                    )
-                finally:
-                    await broker.disconnect()
+            finally:
+                await broker.disconnect()
 
             console.print(
                 f"[dim]Checked {report.checked_symbols} symbol(s) at "

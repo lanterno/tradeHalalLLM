@@ -14,9 +14,9 @@ from halal_trader.core.shadow import (
     shadow_alert_state,
 )
 from halal_trader.domain.models import (
-    CryptoTradeDecision,
-    CryptoTradingPlan,
     TradeAction,
+    TradeDecision,
+    TradingPlan,
 )
 
 # ── Ledger ────────────────────────────────────────────────────────
@@ -147,28 +147,28 @@ def test_render_status_smoke() -> None:
 # ── Plan diffs ────────────────────────────────────────────────────
 
 
-def _buy(symbol: str = "BTCUSDT") -> CryptoTradeDecision:
-    return CryptoTradeDecision(
+def _buy(symbol: str = "BTCUSDT") -> TradeDecision:
+    return TradeDecision(
         action=TradeAction.BUY, symbol=symbol, quantity=1, confidence=0.5, reasoning="x"
     )
 
 
-def _sell(symbol: str = "BTCUSDT") -> CryptoTradeDecision:
-    return CryptoTradeDecision(
+def _sell(symbol: str = "BTCUSDT") -> TradeDecision:
+    return TradeDecision(
         action=TradeAction.SELL, symbol=symbol, quantity=1, confidence=0.5, reasoning="x"
     )
 
 
 def test_diff_plans_identical() -> None:
-    a = CryptoTradingPlan(decisions=[_buy("BTCUSDT"), _sell("ETHUSDT")])
-    b = CryptoTradingPlan(decisions=[_buy("BTCUSDT"), _sell("ETHUSDT")])
+    a = TradingPlan(decisions=[_buy("BTCUSDT"), _sell("ETHUSDT")])
+    b = TradingPlan(decisions=[_buy("BTCUSDT"), _sell("ETHUSDT")])
     d = diff_plans(a, b)
     assert d == {"shared": 2, "only_live": 0, "only_shadow": 0}
 
 
 def test_diff_plans_disagreement() -> None:
-    a = CryptoTradingPlan(decisions=[_buy("BTCUSDT")])
-    b = CryptoTradingPlan(decisions=[_buy("ETHUSDT"), _sell("BTCUSDT")])
+    a = TradingPlan(decisions=[_buy("BTCUSDT")])
+    b = TradingPlan(decisions=[_buy("ETHUSDT"), _sell("BTCUSDT")])
     d = diff_plans(a, b)
     assert d["shared"] == 0
     assert d["only_live"] == 1

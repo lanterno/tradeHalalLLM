@@ -1,6 +1,6 @@
-"""Stocks multi-timeframe analyzer — Alpaca-backed sibling of crypto's.
+"""Stocks multi-timeframe analyzer — the Alpaca-backed ``TimeframeAnalyzer``.
 
-Reuses ``crypto.timeframes.TimeframeAnalyzer`` for the alignment and
+Reuses ``signals.timeframes.TimeframeAnalyzer`` for the alignment and
 support/resistance math — the only broker-specific piece is the
 per-timeframe bar fetch, which goes through Alpaca via the existing
 ``Broker`` port. Bars are coerced into ``Kline`` shape via
@@ -16,11 +16,10 @@ their cost.)
 from __future__ import annotations
 
 import logging
-from typing import Any
 
-from halal_trader.crypto.timeframes import TimeframeAnalyzer
 from halal_trader.domain.models import Kline
 from halal_trader.domain.ports import Broker
+from halal_trader.signals.timeframes import TimeframeAnalyzer
 from halal_trader.trading.bars import bars_to_klines
 
 logger = logging.getLogger(__name__)
@@ -47,9 +46,7 @@ class StockTimeframeAnalyzer(TimeframeAnalyzer):
     _timeframes = _STOCK_TIMEFRAMES
 
     def __init__(self, broker: Broker) -> None:
-        # Bypass parent __init__ — we want a Broker, not a BinanceClient.
-        self._broker = broker  # type: ignore[assignment]
-        self._cache: dict[str, tuple[float, dict[str, Any]]] = {}
+        super().__init__(broker)
 
     async def _fetch_klines(self, pair: str, interval: str, *, limit: int) -> list[Kline]:
         """Pull Alpaca bars at the requested timeframe and coerce to Kline."""

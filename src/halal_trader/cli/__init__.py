@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import click
 
-from halal_trader.cli import crypto as crypto_cmd
 from halal_trader.cli import dashboard as dashboard_cmd
 from halal_trader.cli import db as db_cmd
 from halal_trader.cli import halal as halal_cmd
@@ -60,9 +59,6 @@ cli.add_command(reconcile_cmd.reconcile)
 
 # ── LLM Decision Audit ─────────────────────────────────────────
 cli.add_command(llm_decisions_cmd.llm_decisions)
-
-# ── Crypto ─────────────────────────────────────────────────────
-cli.add_command(crypto_cmd.crypto)
 
 # ── Dashboard ──────────────────────────────────────────────────
 cli.add_command(dashboard_cmd.dashboard)

@@ -6,75 +6,11 @@ from datetime import UTC, datetime
 
 import pytest
 
-from halal_trader.core.fills import FillResult, confirm_alpaca, confirm_binance
+from halal_trader.core.fills import FillResult, confirm_alpaca
 
 
 def _ts() -> datetime:
     return datetime(2026, 1, 1, tzinfo=UTC)
-
-
-# ── Binance ────────────────────────────────────────────────────
-
-
-def test_confirm_binance_fully_filled_with_fills():
-    response = {
-        "orderId": 12345,
-        "status": "FILLED",
-        "executedQty": "0.05",
-        "cumulativeQuoteQty": "3415.00",
-        "fills": [
-            {"price": "68000.0", "qty": "0.03"},
-            {"price": "68500.0", "qty": "0.02"},
-        ],
-    }
-    result = confirm_binance(response, _ts())
-    assert result.status == "filled"
-    assert result.order_id == "12345"
-    assert result.filled_quantity == pytest.approx(0.05)
-    assert result.filled_price == pytest.approx((68000 * 0.03 + 68500 * 0.02) / 0.05)
-    assert result.filled_at is not None
-
-
-def test_confirm_binance_falls_back_to_cumulative():
-    response = {
-        "orderId": "abc",
-        "status": "FILLED",
-        "executedQty": "1.0",
-        "cumulativeQuoteQty": "100.0",
-        "fills": [],
-    }
-    result = confirm_binance(response, _ts())
-    assert result.filled_quantity == 1.0
-    assert result.filled_price == 100.0
-
-
-def test_confirm_binance_partial_fill():
-    response = {
-        "orderId": "p1",
-        "status": "PARTIALLY_FILLED",
-        "executedQty": "0.5",
-        "cumulativeQuoteQty": "50.0",
-        "fills": [],
-    }
-    result = confirm_binance(response, _ts())
-    assert result.status == "partially_filled"
-    assert result.filled_quantity == 0.5
-    assert result.filled_at is None  # only set on full fill
-
-
-def test_confirm_binance_rejected():
-    response = {"orderId": "r1", "status": "REJECTED"}
-    result = confirm_binance(response, _ts())
-    assert result.status == "rejected"
-    assert result.filled_quantity == 0.0
-    assert result.filled_price is None
-
-
-def test_confirm_binance_pending_with_no_data():
-    response = {"orderId": ""}
-    result = confirm_binance(response, _ts())
-    assert result.status == "pending"
-    assert result.filled_quantity == 0.0
 
 
 # ── Alpaca ─────────────────────────────────────────────────────

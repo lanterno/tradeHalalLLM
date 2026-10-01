@@ -11,32 +11,6 @@ install:
 dev:
     uv sync --extra dev --extra all
 
-# ── Crypto bot ────────────────────────────────────────────
-
-# Start 24/7 crypto trading bot (caffeinate -i = no idle sleep / App Nap)
-crypto:
-    caffeinate -dimsu uv run halal-trader crypto start
-
-# Run a single crypto trading cycle
-crypto-once:
-    uv run halal-trader crypto start --once
-
-# Show Binance account and balances
-crypto-status:
-    uv run halal-trader crypto status
-
-# Show crypto trade history
-crypto-history:
-    uv run halal-trader crypto history
-
-# Show crypto performance metrics
-crypto-stats:
-    uv run halal-trader crypto stats
-
-# Show halal-screened crypto pairs
-crypto-screen:
-    uv run halal-trader crypto screen
-
 # ── Stock bot ─────────────────────────────────────────────
 
 # Start stock trading bot (caffeinate -i = no idle sleep / App Nap)
@@ -322,7 +296,6 @@ home-down:
 home-build:
     {{home_compose}} build
 
-# trader-crypto is left out on purpose: it is profile-gated, not in the default fleet.
 # Exit 0 only if every long-running container is running AND the API answers
 home-health:
     #!/usr/bin/env sh

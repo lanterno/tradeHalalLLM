@@ -127,7 +127,7 @@ def setup_logging(settings: Settings, *, cli_log_level: str | None = None) -> No
     # Silence extremely noisy third-party loggers at source level.
     # These produce thousands of DEBUG messages per minute (WebSocket frames)
     # that drown out useful application logs even in the JSON file.
-    for name in ("binance", "websockets"):
+    for name in ("websockets",):
         logging.getLogger(name).setLevel(logging.WARNING)
     # Alembic's plugin-registry module logs "setup plugin alembic.X"
     # at INFO on every import — pure discovery noise that fires 6×

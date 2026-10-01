@@ -3,7 +3,7 @@
 ``RiskState`` carries the three halt conditions and the size multipliers the
 policy multiplies target weights by. This is a minimal, correct engine: heat /
 drawdown / daily-loss halts are real; correlation/volatility multipliers default
-to 1.0 with the structure to fold in ``halal_trader/crypto/risk.py``'s
+to 1.0 with the structure to fold in ``halal_trader/portfolio/risk.py``'s
 correlation + ATR scaling later. ``gross_exposure`` feeds the policy's
 no-leverage normalization (R-03).
 """

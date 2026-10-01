@@ -30,6 +30,6 @@ async def test_bundle_web_audit_helpers(engine) -> None:
 
 async def test_bundle_runtime_config_round_trip(engine) -> None:
     bundle = RepoBundle.from_engine(engine)
-    await bundle.runtime_config.set_runtime_config("CRYPTO_MAX_POSITION_PCT", 0.05)
+    await bundle.runtime_config.set_runtime_config("MAX_POSITION_PCT", 0.05)
     cfg = await bundle.runtime_config.list_runtime_config()
-    assert cfg["CRYPTO_MAX_POSITION_PCT"] == 0.05
+    assert cfg["MAX_POSITION_PCT"] == 0.05

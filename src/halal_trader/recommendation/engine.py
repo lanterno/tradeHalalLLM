@@ -18,10 +18,10 @@ from halal_trader.config import Settings
 from halal_trader.core.llm.base import BaseLLM
 from halal_trader.core.llm.factory import create_llm
 from halal_trader.core.llm.prompts import register as _register_prompt
-from halal_trader.crypto.indicators import compute_all
 from halal_trader.db.repository import Repository
 from halal_trader.domain.ports import Broker
 from halal_trader.halal.cache import DEFAULT_HALAL_SYMBOLS
+from halal_trader.signals.indicators import compute_all
 from halal_trader.trading.bars import bars_to_klines
 
 logger = logging.getLogger(__name__)

@@ -1,4 +1,4 @@
-"""Tests for `TradeSelfReview.review()`'s insufficient_quota handling.
+"""Tests for `TradeSelfReviewBase.review()`'s insufficient_quota handling.
 
 The 1-hour backoff fix from 4db7e21 keeps the bot from re-attempting the
 LLM every 5 min when the provider account is out of credits. This pins
@@ -13,20 +13,20 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from halal_trader.crypto.self_improve import TradeSelfReview
+from halal_trader.trading.self_improve import StockTradeSelfReview
 
 
-def _review(llm_error: Exception | None = None) -> TradeSelfReview:
+def _review(llm_error: Exception | None = None) -> StockTradeSelfReview:
     llm = AsyncMock()
     if llm_error is not None:
         llm.generate_json.side_effect = llm_error
 
-    crypto_trades = AsyncMock()
-    crypto_trades.get_completed_round_trips.return_value = [
+    trades = AsyncMock()
+    trades.get_completed_stock_round_trips.return_value = [
         {
-            "pair": "BTCUSDT",
-            "buy_price": 50000,
-            "sell_price": 49500,
+            "pair": "AAPL",
+            "buy_price": 200,
+            "sell_price": 198,
             "pnl": -10.0,
             "pnl_pct": -0.01,
             "duration_minutes": 5.0,
@@ -35,10 +35,10 @@ def _review(llm_error: Exception | None = None) -> TradeSelfReview:
         }
     ]
 
-    return TradeSelfReview(
-        llm=llm,
+    return StockTradeSelfReview(
+        llm,
         strategy_adjustments=MagicMock(),
-        crypto_trades=crypto_trades,
+        trades=trades,
     )
 
 

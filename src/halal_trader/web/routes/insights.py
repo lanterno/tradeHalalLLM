@@ -12,67 +12,6 @@ from halal_trader.web.dependencies import get_ctx
 
 
 def register(app: FastAPI) -> None:
-    @app.get("/api/insights/regret")
-    async def api_regret(limit: int = 200) -> JSONResponse:
-        from halal_trader.cli.insights import (
-            _load_closed_crypto_trades,
-            _trades_to_closed_views,
-        )
-        from halal_trader.core.regret import aggregate_regret, hindsight_regret
-
-        try:
-            trades = await _load_closed_crypto_trades(limit)
-            views = _trades_to_closed_views(trades)
-            records = [hindsight_regret(v) for v in views]
-            summary = aggregate_regret(records)
-            return JSONResponse(
-                {
-                    "n": summary.n,
-                    "mean_regret": summary.mean_regret,
-                    "median_regret": summary.median_regret,
-                    "pct_high_regret": summary.pct_high_regret,
-                    "missed_edge_count": summary.missed_edge_count,
-                    "tail_loss_count": summary.tail_loss_count,
-                    "by_symbol": summary.by_symbol,
-                }
-            )
-        except Exception as exc:  # noqa: BLE001
-            return JSONResponse({"error": str(exc)}, status_code=500)
-
-    @app.get("/api/insights/thesis")
-    async def api_thesis(limit: int = 200) -> JSONResponse:
-        from halal_trader.cli.insights import (
-            _load_closed_crypto_trades,
-            _trades_to_tagged,
-        )
-        from halal_trader.core.thesis import (
-            attribute_pnl_by_thesis,
-            deprecated_thesis_kill_list,
-        )
-
-        try:
-            trades = await _load_closed_crypto_trades(limit)
-            views = _trades_to_tagged(trades)
-            rows = attribute_pnl_by_thesis(views)
-            return JSONResponse(
-                {
-                    "rows": [
-                        {
-                            "tag": r.tag,
-                            "n_trades": r.n_trades,
-                            "wins": r.wins,
-                            "losses": r.losses,
-                            "win_rate": r.win_rate,
-                            "avg_pnl_pct": r.avg_pnl_pct,
-                        }
-                        for r in rows.values()
-                    ],
-                    "kill_candidates": deprecated_thesis_kill_list(rows),
-                }
-            )
-        except Exception as exc:  # noqa: BLE001
-            return JSONResponse({"error": str(exc)}, status_code=500)
-
     @app.get("/api/insights/drift")
     async def api_drift(ctx: DashboardContext = Depends(get_ctx)) -> JSONResponse:
         mon = ctx.hub.drift
@@ -85,32 +24,6 @@ def register(app: FastAPI) -> None:
                 "n": mon.n,
                 "drift_count": mon.drift_count,
                 "last_drift_at": mon.last_drift_at,
-            }
-        )
-
-    @app.get("/api/insights/stress")
-    async def api_stress(ctx: DashboardContext = Depends(get_ctx)) -> JSONResponse:
-        # Stress verdicts live as a custom hub attribute that the
-        # cycle / stress harness pushes onto. Falls back when absent.
-        verdicts = getattr(ctx.hub, "stress_verdicts", None)
-        if not verdicts:
-            return JSONResponse({"available": False})
-        return JSONResponse(
-            {
-                "available": True,
-                "ts": getattr(ctx.hub, "stress_ts", None),
-                "verdicts": [
-                    {
-                        "scenario_name": v.scenario_name,
-                        "severity": v.severity,
-                        "passed": v.passed,
-                        "buys": v.buys,
-                        "sells": v.sells,
-                        "holds": v.holds,
-                        "notes": v.notes,
-                    }
-                    for v in verdicts
-                ],
             }
         )
 
@@ -172,22 +85,6 @@ def register(app: FastAPI) -> None:
                 ],
             }
         )
-
-    @app.get("/api/insights/basis")
-    async def api_basis(ctx: DashboardContext = Depends(get_ctx)) -> JSONResponse:
-        tracker = ctx.hub.basis
-        if tracker is None or not tracker.history_by_pair:
-            return JSONResponse({"available": False})
-        out = {}
-        for pair, hist in tracker.history_by_pair.items():
-            if not hist:
-                continue
-            out[pair] = {
-                "n": len(hist),
-                "last_basis_bps": hist[-1] if hist else 0.0,
-                "mean_basis_bps": (sum(hist) / len(hist)) if hist else 0.0,
-            }
-        return JSONResponse({"available": True, "pairs": out})
 
     @app.get("/api/insights/treasury")
     async def api_treasury(ctx: DashboardContext = Depends(get_ctx)) -> JSONResponse:
@@ -310,51 +207,6 @@ def register(app: FastAPI) -> None:
         if not ok:
             return JSONResponse({"error": "entry not found"}, status_code=404)
         return JSONResponse({"ok": True, "entry_id": entry_id, "status": status})
-
-    @app.get("/api/insights/velocity")
-    async def api_velocity(ctx: DashboardContext = Depends(get_ctx)) -> JSONResponse:
-        velocity = ctx.hub.velocity or {}
-        if not velocity:
-            return JSONResponse({"available": False})
-        return JSONResponse(
-            {
-                "available": True,
-                "results": [
-                    {
-                        "symbol": r.symbol,
-                        "n_recent": r.n_recent,
-                        "n_older": r.n_older,
-                        "n_total": r.n_total,
-                        "velocity": r.velocity,
-                        "novelty": r.novelty,
-                        "label": r.label,
-                    }
-                    for r in velocity.values()
-                ],
-            }
-        )
-
-    @app.get("/api/insights/whale")
-    async def api_whale(ctx: DashboardContext = Depends(get_ctx)) -> JSONResponse:
-        flows = ctx.hub.whale_flows or {}
-        if not flows:
-            return JSONResponse({"available": False})
-        return JSONResponse(
-            {
-                "available": True,
-                "flows": [
-                    {
-                        "symbol": sig.symbol,
-                        "inflow_to_exchange_usd": sig.inflow_to_exchange_usd,
-                        "outflow_from_exchange_usd": sig.outflow_from_exchange_usd,
-                        "inflow_pressure": sig.inflow_pressure,
-                        "n_transfers": sig.n_transfers,
-                        "label": sig.label,
-                    }
-                    for sig in flows.values()
-                ],
-            }
-        )
 
     @app.get("/api/insights/rag")
     async def api_rag(

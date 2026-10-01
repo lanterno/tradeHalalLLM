@@ -18,7 +18,21 @@ import asyncio
 
 from halal_trader.core.llm.agent import run_agent
 from halal_trader.core.llm.base import BaseLLM
-from halal_trader.core.llm.tools import CRYPTO_AGENTIC_TOOLS, Tool, ToolCall
+from halal_trader.core.llm.tools import (
+    QUERY_RAG_TOOL,
+    QUERY_REGIME_MEMORY_TOOL,
+    Tool,
+    ToolCall,
+)
+
+# The loop forwards ``tools`` to the LLM untouched; the scripted double
+# ignores it, so any list works. ``submit_plan`` is the loop's default
+# terminal tool name.
+_TOOLS: list[Tool] = [
+    QUERY_RAG_TOOL,
+    QUERY_REGIME_MEMORY_TOOL,
+    Tool(name="submit_plan", description="terminal", input_schema={"type": "object"}),
+]
 
 
 class _ScriptedLLM(BaseLLM):
@@ -73,7 +87,7 @@ async def test_empty_tool_calls_returns_empty_plan_without_budget_exhausted():
         llm,
         system="",
         user="prompt",
-        tools=CRYPTO_AGENTIC_TOOLS,
+        tools=_TOOLS,
         handlers={},
     )
     assert result.final_call.name == "submit_plan"
@@ -99,7 +113,7 @@ async def test_unknown_tool_name_records_error_and_continues():
         llm,
         system="",
         user="prompt",
-        tools=CRYPTO_AGENTIC_TOOLS,
+        tools=_TOOLS,
         handlers={},  # no handler for "mystery_tool"
     )
     assert len(result.transcript) == 1
@@ -136,7 +150,7 @@ async def test_wall_clock_budget_forces_finalise_with_empty_plan():
         llm,
         system="",
         user="prompt",
-        tools=CRYPTO_AGENTIC_TOOLS,
+        tools=_TOOLS,
         handlers={"analyze_pair": analyze},
         max_seconds=0.05,
         max_turns=10,
@@ -171,7 +185,7 @@ async def test_generate_timeout_force_finalises_with_empty_plan():
         llm,
         system="",
         user="prompt",
-        tools=CRYPTO_AGENTIC_TOOLS,
+        tools=_TOOLS,
         handlers={},
         max_seconds=0.05,
     )
@@ -200,7 +214,7 @@ async def test_max_turns_exit_calls_async_force_finalise_with_real_plan():
         llm,
         system="",
         user="prompt",
-        tools=CRYPTO_AGENTIC_TOOLS,
+        tools=_TOOLS,
         handlers={"analyze_pair": analyze},
         max_turns=3,
     )
@@ -228,7 +242,7 @@ async def test_async_force_finalise_swallows_exception_returns_empty_plan():
         llm,
         system="",
         user="prompt",
-        tools=CRYPTO_AGENTIC_TOOLS,
+        tools=_TOOLS,
         handlers={"analyze_pair": analyze},
         max_turns=3,
     )
@@ -253,7 +267,7 @@ async def test_async_force_finalise_handles_empty_response():
         llm,
         system="",
         user="prompt",
-        tools=CRYPTO_AGENTIC_TOOLS,
+        tools=_TOOLS,
         handlers={"analyze_pair": analyze},
         max_turns=3,
     )
@@ -282,7 +296,7 @@ async def test_args_in_transcript_are_dict_copies():
         llm,
         system="",
         user="prompt",
-        tools=CRYPTO_AGENTIC_TOOLS,
+        tools=_TOOLS,
         handlers={"analyze_pair": analyze},
     )
     transcript_args = result.transcript[0].args

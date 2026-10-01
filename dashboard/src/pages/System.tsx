@@ -58,36 +58,6 @@ export default function System() {
         />
       </div>
 
-      {/* WebSocket health */}
-      {status?.ws_health && Object.keys(status.ws_health).length > 0 && (
-        <div className="rounded-xl border border-border bg-surface p-4">
-          <h3 className="mb-4 text-sm font-medium uppercase tracking-wider text-muted">
-            WebSocket Health
-          </h3>
-          <div className="grid gap-2 md:grid-cols-3 lg:grid-cols-4">
-            {Object.entries(status.ws_health).map(([symbol, info]) => {
-              const stale = typeof info === "object" && info !== null && "stale" in info
-                ? (info as Record<string, unknown>).stale
-                : false;
-              return (
-                <div
-                  key={symbol}
-                  className="flex items-center justify-between rounded-lg border border-border/50 px-3 py-2"
-                >
-                  <span className="text-sm font-medium">{symbol}</span>
-                  <span
-                    className={cn(
-                      "h-2 w-2 rounded-full",
-                      stale ? "bg-loss" : "bg-accent",
-                    )}
-                  />
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
       {/* Configuration */}
       <div className="rounded-xl border border-border bg-surface p-4">
         <h3 className="mb-4 text-sm font-medium uppercase tracking-wider text-muted">

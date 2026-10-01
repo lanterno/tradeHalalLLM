@@ -93,7 +93,6 @@ def test_constructor_threads_through_optional_kwargs():
     """The kwargs added across recent parity work all stick."""
     notifier = MagicMock()
     hub = MagicMock()
-    regime = MagicMock()
     timeframes = MagicMock()
     svc = TradingCycleService(
         broker=AsyncMock(),
@@ -101,12 +100,10 @@ def test_constructor_threads_through_optional_kwargs():
         strategy=AsyncMock(),
         executor=AsyncMock(),
         portfolio=AsyncMock(),
-        regime_detector=regime,
         timeframe_analyzer=timeframes,
         insights_hub=hub,
         notifier=notifier,
     )
-    assert svc._regime_detector is regime
     assert svc._timeframes is timeframes
     assert svc._hub is hub
     assert svc._notifier is notifier

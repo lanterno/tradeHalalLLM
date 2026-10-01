@@ -143,66 +143,10 @@ def test_trades_endpoint_empty(client):
     assert r.json() == []
 
 
-def test_trades_endpoint_market_stocks_reads_stocks_table(client):
-    """``?market=stocks`` reads the stocks ``trades`` table (returns
-    list of stock trades), not the crypto ledger. Empty pre-trade is
-    correct; the route just must not 404 or fall back to crypto."""
-    r = client.get("/api/trades?market=stocks")
-    assert r.status_code == 200
-    assert isinstance(r.json(), list)
-
-
-def test_trades_endpoint_default_is_crypto_for_back_compat(client):
-    """No ``market`` param → crypto, matching pre-Round-7 behavior."""
-    a = client.get("/api/trades")
-    b = client.get("/api/trades?market=crypto")
-    assert a.status_code == 200
-    assert b.status_code == 200
-    assert a.json() == b.json()
-
-
-def test_trades_endpoint_rejects_unknown_market(client):
-    r = client.get("/api/trades?market=options")
-    assert r.status_code == 400
-    assert "market must be" in r.json()["detail"]
-
-
 def test_pnl_daily_empty(client):
     r = client.get("/api/pnl/daily?days=7")
     assert r.status_code == 200
     assert isinstance(r.json(), list)
-
-
-def test_pnl_daily_defaults_to_crypto_for_back_compat(client):
-    """Pre-Round-7 the route always queried the crypto table — pin
-    that default so existing dashboard fetches (no ``market`` param)
-    keep hitting crypto rows."""
-    r = client.get("/api/pnl/daily?days=7")
-    assert r.status_code == 200
-    # Same response shape as the explicit ``?market=crypto`` call.
-    r2 = client.get("/api/pnl/daily?days=7&market=crypto")
-    assert r2.status_code == 200
-    assert r.json() == r2.json()
-
-
-def test_pnl_daily_market_stocks_reads_stocks_table(client):
-    """``?market=stocks`` must hit the stocks-side ``daily_pnl`` table
-    via :meth:`get_pnl_history`, not the crypto ledger. With no rows
-    written yet it still must respond 200 + ``[]`` (not 404 / not
-    'crypto fallback'). Pin so the stocks day-end row is reachable
-    via this route once the bot has run a day."""
-    r = client.get("/api/pnl/daily?days=7&market=stocks")
-    assert r.status_code == 200
-    assert isinstance(r.json(), list)
-
-
-def test_pnl_daily_rejects_unknown_market(client):
-    """Anything other than crypto/stocks/stock 400s loudly — silent
-    empty results were how the stocks ledger went missing from the
-    dashboard for weeks."""
-    r = client.get("/api/pnl/daily?market=junk")
-    assert r.status_code == 400
-    assert "market must be" in r.json()["detail"]
 
 
 def test_analytics_returns_zeros_with_no_trades(client):
@@ -210,25 +154,6 @@ def test_analytics_returns_zeros_with_no_trades(client):
     assert r.status_code == 200
     body = r.json()
     assert body["total_trades"] == 0
-
-
-def test_analytics_market_stocks_routes_to_cross_asset_analytics(client):
-    """``?market=stocks`` builds a fresh CrossAssetAnalytics(asset_class=
-    'stock') and reads ``get_completed_stock_round_trips`` instead of
-    ``get_completed_round_trips``. Same response shape, sourced from
-    the stocks ``trades`` table."""
-    r = client.get("/api/analytics?market=stocks")
-    assert r.status_code == 200
-    body = r.json()
-    # Same field set as the crypto path — frontend renders identically.
-    for key in ("total_trades", "wins", "losses", "win_rate", "profit_factor"):
-        assert key in body
-
-
-def test_analytics_rejects_unknown_market(client):
-    r = client.get("/api/analytics?market=options")
-    assert r.status_code == 400
-    assert "market must be" in r.json()["detail"]
 
 
 # ── Risk + system status ───────────────────────────────────────
@@ -259,7 +184,7 @@ def test_risk_state_passes_market_discriminator_through(client):
     """The cycle pushes ``risk_state["market"]``; the route must echo it
     so the frontend can label whose risk this snapshot is."""
     client.app.state.ctx.runtime.risk_state = {
-        "market": "crypto",
+        "market": "stocks",
         "is_halted": True,
         "halt_reason": "drawdown_breach",
         "portfolio_heat_pct": 0.03,
@@ -267,7 +192,7 @@ def test_risk_state_passes_market_discriminator_through(client):
         "summary": "halted",
     }
     body = client.get("/api/risk/state").json()
-    assert body["market"] == "crypto"
+    assert body["market"] == "stocks"
     assert body["is_halted"] is True
 
 
@@ -337,7 +262,7 @@ def test_reconcile_recent_paginates(client):
                 session.add(
                     ReconciliationLog(
                         timestamp=datetime.now(UTC),
-                        market="crypto",
+                        market="stocks",
                         symbol=f"SYM{i}",
                         db_quantity=1.0,
                         broker_quantity=0.5,
@@ -389,55 +314,25 @@ def test_metrics_llm_returns_zero_calls_with_no_log(client, tmp_path, monkeypatc
     assert r.json()["calls"] == 0
 
 
-# ── /api/positions market dispatch ───────────────────────────
-
-
-def test_positions_default_is_crypto_for_back_compat(client):
-    """No ``market`` param → crypto path, matching pre-Round-7."""
-    a = client.get("/api/positions")
-    b = client.get("/api/positions?market=crypto")
-    assert a.status_code == 200
-    assert b.status_code == 200
-    assert a.json() == b.json()
-
-
-def test_positions_market_stocks_reads_stocks_open_trades(client):
-    """``?market=stocks`` calls ``get_open_trades`` (stocks repo)
-    instead of ``get_open_crypto_trades``. Empty pre-trade is fine
-    — the route just must return 200 and a list, not 404 or
-    silently fall back to crypto."""
-    r = client.get("/api/positions?market=stocks")
+def test_positions_reads_stocks_open_trades(client):
+    """``/api/positions`` reads ``get_open_trades`` (stocks repo).
+    Empty pre-trade is fine — the route just must return 200 and a list."""
+    r = client.get("/api/positions")
     assert r.status_code == 200
     assert isinstance(r.json(), list)
 
 
-def test_positions_rejects_unknown_market(client):
-    r = client.get("/api/positions?market=options")
-    assert r.status_code == 400
-    assert "market must be" in r.json()["detail"]
+# ── /api/system/status cadence ────────────────────
 
 
-# ── /api/system/status both-market cadence ────────────────────
-
-
-def test_system_status_exposes_both_market_cadences(client):
-    """Pre-Round-7 the ``cycle_interval_seconds`` field only carried
-    the crypto value (60s default). A stocks operator saw "60" even
-    though the stocks cycle runs every 15 min. Pin both new fields
-    and the back-compat key."""
+def test_system_status_exposes_stocks_cadence(client):
+    """The stocks cycle runs every 15 min; the status route reports it."""
     r = client.get("/api/system/status")
     assert r.status_code == 200
     body = r.json()
-    # Back-compat: ``cycle_interval_seconds`` mirrors crypto.
-    assert "cycle_interval_seconds" in body
-    # New: explicit crypto + stocks fields.
-    assert "crypto_cycle_interval_seconds" in body
-    assert "stocks_cycle_interval_seconds" in body
-    # Defaults: crypto = 60s, stocks = 15min * 60 = 900s.
-    assert body["crypto_cycle_interval_seconds"] == 60
+    # Default: 15min * 60 = 900s.
     assert body["stocks_cycle_interval_seconds"] == 900
-    # Back-compat field equals crypto value.
-    assert body["cycle_interval_seconds"] == body["crypto_cycle_interval_seconds"]
+    assert "crypto_cycle_interval_seconds" not in body
 
 
 def test_system_status_classifier_health_null_without_reactor(client):

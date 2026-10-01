@@ -1,15 +1,13 @@
 # Infrastructure
 
 Single-host Docker Compose stack for running the bot in production
-mode. All four services share one Postgres + pgvector instance; the
-two bots write concurrently to the same database.
+mode. Every service shares one Postgres + pgvector instance.
 
 ## Services
 
 | Service | Image | Purpose |
 |---|---|---|
 | `postgres` | `pgvector/pgvector:pg16` | Canonical DB (trades, P&L, halal cache, LLM audit, RAG vectors, …). Listens on `127.0.0.1:5433`. |
-| `trader-crypto` | `halal-trader:latest` | 24/7 crypto bot (`halal-trader crypto start`). Built with `[ml,sentiment]` extras. |
 | `trader-stocks` | `halal-trader:latest` | Market-hours stock bot (`halal-trader start`). |
 | `trader-web` | `halal-trader:latest` | FastAPI dashboard + Prometheus `/metrics`, exposed on `8082`. |
 
@@ -27,7 +25,7 @@ edit-test cycles:
 ```bash
 just pg-up                       # bring up postgres only
 uv run halal-trader db migrate   # run migrations
-uv run halal-trader crypto start --once   # one cycle, then exit
+uv run halal-trader start --once   # one stock cycle, then exit
 ```
 
 `just pg-down` stops Postgres but keeps the data volume, so a
@@ -72,8 +70,8 @@ unless the DB is at the Alembic head, so any schema change must be
 applied before the bots restart:
 
 ```bash
-docker compose run --rm trader-crypto halal-trader db migrate
-docker compose restart trader-crypto trader-stocks trader-web
+docker compose run --rm trader-migrate
+docker compose restart trader-stocks trader-web
 ```
 
 `just db-reset` drops + recreates the database (destroys all trade

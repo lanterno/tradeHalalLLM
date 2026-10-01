@@ -15,9 +15,8 @@ What this module is:
 * No dependency on any specific LLM, prompt, or backtest engine.
 
 What it intentionally is *not*:
-* The fitness function — the caller supplies it. That's where you wire
-  to ``crypto/backtest.py`` / ``crypto/walkforward.py`` / a replay
-  harness over ``ReplayStore``.
+* The fitness function — the caller supplies it (e.g. a replay
+  harness over ``ReplayStore``).
 
 Typical usage::
 

@@ -5,10 +5,9 @@ this file pins the two items that were explicitly listed as Wave H
 deferrals in ``cleanup_roadmap.md``:
 
 * The third tool from the original Wave H spec
-  (``query_regime_memory``) is now defined + handler-bound on both
-  crypto + stocks.
-* The stocks-side ``TradingStrategy`` mirrors the crypto agentic
-  branch with the asset-agnostic tools (RAG + regime memory).
+  (``query_regime_memory``) is defined + handler-bound on stocks.
+* The stocks-side ``TradingStrategy`` has an agentic branch with the
+  asset-agnostic tools (RAG + regime memory).
 """
 
 from __future__ import annotations
@@ -17,11 +16,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from halal_trader.core.llm.tools import (
-    CRYPTO_AGENTIC_TOOLS,
-    QUERY_REGIME_MEMORY_TOOL,
-    ToolCall,
-)
+from halal_trader.core.llm.tools import QUERY_REGIME_MEMORY_TOOL, ToolCall
 
 # ── Tool definition shape ───────────────────────────────────────
 
@@ -40,13 +35,6 @@ def test_query_regime_memory_tool_schema_has_k_param() -> None:
     assert schema["properties"]["k"]["maximum"] == 20
 
 
-def test_query_regime_memory_in_crypto_agentic_tools() -> None:
-    """The bundle constant the agentic mode picks tools from must
-    include the new tool — verified by name match."""
-    names = [t.name for t in CRYPTO_AGENTIC_TOOLS]
-    assert "query_regime_memory" in names
-
-
 def test_query_regime_memory_openai_projection() -> None:
     """The provider-side helper (used by GLMLLM) projects the schema
     onto the OpenAI-compatible function envelope correctly."""
@@ -55,100 +43,11 @@ def test_query_regime_memory_openai_projection() -> None:
     assert openai_payload["function"]["name"] == "query_regime_memory"
 
 
-# ── Crypto handler behaviour ────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_crypto_query_regime_memory_no_hub_returns_friendly_message() -> None:
-    """Standalone / dashboard-only contexts have no hub. The handler
-    must report "not wired" rather than crash the agent loop."""
-    from halal_trader.crypto.agent_tools import build_agent_handlers
-    from halal_trader.crypto.prompts import PromptContext
-
-    handlers = build_agent_handlers(
-        ctx=PromptContext(account=MagicMock(total_balance_usdt=1.0)),
-        hub=None,
-        timeframes=None,
-    )
-    out = await handlers["query_regime_memory"](ToolCall(name="query_regime_memory", args={"k": 3}))
-    assert "not wired" in out.lower()
-
-
-@pytest.mark.asyncio
-async def test_crypto_query_regime_memory_routes_to_store_when_wired() -> None:
-    """With a hub.regime store wired, the handler builds a
-    RegimeFeatures from the call args + invokes ``regime.query``."""
-    from halal_trader.crypto.agent_tools import build_agent_handlers
-    from halal_trader.crypto.prompts import PromptContext
-    from halal_trader.ml.regime_memory import RegimeSnapshot
-
-    regime = MagicMock()
-    from halal_trader.ml.regime_memory import RegimeFeatures
-
-    snap = RegimeSnapshot(
-        date="2026-03-15",
-        features=RegimeFeatures(volatility=0.02, trend=0.1),
-        outcome_pnl_pct=0.008,
-        outcome_win_rate=0.60,
-        outcome_n_trades=5,
-        note="post-FOMC rally",
-    )
-    regime.query = AsyncMock(return_value=[(snap, 0.82)])
-    hub = MagicMock(regime=regime)
-
-    handlers = build_agent_handlers(
-        ctx=PromptContext(account=MagicMock(total_balance_usdt=1.0)),
-        hub=hub,
-        timeframes=None,
-    )
-    out = await handlers["query_regime_memory"](
-        ToolCall(
-            name="query_regime_memory",
-            args={"volatility": 0.02, "trend": 0.1, "sentiment": -0.2, "k": 3},
-        )
-    )
-    regime.query.assert_awaited_once()
-    # Check the feature dict roundtripped through RegimeFeatures.
-    call_args = regime.query.await_args
-    features = call_args.args[0]
-    assert features.volatility == 0.02
-    assert features.trend == 0.1
-    assert features.sentiment == -0.2
-    assert "2026-03-15" in out or "post-FOMC" in out
-
-
-@pytest.mark.asyncio
-async def test_crypto_query_regime_memory_drops_unknown_keys() -> None:
-    """A malformed tool call (extra keys the dataclass doesn't know
-    about) must not crash the loop — the handler filters by the
-    allowed feature set."""
-    from halal_trader.crypto.agent_tools import build_agent_handlers
-    from halal_trader.crypto.prompts import PromptContext
-
-    regime = MagicMock()
-    regime.query = AsyncMock(return_value=[])
-    hub = MagicMock(regime=regime)
-    handlers = build_agent_handlers(
-        ctx=PromptContext(account=MagicMock(total_balance_usdt=1.0)),
-        hub=hub,
-        timeframes=None,
-    )
-    out = await handlers["query_regime_memory"](
-        ToolCall(
-            name="query_regime_memory",
-            args={"volatility": 0.02, "garbage_key": 999, "moon_phase": "waxing"},
-        )
-    )
-    # Should still call query — the garbage keys are dropped, not raised.
-    regime.query.assert_awaited_once()
-    assert "No analogous past regimes" in out
-
-
 # ── Stocks-side wiring ─────────────────────────────────────────
 
 
 def test_stocks_strategy_default_is_not_agentic() -> None:
-    """Stocks defaults to off, same as crypto."""
+    """Stocks agentic mode defaults to off."""
     from halal_trader.trading.strategy import TradingStrategy
 
     strat = TradingStrategy(
@@ -185,7 +84,7 @@ def test_stocks_strategy_agentic_flag_persists() -> None:
 
 
 def test_stocks_settings_expose_agentic_knobs() -> None:
-    """``CRYPTO_AGENTIC_*`` env vars mirror on the stocks side."""
+    """The stocks agentic knobs exist with their documented defaults."""
     from halal_trader.config import StockSettings
 
     s = StockSettings()
@@ -199,7 +98,7 @@ def test_stocks_settings_expose_agentic_knobs() -> None:
 
 @pytest.mark.asyncio
 async def test_stocks_query_rag_handler_routes_to_store() -> None:
-    """Mirror of the crypto handler — same RAG store, different bot."""
+    """The handler routes the query to the hub's RAG store."""
     from halal_trader.trading.agent_tools import build_agent_handlers
 
     rag = MagicMock()
@@ -240,10 +139,8 @@ async def test_stocks_query_rag_blank_query_rejected() -> None:
 
 
 @pytest.mark.asyncio
-async def test_stocks_handler_set_omits_crypto_specific_tools() -> None:
-    """analyze_pair and compute_var_95 don't have clean stocks
-    equivalents; their absence from the stocks handler dict is
-    deliberate and the strategy's tools=[...] omits them."""
+async def test_stocks_handler_set_is_rag_and_regime_memory() -> None:
+    """The stocks handler dict binds exactly the two asset-agnostic tools."""
     from halal_trader.trading.agent_tools import build_agent_handlers
 
     handlers = build_agent_handlers(hub=None)

@@ -12,8 +12,6 @@ from halal_trader.ml.features import FEATURE_KEYS
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncEngine
 
-    from halal_trader.db.repos import CryptoTradeRepo
-
 logger = logging.getLogger(__name__)
 
 _FEATURE_KEYS = list(FEATURE_KEYS)
@@ -43,7 +41,9 @@ class RetrainingScheduler:
         min_samples: int = 50,
         retrain_every_n_trades: int = 20,
         namespace: str = "crypto",
-        crypto_trade_repo: "CryptoTradeRepo | None" = None,
+        # Any repo exposing ``get_filled_trades``; the crypto trade repo
+        # that used to fill this slot was deleted with the crypto bot.
+        crypto_trade_repo: Any = None,
         engine: "AsyncEngine | None" = None,
     ) -> None:
         self._repo = repo

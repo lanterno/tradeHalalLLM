@@ -39,10 +39,10 @@ WORKDIR /app
 # table so it must be present at sync time.
 COPY pyproject.toml uv.lock README.md ./
 
-# Sync core deps; the dashboard / ml / sentiment extras are optional and the
-# operator can rebuild with --build-arg EXTRAS="ml,sentiment". EXTRAS is
+# Sync core deps; the dashboard / ml extras are optional and the
+# operator can rebuild with --build-arg EXTRAS="ml,dashboard". EXTRAS is
 # comma-separated, but uv's --extra takes ONE name per flag — so expand it into
-# repeated --extra flags. Passing "ml,sentiment" as a single --extra value
+# repeated --extra flags. Passing "ml,dashboard" as a single --extra value
 # silently matches no extra and installs neither (base deps only). When EXTRAS
 # is empty the loop adds nothing and this is a plain `uv sync --frozen`.
 ARG EXTRAS=""
@@ -107,5 +107,5 @@ USER trader
 ENV HOME=/home/trader \
     UV_CACHE_DIR=/home/trader/.cache/uv
 
-# Default to the crypto bot; override at run time for stocks or web.
-CMD ["halal-trader", "crypto", "start"]
+# Default to the stock bot; override at run time for web or the shadow engine.
+CMD ["halal-trader", "start"]

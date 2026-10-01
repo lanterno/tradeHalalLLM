@@ -36,19 +36,14 @@ def test_repository_bundle_returns_same_impls_as_delegators() -> None:
     repo = Repository(_FakeEngine())  # type: ignore[arg-type]
     bundle = repo.bundle
     assert bundle.trades is repo._trades
-    assert bundle.crypto_trades is repo._crypto_trades
-    assert bundle.pnl is repo._pnl
     assert bundle.stock_pnl is repo._stock_pnl
-    assert bundle.halal_cache is repo._halal_cache
     assert bundle.stock_halal_cache is repo._stock_halal_cache
     assert bundle.halal_screening is repo._halal_screening
     assert bundle.runtime_config is repo._runtime_config
-    assert bundle.research_jobs is repo._research_jobs
     assert bundle.web_audit is repo._web_audit
     assert bundle.indicator_snapshots is repo._indicator_snapshots
     assert bundle.llm_decisions is repo._llm_decisions
     assert bundle.purification is repo._purification
-    assert bundle.pair_pauses is repo._pair_pause
     assert bundle.strategy_adjustments is repo._strategy_adjustments
 
 
@@ -73,19 +68,14 @@ def test_from_engine_builds_full_bundle_without_repository() -> None:
     bundle = RepoBundle.from_engine(_FakeEngine())  # type: ignore[arg-type]
     for field_name in (
         "trades",
-        "crypto_trades",
-        "pnl",
         "stock_pnl",
-        "halal_cache",
         "stock_halal_cache",
         "halal_screening",
         "runtime_config",
-        "research_jobs",
         "web_audit",
         "indicator_snapshots",
         "llm_decisions",
         "purification",
-        "pair_pauses",
         "strategy_adjustments",
     ):
         assert getattr(bundle, field_name) is not None, (
@@ -100,31 +90,30 @@ def test_from_engine_uses_distinct_instances_per_call() -> None:
     a = RepoBundle.from_engine(_FakeEngine())  # type: ignore[arg-type]
     b = RepoBundle.from_engine(_FakeEngine())  # type: ignore[arg-type]
     assert a.trades is not b.trades
-    assert a.crypto_trades is not b.crypto_trades
+    assert a.stock_pnl is not b.stock_pnl
 
 
 # ── Protocol shape sanity ───────────────────────────────────────
 
 
-def test_crypto_trade_repo_satisfies_protocol_shape() -> None:
+def test_trade_repo_satisfies_protocol_shape() -> None:
     """One of the broader Protocol surfaces — ensures the mini-repo
     implements every method downstream code expects to call. Pure
     structural check; Protocols aren't ``@runtime_checkable`` here
     (mypy enforces the contract at type-check time)."""
     bundle = RepoBundle.from_engine(_FakeEngine())  # type: ignore[arg-type]
-    repo = bundle.crypto_trades
+    repo = bundle.trades
     for method in (
-        "record_crypto_trade",
-        "update_crypto_trade_stop_loss",
-        "close_crypto_trade",
-        "get_today_crypto_trades",
-        "get_open_crypto_trades",
-        "get_open_crypto_trades_for_pair",
-        "close_open_crypto_trades_for_pair",
-        "get_recent_crypto_trades",
-        "get_filled_trades",
+        "record_trade",
+        "update_stock_trade_stop_loss",
+        "close_trade",
+        "get_today_trades",
+        "get_open_trades",
+        "close_open_trades_for_symbol",
+        "get_recent_trades",
+        "get_completed_stock_round_trips",
     ):
-        assert hasattr(repo, method), f"CryptoTradeRepo impl missing {method!r}"
+        assert hasattr(repo, method), f"TradeRepo impl missing {method!r}"
 
 
 # ── Legacy Repository delegation still works ───────────────────

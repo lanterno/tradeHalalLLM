@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from halal_trader.crypto.risk import PortfolioRiskEngine
 from halal_trader.domain.models import Kline
+from halal_trader.portfolio.risk import PortfolioRiskEngine
 
 
 def _kl(close: float, open_time: int) -> Kline:

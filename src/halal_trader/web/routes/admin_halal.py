@@ -36,7 +36,7 @@ def register(app: FastAPI) -> None:
     @app.get("/api/halal/explain/{trade_id}")
     async def explain_trade(
         trade_id: int,
-        asset_class: str = "crypto",
+        asset_class: str = "stock",
         ctx: DashboardContext = Depends(get_ctx),
     ) -> JSONResponse:
         """Wave L — operator-readable Sharia-compliance explanation.
@@ -50,8 +50,8 @@ def register(app: FastAPI) -> None:
         from halal_trader.halal.audit import export_receipt
         from halal_trader.halal.explainer import explain_screening
 
-        if asset_class not in ("crypto", "stock"):
-            raise HTTPException(400, "asset_class must be 'crypto' or 'stock'")
+        if asset_class != "stock":
+            raise HTTPException(400, "asset_class must be 'stock'")
         receipt = await export_receipt(ctx.engine, trade_id=trade_id, asset_class=asset_class)
         if receipt is None:
             raise HTTPException(404, f"trade {trade_id} not found")
