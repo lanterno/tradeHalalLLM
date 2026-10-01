@@ -18,6 +18,9 @@ from halal_trader.domain.ports import LLMBackend
 
 logger = logging.getLogger(__name__)
 
+# Consecutive failed strategy calls before the operator is alerted.
+_FAILURE_ALERT_THRESHOLD = 3
+
 
 @dataclass
 class AgentConfig:
@@ -223,7 +226,35 @@ class BaseStrategy(ABC):
                     )
                 except Exception as alert_err:  # noqa: BLE001 — alerting must never break the cycle
                     logger.warning("quota alert failed to send: %s", alert_err)
+            else:
+                await self._alert_on_persistent_failure(e)
             return make_empty(str(e))
+
+    async def _alert_on_persistent_failure(self, error: Exception) -> None:
+        """Alert after N consecutive failed strategy calls that nothing else reports.
+
+        Quota exhaustion and an exhausted spend budget alert on their own.
+        Anything else -- timeouts, a host returning garbage, schema drift --
+        used to fail silently cycle after cycle: every cycle a no-action
+        plan, no operator signal (assessment llm#3).
+        """
+        from halal_trader.core.llm.spend import BudgetExhausted
+
+        self._consecutive_failures = getattr(self, "_consecutive_failures", 0) + 1
+        if isinstance(error, BudgetExhausted) or self._alert_sink is None:
+            return
+        if self._consecutive_failures < _FAILURE_ALERT_THRESHOLD:
+            return
+        try:
+            await self._alert_sink.notify(
+                "llm.failing",
+                f"{self._consecutive_failures} consecutive strategy LLM failures "
+                f"({self._llm_provider_name}/{self._llm.model}); last: "
+                f"{type(error).__name__}: {error}. "
+                "Every cycle is a no-action plan until it recovers.",
+            )
+        except Exception as alert_err:  # noqa: BLE001 — alerting must never break the cycle
+            logger.warning("failure alert failed to send: %s", alert_err)
 
     async def _validate_with_repair(
         self,
@@ -358,7 +389,15 @@ class BaseStrategy(ABC):
 
     def _on_llm_success(self) -> None:
         """Hook for subclasses to react to a successful LLM call (e.g. reset counters)."""
+        if getattr(self, "_consecutive_failures", 0) >= _FAILURE_ALERT_THRESHOLD:
+            logger.warning(
+                "strategy LLM recovered after %d consecutive failures", self._consecutive_failures
+            )
+        self._consecutive_failures = 0
 
     def _on_llm_failure(self, error: Exception, elapsed_ms: int, prefix: str) -> None:
         """Hook for subclasses to react to a failed LLM call (e.g. circuit breaker)."""
-        logger.error("%s analysis failed after %dms: %s", prefix, elapsed_ms, error)
+        # The type matters: a timeout's message is empty, so `%s` alone logged nothing.
+        logger.error(
+            "%s analysis failed after %dms: %s: %s", prefix, elapsed_ms, type(error).__name__, error
+        )

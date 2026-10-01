@@ -73,3 +73,52 @@ async def test_a_real_hold_is_still_a_success() -> None:
 
     assert plan["market_outlook"] == "flat"
     assert not repo.record_decision.await_args.kwargs["prompt_summary"].startswith("FAILED")
+
+
+def _failing_strategy(error: Exception) -> tuple[BaseStrategy, AsyncMock]:
+    strat, _ = _strategy({})
+    strat._llm.generate_tool_call = AsyncMock(side_effect=error)  # type: ignore[attr-defined]
+    sink = MagicMock()
+    sink.notify = AsyncMock()
+    strat._alert_sink = sink
+    return strat, sink.notify
+
+
+async def test_persistent_failures_alert_after_three_cycles() -> None:
+    strat, notify = _failing_strategy(TimeoutError())
+
+    await _analyse(strat)
+    await _analyse(strat)
+    notify.assert_not_awaited()  # two in a row can be a blip
+    await _analyse(strat)
+
+    kind, message = notify.await_args.args
+    assert kind == "llm.failing"
+    assert "3 consecutive" in message and "TimeoutError" in message
+
+
+async def test_a_success_resets_the_failure_count() -> None:
+    strat, notify = _failing_strategy(TimeoutError())
+    await _analyse(strat)
+    await _analyse(strat)
+    strat._llm.generate_tool_call = AsyncMock(  # type: ignore[attr-defined]
+        return_value=[
+            ToolCall(name="submit_decisions", args={"decisions": [], "market_outlook": "x"})
+        ]
+    )
+    await _analyse(strat)
+    strat._llm.generate_tool_call = AsyncMock(side_effect=TimeoutError())  # type: ignore[attr-defined]
+    await _analyse(strat)
+    await _analyse(strat)
+
+    notify.assert_not_awaited()  # never three in a row
+
+
+async def test_an_exhausted_budget_does_not_double_alert() -> None:
+    from halal_trader.core.llm.spend import BudgetExhausted
+
+    strat, notify = _failing_strategy(BudgetExhausted("cap reached"))
+    for _ in range(4):
+        await _analyse(strat)
+
+    notify.assert_not_awaited()  # the spend meter already alerted
