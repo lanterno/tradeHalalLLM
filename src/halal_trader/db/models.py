@@ -958,3 +958,27 @@ class DailyBarRow(SQLModel, table=True):
     fetched_at: datetime = Field(
         default_factory=lambda: datetime.now(UTC), sa_type=sa.DateTime(timezone=True)
     )
+
+
+class HalalScreenResult(SQLModel, table=True):
+    """One in-house Shariah screening verdict per (as_of, symbol) (compliance/).
+
+    Every run is kept, so the screening history is point-in-time: a backtest
+    asks what the screen said on a given day. ``metrics`` stores the inputs
+    and ratios behind the verdict so each decision can be audited.
+    Research-grade until validated against halal ETF holdings (plan D3).
+    """
+
+    __tablename__ = "halal_screen_results"
+
+    as_of: date = Field(primary_key=True)
+    symbol: str = Field(primary_key=True)
+    cik: int | None = None
+    sic_description: str = ""
+    verdict: str = Field(index=True)
+    reasons: list[str] = Field(sa_column=sa.Column("reasons", JSONB, nullable=False))
+    metrics: dict[str, Any] = Field(sa_column=sa.Column("metrics", JSONB, nullable=False))
+    method: str
+    screened_at: datetime = Field(
+        default_factory=lambda: datetime.now(UTC), sa_type=sa.DateTime(timezone=True)
+    )

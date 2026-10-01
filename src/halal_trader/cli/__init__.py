@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import click
 
+from halal_trader.cli import compliance as compliance_cmd
 from halal_trader.cli import dashboard as dashboard_cmd
 from halal_trader.cli import data as data_cmd
 from halal_trader.cli import db as db_cmd
@@ -54,6 +55,9 @@ cli.add_command(db_cmd.db_group)
 cli.add_command(halt_cmd.halt)
 cli.add_command(halt_cmd.resume)
 cli.add_command(halt_cmd.halt_status)
+
+# ── In-house Shariah screen (research-grade until validated) ──
+cli.add_command(compliance_cmd.compliance)
 
 # ── Research market data ───────────────────────────────────────
 cli.add_command(data_cmd.data)
