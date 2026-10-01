@@ -23,6 +23,7 @@ from halal_trader.core.heartbeat import (
 from halal_trader.core.llm import create_llm
 from halal_trader.core.scheduler import BaseTradingBot
 from halal_trader.domain.ports import Broker, ComplianceScreener
+from halal_trader.domain.status import EntryType
 from halal_trader.halal.cache import HalalScreener
 from halal_trader.halal.zoya import ZoyaClient
 from halal_trader.market_hours import (
@@ -611,7 +612,7 @@ class TradingBot(BaseTradingBot):
                     "event": events.TRADE_BUY_PLACED,
                     "symbol": event.symbol,
                     "status": result.get("status"),
-                    "entry_type": "reactor_momentum",
+                    "entry_type": EntryType.REACTOR_MOMENTUM,
                 },
             )
 

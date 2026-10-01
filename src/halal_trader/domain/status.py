@@ -39,3 +39,14 @@ class TradeStatus(StrEnum):
     def is_open(cls, status: "TradeStatus | str") -> bool:
         """A status that may still produce fills or trade events."""
         return status in {cls.PENDING, cls.SUBMITTED, cls.PARTIALLY_FILLED}
+
+
+class EntryType(StrEnum):
+    """Why a position was opened -- governs who may close it.
+
+    REACTOR_MOMENTUM positions (news-reactor "fast in") are locked against
+    LLM-initiated sells; only the monitor's rule-based exits close them
+    ("slow out"). Stored in ``trades.entry_type``; None for cycle entries.
+    """
+
+    REACTOR_MOMENTUM = "reactor_momentum"

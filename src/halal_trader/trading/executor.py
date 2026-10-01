@@ -11,7 +11,7 @@ from halal_trader.core.long_only import clamp_sell_to_long
 from halal_trader.db.repos import TradeRepo
 from halal_trader.domain.models import TradeAction, TradeDecision, TradingPlan
 from halal_trader.domain.ports import Broker, ComplianceScreener
-from halal_trader.domain.status import TradeStatus
+from halal_trader.domain.status import EntryType, TradeStatus
 
 logger = logging.getLogger(__name__)
 
@@ -321,7 +321,7 @@ class TradeExecutor(BaseExecutor):
         )
         return await self._execute_buy(
             decision,
-            entry_type="reactor_momentum",
+            entry_type=EntryType.REACTOR_MOMENTUM,
             positions=positions or [],
         )
 
@@ -1086,13 +1086,18 @@ class TradeExecutor(BaseExecutor):
         Operator escape hatch: ``min_hold_minutes <= 0`` disables the
         time-window check but does NOT disable the reactor-momentum
         lockout — that's a deliberate policy gate, not a tunable.
-        Repo errors degrade to "allow".
+        Repo errors refuse the sell (fail closed).
         """
         try:
             opens = await self._repo.get_open_trades()
         except Exception as exc:  # noqa: BLE001
-            logger.debug("min-hold lookup failed for %s: %s — allowing sell", symbol, exc)
-            return None
+            # Fail CLOSED: if the lockout cannot be checked, an LLM SELL might
+            # close a protected momentum position. Refusing costs nothing the
+            # monitor can't cover -- its stop/trailing exits do not pass here.
+            logger.warning(
+                "SELL refused: min-hold / momentum lockout unverifiable for %s (%r)", symbol, exc
+            )
+            return f"hold lockout unverifiable ({type(exc).__name__}); refusing LLM sell"
         from datetime import UTC, datetime
 
         wanted = symbol.upper()
@@ -1103,7 +1108,7 @@ class TradeExecutor(BaseExecutor):
             t_sym = str(getattr(trade, "symbol", "") or "").upper()
             if t_sym != wanted:
                 continue
-            if str(getattr(trade, "entry_type", "") or "") == "reactor_momentum":
+            if str(getattr(trade, "entry_type", "") or "") == EntryType.REACTOR_MOMENTUM:
                 has_reactor_momentum = True
             ts = getattr(trade, "timestamp", None)
             if not isinstance(ts, datetime):
@@ -1368,7 +1373,7 @@ class TradeExecutor(BaseExecutor):
         reactor_syms: set[str] = {
             str(getattr(t, "symbol", "") or "").upper()
             for t in opens
-            if str(getattr(t, "entry_type", "") or "") == "reactor_momentum"
+            if str(getattr(t, "entry_type", "") or "") == EntryType.REACTOR_MOMENTUM
             and getattr(t, "symbol", "")
         }
         holding_reactor = self._reactor_hold_overnight and bool(reactor_syms)

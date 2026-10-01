@@ -28,6 +28,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from halal_trader.db.repos import TradeRepo
+from halal_trader.domain.status import EntryType
 from halal_trader.market_hours import is_market_open_local
 from halal_trader.mcp.client import AlpacaMCPClient
 from halal_trader.trading.bars import bars_to_klines
@@ -241,7 +242,7 @@ class StockPositionMonitor:
         """
         if not self._trend_break_enabled:
             return False
-        if str(getattr(trade, "entry_type", "") or "") != "reactor_momentum":
+        if str(getattr(trade, "entry_type", "") or "") != EntryType.REACTOR_MOMENTUM:
             return False
         entry = trade.filled_price or trade.price
         if not entry or price <= entry:
@@ -298,7 +299,7 @@ class StockPositionMonitor:
         (the LLM is locked out). Ordinary cycle positions keep the
         opt-in activation gate + tighter distance.
         """
-        is_reactor = str(getattr(trade, "entry_type", "") or "") == "reactor_momentum"
+        is_reactor = str(getattr(trade, "entry_type", "") or "") == EntryType.REACTOR_MOMENTUM
         if is_reactor:
             distance_pct = self._reactor_trailing_distance_pct
             activation_pct = 0.0  # trail from the first tick in profit

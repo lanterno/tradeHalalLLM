@@ -138,6 +138,7 @@ async def test_close_position_no_order_id_records_filled_when_position_gone():
     broker.close_position = AsyncMock(return_value={"closed": True, "status": "ok"})
 
     repo = MagicMock()
+    repo.get_open_trades = AsyncMock(return_value=[])  # the sell-side hold lockout reads it
     repo.record_trade = AsyncMock(return_value=200)
 
     executor = TradeExecutor(
@@ -166,6 +167,7 @@ async def test_close_position_no_change_records_rejected():
     broker.close_position = AsyncMock(return_value={"closed": False})
 
     repo = MagicMock()
+    repo.get_open_trades = AsyncMock(return_value=[])  # the sell-side hold lockout reads it
     repo.record_trade = AsyncMock(return_value=201)
 
     executor = TradeExecutor(
@@ -188,6 +190,7 @@ async def test_close_position_no_open_position_skipped():
     broker.close_position = AsyncMock()
 
     repo = MagicMock()
+    repo.get_open_trades = AsyncMock(return_value=[])  # the sell-side hold lockout reads it
     repo.record_trade = AsyncMock()
 
     executor = TradeExecutor(
@@ -223,6 +226,7 @@ async def test_sell_fill_closes_open_buy_row():
         }
     )
     repo = MagicMock()
+    repo.get_open_trades = AsyncMock(return_value=[])  # the sell-side hold lockout reads it
     repo.record_trade = AsyncMock(return_value=300)
     repo.close_open_trades_for_symbol = AsyncMock(return_value=1)
 
@@ -262,6 +266,7 @@ async def test_close_all_records_synthetic_sell_for_each_symbol():
     broker.close_all_positions = AsyncMock(return_value={"result": "closed"})
 
     repo = MagicMock()
+    repo.get_open_trades = AsyncMock(return_value=[])  # the sell-side hold lockout reads it
     # Two open BUYs for SHOP — total 290 shares.
     repo.get_open_trades = AsyncMock(
         return_value=[
@@ -307,6 +312,7 @@ async def test_close_all_stamps_closed_at_on_orphan_buys():
     broker.close_all_positions = AsyncMock(return_value={"result": "closed"})
 
     repo = MagicMock()
+    repo.get_open_trades = AsyncMock(return_value=[])  # the sell-side hold lockout reads it
     repo.get_open_trades = AsyncMock(
         return_value=[
             SimpleNamespace(symbol="SHOP", side="buy", filled_price=40.0),
@@ -353,6 +359,7 @@ async def test_close_all_survives_pre_snapshot_failure():
     broker.close_all_positions = AsyncMock(return_value={"result": "closed"})
 
     repo = MagicMock()
+    repo.get_open_trades = AsyncMock(return_value=[])  # the sell-side hold lockout reads it
     repo.get_open_trades = AsyncMock(
         return_value=[SimpleNamespace(symbol="SHOP", side="buy", filled_price=40.0)]
     )
@@ -384,6 +391,7 @@ async def test_close_all_skips_synthetic_sell_when_unpriceable():
     broker.close_all_positions = AsyncMock(return_value={"result": "closed"})
 
     repo = MagicMock()
+    repo.get_open_trades = AsyncMock(return_value=[])  # the sell-side hold lockout reads it
     repo.get_open_trades = AsyncMock(
         return_value=[
             SimpleNamespace(
@@ -421,6 +429,7 @@ async def test_close_all_falls_back_to_entry_price_when_no_fill():
     broker.close_all_positions = AsyncMock(return_value={"result": "closed"})
 
     repo = MagicMock()
+    repo.get_open_trades = AsyncMock(return_value=[])  # the sell-side hold lockout reads it
     repo.get_open_trades = AsyncMock(
         return_value=[
             SimpleNamespace(
@@ -468,6 +477,7 @@ async def test_close_all_holds_reactor_positions_overnight():
     broker.close_position = AsyncMock(return_value={"id": "x"})
 
     repo = MagicMock()
+    repo.get_open_trades = AsyncMock(return_value=[])  # the sell-side hold lockout reads it
     repo.get_open_trades = AsyncMock(
         return_value=[
             SimpleNamespace(
@@ -525,6 +535,7 @@ async def test_close_all_flattens_reactor_when_hold_disabled():
     broker.close_all_positions = AsyncMock(return_value={"result": "closed"})
 
     repo = MagicMock()
+    repo.get_open_trades = AsyncMock(return_value=[])  # the sell-side hold lockout reads it
     repo.get_open_trades = AsyncMock(
         return_value=[
             SimpleNamespace(
@@ -574,6 +585,7 @@ async def test_close_position_with_order_id_uses_confirm_fill_path():
     )
 
     repo = MagicMock()
+    repo.get_open_trades = AsyncMock(return_value=[])  # the sell-side hold lockout reads it
     repo.record_trade = AsyncMock(return_value=202)
 
     executor = TradeExecutor(
@@ -596,6 +608,7 @@ async def test_buy_with_string_response_records_rejected():
     """The exact yesterday-bug shape: broker returns a non-dict string."""
     broker = _broker(place_order_return="2 validation errors for place_stock_order …")
     repo = MagicMock()
+    repo.get_open_trades = AsyncMock(return_value=[])  # the sell-side hold lockout reads it
     repo.record_trade = AsyncMock(return_value=99)
 
     executor = TradeExecutor(
@@ -624,6 +637,7 @@ async def test_buy_with_dict_missing_id_records_rejected():
     """Broker dict that lacks an `id` field → rejected, not pending."""
     broker = _broker(place_order_return={"error": "rate limit", "code": 429})
     repo = MagicMock()
+    repo.get_open_trades = AsyncMock(return_value=[])  # the sell-side hold lockout reads it
     repo.record_trade = AsyncMock(return_value=100)
 
     executor = TradeExecutor(
@@ -642,6 +656,7 @@ async def test_buy_with_none_response_records_rejected():
     """Broker returns None → still safe, recorded as rejected."""
     broker = _broker(place_order_return=None)
     repo = MagicMock()
+    repo.get_open_trades = AsyncMock(return_value=[])  # the sell-side hold lockout reads it
     repo.record_trade = AsyncMock(return_value=101)
 
     executor = TradeExecutor(
@@ -667,6 +682,7 @@ async def test_buy_with_valid_response_unchanged_path():
         }
     )
     repo = MagicMock()
+    repo.get_open_trades = AsyncMock(return_value=[])  # the sell-side hold lockout reads it
     repo.record_trade = AsyncMock(return_value=42)
 
     executor = TradeExecutor(
@@ -709,6 +725,7 @@ async def test_position_cap_counts_existing_holding():
     rejected, even though the new order alone is only 10%."""
     broker = _broker(place_order_return={"id": "x", "status": "filled"})
     repo = MagicMock()
+    repo.get_open_trades = AsyncMock(return_value=[])  # the sell-side hold lockout reads it
     repo.record_trade = AsyncMock(return_value=1)
     executor = TradeExecutor(
         broker, repo, max_position_pct=0.20, max_simultaneous_positions=10, max_sector_pct=0
@@ -730,6 +747,7 @@ async def test_position_cap_allows_when_cumulative_under_limit():
     the cap check passed)."""
     broker = _broker(place_order_return="2 validation errors for place_stock_order …")
     repo = MagicMock()
+    repo.get_open_trades = AsyncMock(return_value=[])  # the sell-side hold lockout reads it
     repo.record_trade = AsyncMock(return_value=1)
     executor = TradeExecutor(
         broker, repo, max_position_pct=0.20, max_simultaneous_positions=10, max_sector_pct=0
