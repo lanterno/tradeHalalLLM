@@ -294,3 +294,41 @@ docker-status:
     @docker compose -f infra/docker-compose.yml ps
     @echo "---"
     @curl -s -o /dev/null -w "Web /api/health → HTTP %{http_code}\n" http://localhost:8082/api/health
+
+# ── Home stack (~/lab/home services.toml) ─────────────────
+# The verbs ~/lab/home's services.toml names. Same fleet as docker-up, plus
+# infra/compose.home.yml: dashboard on 127.0.0.1:6010, Postgres on loopback.
+# Project name pinned to `infra` so the live infra_pg-data volume stays attached.
+home_compose := "docker compose -p infra -f infra/docker-compose.yml -f infra/compose.home.yml"
+
+# Start the fleet in the background (postgres + migrate + stocks + shadow + web)
+home-up:
+    {{home_compose}} up -d
+
+# Stop the fleet (containers removed, volumes kept)
+home-down:
+    {{home_compose}} down
+
+# Rebuild the image the fleet runs
+home-build:
+    {{home_compose}} build
+
+# trader-crypto is left out on purpose: it is profile-gated, not in the default fleet.
+# Exit 0 only if every long-running container is running AND the API answers
+home-health:
+    #!/usr/bin/env sh
+    for c in halal-trader-pg trader-stocks trader-shadow trader-web; do
+        [ "$(docker inspect -f '{{{{.State.Status}}' "$c" 2>/dev/null)" = running ] \
+            || { echo "$c not running"; exit 1; }
+    done
+    curl -fsS --max-time 3 http://127.0.0.1:6010/api/health >/dev/null
+
+# Last 100 lines from every service, no --follow (for callers that expect it to finish)
+home-logs:
+    {{home_compose}} logs --tail=100 --no-color
+
+# pg_dump the whole database into <dest>/halal_trader.dump (restore: just db-restore <file>)
+home-backup dest:
+    docker exec halal-trader-pg pg_dump -U trader -d halal_trader -Fc -f /tmp/home-backup.dump
+    docker cp halal-trader-pg:/tmp/home-backup.dump "{{dest}}/halal_trader.dump"
+    docker exec halal-trader-pg rm -f /tmp/home-backup.dump
