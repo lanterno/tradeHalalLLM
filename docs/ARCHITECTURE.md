@@ -80,6 +80,12 @@ Recorded payloads of the pinned release live in `tests/fixtures/`.
 Read-only account data for the books comes from Alpaca's REST API
 directly (`execution/alpaca_rest.py`).
 
+`execution/alpaca_broker.py` implements the same `Broker` port over REST,
+with no subprocess: timeouts, strict parsing, and a `client_order_id` on
+every order so a timed-out submission is looked up before it is retried.
+`ALPACA_BROKER_ADAPTER=rest` selects it; the default stays `mcp` until
+`halal-trader broker compare` has agreed through live sessions.
+
 ## Books, health, spend
 
 - **Ledger** (`execution/ledger.py`): Alpaca's account activities and daily
