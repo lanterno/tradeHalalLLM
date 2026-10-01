@@ -51,6 +51,25 @@ _TRADING_LOCK_KEY = 0x48414C414C53544B
 _PID_FILE = Path("halal_trader.pid")
 
 
+def _zoya_for(settings: Any) -> ZoyaClient | None:
+    """The Zoya client the halal screen may trust, or None for the default list.
+
+    Zoya's SANDBOX returns randomised verdicts, so it must not decide what is
+    halal (operator decision 2026-10-01): with a sandbox key the bot screens
+    from the curated AAOIFI default list, as with no key at all, until the
+    in-house screen (plan 3.2) or a production key replaces it.
+    """
+    if not settings.zoya.api_key:
+        return None
+    if settings.zoya.use_sandbox:
+        logger.warning(
+            "Zoya key is a SANDBOX key: its verdicts are random, so they are ignored; "
+            "screening from the curated AAOIFI default list instead"
+        )
+        return None
+    return ZoyaClient(api_key=settings.zoya.api_key, use_sandbox=False)
+
+
 class TradingBot(BaseTradingBot):
     """Composition root and scheduler — wires components and runs cron jobs."""
 
@@ -134,13 +153,7 @@ class TradingBot(BaseTradingBot):
         llm = create_llm(self.settings)
 
         # Halal screener
-        zoya = None
-        if self.settings.zoya.api_key:
-            zoya = ZoyaClient(
-                api_key=self.settings.zoya.api_key,
-                use_sandbox=self.settings.zoya.use_sandbox,
-            )
-        self.screener = HalalScreener(repo, zoya)
+        self.screener = HalalScreener(repo, _zoya_for(self.settings))
 
         # Optional adversarial co-bot for stocks. Off
         # by default; flipped on via LLM_ADVERSARIAL_ENABLED.
