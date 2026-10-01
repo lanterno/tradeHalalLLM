@@ -717,6 +717,28 @@ class MlArtefact(SQLModel, table=True):
     )
 
 
+class Heartbeat(SQLModel, table=True):
+    """Last-seen time of each long-running component, one row per component.
+
+    The bots and the dashboard run in separate containers, so "is the bot
+    alive?" has to be answered from the database: the stock bot upserts a
+    row per component (process, cycle, monitor) and /api/health/bot,
+    `just home-health` and the System page read them. Before this the
+    dashboard's "Bot Running" came from in-process state the web container
+    never had, and /api/health was a hard-coded constant.
+    """
+
+    __tablename__ = "heartbeats"
+
+    component: str = Field(primary_key=True)
+    beat_at: datetime = Field(
+        default_factory=lambda: datetime.now(UTC), sa_type=sa.DateTime(timezone=True)
+    )
+    detail: dict[str, Any] | None = Field(
+        default=None, sa_column=sa.Column("detail", JSONB, nullable=True)
+    )
+
+
 class KillSwitch(SQLModel, table=True):
     """Single-row operator kill-switch.
 

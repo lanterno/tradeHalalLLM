@@ -12,6 +12,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from halal_trader.core import events
+from halal_trader.core.heartbeat import STOCK_CYCLE, STOCK_MONITOR, STOCK_PROCESS, beat
 from halal_trader.core.llm import create_llm
 from halal_trader.core.scheduler import BaseTradingBot
 from halal_trader.domain.ports import Broker, ComplianceScreener
@@ -205,6 +206,7 @@ class TradingBot(BaseTradingBot):
             trend_break_enabled=self.settings.stocks.trend_break_enabled,
             trend_break_ma_period=self.settings.stocks.trend_break_ma_period,
             trend_break_timeframe=self.settings.stocks.trend_break_timeframe,
+            on_tick=lambda detail: beat(self._engine, STOCK_MONITOR, detail),
             notifier=self._notifier,
         )
 
@@ -795,6 +797,7 @@ class TradingBot(BaseTradingBot):
                 logger.debug("Stocks self-review trigger check failed: %s", exc)
 
         await cycle_service.run_cycle()
+        await beat(self._engine, STOCK_CYCLE)
 
     async def end_of_day(self) -> None:
         """End-of-day job: close all positions, record P&L."""
@@ -1105,7 +1108,15 @@ class TradingBot(BaseTradingBot):
                 logger.warning("Startup pre-market failed (will retry at scheduled time): %s", e)
 
             # Keep running until interrupted
+            # The run loop doubles as the process heartbeat: every 60 s it
+            # records that the bot is alive, so a hung or dead process shows
+            # up as a stale stock.process row in /api/health/bot.
+            loop = asyncio.get_running_loop()
+            last_beat = float("-inf")
             while self._running:
+                if loop.time() - last_beat >= 60:
+                    await beat(self._engine, STOCK_PROCESS)
+                    last_beat = loop.time()
                 await asyncio.sleep(1)
 
         except KeyboardInterrupt, asyncio.CancelledError:

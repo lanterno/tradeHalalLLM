@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any
 
@@ -63,8 +64,13 @@ class StockPositionMonitor:
         retrainer: Any = None,
         close_recorders: object | None = None,
         notifier: Any = None,
+        on_tick: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
     ) -> None:
         self._mcp = mcp
+        # Called after every completed tick (market open or not) so liveness
+        # is visible outside the process; a tick that raises does not call
+        # it, which is what makes a crash-looping monitor show up as stale.
+        self._on_tick = on_tick
         self._repo = repo
         self._check_interval = check_interval
         self._trailing_activation_pct = trailing_stop_activation_pct
@@ -126,6 +132,7 @@ class StockPositionMonitor:
         while self._running:
             try:
                 if not is_market_open_local():
+                    await self._tick_done({"market_open": False})
                     # Sleep longer outside hours so we're not spinning a
                     # tight loop overnight; one minute is plenty for the
                     # 9:30 ET re-open detection.
@@ -140,6 +147,7 @@ class StockPositionMonitor:
                     if price is None:
                         continue
                     await self._check_trade(trade, price)
+                await self._tick_done({"market_open": True, "open_trades": len(open_trades)})
             except asyncio.CancelledError:
                 break
             except Exception as e:  # noqa: BLE001 — never let monitor crash the bot
@@ -149,6 +157,14 @@ class StockPositionMonitor:
                 await asyncio.sleep(self._check_interval)
             except asyncio.CancelledError:
                 break
+
+    async def _tick_done(self, detail: dict[str, Any]) -> None:
+        if self._on_tick is None:
+            return
+        try:
+            await self._on_tick(detail)
+        except Exception as exc:  # noqa: BLE001 -- liveness reporting must not stop exits
+            logger.debug("monitor on_tick failed: %r", exc)
 
     async def _latest_price(self, symbol: str) -> float | None:
         """Pull the latest snapshot price for ``symbol``, or None on failure."""

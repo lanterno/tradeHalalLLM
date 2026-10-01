@@ -12,15 +12,58 @@ from halal_trader.core.context import DashboardContext
 from halal_trader.web.dependencies import get_ctx
 
 
+async def _bot_liveness(ctx: DashboardContext) -> tuple[bool, dict[str, Any] | None]:
+    """Is the stock bot alive, judged from its heartbeat rows (core/heartbeat).
+
+    The web runs in its own container, so this is the only honest answer it
+    can give. ``(False, None)`` when the heartbeats cannot be read at all.
+    """
+    from halal_trader.core.heartbeat import STOCK_PROCESS, read_beats
+
+    try:
+        beats = await read_beats(ctx.engine)
+    except Exception:  # noqa: BLE001 -- health must answer even when the DB can't
+        return False, None
+    now = datetime.now(UTC)
+    components = {
+        name: {
+            "beat_at": b.beat_at.isoformat(),
+            "age_seconds": round(b.age(now).total_seconds(), 1),
+            "stale": b.is_stale(now),
+            "detail": b.detail,
+        }
+        for name, b in beats.items()
+    }
+    process = beats.get(STOCK_PROCESS)
+    return (process is not None and not process.is_stale(now)), components
+
+
 def register(app: FastAPI) -> None:
     @app.get("/api/health")
-    async def api_health() -> JSONResponse:
+    async def api_health(ctx: DashboardContext = Depends(get_ctx)) -> JSONResponse:
+        """Web liveness (always 200 while the web serves) plus the bot's beats.
+
+        `status` used to be a hard-coded "running" that drove the dashboard's
+        "Bot Running" badge whether or not any bot existed. `bot_alive` is now
+        the real signal; /api/health/bot turns it into an HTTP status.
+        """
+        alive, components = await _bot_liveness(ctx)
         return JSONResponse(
             {
                 "status": "running",
                 "timestamp": datetime.now(UTC).isoformat(),
                 "version": "0.3.0",
+                "bot_alive": alive,
+                "bot": components,
             }
+        )
+
+    @app.get("/api/health/bot")
+    async def api_health_bot(ctx: DashboardContext = Depends(get_ctx)) -> JSONResponse:
+        """200 if the stock bot's process heartbeat is fresh, else 503."""
+        alive, components = await _bot_liveness(ctx)
+        return JSONResponse(
+            {"bot_alive": alive, "bot": components}, status_code=200 if alive else 503
         )
 
     @app.get("/api/system/status")
@@ -55,10 +98,17 @@ def register(app: FastAPI) -> None:
         # ``cycle_interval_seconds`` is preserved (= crypto) so legacy
         # frontends keep working; ``stocks_cycle_interval_seconds`` is
         # the new field a market-aware dashboard reads.
+        from halal_trader.core.heartbeat import STOCK_CYCLE
+
+        alive, components = await _bot_liveness(ctx)
+        cycle_beat = (components or {}).get(STOCK_CYCLE)
         return JSONResponse(
             {
-                "bot_running": ctx.runtime.bot_running,
-                "last_cycle": ctx.runtime.last_cycle,
+                # From the bot's heartbeat rows, not in-process state this
+                # container never had (which always read "Bot Running: No").
+                "bot_running": alive,
+                "last_cycle": ctx.runtime.last_cycle
+                or (cycle_beat["beat_at"] if cycle_beat else None),
                 "cycle_interval_seconds": ctx.settings.crypto.trading_interval_seconds,
                 "crypto_cycle_interval_seconds": ctx.settings.crypto.trading_interval_seconds,
                 "stocks_cycle_interval_seconds": ctx.settings.stocks.trading_interval_minutes * 60,
