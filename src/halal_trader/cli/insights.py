@@ -103,13 +103,9 @@ def catalysts_cmd(symbols: tuple[str, ...], lookahead: int) -> None:
             console.print("[yellow]✗[/] EDGAR disabled (no EDGAR_USER_AGENT)")
 
         from halal_trader.trading.fed_speak_adapter import FedSpeakCatalystSource
-        from halal_trader.trading.options_catalyst_adapter import (
-            OptionsIVCatalystSource,
-        )
 
-        sources.append(OptionsIVCatalystSource())
         sources.append(FedSpeakCatalystSource())
-        console.print("[green]✓[/] Options-IV + Fed-speak enabled (always-on)")
+        console.print("[green]✓[/] Fed-speak enabled (always-on)")
         console.print()
 
         feed = StockCatalystFeed(sources=sources)

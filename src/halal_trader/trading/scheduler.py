@@ -237,12 +237,10 @@ class TradingBot(BaseTradingBot):
             catalyst_sources.append(EDGAREightKSource(user_agent=self.settings.edgar.user_agent))
 
         # Fed-speak is always-on (no key required).
-        # Yahoo options-IV is RETIRED: Yahoo's auth change 401s every symbol
-        # permanently, so the source only ever yielded empty results while
-        # burning a failing request + log line per cycle. The module +
-        # adapter (trading/options_iv.py, options_catalyst_adapter.py) are kept
-        # as dormant scaffolding — re-wire OptionsIVCatalystSource here only
-        # once a real fix lands (crumb auth or a different IV provider).
+        # A Yahoo options-IV source lived here until Yahoo's auth change
+        # 401'd every symbol; it was deleted on 2026-10-01 (the last tree
+        # with it is 8b4be75: trading/options_iv.py and
+        # options_catalyst_adapter.py). Start from there for a new IV provider.
         from halal_trader.trading.fed_speak_adapter import FedSpeakCatalystSource
 
         catalyst_sources.append(FedSpeakCatalystSource())
