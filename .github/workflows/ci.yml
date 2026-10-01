@@ -37,11 +37,16 @@ jobs:
       TEST_PG_DB: halal_trader_test
       DATABASE_URL: postgresql+asyncpg://trader:trader-dev-only@localhost:5433/halal_trader
 
+    timeout-minutes: 25
+
+    # Every check runs even when an earlier one fails (`success() || failure()`):
+    # from May to October 2026 a red Lint/Format step stopped the job before
+    # mypy or pytest ever ran, so five months of pushes were never tested.
     steps:
       - uses: actions/checkout@v4
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@v3
+        uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
           cache-dependency-glob: "uv.lock"
@@ -49,25 +54,41 @@ jobs:
       - name: Set up Python 3.14
         run: uv python install 3.14
 
+      # --locked: fail if pyproject.toml and uv.lock disagree, instead of
+      # silently re-resolving to versions nobody tested locally.
       - name: Install dependencies (dev + all extras)
-        run: uv sync --extra dev --extra all
+        run: uv sync --locked --extra dev --extra all
 
       - name: Lint
+        if: success() || failure()
         run: uv run ruff check src/ tests/
 
       - name: Format check
+        if: success() || failure()
         run: uv run ruff format --check src/ tests/
 
-      - name: Type check (domain + core, strict)
+      - name: Type check (strict gate in pyproject)
+        if: success() || failure()
         run: uv run mypy
 
       - name: Apply Alembic migrations to runtime DB
+        if: success() || failure()
         run: uv run halal-trader db migrate
 
-      - name: Test (with coverage gate on domain + core)
+      - name: Test (coverage over all of src)
+        if: success() || failure()
         run: >
-          uv run pytest -q
-          --cov=src/halal_trader/domain
-          --cov=src/halal_trader/core
-          --cov-report=term-missing
-          --cov-fail-under=85
+          uv run pytest -q -n auto
+          --cov=src/halal_trader
+          --cov=src/halabot
+          --cov-report=term-missing:skip-covered
+
+      # The historical gate (domain + core >= 85%) stays as the floor while
+      # the live-path packages are brought up to it; the full report above is
+      # what to read.
+      - name: Coverage gate (domain + core >= 85%)
+        if: success() || failure()
+        run: >
+          uv run coverage report
+          --include='src/halal_trader/domain/*,src/halal_trader/core/*'
+          --fail-under=85
