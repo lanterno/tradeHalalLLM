@@ -105,6 +105,21 @@ class TradingBot(BaseTradingBot):
             chat_id=self.settings.telegram.chat_id,
         )
         self._alerts = AlertSink(self._notifier)
+        # One daily LLM spend total for every process on the key
+        # (core/llm/spend.py); every GLM call below reports into it.
+        from halal_trader.core.llm import spend
+
+        spend.install(
+            spend.SpendMeter(
+                self._engine,
+                consumer="stock",
+                cap_usd=self.settings.llm.daily_usd_cap,
+                enforce=self.settings.llm.budget_enforce,
+                alert=self._alerts.notify,
+            )
+            if self._engine is not None
+            else None
+        )
 
         # Broker connection (Alpaca via MCP)
         await self._mcp_client.connect()

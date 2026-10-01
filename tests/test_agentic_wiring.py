@@ -75,7 +75,6 @@ async def test_run_agentic_multi_turn_loop_records_transcript() -> None:
     strat._llm = llm
     strat._repo = repo
     strat._llm_provider_name = "anthropic"
-    strat._llm_budget = None
 
     raw, transcript = await strat._run_agentic(
         user_prompt="user prompt",
@@ -131,7 +130,6 @@ async def test_run_llm_analysis_agent_path_persists_transcript() -> None:
     strat._llm = llm
     strat._repo = repo
     strat._llm_provider_name = "anthropic"
-    strat._llm_budget = None
 
     handlers = {"query_regime_memory": AsyncMock(return_value="bullish analogue")}
     plan = await strat._run_llm_analysis(
@@ -189,7 +187,6 @@ async def test_run_llm_analysis_no_agent_keeps_single_call_path() -> None:
     strat._llm = llm
     strat._repo = repo
     strat._llm_provider_name = "anthropic"
-    strat._llm_budget = None
 
     await strat._run_llm_analysis(
         "sys",

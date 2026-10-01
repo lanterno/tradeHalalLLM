@@ -2,6 +2,7 @@
 
 import logging
 from datetime import UTC, date, datetime
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -757,6 +758,21 @@ class BrokerEquity(SQLModel, table=True):
     synced_at: datetime = Field(
         default_factory=lambda: datetime.now(UTC), sa_type=sa.DateTime(timezone=True)
     )
+
+
+class LlmSpend(SQLModel, table=True):
+    """LLM spend per UTC day and consumer process (core/llm/spend.py).
+
+    One shared total across the stock bot and the shadow engine, which bill
+    the same OpenRouter key; the daily cap is checked against the sum.
+    """
+
+    __tablename__ = "llm_spend"
+
+    day: date = Field(primary_key=True)
+    consumer: str = Field(primary_key=True)
+    calls: int = Field(default=0)
+    spent_usd: Decimal = Field(default=Decimal("0"), sa_type=sa.Numeric(14, 6))
 
 
 class Heartbeat(SQLModel, table=True):

@@ -11,7 +11,6 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from halal_trader.core.llm.budget import LLMBudget
 from halal_trader.core.llm.quota import is_quota_error
 from halal_trader.core.tracing import tracer
 from halal_trader.db.repos import LlmDecisionRepo
@@ -69,7 +68,6 @@ class BaseStrategy(ABC):
         daily_loss_limit: float,
         daily_return_target: float,
         max_simultaneous_positions: int,
-        llm_budget: LLMBudget | None = None,
     ) -> None:
         self._llm = llm
         self._repo = repo
@@ -78,7 +76,6 @@ class BaseStrategy(ABC):
         self._daily_loss_limit = daily_loss_limit
         self._daily_return_target = daily_return_target
         self._max_simultaneous_positions = max_simultaneous_positions
-        self._llm_budget = llm_budget
         # Optional operator alerter (AlertSink) — attached by the
         # composition root after construction (mirrors BaseLLM.attach_bus;
         # the crypto root builds its AlertSink after the strategy).
@@ -174,8 +171,6 @@ class BaseStrategy(ABC):
                 )
 
             usage = getattr(self._llm, "last_usage", None)
-            if usage and self._llm_budget is not None and usage.cost_usd:
-                await self._llm_budget.record(usage.cost_usd)
             await self._repo.record_decision(
                 provider=self._llm_provider_name,
                 model=self._llm.model,

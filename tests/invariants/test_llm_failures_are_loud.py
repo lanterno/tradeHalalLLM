@@ -31,7 +31,6 @@ def _strategy(tool_args: dict[str, Any]) -> tuple[BaseStrategy, AsyncMock]:
     strat._llm = llm
     strat._repo = repo
     strat._llm_provider_name = "test"
-    strat._llm_budget = None
     strat._alert_sink = None
     return strat, repo
 

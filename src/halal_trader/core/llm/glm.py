@@ -30,6 +30,7 @@ import time
 from typing import Any
 
 from halal_trader.core import events
+from halal_trader.core.llm import spend
 from halal_trader.core.llm.base import BaseLLM, CallUsage
 from halal_trader.core.llm.pricing import compute_cost_usd
 from halal_trader.core.llm.tools import ToolCall
@@ -118,6 +119,7 @@ class GLMLLM(BaseLLM):
     # ── Generation ─────────────────────────────────────────────
 
     async def generate(self, prompt: str, system: str | None = None) -> str:
+        await spend.before_call()  # BudgetExhausted once an enforced cap is spent
         client = self._get_client()
         messages: list[dict[str, str]] = []
         if system:
@@ -137,6 +139,7 @@ class GLMLLM(BaseLLM):
         )
         elapsed = time.monotonic() - t0
         usage = self._usage_from_response(response, elapsed)
+        await spend.after_call(usage.cost_usd)
 
         logger.info(
             "glm call complete in %.1fs (tokens=%d, cache_read=%d, cost=$%s)",
@@ -173,6 +176,7 @@ class GLMLLM(BaseLLM):
         empty list here, which the strategy layer treats as a failed
         call (no-action plan), never a crash.
         """
+        await spend.before_call()  # BudgetExhausted once an enforced cap is spent
         client = self._get_client()
         messages: list[dict[str, Any]] = []
         if system:
@@ -195,7 +199,8 @@ class GLMLLM(BaseLLM):
             timeout=self.timeout_seconds,
         )
         elapsed = time.monotonic() - t0
-        self._usage_from_response(response, elapsed)
+        usage = self._usage_from_response(response, elapsed)
+        await spend.after_call(usage.cost_usd)
 
         calls: list[ToolCall] = []
         for choice in response.choices:

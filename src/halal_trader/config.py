@@ -160,11 +160,12 @@ class GLMSettings(BaseSettings):
 class LLMSettings(BaseSettings):
     model_config = SettingsConfigDict(**_BASE_CONFIG, env_prefix="LLM_")
     model: str = Field(default="z-ai/glm-5.2")
-    # Hard ceiling on per-UTC-day cumulative spend across all endpoints.
-    # 0 disables the cap (useful in tests). When the cap trips it
-    # engages the kill-switch so the bot stops entering new positions
-    # until the operator clears it.
+    # Per-UTC-day LLM spend cap, summed over every process on the key
+    # (core/llm/spend.py). 0 disables it. In observe mode crossing it alerts;
+    # with budget_enforce it also refuses further LLM calls until the next
+    # UTC day (exits keep working: the position monitor uses no LLM).
     daily_usd_cap: float = Field(default=0.0)
+    budget_enforce: bool = Field(default=False)
     # Adversarial co-bot — runs a cheap follow-up LLM call that critiques
     # each plan and downsizes/skips buys when it surfaces a strong
     # counter-thesis. Off by default (extra cost; opt-in).

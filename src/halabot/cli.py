@@ -96,6 +96,18 @@ async def _run_shadow(
         database_url=settings.database_url, settings=hb, coalesce=not once, bootstrap=True
     )
     ht_engine = await init_db(settings.database_url)  # legacy DB, for the halal universe
+    # The shadow bills the same LLM key as the stock bot: meter it into the
+    # same daily total (core/llm/spend.py) so the cap covers both.
+    from halal_trader.core.llm import spend
+
+    spend.install(
+        spend.SpendMeter(
+            ht_engine,
+            consumer="shadow",
+            cap_usd=settings.llm.daily_usd_cap,
+            enforce=settings.llm.budget_enforce,
+        )
+    )
     repo = Repository(ht_engine)
     mcp = AlpacaMCPClient()
     await mcp.connect()

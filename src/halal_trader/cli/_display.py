@@ -28,10 +28,11 @@ def _warn_uncapped_cloud_llm() -> None:
             Text.from_markup(
                 "[bold red]⚠ LLM_DAILY_USD_CAP=0[/bold red] with metered model "
                 f"[bold]{settings.llm.model}[/bold]\n"
-                "No daily spend cap is enforced. A runaway cycle can spend\n"
-                "real money in an hour. Set [cyan]LLM_DAILY_USD_CAP=10.0[/cyan] "
-                "(or similar) in .env\n"
-                "then restart — the kill-switch will engage if exceeded."
+                "No daily spend cap is set. A runaway cycle can spend\n"
+                "real money in an hour. Set [cyan]LLM_DAILY_USD_CAP=3.0[/cyan] "
+                "(or similar) in .env and restart:\n"
+                "crossing it alerts, and with [cyan]LLM_BUDGET_ENFORCE=true[/cyan] "
+                "further LLM calls are refused for the day."
             ),
             border_style="red",
             title="Spend safety",

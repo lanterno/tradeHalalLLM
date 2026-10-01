@@ -1,0 +1,169 @@
+"""The LLM spend cap: one daily total across every process that uses the key.
+
+Every GLM call reports its cost here (core/llm/glm.py) and asks first
+whether it may run. The total lives in the ``llm_spend`` table, one row per
+(UTC day, consumer), so it survives restarts and adds up the stock bot and
+the shadow engine, which share one OpenRouter key and one bill.
+
+Two modes (``LLM_BUDGET_ENFORCE``):
+
+* observe (default): never blocks; alerts once a day at 80% of the cap and
+  once when the cap is crossed, so the cap can be sized from real data;
+* enforce: additionally refuses every further LLM call for the rest of the
+  UTC day once the cap is reached. That is the actual spend stop -- the
+  kill-switch alone would not be (the classifier and the shadow keep
+  calling). Exits keep working: the position monitor does not use the LLM.
+
+Nothing here raises into a caller except :class:`BudgetExhausted`, which is
+the point of enforce mode. Metering failures are logged and ignored.
+
+Replaces core/llm/budget.py's LLMBudget, which was never constructed.
+"""
+
+from __future__ import annotations
+
+import logging
+from collections.abc import Awaitable, Callable
+from datetime import UTC, date, datetime
+from decimal import Decimal
+
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncEngine
+
+logger = logging.getLogger(__name__)
+
+Alert = Callable[[str, str], Awaitable[None]]
+
+_WARN_FRACTION = Decimal("0.8")
+
+
+class BudgetExhausted(RuntimeError):
+    """Raised instead of making an LLM call once an enforced cap is reached."""
+
+
+class SpendMeter:
+    def __init__(
+        self,
+        engine: AsyncEngine,
+        *,
+        consumer: str,
+        cap_usd: float,
+        enforce: bool = False,
+        alert: Alert | None = None,
+    ) -> None:
+        self._engine = engine
+        self._consumer = consumer
+        self._cap = Decimal(str(cap_usd))
+        self._enforce = enforce
+        self._alert = alert
+        self._alerted: set[tuple[date, str]] = set()
+        self._exhausted_on: date | None = None
+
+    @property
+    def cap_usd(self) -> Decimal:
+        return self._cap
+
+    async def spent_today(self) -> Decimal:
+        async with self._engine.connect() as conn:
+            total = (
+                await conn.execute(
+                    text("SELECT coalesce(sum(spent_usd), 0) FROM llm_spend WHERE day = :day"),
+                    {"day": _today()},
+                )
+            ).scalar()
+        return Decimal(str(total))
+
+    async def check(self) -> None:
+        """Raise BudgetExhausted if enforce mode is on and today's cap is spent."""
+        if not self._enforce or self._cap <= 0:
+            return
+        today = _today()
+        if self._exhausted_on == today:
+            raise BudgetExhausted(f"LLM daily cap ${self._cap} reached for {today}")
+        try:
+            spent = await self.spent_today()
+        except Exception as exc:  # noqa: BLE001 -- metering must not block on a DB hiccup
+            logger.warning("LLM spend check failed: %r", exc)
+            return
+        if spent >= self._cap:
+            self._exhausted_on = today
+            raise BudgetExhausted(f"LLM daily cap ${self._cap} reached for {today}")
+
+    async def record(self, cost_usd: Decimal) -> None:
+        """Add one call's cost to today's total; alert at 80% and at the cap."""
+        if cost_usd <= 0:
+            return
+        today = _today()
+        try:
+            async with self._engine.begin() as conn:
+                await conn.execute(
+                    text(
+                        """
+                        INSERT INTO llm_spend (day, consumer, calls, spent_usd)
+                        VALUES (:day, :consumer, 1, :cost)
+                        ON CONFLICT (day, consumer) DO UPDATE
+                            SET calls = llm_spend.calls + 1,
+                                spent_usd = llm_spend.spent_usd + EXCLUDED.spent_usd
+                        """
+                    ),
+                    {"day": today, "consumer": self._consumer, "cost": cost_usd},
+                )
+            spent = await self.spent_today()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("LLM spend not recorded: %r", exc)
+            return
+        if self._cap <= 0:
+            return
+        if spent >= self._cap:
+            if self._enforce:
+                self._exhausted_on = today
+            await self._alert_once(
+                today,
+                "llm.budget_exhausted",
+                f"LLM spend ${spent:.2f} reached the ${self._cap:.2f} daily cap on {today}; "
+                + (
+                    "further LLM calls are refused until tomorrow (UTC)."
+                    if self._enforce
+                    else "observe mode: calls continue (set LLM_BUDGET_ENFORCE=true to stop them)."
+                ),
+            )
+        elif spent >= self._cap * _WARN_FRACTION:
+            await self._alert_once(
+                today,
+                "llm.budget_warning",
+                f"LLM spend ${spent:.2f} is past 80% of the ${self._cap:.2f} daily cap on {today}.",
+            )
+
+    async def _alert_once(self, day: date, kind: str, message: str) -> None:
+        if (day, kind) in self._alerted:
+            return
+        self._alerted.add((day, kind))
+        logger.warning(message, extra={"event": kind})
+        if self._alert is not None:
+            try:
+                await self._alert(kind, message)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("spend alert failed: %r", exc)
+
+
+_meter: SpendMeter | None = None
+
+
+def install(meter: SpendMeter | None) -> None:
+    """Make ``meter`` this process's meter (called once at startup)."""
+    global _meter
+    _meter = meter
+
+
+async def before_call() -> None:
+    if _meter is not None:
+        await _meter.check()
+
+
+async def after_call(cost_usd: Decimal) -> None:
+    if _meter is not None:
+        await _meter.record(cost_usd)
+
+
+def _today() -> date:
+    return datetime.now(UTC).date()

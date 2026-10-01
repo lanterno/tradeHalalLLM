@@ -178,7 +178,6 @@ async def test_strategy_takes_tool_path_when_llm_supports_and_tool_given() -> No
     strat._llm = llm
     strat._repo = repo
     strat._llm_provider_name = "test"
-    strat._llm_budget = None
 
     plan = await strat._run_llm_analysis(
         "sys",
@@ -217,7 +216,6 @@ async def test_strategy_falls_back_to_json_when_tool_use_not_supported() -> None
     strat._llm = llm
     strat._repo = repo
     strat._llm_provider_name = "test"
-    strat._llm_budget = None
 
     plan = await strat._run_llm_analysis(
         "sys",
@@ -254,7 +252,6 @@ async def test_strategy_falls_back_to_json_when_no_tool_passed() -> None:
     strat._llm = llm
     strat._repo = repo
     strat._llm_provider_name = "test"
-    strat._llm_budget = None
 
     await strat._run_llm_analysis(
         "sys",
