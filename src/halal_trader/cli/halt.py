@@ -21,9 +21,11 @@ from halal_trader.logging import console
 def halt(reason: str, close_all: str | None) -> None:
     """Engage the operator kill-switch — bots refuse new entries until resumed.
 
-    With ``--close-all stocks``, every open position is liquidated FIRST
-    (best-effort, surfaces per-symbol errors), then the kill-switch is
-    engaged so no new positions can open while you investigate.
+    The kill-switch is engaged FIRST, so nothing can open while the rest
+    runs. With ``--close-all stocks``, every open position is then
+    liquidated, best-effort: a broker that cannot be reached is reported,
+    but the halt is already in place. (It used to liquidate first, and a
+    broker error aborted the command before the halt was ever set.)
     """
 
     async def _halt() -> None:
@@ -35,6 +37,11 @@ def halt(reason: str, close_all: str | None) -> None:
         settings = get_settings()
         engine = await init_db(settings.database_url)
         try:
+            status = await halt_module.set_halt(engine, reason=reason)
+            console.print(
+                f"[red]KILL-SWITCH ENGAGED[/red] "
+                f"(by {status.set_by} at {status.set_at}): {status.reason}"
+            )
             if close_all == "stocks":
                 from halal_trader.mcp.client import AlpacaMCPClient
 
@@ -42,14 +49,14 @@ def halt(reason: str, close_all: str | None) -> None:
                 try:
                     await mcp.connect()
                     print_liquidation(await liquidate_stocks(mcp))
+                except Exception as exc:  # noqa: BLE001 -- the halt already holds
+                    console.print(
+                        f"[red]Liquidation failed ({type(exc).__name__}: {exc}).[/red] "
+                        "The kill-switch IS engaged; close positions by hand or retry."
+                    )
+                    raise SystemExit(1) from exc
                 finally:
                     await mcp.disconnect()
-
-            status = await halt_module.set_halt(engine, reason=reason)
-            console.print(
-                f"[red]KILL-SWITCH ENGAGED[/red] "
-                f"(by {status.set_by} at {status.set_at}): {status.reason}"
-            )
         finally:
             await engine.dispose()
 
