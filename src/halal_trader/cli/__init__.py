@@ -10,6 +10,7 @@ from __future__ import annotations
 import click
 
 from halal_trader.cli import dashboard as dashboard_cmd
+from halal_trader.cli import data as data_cmd
 from halal_trader.cli import db as db_cmd
 from halal_trader.cli import halal as halal_cmd
 from halal_trader.cli import halt as halt_cmd
@@ -53,6 +54,9 @@ cli.add_command(db_cmd.db_group)
 cli.add_command(halt_cmd.halt)
 cli.add_command(halt_cmd.resume)
 cli.add_command(halt_cmd.halt_status)
+
+# ── Research market data ───────────────────────────────────────
+cli.add_command(data_cmd.data)
 
 # ── Broker ledger (the books of truth) ─────────────────────────
 cli.add_command(ledger_cmd.ledger)

@@ -235,9 +235,11 @@ home-health:
 home-logs:
     {{home_compose}} logs --tail=100 --no-color
 
-# pg_dump the whole database into <dest>/halal_trader.dump (restore: just db-restore <file>)
+# pg_dump the database into <dest>/halal_trader.dump (restore: just db-restore <file>).
+# The research store (daily_bars, market_assets) is re-derivable from Alpaca with
+# `halal-trader data backfill`, so its rows are left out; its schema is kept.
 home-backup dest:
-    docker exec halal-trader-pg pg_dump -U trader -d halal_trader -Fc -f /tmp/home-backup.dump
+    docker exec halal-trader-pg pg_dump -U trader -d halal_trader -Fc --exclude-table-data=daily_bars --exclude-table-data=market_assets -f /tmp/home-backup.dump
     docker cp halal-trader-pg:/tmp/home-backup.dump "{{dest}}/halal_trader.dump"
     docker exec halal-trader-pg rm -f /tmp/home-backup.dump
 

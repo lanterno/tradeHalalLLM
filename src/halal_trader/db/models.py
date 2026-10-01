@@ -912,3 +912,49 @@ def _alembic_head_revision() -> str:
 def _alembic_ini_path() -> Path:
     """Locate alembic.ini at the project root."""
     return Path(__file__).resolve().parent.parent.parent.parent / "alembic.ini"
+
+
+# ── Research data store (data/, plan Phase 3) ─────────────────────────
+# Re-derivable from Alpaca, so excluded from the nightly backup.
+
+
+class MarketAsset(SQLModel, table=True):
+    """Alpaca's active US-equity asset list (stocks and ETFs), as last synced."""
+
+    __tablename__ = "market_assets"
+
+    symbol: str = Field(primary_key=True)
+    name: str
+    exchange: str = Field(index=True)
+    tradable: bool
+    fractionable: bool
+    status: str
+    synced_at: datetime = Field(
+        default_factory=lambda: datetime.now(UTC), sa_type=sa.DateTime(timezone=True)
+    )
+
+
+class DailyBarRow(SQLModel, table=True):
+    """One daily SIP bar per (symbol, session, adjustment).
+
+    ``adjustment`` is 'raw' (the prices that traded -- what executions and
+    stops see) or 'all' (split- and dividend-adjusted -- what returns and
+    factors need). Adjusted history is rewritten by every corporate action,
+    so ``fetched_at`` records which vintage a row is.
+    """
+
+    __tablename__ = "daily_bars"
+
+    symbol: str = Field(primary_key=True)
+    day: date = Field(primary_key=True)
+    adjustment: str = Field(primary_key=True)
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float
+    vwap: float | None = None
+    trades: int | None = None
+    fetched_at: datetime = Field(
+        default_factory=lambda: datetime.now(UTC), sa_type=sa.DateTime(timezone=True)
+    )
