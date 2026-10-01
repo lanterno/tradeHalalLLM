@@ -5,6 +5,7 @@ import logging
 import re
 from contextlib import AsyncExitStack
 from datetime import timedelta
+from pathlib import Path
 from typing import Any
 
 from mcp import ClientSession, StdioServerParameters
@@ -44,17 +45,33 @@ def _unwrap_mcp_envelope(parsed: Any) -> Any:
     return parsed
 
 
-def server_parameters(settings: Settings) -> StdioServerParameters:
+# Where infra/Dockerfile installs the server's frozen closure at build time.
+BAKED_SERVER = Path("/opt/alpaca-mcp/bin/alpaca-mcp-server")
+
+
+def server_parameters(
+    settings: Settings, *, baked_server: Path = BAKED_SERVER
+) -> StdioServerParameters:
     """How the broker subprocess is launched: pinned version, paper flag, keys.
 
     The alpaca-mcp-server CLI has no "serve" subcommand: it defaults to the
     stdio transport when launched with no args, which is exactly what MCP's
-    StdioServerParameters expects. `uvx pkg@X.Y.Z` pins the exact release
-    (see AlpacaSettings.mcp_server_version for why it must be pinned).
+    StdioServerParameters expects. In the Docker image the server is a
+    build-time install launched by path (mcp_server_command); on a host it is
+    `uvx alpaca-mcp-server@X.Y.Z` (see AlpacaSettings for why both are pinned).
     """
+    # Precedence: explicit setting > the image's build-time install > uvx. The
+    # image install is found by path, not via an env var, so an empty
+    # ALPACA_MCP_SERVER_COMMAND= copied from .env.example cannot silently put
+    # a container back on runtime resolution.
+    explicit = settings.alpaca.mcp_server_command
+    if explicit or baked_server.exists():
+        command, args = explicit or str(baked_server), []
+    else:
+        command, args = "uvx", [f"alpaca-mcp-server@{settings.alpaca.mcp_server_version}"]
     return StdioServerParameters(
-        command="uvx",
-        args=[f"alpaca-mcp-server@{settings.alpaca.mcp_server_version}"],
+        command=command,
+        args=args,
         env={
             "ALPACA_API_KEY": settings.alpaca.api_key,
             "ALPACA_SECRET_KEY": settings.alpaca.secret_key,

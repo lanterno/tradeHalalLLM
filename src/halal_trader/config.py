@@ -46,6 +46,11 @@ class AlpacaSettings(BaseSettings):
     # closure, then replace MCP with alpaca-py: plan 1.6 / 3.2). Bump this only
     # after the recorded-payload contract tests pass.
     mcp_server_version: str = Field(default="2.3.2", pattern=r"^\d+\.\d+\.\d+$")
+    # Explicit server executable to launch instead of the default resolution:
+    # the image's build-time install of infra/alpaca-mcp-server.txt at
+    # /opt/alpaca-mcp (used automatically when present), else
+    # "uvx alpaca-mcp-server@<mcp_server_version>" on a host. Normally empty.
+    mcp_server_command: str = Field(default="")
 
 
 class BinanceSettings(BaseSettings):

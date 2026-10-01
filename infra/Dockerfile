@@ -73,6 +73,18 @@ WORKDIR /app
 # uv (which provides uvx) into the final image.
 RUN pip install --no-cache-dir uv
 
+# The Alpaca MCP broker server, installed from its frozen closure at BUILD
+# time into its own venv, so starting a container never resolves packages
+# (see infra/alpaca-mcp-server.txt for the outage that made this necessary).
+# --no-deps: the file is a complete freeze; install exactly that, nothing else.
+COPY infra/alpaca-mcp-server.txt /tmp/alpaca-mcp-server.txt
+RUN uv venv --python /usr/local/bin/python3 /opt/alpaca-mcp \
+    && uv pip install --python /opt/alpaca-mcp/bin/python --no-deps \
+        -r /tmp/alpaca-mcp-server.txt \
+    && cp /tmp/alpaca-mcp-server.txt /opt/alpaca-mcp/requirements.txt \
+    && /opt/alpaca-mcp/bin/python -c "import alpaca_mcp_server"
+# mcp/client.py finds it at this path (BAKED_SERVER); no env var needed.
+
 COPY --from=builder /app /app
 
 # Drop the built SPA into the runtime image where web/app.py looks for it
