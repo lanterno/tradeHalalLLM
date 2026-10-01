@@ -29,11 +29,11 @@ def test_neutral_seed_is_opinion_free():
 def test_band_index_buckets():
     assert band_index(0.0) == 0
     assert band_index(0.2) == 0
-    assert band_index(0.3) == 1     # boundary lands in the next band
+    assert band_index(0.3) == 1  # boundary lands in the next band
     assert band_index(0.5) == 1
     assert band_index(0.6) == 2
     assert band_index(0.8) == 3
-    assert band_index(1.0) == 3     # top inclusive (no IndexError)
+    assert band_index(1.0) == 3  # top inclusive (no IndexError)
 
 
 def test_band_index_clamps_out_of_range():

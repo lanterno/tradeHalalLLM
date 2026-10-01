@@ -97,9 +97,7 @@ class ZoyaClient:
             # actual cause (auth / rate-limit / schema) during the
             # 2026-05-27 outage where every symbol failed with a blank message.
             body = (e.response.text or "")[:200]
-            logger.warning(
-                "Zoya HTTP error for %s: %d %s", symbol, e.response.status_code, body
-            )
+            logger.warning("Zoya HTTP error for %s: %d %s", symbol, e.response.status_code, body)
             return {
                 "symbol": symbol,
                 "compliance": "doubtful",

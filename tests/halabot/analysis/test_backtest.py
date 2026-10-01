@@ -23,8 +23,11 @@ def _bars(prices: list[float], *, start: datetime = T0, step_min: int = 1) -> li
 
 # Cold-start bands tuned to the raw-conviction scale (as the live shadow uses).
 CFG = PolicyConfig(
-    conviction_entry_band=0.25, conviction_exit_band=0.15,
-    max_weight_per_asset=0.20, max_gross_exposure=1.0, target_rebalance_threshold=0.03,
+    conviction_entry_band=0.25,
+    conviction_exit_band=0.15,
+    max_weight_per_asset=0.20,
+    max_gross_exposure=1.0,
+    target_rebalance_threshold=0.03,
 )
 
 
@@ -58,9 +61,9 @@ async def test_transaction_costs_reduce_returns():
     # The same run with a high cost should net a lower total return (churn penalty).
     up = _bars([100.0 + i for i in range(80)])
     free = await Backtester(policy_config=CFG, trading_hours=False, cost_bps=0.0).run({"NVDA": up})
-    costly = await Backtester(
-        policy_config=CFG, trading_hours=False, cost_bps=50.0
-    ).run({"NVDA": up})
+    costly = await Backtester(policy_config=CFG, trading_hours=False, cost_bps=50.0).run(
+        {"NVDA": up}
+    )
     assert costly.total_return < free.total_return  # costs bite each round-trip
 
 
@@ -122,13 +125,15 @@ async def test_book_segments_closed_trades_by_entry_regime():
     book = _book()
     await book.on_proposal(
         SimpleNamespace(
-            asset="UP", ts=T0,
+            asset="UP",
+            ts=T0,
             payload={"price": 100.0, "weight_delta": 0.2, "regime": "trending_up"},
         )
     )
     await book.on_proposal(
         SimpleNamespace(
-            asset="FLAT", ts=T0,
+            asset="FLAT",
+            ts=T0,
             payload={"price": 100.0, "weight_delta": 0.2, "regime": "ranging"},
         )
     )
@@ -177,13 +182,15 @@ async def test_book_attributes_outcomes_to_entry_sources_multilabel():
     book = _book()
     await book.on_proposal(
         SimpleNamespace(
-            asset="WIN", ts=T0,
+            asset="WIN",
+            ts=T0,
             payload={"price": 100.0, "weight_delta": 0.2, "sources": ["rsi", "forecaster"]},
         )
     )
     await book.on_proposal(
         SimpleNamespace(
-            asset="LOSS", ts=T0,
+            asset="LOSS",
+            ts=T0,
             payload={"price": 100.0, "weight_delta": 0.2, "sources": ["rsi", "volume"]},
         )
     )
@@ -207,7 +214,8 @@ async def test_book_buckets_by_entry_conviction():
     for asset, conv, exit_px in [("A", 0.38, 95.0), ("B", 0.42, 110.0), ("C", 0.55, 105.0)]:
         await book.on_proposal(
             SimpleNamespace(
-                asset=asset, ts=T0,
+                asset=asset,
+                ts=T0,
                 payload={"price": 100.0, "weight_delta": 0.2, "conviction_raw": conv},
             )
         )
@@ -246,9 +254,9 @@ async def test_exit_ladder_locks_gains_on_a_reversal_vs_off():
     # trend-break/trailing stop, so it never gives back as much as the
     # conviction-decay-only path. Ladder ON should not net WORSE here.
     bars = _bars([100.0 + i for i in range(60)] + [160.0 - 3.0 * i for i in range(30)])
-    off = await Backtester(
-        policy_config=CFG, trading_hours=False, exit_ladder=False
-    ).run({"NVDA": bars})
+    off = await Backtester(policy_config=CFG, trading_hours=False, exit_ladder=False).run(
+        {"NVDA": bars}
+    )
     on = await Backtester(
         policy_config=CFG, trading_hours=False, exit_ladder=True, trailing_pct=0.05
     ).run({"NVDA": bars})

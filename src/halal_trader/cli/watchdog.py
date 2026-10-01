@@ -72,7 +72,7 @@ def _find_last_activity(
                 continue
             try:
                 rec = json.loads(raw)
-            except (ValueError, TypeError):
+            except ValueError, TypeError:
                 continue
             name = rec.get("name", "")
             if not isinstance(name, str) or not name.startswith(logger_prefix):
@@ -91,7 +91,7 @@ def _find_last_activity(
 def _read_state(state_file: Path) -> dict[str, Any]:
     try:
         loaded = json.loads(state_file.read_text())
-    except (FileNotFoundError, ValueError):
+    except FileNotFoundError, ValueError:
         return {}
     return loaded if isinstance(loaded, dict) else {}
 

@@ -160,9 +160,7 @@ class Repository:
     async def close_open_trades_for_symbol(
         self, symbol: str, exit_price: float, exit_reason: str
     ) -> int:
-        return await self._trades.close_open_trades_for_symbol(
-            symbol, exit_price, exit_reason
-        )
+        return await self._trades.close_open_trades_for_symbol(symbol, exit_price, exit_reason)
 
     async def update_stock_trade_stop_loss(self, trade_id: int, new_stop_loss: float) -> None:
         await self._trades.update_stock_trade_stop_loss(trade_id, new_stop_loss)
@@ -227,22 +225,14 @@ class Repository:
     async def get_latest_recommendation(self) -> dict[str, Any] | None:
         return await self._daily_recommendations.get_latest_recommendation()
 
-    async def get_recent_recommendations(
-        self, limit: int = 30
-    ) -> list[dict[str, Any]]:
+    async def get_recent_recommendations(self, limit: int = 30) -> list[dict[str, Any]]:
         return await self._daily_recommendations.get_recent_recommendations(limit)
 
-    async def get_recommendations_to_score(
-        self, limit: int = 500
-    ) -> list[dict[str, Any]]:
+    async def get_recommendations_to_score(self, limit: int = 500) -> list[dict[str, Any]]:
         return await self._daily_recommendations.get_recommendations_to_score(limit)
 
-    async def update_recommendation_outcome(
-        self, rec_id: int, **fields: Any
-    ) -> bool:
-        return await self._daily_recommendations.update_recommendation_outcome(
-            rec_id, **fields
-        )
+    async def update_recommendation_outcome(self, rec_id: int, **fields: Any) -> bool:
+        return await self._daily_recommendations.update_recommendation_outcome(rec_id, **fields)
 
     async def pin_research_job(self, job_id: int, pinned: bool) -> bool:
         return await self._research_jobs.pin_research_job(job_id, pinned)

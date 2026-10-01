@@ -58,5 +58,5 @@ def test_fake_clock_set_jumps_absolute():
 def test_fake_clock_coerces_naive_to_utc():
     c = FakeClock(datetime(2026, 5, 28, 12, 0))  # naive
     assert c.now().tzinfo is UTC
-    c.set(datetime(2026, 6, 1, 0, 0))            # naive
+    c.set(datetime(2026, 6, 1, 0, 0))  # naive
     assert c.now().tzinfo is UTC

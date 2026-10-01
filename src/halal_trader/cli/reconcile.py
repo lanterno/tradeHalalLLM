@@ -203,9 +203,7 @@ def reconcile_fix_orphans(dry_run: bool, min_age_minutes: int, no_broker: bool) 
             console.print(tbl)
 
             if dry_run and any(f.old_status != f.new_status for f in report.fixes):
-                console.print(
-                    "[dim]Re-run with --apply to persist these changes.[/dim]"
-                )
+                console.print("[dim]Re-run with --apply to persist these changes.[/dim]")
         finally:
             if broker is not None:
                 try:

@@ -55,8 +55,8 @@ async def test_worker_coalesces_consecutive_same_asset_evidence():
     assert len(u.evidence_calls) == 1
     asset, now, n_items, _ = u.evidence_calls[0]
     assert asset == "NVDA"
-    assert n_items == 3                              # all items merged
-    assert now == T0 + timedelta(minutes=2)          # now = latest ts (monotonic)
+    assert n_items == 3  # all items merged
+    assert now == T0 + timedelta(minutes=2)  # now = latest ts (monotonic)
 
 
 @pytest.mark.asyncio

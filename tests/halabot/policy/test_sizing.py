@@ -36,7 +36,7 @@ def test_above_entry_band_sizes_up():
 
 def test_hysteresis_holds_between_bands_only_when_held():
     mid = _belief(0.50)  # between exit (0.45) and entry (0.60)
-    assert target_weight(mid, RISK, held=True, cfg=CFG) > 0.0   # stays held
+    assert target_weight(mid, RISK, held=True, cfg=CFG) > 0.0  # stays held
     assert target_weight(mid, RISK, held=False, cfg=CFG) == 0.0  # but won't open
 
 
@@ -48,10 +48,18 @@ def test_conviction_size_power_shrinks_marginal_positions():
     # power>1 makes the conviction->size ramp convex: a mid-conviction position is
     # smaller than under the linear (power=1) default, but full conviction is
     # unchanged. (A/B showed >1 hurts overall, so it ships at 1.0; default off.)
-    linear = PolicyConfig(conviction_entry_band=0.60, conviction_exit_band=0.45,
-                          max_weight_per_asset=0.20, conviction_size_power=1.0)
-    convex = PolicyConfig(conviction_entry_band=0.60, conviction_exit_band=0.45,
-                          max_weight_per_asset=0.20, conviction_size_power=2.0)
+    linear = PolicyConfig(
+        conviction_entry_band=0.60,
+        conviction_exit_band=0.45,
+        max_weight_per_asset=0.20,
+        conviction_size_power=1.0,
+    )
+    convex = PolicyConfig(
+        conviction_entry_band=0.60,
+        conviction_exit_band=0.45,
+        max_weight_per_asset=0.20,
+        conviction_size_power=2.0,
+    )
     mid = _belief(0.75)
     assert target_weight(mid, RISK, held=False, cfg=convex) < target_weight(
         mid, RISK, held=False, cfg=linear

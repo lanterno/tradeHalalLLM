@@ -54,7 +54,10 @@ class Attribution:
 
 
 async def attribution(
-    engine: AsyncEngine, *, min_n: int = 1, include_open: bool = True,
+    engine: AsyncEngine,
+    *,
+    min_n: int = 1,
+    include_open: bool = True,
     win_threshold_pct: float = 0.002,
 ) -> Attribution:
     """Per-regime and per-source win-rate / avg-return over closed outcomes plus
@@ -71,9 +74,7 @@ async def attribution(
         open_rows = (
             (
                 await conn.execute(
-                    sa.select(
-                        _open_position.c.unrealized_return_pct, _open_position.c.entry_belief
-                    )
+                    sa.select(_open_position.c.unrealized_return_pct, _open_position.c.entry_belief)
                 )
             ).all()
             if include_open
@@ -102,6 +103,8 @@ async def attribution(
         return sorted(out, key=lambda b: -b.avg_return_pct)
 
     return Attribution(
-        total=len(rows), open_count=len(open_rows),
-        by_regime=_buckets(by_regime), by_source=_buckets(by_source),
+        total=len(rows),
+        open_count=len(open_rows),
+        by_regime=_buckets(by_regime),
+        by_source=_buckets(by_source),
     )

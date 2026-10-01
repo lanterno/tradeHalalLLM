@@ -89,8 +89,11 @@ class ShadowOutcomeTracker:
             if pos is None or pos.weight <= _EPS:
                 entry_belief = await self._entry_belief_snapshot(asset, belief_version)
                 self._positions[asset] = _Position(
-                    weight=delta, entry_vwap=price, open_ts=ts,
-                    belief_version=belief_version, entry_belief=entry_belief,
+                    weight=delta,
+                    entry_vwap=price,
+                    open_ts=ts,
+                    belief_version=belief_version,
+                    entry_belief=entry_belief,
                 )
             else:
                 total = pos.weight + delta

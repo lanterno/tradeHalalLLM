@@ -34,7 +34,7 @@ async def test_replay_is_event_time_ordered_regardless_of_append_order():
     log = InMemoryEventLog()
     late = new_event(_at(30), EventType.OBSERVATION_BAR, source="a", asset="NVDA")
     early = new_event(_at(5), EventType.OBSERVATION_BAR, source="a", asset="NVDA")
-    await log.append(late)   # appended out of ts order
+    await log.append(late)  # appended out of ts order
     await log.append(early)
     out = await _collect(log)
     assert [x.ts.minute for x in out] == [5, 30]  # replays in ts order

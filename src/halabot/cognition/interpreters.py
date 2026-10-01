@@ -291,9 +291,7 @@ class ForecasterInterpreter:
 
     consumes = frozenset({EventType.OBSERVATION_BAR})
 
-    def __init__(
-        self, buffer: BarBuffer, *, window: int = 20, min_r2: float = 0.3
-    ) -> None:
+    def __init__(self, buffer: BarBuffer, *, window: int = 20, min_r2: float = 0.3) -> None:
         self._buffer = buffer
         self._window = window
         self._min_r2 = min_r2
@@ -478,9 +476,7 @@ class SupportResistanceInterpreter:
         support = max((s for s in swing_lows if s <= price), default=None)
         resistance = min((r for r in swing_highs if r >= price), default=None)
         near_support = support is not None and (price - support) / price <= self._proximity
-        near_resistance = (
-            resistance is not None and (resistance - price) / price <= self._proximity
-        )
+        near_resistance = resistance is not None and (resistance - price) / price <= self._proximity
         if near_support and not near_resistance:
             direction = 0.6  # bounce zone — favorable long entry
             detail = f"near support {support:.2f}"

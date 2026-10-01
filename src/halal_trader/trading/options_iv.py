@@ -129,10 +129,7 @@ class YahooOptionsIV:
         if resp.status_code != 200:
             logger.debug("yahoo options %s returned %d", symbol, resp.status_code)
             self._consecutive_failures += 1
-            if (
-                not self._circuit_open
-                and self._consecutive_failures >= _BREAKER_THRESHOLD
-            ):
+            if not self._circuit_open and self._consecutive_failures >= _BREAKER_THRESHOLD:
                 self._circuit_open = True
                 logger.warning(
                     "yahoo options IV circuit breaker OPEN after %d consecutive "

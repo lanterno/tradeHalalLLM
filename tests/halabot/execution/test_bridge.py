@@ -42,8 +42,14 @@ class _Account:
 
 
 def _armed(**kw):
-    base = dict(armed=True, reason="ARMED", market="stocks", max_order_usd=1000.0,
-                max_account_usd=10_000.0, daily_loss_floor_pct=0.05)
+    base = dict(
+        armed=True,
+        reason="ARMED",
+        market="stocks",
+        max_order_usd=1000.0,
+        max_account_usd=10_000.0,
+        daily_loss_floor_pct=0.05,
+    )
     base.update(kw)
     return LiveModeDecision(**base)
 
@@ -53,8 +59,12 @@ def _build(account, decision):
     bus = InProcessEventBus(InMemoryEventLog())
     fills: list[Event] = []
     bus.subscribe({EventType.ORDER_FILLED}, lambda e: _cap(fills, e))
-    ex = Executor(venue=venue, bus=bus, clock=FakeClock(T0),
-                  feasibility=FeasibilityConfig(min_notional_usd=50.0, lot_step=1.0))
+    ex = Executor(
+        venue=venue,
+        bus=bus,
+        clock=FakeClock(T0),
+        feasibility=FeasibilityConfig(min_notional_usd=50.0, lot_step=1.0),
+    )
     return bus, venue, fills, ex
 
 
@@ -65,9 +75,19 @@ async def _cap(sink, e):
 async def _propose(bus, asset, side, delta):
     await bus.publish(
         new_event(
-            FakeClock(T0), EventType.POLICY_TRADE_PROPOSED, source="policy.shadow", asset=asset,
-            payload={"side": side, "target_weight": max(0.0, delta), "current_weight": 0.0,
-                     "weight_delta": delta, "reason": "test", "belief_version": 1, "shadow": True},
+            FakeClock(T0),
+            EventType.POLICY_TRADE_PROPOSED,
+            source="policy.shadow",
+            asset=asset,
+            payload={
+                "side": side,
+                "target_weight": max(0.0, delta),
+                "current_weight": 0.0,
+                "weight_delta": delta,
+                "reason": "test",
+                "belief_version": 1,
+                "shadow": True,
+            },
         )
     )
 
@@ -76,7 +96,9 @@ def test_wire_refuses_when_not_armed():
     bus, _, _, ex = _build(_Account(), _armed())
     with pytest.raises(RuntimeError):
         wire_live_execution(
-            bus=bus, executor=ex, decision=_armed(armed=False, reason="shadow only"),
+            bus=bus,
+            executor=ex,
+            decision=_armed(armed=False, reason="shadow only"),
             account=_Account(),
         )
 

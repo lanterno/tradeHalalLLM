@@ -244,7 +244,7 @@ def _format_slippage(rows: list[dict[str, Any]], *, limit: int = 20) -> str:
             continue
         try:
             samples.append(float(sp))
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             continue
     if not samples:
         return "No slippage data yet."
@@ -448,8 +448,7 @@ def _format_sector_exposure(
     )
 
     positions_value = {
-        p.symbol: float(p.qty) * float(p.current_price or p.avg_entry_price)
-        for p in positions
+        p.symbol: float(p.qty) * float(p.current_price or p.avg_entry_price) for p in positions
     }
     allocation = compute_allocation(positions_value, total_equity=equity)
     if not allocation.by_sector:
@@ -712,15 +711,11 @@ class TradingStrategy(BaseStrategy):
                 part
                 for part in (
                     _format_capacity(len(positions), self._max_simultaneous_positions),
-                    _format_symbol_headroom(
-                        positions, portfolio_value, self._max_position_pct
-                    ),
+                    _format_symbol_headroom(positions, portfolio_value, self._max_position_pct),
                 )
                 if part
             ),
-            sector_text=_format_sector_exposure(
-                positions, portfolio_value, self._max_sector_pct
-            ),
+            sector_text=_format_sector_exposure(positions, portfolio_value, self._max_sector_pct),
             recent_closed_text=recent_closed_text,
             slippage_text=slippage_text,
             learnings_text=learnings_text,

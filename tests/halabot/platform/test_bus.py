@@ -43,8 +43,8 @@ async def test_publish_durable_appends_then_dispatches():
     bus.subscribe({EventType.OBSERVATION_BAR}, lambda e: _record(seen, e))
 
     await bus.publish(_ev(EventType.OBSERVATION_BAR, "NVDA"))
-    assert len(log) == 1          # durably appended
-    assert len(seen) == 1         # and dispatched
+    assert len(log) == 1  # durably appended
+    assert len(seen) == 1  # and dispatched
 
 
 @pytest.mark.asyncio
@@ -67,7 +67,7 @@ async def test_durable_append_failure_blocks_dispatch_and_raises():
 
     with pytest.raises(DurableAppendError):
         await bus.publish(_ev(EventType.OBSERVATION_BAR, "NVDA"))
-    assert seen == []             # NOT dispatched — new work refused on DB outage
+    assert seen == []  # NOT dispatched — new work refused on DB outage
 
 
 @pytest.mark.asyncio
@@ -81,7 +81,7 @@ async def test_control_event_dispatches_even_when_append_fails():
     bus.subscribe({EventType.BELIEF_INVALIDATED}, lambda e: _record(exits, e))
 
     await bus.publish(_ev(EventType.BELIEF_INVALIDATED, "NVDA"))  # must NOT raise
-    assert len(exits) == 1        # exit signal got through despite the dead DB
+    assert len(exits) == 1  # exit signal got through despite the dead DB
 
 
 @pytest.mark.asyncio
@@ -97,7 +97,7 @@ async def test_handler_exception_is_isolated():
     bus.subscribe({EventType.OBSERVATION_BAR}, lambda e: _record(good, e))
 
     await bus.publish(_ev(EventType.OBSERVATION_BAR, "NVDA"))  # must not raise
-    assert len(good) == 1         # the healthy handler still ran
+    assert len(good) == 1  # the healthy handler still ran
 
 
 @pytest.mark.asyncio
@@ -109,7 +109,7 @@ async def test_unsubscribe_stops_delivery():
     await bus.publish(_ev(EventType.OBSERVATION_BAR, "NVDA"))
     sub.unsubscribe()
     await bus.publish(_ev(EventType.OBSERVATION_BAR, "NVDA"))
-    assert len(seen) == 1         # only the pre-unsubscribe event
+    assert len(seen) == 1  # only the pre-unsubscribe event
 
 
 @pytest.mark.asyncio

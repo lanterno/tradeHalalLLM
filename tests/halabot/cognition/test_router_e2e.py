@@ -81,8 +81,12 @@ def _build():
         llm=_LLM(),
         config=UpdaterConfig(),
     )
-    router = CognitionRouter(bus=bus, updater=updater, buffer=buffer,
-                             interpreters=[IndicatorInterpreter(buffer), NewsLexiconInterpreter()])
+    router = CognitionRouter(
+        bus=bus,
+        updater=updater,
+        buffer=buffer,
+        interpreters=[IndicatorInterpreter(buffer), NewsLexiconInterpreter()],
+    )
     router.start()
     captured: list[Event] = []
     bus.subscribe(
@@ -101,7 +105,10 @@ async def _feed_uptrend(bus, clock, *, asset="NVDA", n=30, start=100.0):
         c = start + i
         await bus.publish(
             new_event(
-                clock, EventType.OBSERVATION_BAR, source="alpaca", asset=asset,
+                clock,
+                EventType.OBSERVATION_BAR,
+                source="alpaca",
+                asset=asset,
                 payload={"o": c, "h": c + 1, "low": c - 1, "c": c, "v": 1000.0},
             )
         )
@@ -117,7 +124,7 @@ async def test_uptrend_bars_form_a_bullish_belief():
     assert b.direction == Direction.LONG_BIAS
     assert b.regime == Regime.TRENDING_UP
     assert b.conviction > 0.0
-    assert b.levels.invalidation is not None        # ATR-based stop established
+    assert b.levels.invalidation is not None  # ATR-based stop established
     assert b.version >= 1
     # only belief.* emitted — the loop never produced an order event (read-only)
     assert events and all(
@@ -134,7 +141,10 @@ async def test_bullish_news_raises_conviction_and_adds_evidence():
     clock.advance(timedelta(minutes=1))
     await bus.publish(
         new_event(
-            clock, EventType.OBSERVATION_NEWS, source="finnhub", asset="NVDA",
+            clock,
+            EventType.OBSERVATION_NEWS,
+            source="finnhub",
+            asset="NVDA",
             payload={"lexicon_polarity": 0.9, "headline": "surprise beat", "url": "http://n"},
         )
     )
@@ -172,10 +182,19 @@ async def test_macro_observation_lands_in_catalysts_pending():
     scheduled = (T0 + timedelta(days=2)).isoformat()
     await bus.publish(
         new_event(
-            clock, EventType.OBSERVATION_MACRO, source="macro-catalysts", asset="NVDA",
-            payload={"kind": "CPI", "asset": "NVDA", "scheduled_for": scheduled,
-                     "expected_impact": 0.9, "actual": None, "consensus": None,
-                     "detail": "CPI release"},
+            clock,
+            EventType.OBSERVATION_MACRO,
+            source="macro-catalysts",
+            asset="NVDA",
+            payload={
+                "kind": "CPI",
+                "asset": "NVDA",
+                "scheduled_for": scheduled,
+                "expected_impact": 0.9,
+                "actual": None,
+                "consensus": None,
+                "detail": "CPI release",
+            },
         )
     )
     b = await store.get("NVDA")
@@ -192,9 +211,18 @@ async def test_malformed_macro_observation_dropped_without_belief():
     bus, clock, store, captured = _build()
     await bus.publish(
         new_event(
-            clock, EventType.OBSERVATION_MACRO, source="macro-catalysts", asset="NVDA",
-            payload={"kind": "CPI", "asset": "NVDA", "scheduled_for": "not-a-date",
-                     "expected_impact": 0.9, "actual": None, "consensus": None},
+            clock,
+            EventType.OBSERVATION_MACRO,
+            source="macro-catalysts",
+            asset="NVDA",
+            payload={
+                "kind": "CPI",
+                "asset": "NVDA",
+                "scheduled_for": "not-a-date",
+                "expected_impact": 0.9,
+                "actual": None,
+                "consensus": None,
+            },
         )
     )
     assert await store.get("NVDA") is None

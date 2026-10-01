@@ -343,8 +343,12 @@ async def test_stop_loss_reentry_zero_disables_gate():
         return_value={"id": "x", "status": "filled", "filled_qty": "100", "filled_avg_price": "100"}
     )
     executor = TradeExecutor(
-        broker, repo, max_position_pct=1.0, max_simultaneous_positions=10,
-        max_sector_pct=0, recent_close_cooldown_minutes=0,
+        broker,
+        repo,
+        max_position_pct=1.0,
+        max_simultaneous_positions=10,
+        max_sector_pct=0,
+        recent_close_cooldown_minutes=0,
         stop_loss_reentry_cooldown_minutes=0,
     )
 

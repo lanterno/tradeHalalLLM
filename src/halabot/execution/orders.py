@@ -114,8 +114,12 @@ class Executor:
             )
             return None
         else:
-            logger.info("order %s %s pending (status=%s) — awaiting fill confirmation",
-                        p.side, p.asset, result.status)
+            logger.info(
+                "order %s %s pending (status=%s) — awaiting fill confirmation",
+                p.side,
+                p.asset,
+                result.status,
+            )
         return result
 
     async def _size_buy(self, p: TradeProposal, ctx: ExecutionContext) -> Order | None:
@@ -175,9 +179,7 @@ class Executor:
             )
         )
 
-    async def _publish_fill(
-        self, r: OrderResult, p: TradeProposal, ctx: ExecutionContext
-    ) -> None:
+    async def _publish_fill(self, r: OrderResult, p: TradeProposal, ctx: ExecutionContext) -> None:
         slippage = None
         if r.filled_price and r.filled_price > 0:
             try:

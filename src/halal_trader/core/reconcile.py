@@ -253,7 +253,7 @@ def _aggregate_stocks_positions(
         filled_raw = row.get("filled_quantity")
         try:
             qty = float(filled_raw) if filled_raw is not None else 0.0
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             qty = 0.0
         if qty <= 0:
             # Executed status but no fill column — fall back to the
@@ -262,7 +262,7 @@ def _aggregate_stocks_positions(
             qty_raw = row.get("quantity")
             try:
                 qty = float(qty_raw) if qty_raw is not None else 0.0
-            except (TypeError, ValueError):
+            except TypeError, ValueError:
                 qty = 0.0
         if qty <= 0:
             continue
@@ -470,8 +470,7 @@ async def _persist_and_alert(
             actionable = [
                 d
                 for d in report.drifts
-                if not d.is_settling
-                and not (d.db_quantity == 0.0 and d.broker_quantity > 0.0)
+                if not d.is_settling and not (d.db_quantity == 0.0 and d.broker_quantity > 0.0)
             ]
         else:
             actionable = [d for d in report.drifts if not d.is_settling]
@@ -589,13 +588,13 @@ async def fix_stocks_orphans(
                     raw_status = str(order.get("status", "")).lower()
                     try:
                         filled_qty_broker = float(order.get("filled_qty") or 0)
-                    except (TypeError, ValueError):
+                    except TypeError, ValueError:
                         filled_qty_broker = 0.0
                     fa_raw = order.get("filled_avg_price")
                     if isinstance(fa_raw, (int, float, str)) and fa_raw != "":
                         try:
                             filled_avg = float(fa_raw)
-                        except (TypeError, ValueError):
+                        except TypeError, ValueError:
                             filled_avg = None
                 # Map Alpaca order statuses to TradeStatus values.
                 if raw_status == "filled":
@@ -610,10 +609,7 @@ async def fix_stocks_orphans(
                     # Still really pending — leave it alone, the
                     # executor's confirm loop will catch it next cycle.
                     new_status = trade.status
-                    notes = (
-                        "broker reports still open ("
-                        f"{raw_status!r}); skipping"
-                    )
+                    notes = f"broker reports still open ({raw_status!r}); skipping"
                 elif not raw_status:
                     # Broker had no record — treat as rejected so the
                     # row stops counting against drift.
@@ -624,10 +620,14 @@ async def fix_stocks_orphans(
                     notes = f"unknown broker status {raw_status!r}; treating as rejected"
                 source = "broker"
 
-                if new_status in {
-                    TradeStatus.FILLED.value,
-                    TradeStatus.PARTIALLY_FILLED.value,
-                } and filled_qty_broker > 0:
+                if (
+                    new_status
+                    in {
+                        TradeStatus.FILLED.value,
+                        TradeStatus.PARTIALLY_FILLED.value,
+                    }
+                    and filled_qty_broker > 0
+                ):
                     # Update fill columns from broker truth.
                     trade.filled_quantity = filled_qty_broker
                     trade.filled_price = filled_avg
@@ -717,9 +717,7 @@ async def _import_broker_only_positions(
     recent = await repos.trades.get_recent_trades(limit=500)
     # grace=0: we only care whether the DB already tracks net-long shares,
     # not whether a fill is mid-settlement.
-    db_net, _ = _aggregate_stocks_positions(
-        recent, now=datetime.now(UTC), grace=timedelta(0)
-    )
+    db_net, _ = _aggregate_stocks_positions(recent, now=datetime.now(UTC), grace=timedelta(0))
 
     for p in positions:
         sym = str(getattr(p, "symbol", "") or "").upper()
@@ -835,9 +833,7 @@ async def reconcile_db_to_broker(
 
     repos = RepoBundle.from_engine(engine)
     recent = await repos.trades.get_recent_trades(limit=500)
-    db_net, _ = _aggregate_stocks_positions(
-        recent, now=datetime.now(UTC), grace=timedelta(0)
-    )
+    db_net, _ = _aggregate_stocks_positions(recent, now=datetime.now(UTC), grace=timedelta(0))
 
     broker_net: dict[str, float] = {}
     broker_price: dict[str, float] = {}

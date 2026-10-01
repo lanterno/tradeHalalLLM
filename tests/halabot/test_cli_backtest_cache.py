@@ -12,8 +12,14 @@ T0 = datetime(2026, 1, 1, 14, 0, tzinfo=UTC)
 
 def _bars(n: int, *, start: datetime = T0, step_min: int = 60) -> list[Bar]:
     return [
-        Bar(o=100.0 + i, h=101.0 + i, low=99.0 + i, c=100.5 + i, v=1000.0 + i,
-            ts=start + timedelta(minutes=i * step_min))
+        Bar(
+            o=100.0 + i,
+            h=101.0 + i,
+            low=99.0 + i,
+            c=100.5 + i,
+            v=1000.0 + i,
+            ts=start + timedelta(minutes=i * step_min),
+        )
         for i in range(n)
     ]
 

@@ -235,7 +235,9 @@ class _Book:
             fill = price * (1.0 + self._cost)
             if pos is None or pos.weight <= _EPS:
                 self._pos[asset] = _Pos(
-                    weight=delta, vwap=fill, open_ts=ts,
+                    weight=delta,
+                    vwap=fill,
+                    open_ts=ts,
                     regime=str(p.get("regime", "unknown")),
                     structural=self._structural_at_entry(asset),
                     market=self._market_at_entry(),
@@ -471,7 +473,8 @@ class Backtester:
             )
 
             return ChronosForecasterInterpreter(
-                buffer, load_chronos_pipeline(self._chronos_model),
+                buffer,
+                load_chronos_pipeline(self._chronos_model),
                 max_weight=self._chronos_max_weight,
             )
         return ForecasterInterpreter(buffer)  # "ols" (default for any non-chronos value)
@@ -500,17 +503,28 @@ class Backtester:
         calendar = RegularHoursCalendar() if self._trading_hours else ContinuousCalendar()
 
         updater = BeliefUpdater(
-            store=store, bus=bus, clock=clock, calendar=calendar,
-            regime=EvidenceRegimeClassifier(), levels=BarLevelEngine(buffer),
-            calibrator=IdentityCalibrator(), thesis_writer=_NoThesis(),
-            prices=prices, positions=ShadowPortfolio(), llm=_OffLLM(),
+            store=store,
+            bus=bus,
+            clock=clock,
+            calendar=calendar,
+            regime=EvidenceRegimeClassifier(),
+            levels=BarLevelEngine(buffer),
+            calibrator=IdentityCalibrator(),
+            thesis_writer=_NoThesis(),
+            prices=prices,
+            positions=ShadowPortfolio(),
+            llm=_OffLLM(),
             config=self._updater_config,
         )
         interpreters = self._interpreters or [
-            IndicatorInterpreter(buffer), RsiInterpreter(buffer),
-            TrendAlignmentInterpreter(buffer), AnomalyInterpreter(buffer),
-            DriftInterpreter(buffer), MultiFrameInterpreter(buffer),
-            VolumeConfirmationInterpreter(buffer), SupportResistanceInterpreter(buffer),
+            IndicatorInterpreter(buffer),
+            RsiInterpreter(buffer),
+            TrendAlignmentInterpreter(buffer),
+            AnomalyInterpreter(buffer),
+            DriftInterpreter(buffer),
+            MultiFrameInterpreter(buffer),
+            VolumeConfirmationInterpreter(buffer),
+            SupportResistanceInterpreter(buffer),
             NewsLexiconInterpreter(),
         ]
         if benchmark and relstrength and self._interpreters is None:
@@ -519,17 +533,28 @@ class Backtester:
             interpreters.append(self._build_forecaster(buffer))
         router = CognitionRouter(bus=bus, updater=updater, buffer=buffer, interpreters=interpreters)
         shadow = ShadowPolicyRunner(
-            bus=bus, store=store, policy=Policy(self._policy_config),
-            portfolio=ShadowPortfolio(), risk_engine=BasicRiskEngine(self._risk_config),
-            clock=clock, prices=prices, history=buffer,
-            benchmark=benchmark, market_gate=self._market_gate,
+            bus=bus,
+            store=store,
+            policy=Policy(self._policy_config),
+            portfolio=ShadowPortfolio(),
+            risk_engine=BasicRiskEngine(self._risk_config),
+            clock=clock,
+            prices=prices,
+            history=buffer,
+            benchmark=benchmark,
+            market_gate=self._market_gate,
             market_sma_window=self._market_sma_window,
         )
         book = _Book(
-            win_threshold_pct=self._win, prices=prices, cost_frac=self._cost_frac,
-            exit_ladder=self._exit_ladder, trailing_pct=self._trailing_pct,
-            buffer=buffer, structure_window=self._structure_window,
-            structure_er_trend=self._structure_er_trend, benchmark=benchmark,
+            win_threshold_pct=self._win,
+            prices=prices,
+            cost_frac=self._cost_frac,
+            exit_ladder=self._exit_ladder,
+            trailing_pct=self._trailing_pct,
+            buffer=buffer,
+            structure_window=self._structure_window,
+            structure_er_trend=self._structure_er_trend,
+            benchmark=benchmark,
         )
         bus.subscribe({EventType.POLICY_TRADE_PROPOSED}, book.on_proposal)
         router.start()
@@ -542,21 +567,31 @@ class Backtester:
             if sym == benchmark:
                 continue
             await bus.publish(
-                new_event(clock, EventType.COMPLIANCE_VERDICT, source="backtest", asset=sym,
-                          payload={"status": "halal", "transient_error": False})
+                new_event(
+                    clock,
+                    EventType.COMPLIANCE_VERDICT,
+                    source="backtest",
+                    asset=sym,
+                    payload={"status": "halal", "transient_error": False},
+                )
             )
         # Replay bars in event-time order.
         for ts, sym, bar in stream:
             clock.set(ts)
             await bus.publish(
-                new_event(clock, EventType.OBSERVATION_BAR, source="backtest", asset=sym,
-                          payload={"o": bar.o, "h": bar.h, "low": bar.low, "c": bar.c, "v": bar.v})
+                new_event(
+                    clock,
+                    EventType.OBSERVATION_BAR,
+                    source="backtest",
+                    asset=sym,
+                    payload={"o": bar.o, "h": bar.h, "low": bar.low, "c": bar.c, "v": bar.v},
+                )
             )
             # Slow-out exit pass for this bar's asset (after its belief updated).
             if self._exit_ladder and sym != benchmark:
                 closes = buffer.closes(sym)
                 sma = (
-                    sum(closes[-self._sma_window:]) / min(len(closes), self._sma_window)
+                    sum(closes[-self._sma_window :]) / min(len(closes), self._sma_window)
                     if closes
                     else None
                 )

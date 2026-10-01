@@ -136,9 +136,7 @@ def check_buy_against_limits(
     if allocation.total_equity <= 0:
         return True, ""
     sector = sector_for(symbol, sector_map=sector_map)
-    exempt = (
-        DEFAULT_EXEMPT_SECTORS if exempt_sectors is None else frozenset(exempt_sectors)
-    )
+    exempt = DEFAULT_EXEMPT_SECTORS if exempt_sectors is None else frozenset(exempt_sectors)
     if sector in exempt:
         return True, ""
     current = allocation.by_sector.get(sector, 0.0)

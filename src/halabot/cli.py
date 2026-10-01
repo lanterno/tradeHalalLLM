@@ -140,9 +140,7 @@ async def _run_shadow(
         from halal_trader.trading.fred_catalysts import FREDReleaseCalendarSource
 
         fred_fetcher = FREDReleaseCalendarSource(api_key=fred_key)
-        sources.append(
-            MacroCatalystSource(fred_fetcher, universe, clock, dedup_store=dedup)
-        )
+        sources.append(MacroCatalystSource(fred_fetcher, universe, clock, dedup_store=dedup))
 
     zoya_client = None
     if rescreen_compliance:
@@ -173,9 +171,16 @@ async def _run_shadow(
         for sym in syms:
             await engine.bus.publish(
                 new_event(
-                    clock, EventType.COMPLIANCE_VERDICT, source="halal-universe", asset=sym,
-                    payload={"status": "halal", "detail": "halal universe member",
-                             "screening_id": None, "transient_error": False},
+                    clock,
+                    EventType.COMPLIANCE_VERDICT,
+                    source="halal-universe",
+                    asset=sym,
+                    payload={
+                        "status": "halal",
+                        "detail": "halal universe member",
+                        "screening_id": None,
+                        "transient_error": False,
+                    },
                 )
             )
 
@@ -194,14 +199,12 @@ async def _run_shadow(
             # The heartbeat drives time-decay (R-08) so conviction fades on the
             # passage of time even with no new data; supervised so a transient
             # publish failure restarts it rather than silently stopping decay.
-            heartbeat.spawn(
-                "heartbeat", lambda: heartbeat_loop(engine.bus, clock, interval)
-            )
+            heartbeat.spawn("heartbeat", lambda: heartbeat_loop(engine.bus, clock, interval))
             click.echo(f"shadow running (poll/heartbeat every {interval:.0f}s) — Ctrl-C to stop")
             try:
                 stop = asyncio.Event()
                 await stop.wait()
-            except (KeyboardInterrupt, asyncio.CancelledError):
+            except KeyboardInterrupt, asyncio.CancelledError:
                 click.echo("stopping…")
 
         await _print_summary(engine)
@@ -238,49 +241,79 @@ def ab_report_cmd(days: int) -> None:
     help="Comma-separated entry bands to compare (fetch once, replay each), e.g. 0.15,0.25,0.35.",
 )
 @click.option(
-    "--cost-bps", default=5.0, show_default=True,
+    "--cost-bps",
+    default=5.0,
+    show_default=True,
     help="One-way transaction cost (slippage+commission) in basis points.",
 )
 @click.option(
-    "--exit-ladder", is_flag=True, default=False,
+    "--exit-ladder",
+    is_flag=True,
+    default=False,
     help="Enable the Appendix-H slow-out exits (trend-break + trailing stop) in the book.",
 )
 @click.option(
-    "--ladder-ab", is_flag=True, default=False,
+    "--ladder-ab",
+    is_flag=True,
+    default=False,
     help="Controlled A/B: replay the SAME fetched bars with the exit ladder off vs on.",
 )
 @click.option(
-    "--market-gate-ab", is_flag=True, default=False,
+    "--market-gate-ab",
+    is_flag=True,
+    default=False,
     help="Controlled A/B: replay the SAME bars with the market-regime gate off vs on.",
 )
 @click.option(
-    "--trailing-pct", default=0.05, show_default=True,
+    "--trailing-pct",
+    default=0.05,
+    show_default=True,
     help="Trailing-stop ratchet distance for --exit-ladder (fraction of the high-water mark).",
 )
 @click.option(
-    "--cache-write", default="", help="After fetching, write the bars to this JSON file.",
+    "--cache-write",
+    default="",
+    help="After fetching, write the bars to this JSON file.",
 )
 @click.option(
-    "--cache-read", default="",
+    "--cache-read",
+    default="",
     help="Replay bars from this JSON cache instead of fetching (reproducible, offline).",
 )
 @click.option(
-    "--oos-splits", default=1, show_default=True,
+    "--oos-splits",
+    default=1,
+    show_default=True,
     help="Partition the bars into N disjoint time windows and report each (out-of-sample).",
 )
 @click.option(
-    "--forecaster", type=click.Choice(["", "ols", "chronos"]), default="",
+    "--forecaster",
+    type=click.Choice(["", "ols", "chronos"]),
+    default="",
     help="Append a forecaster interpreter to the stack (ols = cheap slope; chronos = [ml]).",
 )
 @click.option(
-    "--forecaster-ab", is_flag=True, default=False,
+    "--forecaster-ab",
+    is_flag=True,
+    default=False,
     help="Controlled A/B: replay the SAME bars with no forecaster vs the Chronos forecaster.",
 )
 def backtest(
-    symbols: str, days: int, timeframe: str, continuous: bool, sweep_bands: str,
-    cost_bps: float, exit_ladder: bool, ladder_ab: bool, market_gate_ab: bool,
-    trailing_pct: float, cache_write: str, cache_read: str, oos_splits: int,
-    forecaster: str, forecaster_ab: bool,
+    symbols: str,
+    days: int,
+    timeframe: str,
+    continuous: bool,
+    sweep_bands: str,
+    cost_bps: float,
+    exit_ladder: bool,
+    ladder_ab: bool,
+    market_gate_ab: bool,
+    trailing_pct: float,
+    cache_write: str,
+    cache_read: str,
+    oos_splits: int,
+    forecaster: str,
+    forecaster_ab: bool,
 ) -> None:
     """Replay historical bars through the engine and report hypothetical P&L."""
     from halabot.platform.observability import setup_logging
@@ -288,11 +321,21 @@ def backtest(
     setup_logging(logging.WARNING)  # quiet — the result line is the output
     asyncio.run(
         _run_backtest(
-            symbols=symbols, days=days, timeframe=timeframe, continuous=continuous,
-            sweep_bands=sweep_bands, cost_bps=cost_bps,
-            exit_ladder=exit_ladder, ladder_ab=ladder_ab, market_gate_ab=market_gate_ab,
-            trailing_pct=trailing_pct, cache_write=cache_write, cache_read=cache_read,
-            oos_splits=oos_splits, forecaster=forecaster, forecaster_ab=forecaster_ab,
+            symbols=symbols,
+            days=days,
+            timeframe=timeframe,
+            continuous=continuous,
+            sweep_bands=sweep_bands,
+            cost_bps=cost_bps,
+            exit_ladder=exit_ladder,
+            ladder_ab=ladder_ab,
+            market_gate_ab=market_gate_ab,
+            trailing_pct=trailing_pct,
+            cache_write=cache_write,
+            cache_read=cache_read,
+            oos_splits=oos_splits,
+            forecaster=forecaster,
+            forecaster_ab=forecaster_ab,
         )
     )
 
@@ -341,8 +384,14 @@ async def _fetch_backtest_bars(
             p = e.payload
             ts = parse_iso(p.get("bar_ts")) or e.ts
             bars_by_symbol.setdefault(e.asset, []).append(
-                Bar(o=float(p["o"]), h=float(p["h"]), low=float(p["low"]),
-                    c=float(p["c"]), v=float(p.get("v", 0.0)), ts=ts)
+                Bar(
+                    o=float(p["o"]),
+                    h=float(p["h"]),
+                    low=float(p["low"]),
+                    c=float(p["c"]),
+                    v=float(p.get("v", 0.0)),
+                    ts=ts,
+                )
             )
         return bars_by_symbol
     finally:
@@ -405,11 +454,22 @@ def _oos_windows(
 
 
 async def _run_backtest(
-    *, symbols: str, days: int, timeframe: str, continuous: bool, sweep_bands: str = "",
-    cost_bps: float = 5.0, exit_ladder: bool = False, ladder_ab: bool = False,
-    market_gate_ab: bool = False, trailing_pct: float = 0.05,
-    cache_read: str = "", cache_write: str = "", oos_splits: int = 1,
-    forecaster: str = "", forecaster_ab: bool = False,
+    *,
+    symbols: str,
+    days: int,
+    timeframe: str,
+    continuous: bool,
+    sweep_bands: str = "",
+    cost_bps: float = 5.0,
+    exit_ladder: bool = False,
+    ladder_ab: bool = False,
+    market_gate_ab: bool = False,
+    trailing_pct: float = 0.05,
+    cache_read: str = "",
+    cache_write: str = "",
+    oos_splits: int = 1,
+    forecaster: str = "",
+    forecaster_ab: bool = False,
 ) -> None:
     from halabot.analysis.backtest import Backtester
     from halabot.belief.updater import UpdaterConfig
@@ -427,8 +487,11 @@ async def _run_backtest(
     )
 
     def _make(
-        entry_band: float, exit_band: float, *,
-        ladder: bool = exit_ladder, market_gate: bool = hb.policy.market_gate_enabled,
+        entry_band: float,
+        exit_band: float,
+        *,
+        ladder: bool = exit_ladder,
+        market_gate: bool = hb.policy.market_gate_enabled,
         fcast: str = eff_forecaster,
     ) -> Backtester:
         return Backtester(
@@ -496,9 +559,9 @@ async def _run_backtest(
                 res = await _make(band, max(0.0, exit_band)).run(bbs, benchmark=bench)
                 click.echo(f"  entry={band:.2f}: {res.summary()}")
         else:
-            res = await _make(
-                hb.policy.conviction_entry_band, hb.policy.conviction_exit_band
-            ).run(bbs, benchmark=bench)
+            res = await _make(hb.policy.conviction_entry_band, hb.policy.conviction_exit_band).run(
+                bbs, benchmark=bench
+            )
             click.echo(f"=== backtest result ===\n  {res.summary()}")
             click.echo("=== by entry regime ===")
             click.echo(res.regime_summary())
@@ -553,7 +616,8 @@ async def _run_attribution(*, min_n: int) -> None:
     await bootstrap_schema(engine)
     try:
         attr = await attribution(
-            engine, min_n=min_n,
+            engine,
+            min_n=min_n,
             win_threshold_pct=get_hb_settings().conviction.win_threshold_pct,
         )
     finally:

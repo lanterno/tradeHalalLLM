@@ -103,7 +103,10 @@ async def _seed_uptrend(bus, *, asset="NVDA", n=30, start=100.0):
         start += 1
         await bus.publish(
             new_event(
-                clk, EventType.OBSERVATION_BAR, source="alpaca", asset=asset,
+                clk,
+                EventType.OBSERVATION_BAR,
+                source="alpaca",
+                asset=asset,
                 payload={"o": c, "h": c + 1, "low": c - 1, "c": c, "v": 1000.0},
             )
         )

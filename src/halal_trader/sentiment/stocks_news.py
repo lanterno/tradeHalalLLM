@@ -148,10 +148,7 @@ class StockNewsCollector:
         except Exception as exc:  # noqa: BLE001
             logger.debug("Yahoo news request failed for %s: %s", sym, exc)
             self._consecutive_failures += 1
-            if (
-                not self._circuit_open
-                and self._consecutive_failures >= _BREAKER_THRESHOLD
-            ):
+            if not self._circuit_open and self._consecutive_failures >= _BREAKER_THRESHOLD:
                 self._circuit_open = True
                 logger.warning(
                     "Yahoo news circuit breaker OPEN after %d consecutive "
@@ -250,10 +247,7 @@ class FinnhubNewsCollector:
         except Exception as exc:  # noqa: BLE001
             logger.debug("Finnhub news request failed for %s: %s", sym, exc)
             self._consecutive_failures += 1
-            if (
-                not self._circuit_open
-                and self._consecutive_failures >= _BREAKER_THRESHOLD
-            ):
+            if not self._circuit_open and self._consecutive_failures >= _BREAKER_THRESHOLD:
                 self._circuit_open = True
                 logger.warning(
                     "Finnhub news circuit breaker OPEN after %d consecutive "
@@ -275,9 +269,7 @@ class FinnhubNewsCollector:
         return events
 
 
-def _parse_finnhub_payload(
-    symbol: str, payload: Any, *, limit: int
-) -> list[NewsEvent]:
+def _parse_finnhub_payload(symbol: str, payload: Any, *, limit: int) -> list[NewsEvent]:
     """Finnhub returns ``[{"headline": str, "source": str, "url": str,
     "datetime": int (epoch s), "summary": str}, ...]`` — a bare list,
     not a wrapped object."""

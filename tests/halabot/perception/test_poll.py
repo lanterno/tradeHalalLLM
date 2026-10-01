@@ -34,8 +34,11 @@ class _FakeNews(PollingSource):
         if raw.get("skip"):
             return None
         return new_event(
-            CLOCK, EventType.OBSERVATION_NEWS, source="fake-news",
-            asset=raw["asset"], payload={"url": raw["url"]},
+            CLOCK,
+            EventType.OBSERVATION_NEWS,
+            source="fake-news",
+            asset=raw["asset"],
+            payload={"url": raw["url"]},
         )
 
     def dedup_key(self, raw: Any) -> str | None:
@@ -45,6 +48,7 @@ class _FakeNews(PollingSource):
 async def _emit_to(sink: list[Event]):
     async def emit(e: Event) -> None:
         sink.append(e)
+
     return emit
 
 
@@ -59,10 +63,12 @@ async def test_poll_once_emits_mapped_events():
 
 @pytest.mark.asyncio
 async def test_poll_dedups_repeated_keys_across_ticks():
-    src = _FakeNews([
-        [{"url": "a", "asset": "NVDA"}],
-        [{"url": "a", "asset": "NVDA"}, {"url": "b", "asset": "NVDA"}],  # 'a' repeats
-    ])
+    src = _FakeNews(
+        [
+            [{"url": "a", "asset": "NVDA"}],
+            [{"url": "a", "asset": "NVDA"}, {"url": "b", "asset": "NVDA"}],  # 'a' repeats
+        ]
+    )
     sink: list[Event] = []
     emit = await _emit_to(sink)
     await src.poll_once(emit)

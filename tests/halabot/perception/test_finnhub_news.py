@@ -43,18 +43,25 @@ class _FakeClient:
 async def _universe(symbols):
     async def u() -> list[str]:
         return symbols
+
     return u
 
 
 async def _emit_to(sink: list[Event]):
     async def emit(e: Event) -> None:
         sink.append(e)
+
     return emit
 
 
 def _item(headline, url, **kw):
-    return {"headline": headline, "url": url, "summary": kw.get("summary", ""),
-            "datetime": kw.get("datetime", 1), "source": kw.get("source", "Reuters")}
+    return {
+        "headline": headline,
+        "url": url,
+        "summary": kw.get("summary", ""),
+        "datetime": kw.get("datetime", 1),
+        "source": kw.get("source", "Reuters"),
+    }
 
 
 async def _src(by_symbol, symbols):

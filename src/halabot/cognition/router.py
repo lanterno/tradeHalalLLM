@@ -79,9 +79,7 @@ class CognitionRouter:
     def known_assets(self) -> frozenset[str]:
         return frozenset(self._known_assets)
 
-    async def bootstrap(
-        self, *, since: datetime, until: datetime, now: datetime
-    ) -> frozenset[str]:
+    async def bootstrap(self, *, since: datetime, until: datetime, now: datetime) -> frozenset[str]:
         """Warm beliefs by replaying ``observation.*`` from the event log (Appendix F).
 
         Each event is interpreted at its OWN ts (event-time) with ``is_replay=True``

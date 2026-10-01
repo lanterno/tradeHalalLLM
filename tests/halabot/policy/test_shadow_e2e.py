@@ -23,7 +23,9 @@ CLOCK = FakeClock(datetime(2026, 5, 28, 12, 0, tzinfo=UTC))
 
 def _bullish(asset="NVDA", conviction=0.9, *, status="halal", direction=Direction.LONG_BIAS):
     return BeliefState(
-        asset=asset, direction=direction, conviction=conviction,
+        asset=asset,
+        direction=direction,
+        conviction=conviction,
         halal=ComplianceVerdict(asset, status),  # type: ignore[arg-type]
     )
 
@@ -32,8 +34,12 @@ async def _build():
     store = InMemoryBeliefStore()
     bus = InProcessEventBus(InMemoryEventLog())
     runner = ShadowPolicyRunner(
-        bus=bus, store=store, policy=Policy(PolicyConfig()),
-        portfolio=ShadowPortfolio(), risk_engine=BasicRiskEngine(), clock=CLOCK,
+        bus=bus,
+        store=store,
+        policy=Policy(PolicyConfig()),
+        portfolio=ShadowPortfolio(),
+        risk_engine=BasicRiskEngine(),
+        clock=CLOCK,
     )
     runner.start()
     proposed: list[Event] = []
@@ -57,8 +63,13 @@ async def test_decay_only_update_skips_recompute_heartbeat_does_it_once():
     store, bus, runner, proposed = await _build()
     await store.put(_bullish())
     await bus.publish(
-        new_event(CLOCK, EventType.BELIEF_UPDATED, source="belief.updater", asset="NVDA",
-                  payload={"decay_only": True})
+        new_event(
+            CLOCK,
+            EventType.BELIEF_UPDATED,
+            source="belief.updater",
+            asset="NVDA",
+            payload={"decay_only": True},
+        )
     )
     assert runner.proposals_count == 0  # decay_only → skipped, no proposal
     await bus.publish(new_event(CLOCK, EventType.SYSTEM_HEARTBEAT, source="heartbeat"))
@@ -72,8 +83,8 @@ async def test_bullish_halal_belief_yields_a_buy_proposal():
     assert runner.proposals_count == 1
     assert len(proposed) == 1
     assert proposed[0].payload["side"] == "buy"
-    assert proposed[0].payload["shadow"] is True   # never executed
-    assert runner._portfolio.weight("NVDA") > 0    # hypothetical book moved
+    assert proposed[0].payload["shadow"] is True  # never executed
+    assert runner._portfolio.weight("NVDA") > 0  # hypothetical book moved
 
 
 @pytest.mark.asyncio
@@ -96,12 +107,10 @@ async def test_non_halal_belief_yields_no_proposal():
 @pytest.mark.asyncio
 async def test_conviction_decay_to_neutral_proposes_an_exit():
     store, bus, runner, proposed = await _build()
-    await _signal_belief_update(bus, store, _bullish())          # buy in
+    await _signal_belief_update(bus, store, _bullish())  # buy in
     assert runner._portfolio.weight("NVDA") > 0
     # belief turns neutral (conviction gone) → target 0 → exit proposal
-    await _signal_belief_update(
-        bus, store, _bullish(conviction=0.0, direction=Direction.NEUTRAL)
-    )
+    await _signal_belief_update(bus, store, _bullish(conviction=0.0, direction=Direction.NEUTRAL))
     assert any(p.side == "sell" for p in runner.last_proposals)
     assert runner._portfolio.weight("NVDA") == 0.0  # flattened in the shadow book
 

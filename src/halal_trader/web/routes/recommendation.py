@@ -73,9 +73,7 @@ def register(app: FastAPI) -> None:
                 own_broker = AlpacaMCPClient()
                 await own_broker.connect()
                 broker = own_broker
-            engine = DailyRecommendationEngine(
-                broker=broker, repo=ctx.repo, settings=ctx.settings
-            )
+            engine = DailyRecommendationEngine(broker=broker, repo=ctx.repo, settings=ctx.settings)
             rec = await engine.generate()
         except Exception as exc:  # noqa: BLE001 — surface as a structured 502
             raise HTTPException(

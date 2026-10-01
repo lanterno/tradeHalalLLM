@@ -26,7 +26,10 @@ class _ListSource(PollingSource):
 
     def to_event(self, raw) -> Event:
         return new_event(
-            CLOCK, EventType.OBSERVATION_NEWS, source="test", asset=raw["asset"],
+            CLOCK,
+            EventType.OBSERVATION_NEWS,
+            source="test",
+            asset=raw["asset"],
             payload={"headline": raw["key"], "url": raw["key"]},
         )
 
@@ -59,8 +62,9 @@ async def test_inmemory_store_roundtrip():
 @pytest.mark.asyncio
 async def test_source_dedups_within_session():
     store = InMemoryDedupStore()
-    src = _ListSource([{"asset": "NVDA", "key": "u1"}, {"asset": "NVDA", "key": "u2"}],
-                      dedup_store=store)
+    src = _ListSource(
+        [{"asset": "NVDA", "key": "u1"}, {"asset": "NVDA", "key": "u2"}], dedup_store=store
+    )
     first = await _collect(src)
     second = await _collect(src)  # same items again
     assert len(first) == 2

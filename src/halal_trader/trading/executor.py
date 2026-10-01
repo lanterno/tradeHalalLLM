@@ -86,12 +86,10 @@ def _existing_position_value(symbol: str, positions: Any) -> float:
             try:
                 qty = float(getattr(pos, "qty", 0) or 0)
                 px = float(
-                    getattr(pos, "current_price", 0)
-                    or getattr(pos, "avg_entry_price", 0)
-                    or 0
+                    getattr(pos, "current_price", 0) or getattr(pos, "avg_entry_price", 0) or 0
                 )
                 return abs(qty * px)
-            except (TypeError, ValueError):
+            except TypeError, ValueError:
                 return 0.0
     return 0.0
 
@@ -106,12 +104,7 @@ def _compute_slippage_pct(
       * SELL filled lower than estimated → positive (received less)
     Returns ``None`` when either input is missing or non-positive.
     """
-    if (
-        estimated_price is None
-        or filled_price is None
-        or estimated_price <= 0
-        or filled_price <= 0
-    ):
+    if estimated_price is None or filled_price is None or estimated_price <= 0 or filled_price <= 0:
         return None
     delta = float(filled_price) - float(estimated_price)
     if side.lower() == "buy":
@@ -192,9 +185,7 @@ class TradeExecutor(BaseExecutor):
         # routine and lose to slippage. SELLs are always allowed (the
         # operator + monitor still need to be able to close anything).
         # Set to 0 to disable.
-        self._no_new_positions_minutes_before_close = (
-            no_new_positions_minutes_before_close
-        )
+        self._no_new_positions_minutes_before_close = no_new_positions_minutes_before_close
         # Reactor (news-momentum) entry sizing + price-confirmation gate.
         # Reactor entries are sized at this fraction of ``max_position_pct``
         # (default half) and only fire when the stock is up at least
@@ -268,9 +259,7 @@ class TradeExecutor(BaseExecutor):
 
         account = await self._broker.get_account_info()
         target_notional = (
-            account.portfolio_value
-            * self._max_position_pct
-            * self._reactor_entry_size_fraction
+            account.portfolio_value * self._max_position_pct * self._reactor_entry_size_fraction
         )
         shares = int(target_notional // price)
         if shares < 1:
@@ -378,9 +367,7 @@ class TradeExecutor(BaseExecutor):
             sym = str(b.symbol).upper()
             if sym in merged:
                 prev = merged[sym]
-                merged[sym] = prev.model_copy(
-                    update={"quantity": prev.quantity + b.quantity}
-                )
+                merged[sym] = prev.model_copy(update={"quantity": prev.quantity + b.quantity})
                 logger.info(
                     "Merged duplicate same-cycle BUY for %s (+%g → %g shares)",
                     sym,
@@ -448,9 +435,7 @@ class TradeExecutor(BaseExecutor):
         # Per-name cap is CUMULATIVE: held value + this order must stay under
         # max_position_pct. Checking only the new order's notional let repeated
         # adds to one symbol breach the cap (AAPL → ~34% vs a 20% limit).
-        existing_value = _existing_position_value(
-            decision.symbol, kwargs.get("positions")
-        )
+        existing_value = _existing_position_value(decision.symbol, kwargs.get("positions"))
         projected_value = existing_value + estimated_cost
         if (
             account.portfolio_value > 0
@@ -499,9 +484,7 @@ class TradeExecutor(BaseExecutor):
             # reason so the reconciler ignores the row instead of
             # carrying it as a phantom position.
             if not order_id:
-                broker_msg = (
-                    str(order_result)[:300] if order_result is not None else "no response"
-                )
+                broker_msg = str(order_result)[:300] if order_result is not None else "no response"
                 logger.error(
                     "BUY order rejected by broker (no order id): %s — %s",
                     decision.symbol,
@@ -786,9 +769,7 @@ class TradeExecutor(BaseExecutor):
             # back if the close-out write fails.
             if fill.status in ("filled", "partially_filled") and fill.filled_price:
                 try:
-                    closer = getattr(
-                        self._repo, "close_open_trades_for_symbol", None
-                    )
+                    closer = getattr(self._repo, "close_open_trades_for_symbol", None)
                     if closer is not None:
                         closed_n = await closer(
                             decision.symbol,
@@ -920,9 +901,7 @@ class TradeExecutor(BaseExecutor):
         latest_exit: datetime | None = None
         exit_kind = ""
 
-        async def _scan(
-            rows: list[dict[str, Any]], ts_key: str
-        ) -> tuple[datetime | None, str]:
+        async def _scan(rows: list[dict[str, Any]], ts_key: str) -> tuple[datetime | None, str]:
             best: datetime | None = None
             for row in rows:
                 if str(row.get("symbol") or "").upper() != wanted:
@@ -963,13 +942,9 @@ class TradeExecutor(BaseExecutor):
         sells_method = getattr(self._repo, "get_recent_sells", None)
         if sells_method is not None:
             try:
-                sell_rows = await sells_method(
-                    minutes=self._recent_close_cooldown_minutes
-                )
+                sell_rows = await sells_method(minutes=self._recent_close_cooldown_minutes)
                 sell_ts, _ = await _scan(sell_rows, "timestamp")
-                if sell_ts is not None and (
-                    latest_exit is None or sell_ts > latest_exit
-                ):
+                if sell_ts is not None and (latest_exit is None or sell_ts > latest_exit):
                     latest_exit = sell_ts
                     exit_kind = "sold"
             except Exception as exc:  # noqa: BLE001
@@ -992,8 +967,7 @@ class TradeExecutor(BaseExecutor):
             "Wait for the cooldown to elapse or pick a different symbol."
         )
         logger.warning(
-            "BUY rejected by recent-close cooldown: %s (%s %.0f min ago, "
-            "cooldown %d min)",
+            "BUY rejected by recent-close cooldown: %s (%s %.0f min ago, cooldown %d min)",
             symbol,
             exit_kind,
             gap_min,
@@ -1017,9 +991,7 @@ class TradeExecutor(BaseExecutor):
         except Exception:  # noqa: BLE001
             return None
         close_t = effective_close_time(now_et.date())
-        close_dt = now_et.replace(
-            hour=close_t.hour, minute=close_t.minute, second=0, microsecond=0
-        )
+        close_dt = now_et.replace(hour=close_t.hour, minute=close_t.minute, second=0, microsecond=0)
         minutes_to_close = (close_dt - now_et).total_seconds() / 60.0
         if minutes_to_close > self._no_new_positions_minutes_before_close:
             return None
@@ -1139,7 +1111,7 @@ class TradeExecutor(BaseExecutor):
             if str(getattr(pos, "symbol", "")).upper() == wanted:
                 try:
                     return float(getattr(pos, "qty", 0) or 0)
-                except (TypeError, ValueError):
+                except TypeError, ValueError:
                     return 0.0
         return 0.0
 
@@ -1263,9 +1235,7 @@ class TradeExecutor(BaseExecutor):
             return entry_fallback
         return None
 
-    async def _flatten_except(
-        self, broker_symbols: list[str], keep: set[str]
-    ) -> dict[str, Any]:
+    async def _flatten_except(self, broker_symbols: list[str], keep: set[str]) -> dict[str, Any]:
         """Close every broker position except those in ``keep``.
 
         Used at EOD when reactor positions are held overnight: the
@@ -1383,7 +1353,7 @@ class TradeExecutor(BaseExecutor):
             q = getattr(trade, "filled_quantity", None) or getattr(trade, "quantity", 0)
             try:
                 open_qty_by_sym[sym] = open_qty_by_sym.get(sym, 0.0) + float(q or 0)
-            except (TypeError, ValueError):
+            except TypeError, ValueError:
                 continue
 
         total_closed = 0
@@ -1413,9 +1383,7 @@ class TradeExecutor(BaseExecutor):
                 n = await closer(sym, exit_price, "eod_close_all")
                 total_closed += n
             except Exception as exc:  # noqa: BLE001
-                logger.warning(
-                    "EOD close-all: failed to stamp closed_at on %s: %s", sym, exc
-                )
+                logger.warning("EOD close-all: failed to stamp closed_at on %s: %s", sym, exc)
                 continue
 
             # Record a synthetic SELL Trade row so the reconciler's
@@ -1507,6 +1475,6 @@ class TradeExecutor(BaseExecutor):
                         if c:
                             try:
                                 return float(c)
-                            except (TypeError, ValueError):
+                            except TypeError, ValueError:
                                 pass
         return 0.0

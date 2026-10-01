@@ -78,8 +78,9 @@ def _ev(direction, weight=1.0, *, source="news", ts=T0, directional=True):
     )
 
 
-def _build(*, regime=None, levels=None, thesis=None, prices=None, positions=None, llm=None,
-           config=None):
+def _build(
+    *, regime=None, levels=None, thesis=None, prices=None, positions=None, llm=None, config=None
+):
     store = InMemoryBeliefStore()
     log = InMemoryEventLog()
     bus = InProcessEventBus(log)
@@ -127,9 +128,9 @@ async def test_belief_updates_fully_when_llm_unavailable():
     thesis = FakeThesis()
     updater, store, _ = _build(thesis=thesis, llm=FakeLLM(available=False))
     b = await updater.apply_evidence("NVDA", [_ev(1.0), _ev(1.0)], T0)
-    assert b.conviction > 0.0       # deterministic fields still computed
+    assert b.conviction > 0.0  # deterministic fields still computed
     assert b.regime == Regime.TRENDING_UP
-    assert thesis.calls == 0        # LLM never called
+    assert thesis.calls == 0  # LLM never called
 
 
 @pytest.mark.asyncio
@@ -137,7 +138,7 @@ async def test_thesis_skipped_when_breaker_open():
     thesis = FakeThesis()
     updater, _, _ = _build(thesis=thesis, llm=FakeLLM(available=True, breaker=True))
     await updater.apply_evidence("NVDA", [_ev(1.0)], T0)
-    assert thesis.calls == 0        # quota/circuit breaker blocks the call (R-15)
+    assert thesis.calls == 0  # quota/circuit breaker blocks the call (R-15)
 
 
 # ── material_shift (R-11) ──
@@ -168,10 +169,10 @@ async def test_regime_flip_detected_against_prev_not_self():
     thesis = FakeThesis()
     regime = FakeRegime(regime=Regime.TRENDING_UP, conf=0.9)
     updater, _, _ = _build(thesis=thesis, regime=regime)
-    await updater.apply_evidence("NVDA", [_ev(1.0)], T0)        # → TRENDING_UP (call 1)
-    regime.regime = Regime.VOLATILE                            # flip
+    await updater.apply_evidence("NVDA", [_ev(1.0)], T0)  # → TRENDING_UP (call 1)
+    regime.regime = Regime.VOLATILE  # flip
     await updater.apply_evidence("NVDA", [_ev(1.0)], T0 + timedelta(minutes=1))
-    assert thesis.calls == 2                                   # flip detected vs prev
+    assert thesis.calls == 2  # flip detected vs prev
 
 
 # ── drift/anomaly flags wired (R-12) ──
@@ -303,9 +304,7 @@ async def test_lapsed_compliance_on_held_position_forces_exit():
     from halabot.belief.schema import ComplianceVerdict
 
     updater, _, events = _build(positions=FakePositions(held={"NVDA"}))
-    await updater.set_compliance(
-        "NVDA", ComplianceVerdict("NVDA", "not_halal", screened_at=T0), T0
-    )
+    await updater.set_compliance("NVDA", ComplianceVerdict("NVDA", "not_halal", screened_at=T0), T0)
     inval = [e for e in events if e.type == EventType.BELIEF_INVALIDATED]
     assert len(inval) == 1
     assert inval[0].payload["reason"] == "compliance_lapsed"
@@ -316,9 +315,7 @@ async def test_lapsed_compliance_not_held_does_not_force_exit():
     from halabot.belief.schema import ComplianceVerdict
 
     updater, _, events = _build(positions=FakePositions(held=set()))  # not held
-    await updater.set_compliance(
-        "NVDA", ComplianceVerdict("NVDA", "not_halal", screened_at=T0), T0
-    )
+    await updater.set_compliance("NVDA", ComplianceVerdict("NVDA", "not_halal", screened_at=T0), T0)
     assert not any(e.type == EventType.BELIEF_INVALIDATED for e in events)
 
 

@@ -95,9 +95,7 @@ def test_markers_cover_openai_and_openrouter_shapes():
 @pytest.mark.asyncio
 async def test_quota_failure_fires_alert_and_returns_empty_plan():
     repo = _FakeRepo()
-    strategy = _strategy(
-        _FailingLLM(Exception("Error code: 402 - Insufficient credits")), repo
-    )
+    strategy = _strategy(_FailingLLM(Exception("Error code: 402 - Insufficient credits")), repo)
     sink = _FakeSink()
     strategy.attach_alert_sink(sink)
 
@@ -126,18 +124,14 @@ async def test_generic_failure_does_not_alert():
 
 @pytest.mark.asyncio
 async def test_no_sink_attached_is_safe():
-    strategy = _strategy(
-        _FailingLLM(Exception("insufficient_quota")), _FakeRepo()
-    )
+    strategy = _strategy(_FailingLLM(Exception("insufficient_quota")), _FakeRepo())
     plan = await _run(strategy)  # must not raise
     assert plan["empty"] is True
 
 
 @pytest.mark.asyncio
 async def test_broken_sink_never_breaks_the_cycle():
-    strategy = _strategy(
-        _FailingLLM(Exception("insufficient credits")), _FakeRepo()
-    )
+    strategy = _strategy(_FailingLLM(Exception("insufficient credits")), _FakeRepo())
     strategy.attach_alert_sink(_FakeSink(explode=True))
 
     plan = await _run(strategy)  # alert raises internally; plan still returned

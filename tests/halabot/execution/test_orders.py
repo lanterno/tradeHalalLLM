@@ -21,8 +21,13 @@ T0 = datetime(2026, 5, 28, 12, 0, tzinfo=UTC)
 
 def _prop(asset, side, delta, *, version=1) -> TradeProposal:
     return TradeProposal(
-        asset=asset, side=side, target_weight=max(0.0, delta), current_weight=0.0,
-        weight_delta=delta, reason="test", belief_version=version,
+        asset=asset,
+        side=side,
+        target_weight=max(0.0, delta),
+        current_weight=0.0,
+        weight_delta=delta,
+        reason="test",
+        belief_version=version,
     )
 
 
@@ -33,7 +38,9 @@ def _build(*, prices=None, fail=None, breaker=None):
     events: list[Event] = []
     bus.subscribe(set(EventType), lambda e: _cap(events, e))
     ex = Executor(
-        venue=venue, bus=bus, clock=clock,
+        venue=venue,
+        bus=bus,
+        clock=clock,
         breaker=breaker or PerAssetBreaker(),
         feasibility=FeasibilityConfig(min_notional_usd=50.0, lot_step=1.0),
     )
@@ -47,8 +54,10 @@ async def _cap(sink, e):
 def _ctx(equity=100_000.0, bp=100_000.0, held=None, halal_ok=None):
     held = held or {}
     return ExecutionContext(
-        equity=equity, buying_power=bp,
-        position_qty=lambda a: held.get(a, 0.0), halal_ok=halal_ok,
+        equity=equity,
+        buying_power=bp,
+        position_qty=lambda a: held.get(a, 0.0),
+        halal_ok=halal_ok,
     )
 
 
@@ -115,8 +124,13 @@ async def test_pending_result_does_not_emit_fill(monkeypatch):
 
     async def _pending(order):
         return OrderResult(
-            asset=order.asset, side=order.side, requested_qty=order.quantity,
-            filled_qty=0.0, filled_price=None, status="submitted", order_id="pending-1",
+            asset=order.asset,
+            side=order.side,
+            requested_qty=order.quantity,
+            filled_qty=0.0,
+            filled_price=None,
+            status="submitted",
+            order_id="pending-1",
         )
 
     monkeypatch.setattr(venue, "place", _pending)

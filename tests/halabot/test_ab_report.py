@@ -21,7 +21,10 @@ async def _seed_shadow(engine, proposals: list[tuple[str, str]], *, at: datetime
     for asset, side in proposals:
         await log.append(
             new_event(
-                clock, EventType.POLICY_TRADE_PROPOSED, source="policy.shadow", asset=asset,
+                clock,
+                EventType.POLICY_TRADE_PROPOSED,
+                source="policy.shadow",
+                asset=asset,
                 payload={"side": side, "shadow": True},
             )
         )
@@ -88,10 +91,19 @@ async def _seed_outcomes(engine, returns: list[tuple[str, float]], *, at: dateti
         for asset, ret in returns:
             await conn.execute(
                 sa.insert(o).values(
-                    asset=asset, entry_ts=at, exit_ts=at, entry_price=100.0,
-                    exit_price=100.0 * (1 + ret), closed_weight=0.1, return_pct=ret,
-                    hold_seconds=3600, belief_version=1, entry_belief=None,
-                    label=1 if ret > 0.002 else 0, reason="test", created_at=at,
+                    asset=asset,
+                    entry_ts=at,
+                    exit_ts=at,
+                    entry_price=100.0,
+                    exit_price=100.0 * (1 + ret),
+                    closed_weight=0.1,
+                    return_pct=ret,
+                    hold_seconds=3600,
+                    belief_version=1,
+                    entry_belief=None,
+                    label=1 if ret > 0.002 else 0,
+                    reason="test",
+                    created_at=at,
                 )
             )
 

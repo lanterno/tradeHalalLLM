@@ -100,9 +100,7 @@ class HalalScreener:
             # funnelled into AAPL/ADBE/INTU). Make it loud, and louder still
             # in sandbox, where Zoya verdicts are RANDOMISED, not real.
             halal_n = sum(
-                1
-                for r in results
-                if not r.get("error") and r.get("compliance") == "halal"
+                1 for r in results if not r.get("error") and r.get("compliance") == "halal"
             )
             screened_n = sum(1 for r in results if not r.get("error"))
             logger.info(

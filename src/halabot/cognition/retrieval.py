@@ -50,8 +50,10 @@ def _query_text(b: BeliefState) -> str:
     words. Emit the same register: direction words, regime words, and the
     top evidence sources with their signs.
     """
-    direction = "bullish long" if b.direction.value == "long_bias" else (
-        "bearish short" if b.direction.value == "short_bias" else "neutral flat"
+    direction = (
+        "bullish long"
+        if b.direction.value == "long_bias"
+        else ("bearish short" if b.direction.value == "short_bias" else "neutral flat")
     )
     regime_words = b.regime.value.replace("_", " ")
     ev_words = " ".join(

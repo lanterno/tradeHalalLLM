@@ -38,7 +38,7 @@ class FactorScore:
 def _num(v: Any) -> float:
     try:
         f = float(v)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return 0.0
     return f if np.isfinite(f) else 0.0
 

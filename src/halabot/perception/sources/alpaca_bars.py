@@ -61,7 +61,7 @@ class AlpacaBarSource(PollingSource):
             low = float(raw.get("l", raw.get("low", 0)))
             c = float(raw.get("c", raw.get("close", 0)))
             v = float(raw.get("v", raw.get("volume", 0)))
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return None
         if c <= 0:
             return None

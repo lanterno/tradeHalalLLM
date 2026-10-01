@@ -19,8 +19,11 @@ T0 = datetime(2026, 5, 28, 12, 0, tzinfo=UTC)
 
 async def _seed_belief(engine, asset="NVDA", conviction=0.7):
     b = BeliefState(
-        asset=asset, regime=Regime.TRENDING_UP, direction=Direction.LONG_BIAS,
-        conviction=conviction, conviction_raw=conviction,
+        asset=asset,
+        regime=Regime.TRENDING_UP,
+        direction=Direction.LONG_BIAS,
+        conviction=conviction,
+        conviction_raw=conviction,
         halal=ComplianceVerdict(asset, "halal", screened_at=T0),
     )
     await PgBeliefStore(engine).put(b)
@@ -43,26 +46,43 @@ async def test_decision_chain_replays_by_correlation_id(halabot_engine):
     clock = FakeClock(T0)
     # An observation starts a chain; downstream events inherit its correlation_id.
     obs = new_event(
-        clock, EventType.OBSERVATION_BAR, source="alpaca", asset="NVDA",
+        clock,
+        EventType.OBSERVATION_BAR,
+        source="alpaca",
+        asset="NVDA",
         payload={"o": 1, "h": 1, "low": 1, "c": 1},
     )
     await bus.publish(obs)
     belief = new_event(
-        clock, EventType.BELIEF_UPDATED, source="belief.updater", asset="NVDA",
-        payload={"version": 1}, correlation_id=obs.correlation_id,
+        clock,
+        EventType.BELIEF_UPDATED,
+        source="belief.updater",
+        asset="NVDA",
+        payload={"version": 1},
+        correlation_id=obs.correlation_id,
     )
     await bus.publish(belief)
     policy = new_event(
-        clock, EventType.POLICY_TRADE_PROPOSED, source="policy.shadow", asset="NVDA",
-        payload={"side": "buy", "target_weight": 0.1, "current_weight": 0.0,
-                 "weight_delta": 0.1, "shadow": True},
+        clock,
+        EventType.POLICY_TRADE_PROPOSED,
+        source="policy.shadow",
+        asset="NVDA",
+        payload={
+            "side": "buy",
+            "target_weight": 0.1,
+            "current_weight": 0.0,
+            "weight_delta": 0.1,
+            "shadow": True,
+        },
         causation=belief,
     )
     await bus.publish(policy)
 
     chain = await queries.decision_chain(halabot_engine, obs.correlation_id)
     assert [e["type"] for e in chain] == [
-        "observation.bar", "belief.updated", "policy.trade_proposed"
+        "observation.bar",
+        "belief.updated",
+        "policy.trade_proposed",
     ]
     # The proposal is a separate query feed too.
     recent = await queries.recent_decisions(halabot_engine)
@@ -82,9 +102,7 @@ async def test_control_toggle_roundtrip(halabot_engine):
 @pytest.mark.asyncio
 async def test_system_health_counts(halabot_engine):
     bus = InProcessEventBus(PgEventLog(halabot_engine))
-    await bus.publish(
-        new_event(FakeClock(T0), EventType.SYSTEM_HEARTBEAT, source="hb")
-    )
+    await bus.publish(new_event(FakeClock(T0), EventType.SYSTEM_HEARTBEAT, source="hb"))
     await _seed_belief(halabot_engine, "NVDA", 0.6)
     health = await queries.system_health(halabot_engine)
     assert health["events"] >= 1

@@ -27,9 +27,7 @@ def test_bar_missing_keys_reported():
 
 
 def test_ingress_requires_asset():
-    e = _ev(
-        EventType.OBSERVATION_PRICE, asset=None, payload={"price": 1.0}
-    )
+    e = _ev(EventType.OBSERVATION_PRICE, asset=None, payload={"price": 1.0})
     assert validate_payload(e) == "missing asset"
 
 

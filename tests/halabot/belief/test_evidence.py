@@ -109,7 +109,9 @@ def test_merge_keeps_distinct_sources_sharing_one_event_id():
     ]
     out = merge([], items)
     assert {e.source for e in out} == {
-        "indicator.momentum", "indicator.rsi", "indicator.relstrength"
+        "indicator.momentum",
+        "indicator.rsi",
+        "indicator.relstrength",
     }
 
 
@@ -128,8 +130,7 @@ def test_merge_keeps_items_without_event_id():
 
 def test_merge_caps_per_source_keeping_newest():
     existing = [
-        _ev("news", 1.0, 1.0, ts=T0 + timedelta(minutes=m), event_id=uuid4())
-        for m in range(5)
+        _ev("news", 1.0, 1.0, ts=T0 + timedelta(minutes=m), event_id=uuid4()) for m in range(5)
     ]
     out = merge(existing, [], cap_per_source=3)
     kept_minutes = sorted(e.ts.minute for e in out)
@@ -149,9 +150,7 @@ def test_weighted_sum_nets_opposing_evidence():
 
 def test_weighted_sum_excludes_flag_sources():
     # An anomaly flag must not bias the signed vector.
-    out = weighted_sum(
-        [_ev("a", 1.0, 1.0), _ev("anomaly", -1.0, 1.0, directional=False)]
-    )
+    out = weighted_sum([_ev("a", 1.0, 1.0), _ev("anomaly", -1.0, 1.0, directional=False)])
     assert out == 1.0
 
 
@@ -160,9 +159,7 @@ def test_fraction_same_sign_full_agreement():
 
 
 def test_fraction_same_sign_split():
-    out = fraction_same_sign(
-        [_ev("a", 1.0, 1.0), _ev("b", 1.0, 1.0), _ev("c", -1.0, 0.1)]
-    )
+    out = fraction_same_sign([_ev("a", 1.0, 1.0), _ev("b", 1.0, 1.0), _ev("c", -1.0, 0.1)])
     assert out == 2 / 3
 
 

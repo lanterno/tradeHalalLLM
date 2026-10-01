@@ -38,7 +38,7 @@ def test_targets_normalize_when_gross_exceeds_cap():
     beliefs = [_b(f"A{i}", conviction=1.0) for i in range(6)]  # 6 × 0.20 = 1.20 > 1.0
     targets = policy.targets(beliefs, ShadowPortfolio(), RISK)
     gross = sum(t.weight for t in targets)
-    assert gross == pytest.approx(1.0)            # scaled down to the cap — no leverage
+    assert gross == pytest.approx(1.0)  # scaled down to the cap — no leverage
     assert all("normalized" in t.reason for t in targets)
 
 
@@ -81,7 +81,10 @@ def test_market_gate_blocks_buy_when_risk_off():
     b = _b("NVDA", conviction=0.9)
     targets = policy.targets([b], ShadowPortfolio(), RISK)
     props = policy.deltas(
-        targets, ShadowPortfolio(), beliefs_by_asset={"NVDA": b}, risk=RISK,
+        targets,
+        ShadowPortfolio(),
+        beliefs_by_asset={"NVDA": b},
+        risk=RISK,
         market_risk_off=True,
     )
     assert props == []  # market risk-off → don't fight the tape
@@ -95,7 +98,11 @@ def test_market_gate_allows_sell_when_risk_off():
     pf.set_weight("NVDA", 0.20)  # currently long; conviction gone → target 0 → sell
     targets = policy.targets([b], pf, RISK)
     props = policy.deltas(
-        targets, pf, beliefs_by_asset={"NVDA": b}, risk=RISK, market_risk_off=True,
+        targets,
+        pf,
+        beliefs_by_asset={"NVDA": b},
+        risk=RISK,
+        market_risk_off=True,
     )
     assert len(props) == 1 and props[0].side == "sell"
 
@@ -105,7 +112,10 @@ def test_market_gate_off_allows_buy():
     b = _b("NVDA", conviction=0.9)
     targets = policy.targets([b], ShadowPortfolio(), RISK)
     props = policy.deltas(
-        targets, ShadowPortfolio(), beliefs_by_asset={"NVDA": b}, risk=RISK,
+        targets,
+        ShadowPortfolio(),
+        beliefs_by_asset={"NVDA": b},
+        risk=RISK,
         market_risk_off=False,
     )
     assert len(props) == 1 and props[0].side == "buy"
@@ -118,8 +128,12 @@ def test_on_reject_reports_gated_buy_reason():
     targets = policy.targets([b], ShadowPortfolio(), RISK)
     seen: list[tuple[str, str]] = []
     props = policy.deltas(
-        targets, ShadowPortfolio(), beliefs_by_asset={"NVDA": b}, risk=RISK,
-        market_risk_off=True, on_reject=lambda a, r: seen.append((a, r)),
+        targets,
+        ShadowPortfolio(),
+        beliefs_by_asset={"NVDA": b},
+        risk=RISK,
+        market_risk_off=True,
+        on_reject=lambda a, r: seen.append((a, r)),
     )
     assert props == []
     assert len(seen) == 1 and seen[0][0] == "NVDA" and "market regime" in seen[0][1]
@@ -191,7 +205,9 @@ def test_risk_halt_blocks_buy_but_allows_sell():
     b = _b("NVDA", conviction=0.9)
     buy = policy.deltas(
         policy.targets([b], ShadowPortfolio(), halted),
-        ShadowPortfolio(), beliefs_by_asset={"NVDA": b}, risk=halted,
+        ShadowPortfolio(),
+        beliefs_by_asset={"NVDA": b},
+        risk=halted,
     )
     assert buy == []
     # sell allowed: held position, belief turned neutral → target 0 → exit
@@ -200,7 +216,9 @@ def test_risk_halt_blocks_buy_but_allows_sell():
     pf.set_weight("NVDA", 0.15)
     sell = policy.deltas(
         policy.targets([flat], pf, halted),
-        pf, beliefs_by_asset={"NVDA": flat}, risk=halted,
+        pf,
+        beliefs_by_asset={"NVDA": flat},
+        risk=halted,
     )
     assert len(sell) == 1 and sell[0].side == "sell"
 
@@ -225,7 +243,10 @@ def test_kill_switch_blocks_buy():
     b = _b("NVDA", conviction=0.9)
     props = policy.deltas(
         policy.targets([b], ShadowPortfolio(), RISK),
-        ShadowPortfolio(), beliefs_by_asset={"NVDA": b}, risk=RISK, kill_switch=True,
+        ShadowPortfolio(),
+        beliefs_by_asset={"NVDA": b},
+        risk=RISK,
+        kill_switch=True,
     )
     assert props == []
 
@@ -240,7 +261,10 @@ def test_kill_switch_still_allows_exit():
     b2 = _b("NVDA", conviction=0.0, direction=Direction.NEUTRAL)
     props = policy.deltas(
         policy.targets([b2], held, RISK),
-        held, beliefs_by_asset={"NVDA": b2}, risk=RISK, kill_switch=True,
+        held,
+        beliefs_by_asset={"NVDA": b2},
+        risk=RISK,
+        kill_switch=True,
     )
     assert len(props) == 1 and props[0].side == "sell"
 
@@ -259,9 +283,12 @@ def test_targets_zeroed_on_risk_halt():
 
 def test_max_open_positions_caps_new_entries():
     cfg = PolicyConfig(
-        conviction_entry_band=0.60, conviction_exit_band=0.45,
-        max_weight_per_asset=0.20, max_gross_exposure=1.0,
-        target_rebalance_threshold=0.05, max_open_positions=2,
+        conviction_entry_band=0.60,
+        conviction_exit_band=0.45,
+        max_weight_per_asset=0.20,
+        max_gross_exposure=1.0,
+        target_rebalance_threshold=0.05,
+        max_open_positions=2,
     )
     policy = Policy(cfg)
     beliefs = [_b(f"A{i}", conviction=1.0) for i in range(5)]  # 5 want in
@@ -279,6 +306,9 @@ def test_buy_with_missing_belief_is_failed_closed():
     b = _b("NVDA", conviction=0.9)
     targets = policy.targets([b], ShadowPortfolio(), RISK)
     props = policy.deltas(
-        targets, ShadowPortfolio(), beliefs_by_asset={}, risk=RISK  # belief missing
+        targets,
+        ShadowPortfolio(),
+        beliefs_by_asset={},
+        risk=RISK,  # belief missing
     )
     assert props == []  # no verdict → no buy

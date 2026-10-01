@@ -134,8 +134,8 @@ async def test_alignment_silent_when_horizons_disagree():
 @pytest.mark.asyncio
 async def test_anomaly_flag_on_volatility_spike():
     buf = BarBuffer()
-    calm = [100 + 0.1 * i for i in range(40)]          # low-vol drift
-    spike = [104, 96, 108, 92, 110]                     # sudden chaos
+    calm = [100 + 0.1 * i for i in range(40)]  # low-vol drift
+    spike = [104, 96, 108, 92, 110]  # sudden chaos
     _fill(buf, "NVDA", calm + spike)
     obs = new_event(CLOCK, EventType.OBSERVATION_BAR, source="alpaca", asset="NVDA")
     out = await AnomalyInterpreter(buf).interpret(obs)
@@ -228,8 +228,11 @@ async def test_forecaster_projects_uptrend():
 @pytest.mark.asyncio
 async def test_forecaster_silent_on_noisy_series():
     buf = BarBuffer()
-    _fill(buf, "NVDA", [100, 90, 110, 88, 112, 91, 109, 95, 105, 92,
-                        108, 94, 106, 93, 107, 96, 104, 97, 103, 99])  # low R²
+    _fill(
+        buf,
+        "NVDA",
+        [100, 90, 110, 88, 112, 91, 109, 95, 105, 92, 108, 94, 106, 93, 107, 96, 104, 97, 103, 99],
+    )  # low R²
     obs = new_event(CLOCK, EventType.OBSERVATION_BAR, source="alpaca", asset="NVDA")
     assert await ForecasterInterpreter(buf).interpret(obs) == []
 
@@ -286,7 +289,7 @@ async def test_structure_silent_mid_range():
 @pytest.mark.asyncio
 async def test_relstrength_bullish_when_outperforming_benchmark():
     buf = BarBuffer()
-    _fill(buf, "SPY", [100 + 0.2 * i for i in range(25)])   # benchmark +~5%
+    _fill(buf, "SPY", [100 + 0.2 * i for i in range(25)])  # benchmark +~5%
     _fill(buf, "NVDA", [100 + 1.0 * i for i in range(25)])  # leader, far stronger
     obs = new_event(CLOCK, EventType.OBSERVATION_BAR, source="alpaca", asset="NVDA")
     out = await RelativeStrengthInterpreter(buf, benchmark="SPY").interpret(obs)
@@ -313,7 +316,10 @@ async def test_relstrength_skips_the_benchmark_itself():
 @pytest.mark.asyncio
 async def test_news_interpreter_emits_polarity_evidence():
     obs = new_event(
-        CLOCK, EventType.OBSERVATION_NEWS, source="finnhub", asset="NVDA",
+        CLOCK,
+        EventType.OBSERVATION_NEWS,
+        source="finnhub",
+        asset="NVDA",
         payload={"lexicon_polarity": 0.8, "headline": "blowout earnings"},
     )
     out = await NewsLexiconInterpreter().interpret(obs)
@@ -325,7 +331,10 @@ async def test_news_interpreter_emits_polarity_evidence():
 @pytest.mark.asyncio
 async def test_news_interpreter_silent_when_lexicon_abstains():
     obs = new_event(
-        CLOCK, EventType.OBSERVATION_NEWS, source="finnhub", asset="NVDA",
+        CLOCK,
+        EventType.OBSERVATION_NEWS,
+        source="finnhub",
+        asset="NVDA",
         payload={"lexicon_polarity": None, "headline": "ambiguous"},
     )
     assert await NewsLexiconInterpreter().interpret(obs) == []
@@ -347,7 +356,10 @@ class _Scorer:
 @pytest.mark.asyncio
 async def test_news_llm_scores_when_lexicon_abstained():
     obs = new_event(
-        CLOCK, EventType.OBSERVATION_NEWS, source="finnhub", asset="NVDA",
+        CLOCK,
+        EventType.OBSERVATION_NEWS,
+        source="finnhub",
+        asset="NVDA",
         payload={"lexicon_polarity": None, "headline": "surprise FDA approval"},
     )
     out = await NewsLlmInterpreter(_Scorer(0.7)).interpret(obs)
@@ -358,7 +370,10 @@ async def test_news_llm_scores_when_lexicon_abstained():
 async def test_news_llm_skips_when_lexicon_already_scored():
     scorer = _Scorer(0.7)
     obs = new_event(
-        CLOCK, EventType.OBSERVATION_NEWS, source="finnhub", asset="NVDA",
+        CLOCK,
+        EventType.OBSERVATION_NEWS,
+        source="finnhub",
+        asset="NVDA",
         payload={"lexicon_polarity": 0.5, "headline": "x"},  # lexicon scored it
     )
     assert await NewsLlmInterpreter(scorer).interpret(obs) == []
@@ -373,7 +388,10 @@ async def test_news_llm_rate_limits_burst():
     scorer = _Scorer(0.6)
     itp = NewsLlmInterpreter(scorer, max_per_window=2, monotonic=lambda: 1000.0)  # frozen clock
     obs = new_event(
-        CLOCK, EventType.OBSERVATION_NEWS, source="finnhub", asset="NVDA",
+        CLOCK,
+        EventType.OBSERVATION_NEWS,
+        source="finnhub",
+        asset="NVDA",
         payload={"lexicon_polarity": None, "headline": "nuanced headline"},
     )
     assert len(await itp.interpret(obs)) == 1
@@ -391,7 +409,10 @@ async def test_news_llm_budget_recovers_after_window():
         scorer, max_per_window=1, window_s=60.0, monotonic=lambda: clock_now[0]
     )
     obs = new_event(
-        CLOCK, EventType.OBSERVATION_NEWS, source="finnhub", asset="NVDA",
+        CLOCK,
+        EventType.OBSERVATION_NEWS,
+        source="finnhub",
+        asset="NVDA",
         payload={"lexicon_polarity": None, "headline": "h"},
     )
     assert len(await itp.interpret(obs)) == 1
@@ -404,7 +425,10 @@ async def test_news_llm_budget_recovers_after_window():
 @pytest.mark.asyncio
 async def test_news_llm_silent_on_scorer_error():
     obs = new_event(
-        CLOCK, EventType.OBSERVATION_NEWS, source="finnhub", asset="NVDA",
+        CLOCK,
+        EventType.OBSERVATION_NEWS,
+        source="finnhub",
+        asset="NVDA",
         payload={"lexicon_polarity": None, "headline": "x"},
     )
     assert await NewsLlmInterpreter(_Scorer(None, raises=True)).interpret(obs) == []  # INV-1

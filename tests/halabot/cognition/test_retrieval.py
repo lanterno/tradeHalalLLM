@@ -29,8 +29,9 @@ class _FakeStore:
         self.explode = explode
         self.queries: list[str] = []
 
-    async def query(self, text: str, *, k: int = 5, min_similarity: float = 0.1,
-                    symbol: str | None = None) -> list[tuple[Any, float]]:
+    async def query(
+        self, text: str, *, k: int = 5, min_similarity: float = 0.1, symbol: str | None = None
+    ) -> list[tuple[Any, float]]:
         if self.explode:
             raise RuntimeError("pg down")
         self.queries.append(text)

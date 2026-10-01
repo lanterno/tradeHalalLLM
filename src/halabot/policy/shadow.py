@@ -95,9 +95,7 @@ class ShadowPolicyRunner:
         self._subs.append(self._bus.subscribe({EventType.BELIEF_UPDATED}, self._on_belief))
         # Force-exits (INV-7 compliance_lapsed, price-break invalidation) bypass
         # the conviction path — a held belief turning invalid must close now.
-        self._subs.append(
-            self._bus.subscribe({EventType.BELIEF_INVALIDATED}, self._on_invalidated)
-        )
+        self._subs.append(self._bus.subscribe({EventType.BELIEF_INVALIDATED}, self._on_invalidated))
         # One recompute per heartbeat covers the decay-only updates (which skip
         # their per-asset recompute) so a tick is O(N), not O(N^2).
         self._subs.append(self._bus.subscribe({EventType.SYSTEM_HEARTBEAT}, self._recompute))

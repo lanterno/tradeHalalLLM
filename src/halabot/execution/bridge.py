@@ -54,9 +54,7 @@ class LiveTradeBridge:
         self.routed = 0
 
     def start(self) -> None:
-        self._subs.append(
-            self._bus.subscribe({EventType.POLICY_TRADE_PROPOSED}, self._on_proposal)
-        )
+        self._subs.append(self._bus.subscribe({EventType.POLICY_TRADE_PROPOSED}, self._on_proposal))
 
     def stop(self) -> None:
         for sub in self._subs:

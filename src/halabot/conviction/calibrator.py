@@ -118,7 +118,5 @@ class FittedCalibrator:
             return False
         self._model = model
         self.fitted = True
-        logger.info(
-            "calibrator fit on %d samples: a=%.3f b=%.3f", len(samples), model[0], model[1]
-        )
+        logger.info("calibrator fit on %d samples: a=%.3f b=%.3f", len(samples), model[0], model[1])
         return True

@@ -279,15 +279,11 @@ class TradingCycleService(BaseCycleService):
                 # longest window), not just 60 min — otherwise a symbol
                 # in minutes 61-120 of its re-entry gate vanishes from
                 # the prompt while the executor still rejects it.
-                close_cd = int(
-                    getattr(self._executor, "_recent_close_cooldown_minutes", 30)
-                )
+                close_cd = int(getattr(self._executor, "_recent_close_cooldown_minutes", 30))
                 reentry_cd = int(
                     getattr(self._executor, "_stop_loss_reentry_cooldown_minutes", 120)
                 )
-                rows = await repos.trades.get_recently_closed(
-                    minutes=max(60, close_cd, reentry_cd)
-                )
+                rows = await repos.trades.get_recently_closed(minutes=max(60, close_cd, reentry_cd))
                 recent_closed_text = _format_recent_closed(
                     rows,
                     close_cooldown_min=close_cd,
@@ -307,9 +303,7 @@ class TradingCycleService(BaseCycleService):
                 held = {p.symbol.upper() for p in positions}
                 droppable = (gated - held) & {s.upper() for s in halal_symbols}
                 if droppable:
-                    halal_symbols = [
-                        s for s in halal_symbols if s.upper() not in droppable
-                    ]
+                    halal_symbols = [s for s in halal_symbols if s.upper() not in droppable]
                     # Also drop their market-data sections — the 11:00
                     # cycle showed the model mining buy candidates out
                     # of any context that still renders them (it
@@ -317,15 +311,10 @@ class TradingCycleService(BaseCycleService):
                     # block alone). Keep the exit-history line (it
                     # explains the absence); remove the price action
                     # that invites a fresh thesis.
-                    snapshots = {
-                        s: v for s, v in snapshots.items() if s.upper() not in droppable
-                    }
-                    bars = {
-                        s: v for s, v in bars.items() if s.upper() not in droppable
-                    }
+                    snapshots = {s: v for s, v in snapshots.items() if s.upper() not in droppable}
+                    bars = {s: v for s, v in bars.items() if s.upper() not in droppable}
                     logger.info(
-                        "Buy universe filtered: %s inside executor gates "
-                        "(%d symbol(s) remain)",
+                        "Buy universe filtered: %s inside executor gates (%d symbol(s) remain)",
                         ", ".join(sorted(droppable)),
                         len(halal_symbols),
                     )
@@ -357,17 +346,13 @@ class TradingCycleService(BaseCycleService):
                     if prev is None or ts > prev:
                         youngest_ts_by_sym[sym] = ts
                 for sym, ts in youngest_ts_by_sym.items():
-                    holding_minutes_by_symbol[sym] = (
-                        now_utc - ts
-                    ).total_seconds() / 60.0
+                    holding_minutes_by_symbol[sym] = (now_utc - ts).total_seconds() / 60.0
 
                 # Self-review observations land in strategy_adjustments
                 # with parameter="self_review_observation" — read the
                 # most recent N here.
                 try:
-                    adjustments = await repos.strategy_adjustments.get_recent_adjustments(
-                        limit=30
-                    )
+                    adjustments = await repos.strategy_adjustments.get_recent_adjustments(limit=30)
                     obs = [
                         (row.get("reasoning") or "")
                         for row in adjustments

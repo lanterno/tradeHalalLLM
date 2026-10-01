@@ -97,8 +97,13 @@ def test_observability_filter_attaches_service_when_set():
 
     def _rec():
         return logging.LogRecord(
-            name="halal_trader.test", level=logging.INFO, pathname=__file__,
-            lineno=0, msg="hi", args=None, exc_info=None,
+            name="halal_trader.test",
+            level=logging.INFO,
+            pathname=__file__,
+            lineno=0,
+            msg="hi",
+            args=None,
+            exc_info=None,
         )
 
     assert get_service() == ""  # default unset

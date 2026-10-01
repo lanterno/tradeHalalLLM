@@ -39,12 +39,14 @@ class _FakeMCP:
 async def _universe(symbols):
     async def u() -> list[str]:
         return symbols
+
     return u
 
 
 async def _emit_to(sink: list[Event]):
     async def emit(e: Event) -> None:
         sink.append(e)
+
     return emit
 
 

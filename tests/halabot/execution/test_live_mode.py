@@ -39,9 +39,7 @@ def test_stale_token_refused(monkeypatch):
 
 
 def test_valid_dated_token_arms(monkeypatch):
-    s = _settings(
-        monkeypatch, ENGINE_LIVE="stocks", ENGINE_LIVE_TOKEN=expected_token(TODAY)
-    )
+    s = _settings(monkeypatch, ENGINE_LIVE="stocks", ENGINE_LIVE_TOKEN=expected_token(TODAY))
     d = CHECKER.check(s, TODAY)
     assert d.armed is True
     assert d.market == "stocks"

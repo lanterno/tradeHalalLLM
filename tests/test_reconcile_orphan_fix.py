@@ -352,9 +352,7 @@ async def test_crypto_legacy_row_without_filled_quantity_still_counted(engine):
     reconciler still trusts these by falling back to `quantity`."""
     repo = Repository(engine)
     # status='filled' but no filled_quantity — legacy shape
-    await repo.record_crypto_trade(
-        pair="BTCUSDT", side="buy", quantity=0.4, status="filled"
-    )
+    await repo.record_crypto_trade(pair="BTCUSDT", side="buy", quantity=0.4, status="filled")
 
     broker = MagicMock()
     broker.get_balances = AsyncMock(return_value=[_balance("BTC", 0.4)])
@@ -500,9 +498,7 @@ async def test_reconcile_db_to_broker_dry_run_proposes_no_write(engine):
         return_value=[SimpleNamespace(symbol="TXN", qty=25, avg_entry_price=200.0)]
     )
 
-    report = await reconcile.reconcile_db_to_broker(
-        engine=engine, broker=broker, dry_run=True
-    )
+    report = await reconcile.reconcile_db_to_broker(engine=engine, broker=broker, dry_run=True)
     assert report.applied_count == 0
     fix = next(f for f in report.fixes if f.symbol == "TXN")
     assert fix.db_net == -5.0
@@ -531,9 +527,7 @@ async def test_reconcile_db_to_broker_apply_balances_to_broker(engine):
         return_value=[SimpleNamespace(symbol="TXN", qty=25, avg_entry_price=200.0)]
     )
 
-    report = await reconcile.reconcile_db_to_broker(
-        engine=engine, broker=broker, dry_run=False
-    )
+    report = await reconcile.reconcile_db_to_broker(engine=engine, broker=broker, dry_run=False)
     assert report.applied_count == 1
 
     # The adjustment row is tagged, closed, and P&L-neutral.

@@ -53,8 +53,7 @@ def test_plan_skips_other_engine_positions():
 def test_plan_skips_unknown_owner_positions():
     # Fail-safe: never adopt/adjust a position we can't prove is ours (audit #9).
     plan = {
-        a.asset: a
-        for a in reconcile_plan({"NVDA": 5.0}, {}, lambda a: None, engine_owner="belief")
+        a.asset: a for a in reconcile_plan({"NVDA": 5.0}, {}, lambda a: None, engine_owner="belief")
     }
     assert plan["NVDA"].action == "skip_other_engine"
 
@@ -67,7 +66,9 @@ async def test_reconciler_emits_events_for_actions():
     events: list[Event] = []
     bus.subscribe({EventType.POSITION_RECONCILED}, lambda e: _cap(events, e))
     rec = Reconciler(
-        venue=venue, bus=bus, clock=FakeClock(T0),
+        venue=venue,
+        bus=bus,
+        clock=FakeClock(T0),
         db_net=lambda: {},  # DB knows nothing → import
         owner_of=lambda a: "belief",
     )

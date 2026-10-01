@@ -156,7 +156,8 @@ class LazyChronosForecaster:
                 self._failed = True
                 logger.warning(
                     "Chronos load failed (%s) — forecaster disabled, engine continues: %r",
-                    self._model_name, exc,
+                    self._model_name,
+                    exc,
                 )
                 return _ABSTAIN
         return self._impl.forecast(closes, horizon=horizon)

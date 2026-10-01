@@ -22,9 +22,17 @@ T0 = datetime(2026, 5, 28, 12, 0, tzinfo=UTC)
 async def _propose(bus, clock, asset, side, weight_delta, price, *, belief_version=1):
     await bus.publish(
         new_event(
-            clock, EventType.POLICY_TRADE_PROPOSED, source="policy.shadow", asset=asset,
-            payload={"side": side, "weight_delta": weight_delta, "price": price,
-                     "belief_version": belief_version, "reason": "test"},
+            clock,
+            EventType.POLICY_TRADE_PROPOSED,
+            source="policy.shadow",
+            asset=asset,
+            payload={
+                "side": side,
+                "weight_delta": weight_delta,
+                "price": price,
+                "belief_version": belief_version,
+                "reason": "test",
+            },
         )
     )
 
@@ -109,7 +117,10 @@ async def test_missing_price_is_skipped(halabot_engine):
     clock = FakeClock(T0)
     await bus.publish(
         new_event(
-            clock, EventType.POLICY_TRADE_PROPOSED, source="policy.shadow", asset="NVDA",
+            clock,
+            EventType.POLICY_TRADE_PROPOSED,
+            source="policy.shadow",
+            asset="NVDA",
             payload={"side": "buy", "weight_delta": 0.1, "price": None, "belief_version": 1},
         )
     )

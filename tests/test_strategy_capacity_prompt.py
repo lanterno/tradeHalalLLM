@@ -67,11 +67,13 @@ def test_capacity_over_cap_defensive():
 def _pos(symbol: str, qty: float, price: float):
     """Build a Position with current_price set so values are computable."""
     from halal_trader.domain.models import Position
+
     return Position(symbol=symbol, qty=qty, avg_entry_price=price, current_price=price)
 
 
 def test_sector_exposure_empty_when_no_positions():
     from halal_trader.trading.strategy import _format_sector_exposure
+
     out = _format_sector_exposure([], equity=100_000, max_sector_pct=0.40)
     assert "all-cash" in out
     assert "40%" in out
@@ -79,10 +81,9 @@ def test_sector_exposure_empty_when_no_positions():
 
 def test_sector_exposure_below_cap_no_warning():
     from halal_trader.trading.strategy import _format_sector_exposure
+
     # MSFT 10% of equity — well below 40% cap
-    out = _format_sector_exposure(
-        [_pos("MSFT", 50, 200)], equity=100_000, max_sector_pct=0.40
-    )
+    out = _format_sector_exposure([_pos("MSFT", 50, 200)], equity=100_000, max_sector_pct=0.40)
     assert "Technology" in out
     assert "10%" in out
     # No alarm wording when comfortably below the cap.
@@ -95,10 +96,9 @@ def test_sector_exposure_at_cap_emits_warning():
     """Tech is exempt; use a non-exempt sector (Healthcare via JNJ) to
     exercise the AT-CAP warning."""
     from halal_trader.trading.strategy import _format_sector_exposure
+
     # JNJ $40k of $100k equity = exactly 40% — at cap
-    out = _format_sector_exposure(
-        [_pos("JNJ", 250, 160)], equity=100_000, max_sector_pct=0.40
-    )
+    out = _format_sector_exposure([_pos("JNJ", 250, 160)], equity=100_000, max_sector_pct=0.40)
     assert "AT CAP" in out
     assert "WILL BE REJECTED" in out
     assert "Healthcare" in out
@@ -106,10 +106,9 @@ def test_sector_exposure_at_cap_emits_warning():
 
 def test_sector_exposure_near_cap_emits_warning():
     from halal_trader.trading.strategy import _format_sector_exposure
+
     # JNJ $33k of $100k = 33% — within 80% of 40% cap (>=32%)
-    out = _format_sector_exposure(
-        [_pos("JNJ", 206, 160)], equity=100_000, max_sector_pct=0.40
-    )
+    out = _format_sector_exposure([_pos("JNJ", 206, 160)], equity=100_000, max_sector_pct=0.40)
     assert "near cap" in out
     assert "WILL BE REJECTED" in out
 
@@ -117,6 +116,7 @@ def test_sector_exposure_near_cap_emits_warning():
 def test_sector_exposure_aggregates_multiple_symbols_in_same_sector():
     """Two Healthcare symbols sum to 45% → past the cap warning fires."""
     from halal_trader.trading.strategy import _format_sector_exposure
+
     # JNJ 20% + LLY 25% = 45% Healthcare — over cap
     out = _format_sector_exposure(
         [_pos("JNJ", 125, 160), _pos("LLY", 50, 500)],
@@ -133,10 +133,9 @@ def test_sector_exposure_marks_technology_exempt():
     """Tech positions render with "(exempt)" and never trigger the
     cap warning, even when 80%+ of portfolio."""
     from halal_trader.trading.strategy import _format_sector_exposure
+
     # MSFT $80k of $100k = 80% — would normally scream AT CAP.
-    out = _format_sector_exposure(
-        [_pos("MSFT", 400, 200)], equity=100_000, max_sector_pct=0.40
-    )
+    out = _format_sector_exposure([_pos("MSFT", 400, 200)], equity=100_000, max_sector_pct=0.40)
     assert "Technology" in out
     assert "exempt" in out
     # The cap-warning footer must NOT mention Technology.
@@ -151,6 +150,7 @@ def test_sector_exposure_mixed_tech_and_capped_sectors():
     """Tech is silent (exempt); Healthcare at 40% still triggers the
     warning footer."""
     from halal_trader.trading.strategy import _format_sector_exposure
+
     out = _format_sector_exposure(
         [
             _pos("MSFT", 400, 200),  # $80k Tech (exempt)
@@ -199,8 +199,8 @@ def test_symbol_headroom_shows_max_add():
     from halal_trader.trading.strategy import _format_symbol_headroom
 
     positions = [
-        Position(symbol="ADBE", qty=82, current_price=220.0),   # $18,040 held
-        Position(symbol="INTU", qty=36, current_price=275.0),   # $9,900 held
+        Position(symbol="ADBE", qty=82, current_price=220.0),  # $18,040 held
+        Position(symbol="INTU", qty=36, current_price=275.0),  # $9,900 held
     ]
     out = _format_symbol_headroom(positions, 100_000.0, 0.20)
     assert "20% of equity" in out

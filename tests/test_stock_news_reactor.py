@@ -36,9 +36,7 @@ class _FakeClassifier:
         self.calls.append((symbol, headline))
         for needle, score in self._scores.items():
             if needle in headline:
-                return HeadlineClassification(
-                    score=score, tag="other", rationale="(fake)"
-                )
+                return HeadlineClassification(score=score, tag="other", rationale="(fake)")
         return HeadlineClassification(score=0.0)
 
 
@@ -83,6 +81,7 @@ def test_reactor_default_threshold_raised_to_085():
     the NVDA earnings cascade flooded with editorial coverage all
     scoring exactly 0.70."""
     from halal_trader.sentiment.stocks_events import StockNewsEventReactor
+
     assert StockNewsEventReactor._DEFAULT_SCORE_THRESHOLD == 0.85
 
 
@@ -91,6 +90,7 @@ def test_reactor_default_notify_cooldown_1800s():
     Raised from 15→30 on 2026-05-22 after observing the same NVDA
     Q1 catalyst re-firing every ~15 min via repackaged headlines."""
     from halal_trader.sentiment.stocks_events import StockNewsEventReactor
+
     assert StockNewsEventReactor._DEFAULT_NOTIFY_COOLDOWN_S == 1800
 
 
@@ -109,9 +109,7 @@ async def test_reactor_skips_sweep_while_halted(monkeypatch):
 
     classifier = _FakeClassifier({"good": 0.95})
     r = _reactor(classifier)
-    r._scan_all_symbols = AsyncMock(
-        side_effect=AssertionError("reactor scanned while halted")
-    )
+    r._scan_all_symbols = AsyncMock(side_effect=AssertionError("reactor scanned while halted"))
 
     async def _halt():
         r._running = False  # one gated iteration, then stop the loop
@@ -804,7 +802,9 @@ def test_reactor_exposes_classifier_for_telemetry():
     public accessor so a future refactor can't accidentally rename it."""
     c = GPTHeadlineClassifier(_OkLLM())
     r = StockNewsEventReactor(
-        api_key="k", symbols=["AAPL"], classifier=c,
+        api_key="k",
+        symbols=["AAPL"],
+        classifier=c,
     )
     assert r.classifier is c
 
@@ -826,9 +826,7 @@ async def test_breaker_trips_when_entire_fallback_chain_is_quota_exhausted():
 
         async def generate(self, prompt, system=None):
             self.calls += 1
-            raise RuntimeError(
-                f"Error from {self.model}: code: 'insufficient_quota'"
-            )
+            raise RuntimeError(f"Error from {self.model}: code: 'insufficient_quota'")
 
     primary = _OutOfCredits("gpt-4o-mini")
     fb1 = _OutOfCredits("claude-haiku")

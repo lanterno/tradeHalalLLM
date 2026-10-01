@@ -74,9 +74,7 @@ class FinnhubNewsSource(PollingSource):
         out: list[dict[str, Any]] = []
         for sym in symbols:
             try:
-                resp = await self._client.get(
-                    _FINNHUB_NEWS, params={**params_base, "symbol": sym}
-                )
+                resp = await self._client.get(_FINNHUB_NEWS, params={**params_base, "symbol": sym})
                 resp.raise_for_status()
                 items = resp.json()
             except Exception as exc:  # noqa: BLE001 — one symbol's failure skips it

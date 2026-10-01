@@ -115,11 +115,7 @@ class PgBeliefStore:
     async def all_active(self) -> list[BeliefState]:
         t = _belief_table
         # Latest version per asset via DISTINCT ON (asset) ordered by version desc.
-        stmt = (
-            sa.select(t)
-            .order_by(t.c.asset, t.c.version.desc())
-            .distinct(t.c.asset)
-        )
+        stmt = sa.select(t).order_by(t.c.asset, t.c.version.desc()).distinct(t.c.asset)
         async with self._engine.connect() as conn:
             rows = (await conn.execute(stmt)).all()
         return [belief_from_row(dict(r._mapping)) for r in rows]

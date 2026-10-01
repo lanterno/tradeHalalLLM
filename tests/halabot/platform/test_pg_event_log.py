@@ -25,8 +25,13 @@ async def _collect(log: PgEventLog, **kw) -> list[Event]:
 @pytest.mark.asyncio
 async def test_append_and_replay_roundtrip(halabot_engine):
     log = PgEventLog(halabot_engine)
-    e = new_event(_at(0), EventType.OBSERVATION_NEWS, source="finnhub", asset="NVDA",
-                  payload={"headline": "beat", "score": 0.9})
+    e = new_event(
+        _at(0),
+        EventType.OBSERVATION_NEWS,
+        source="finnhub",
+        asset="NVDA",
+        payload={"headline": "beat", "score": 0.9},
+    )
     await log.append(e)
     out = await _collect(log)
     assert len(out) == 1
@@ -65,8 +70,9 @@ async def test_replay_filters(halabot_engine):
 async def test_causation_chain_persists(halabot_engine):
     log = PgEventLog(halabot_engine)
     root = new_event(_at(0), EventType.OBSERVATION_NEWS, source="finnhub", asset="NVDA")
-    child = new_event(_at(1), EventType.BELIEF_UPDATED, source="belief", asset="NVDA",
-                      causation=root)
+    child = new_event(
+        _at(1), EventType.BELIEF_UPDATED, source="belief", asset="NVDA", causation=root
+    )
     await log.append(root)
     await log.append(child)
     out = await _collect(log, asset="NVDA")
@@ -89,9 +95,9 @@ async def test_bus_durably_persists_then_replays(halabot_engine):
         payload={"o": 1.0, "h": 1.0, "low": 1.0, "c": 1.0},
     )
     await bus.publish(e)
-    assert len(seen) == 1                       # dispatched
+    assert len(seen) == 1  # dispatched
     replayed = [x async for x in bus.replay(types={EventType.OBSERVATION_BAR})]
-    assert [x.id for x in replayed] == [e.id]   # durably persisted
+    assert [x.id for x in replayed] == [e.id]  # durably persisted
 
 
 async def _record(sink: list, e: Event) -> None:

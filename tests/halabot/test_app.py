@@ -25,16 +25,21 @@ async def test_engine_builds_and_runs_end_to_end(halabot_engine):
     clock = FakeClock(T0)
     engine = await build_engine(db_engine=halabot_engine, clock=clock)
     proposed: list[Event] = []
-    engine.bus.subscribe(
-        {EventType.POLICY_TRADE_PROPOSED}, lambda e: _cap(proposed, e)
-    )
+    engine.bus.subscribe({EventType.POLICY_TRADE_PROPOSED}, lambda e: _cap(proposed, e))
     try:
         # Halal verdict first (INV-7 — without it the policy's halal gate blocks buys).
         await engine.bus.publish(
             new_event(
-                clock, EventType.COMPLIANCE_VERDICT, source="zoya", asset="NVDA",
-                payload={"status": "halal", "detail": "ok", "screening_id": 1,
-                         "transient_error": False},
+                clock,
+                EventType.COMPLIANCE_VERDICT,
+                source="zoya",
+                asset="NVDA",
+                payload={
+                    "status": "halal",
+                    "detail": "ok",
+                    "screening_id": 1,
+                    "transient_error": False,
+                },
             )
         )
         # Uptrend bars → bullish belief.
@@ -43,7 +48,10 @@ async def test_engine_builds_and_runs_end_to_end(halabot_engine):
             c = 100.0 + i
             await engine.bus.publish(
                 new_event(
-                    clock, EventType.OBSERVATION_BAR, source="alpaca", asset="NVDA",
+                    clock,
+                    EventType.OBSERVATION_BAR,
+                    source="alpaca",
+                    asset="NVDA",
                     payload={"o": c, "h": c + 1, "low": c - 1, "c": c, "v": 1000.0},
                 )
             )
@@ -70,9 +78,16 @@ async def test_engine_blocks_buy_for_non_halal_asset(halabot_engine):
     try:
         await engine.bus.publish(
             new_event(
-                clock, EventType.COMPLIANCE_VERDICT, source="zoya", asset="HOOD",
-                payload={"status": "not_halal", "detail": "interest income",
-                         "screening_id": 2, "transient_error": False},
+                clock,
+                EventType.COMPLIANCE_VERDICT,
+                source="zoya",
+                asset="HOOD",
+                payload={
+                    "status": "not_halal",
+                    "detail": "interest income",
+                    "screening_id": 2,
+                    "transient_error": False,
+                },
             )
         )
         for i in range(30):
@@ -80,7 +95,10 @@ async def test_engine_blocks_buy_for_non_halal_asset(halabot_engine):
             c = 100.0 + i
             await engine.bus.publish(
                 new_event(
-                    clock, EventType.OBSERVATION_BAR, source="alpaca", asset="HOOD",
+                    clock,
+                    EventType.OBSERVATION_BAR,
+                    source="alpaca",
+                    asset="HOOD",
                     payload={"o": c, "h": c + 1, "low": c - 1, "c": c, "v": 1000.0},
                 )
             )
@@ -102,9 +120,16 @@ async def test_engine_coalesce_mode_forms_belief_end_to_end(halabot_engine):
     try:
         await engine.bus.publish(
             new_event(
-                clock, EventType.COMPLIANCE_VERDICT, source="zoya", asset="NVDA",
-                payload={"status": "halal", "detail": "ok", "screening_id": 1,
-                         "transient_error": False},
+                clock,
+                EventType.COMPLIANCE_VERDICT,
+                source="zoya",
+                asset="NVDA",
+                payload={
+                    "status": "halal",
+                    "detail": "ok",
+                    "screening_id": 1,
+                    "transient_error": False,
+                },
             )
         )
         for i in range(30):
@@ -112,7 +137,10 @@ async def test_engine_coalesce_mode_forms_belief_end_to_end(halabot_engine):
             c = 100.0 + i
             await engine.bus.publish(
                 new_event(
-                    clock, EventType.OBSERVATION_BAR, source="alpaca", asset="NVDA",
+                    clock,
+                    EventType.OBSERVATION_BAR,
+                    source="alpaca",
+                    asset="NVDA",
                     payload={"o": c, "h": c + 1, "low": c - 1, "c": c, "v": 1000.0},
                 )
             )

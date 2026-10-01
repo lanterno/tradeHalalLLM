@@ -49,9 +49,7 @@ def test_drawdown_halts():
 def test_daily_realized_loss_halts_even_without_heat():
     # Realized loss day, but flat now (no unrealized heat, equity near peak):
     # the daily-loss floor must still trip (R-10).
-    s = ENGINE.evaluate(
-        _snap(realized_pnl_today=-2_500.0, unrealized_pnl=0.0, equity=100_000.0)
-    )
+    s = ENGINE.evaluate(_snap(realized_pnl_today=-2_500.0, unrealized_pnl=0.0, equity=100_000.0))
     assert s.halted and "daily realized loss" in s.reason
 
 

@@ -73,9 +73,7 @@ class TargetWeightWriter:
         self.written = 0
 
     def start(self) -> None:
-        self._subs.append(
-            self._bus.subscribe({EventType.POLICY_TARGET_CHANGED}, self._on_target)
-        )
+        self._subs.append(self._bus.subscribe({EventType.POLICY_TARGET_CHANGED}, self._on_target))
 
     def stop(self) -> None:
         for sub in self._subs:

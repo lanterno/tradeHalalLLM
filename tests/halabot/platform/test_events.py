@@ -35,9 +35,7 @@ def test_new_event_without_causation_starts_fresh_chain():
 def test_new_event_with_causation_inherits_correlation_and_links_causation():
     c = _clock()
     root = new_event(c, EventType.OBSERVATION_NEWS, source="finnhub", asset="NVDA")
-    child = new_event(
-        c, EventType.BELIEF_UPDATED, source="belief", asset="NVDA", causation=root
-    )
+    child = new_event(c, EventType.BELIEF_UPDATED, source="belief", asset="NVDA", causation=root)
     assert child.causation_id == root.id
     assert child.correlation_id == root.correlation_id  # same causal chain
     assert child.id != root.id

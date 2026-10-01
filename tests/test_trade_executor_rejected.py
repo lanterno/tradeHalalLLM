@@ -93,6 +93,7 @@ def test_extract_order_id_wrapped_result_non_dict():
 
 def _position(symbol: str, qty: float):
     from halal_trader.domain.models import Position
+
     return Position(symbol=symbol, qty=qty, avg_entry_price=100.0, current_price=101.0)
 
 
@@ -194,9 +195,7 @@ async def test_sell_fill_closes_open_buy_row():
     broker = MagicMock()
     broker.get_account_info = AsyncMock(return_value=_account())
     # Held long ≥ the sell quantity so the short-guard clamp lets it through.
-    broker.get_all_positions = AsyncMock(
-        return_value=[SimpleNamespace(symbol="QCOM", qty=40.0)]
-    )
+    broker.get_all_positions = AsyncMock(return_value=[SimpleNamespace(symbol="QCOM", qty=40.0)])
     broker.place_order = AsyncMock(return_value={"id": "sell-1", "status": "filled"})
     broker.get_order_by_id = AsyncMock(
         return_value={
@@ -310,9 +309,7 @@ async def test_close_all_stamps_closed_at_on_orphan_buys():
     # All three symbols should get a close call — even MSFT which the
     # broker didn't have (orphan: DB thought we held it but broker
     # didn't, exactly the case we're fixing).
-    closed_symbols = {
-        call.args[0] for call in repo.close_open_trades_for_symbol.await_args_list
-    }
+    closed_symbols = {call.args[0] for call in repo.close_open_trades_for_symbol.await_args_list}
     assert closed_symbols == {"SHOP", "NOW", "MSFT"}
     # Exit price for SHOP comes from pre-snapshot current_price (42.5).
     shop_call = next(
@@ -458,11 +455,17 @@ async def test_close_all_holds_reactor_positions_overnight():
     repo.get_open_trades = AsyncMock(
         return_value=[
             SimpleNamespace(
-                symbol="NVDA", side="buy", filled_quantity=20, filled_price=200.0,
+                symbol="NVDA",
+                side="buy",
+                filled_quantity=20,
+                filled_price=200.0,
                 entry_type="reactor_momentum",
             ),
             SimpleNamespace(
-                symbol="SHOP", side="buy", filled_quantity=10, filled_price=40.0,
+                symbol="SHOP",
+                side="buy",
+                filled_quantity=10,
+                filled_price=40.0,
                 entry_type=None,
             ),
         ]
@@ -471,7 +474,11 @@ async def test_close_all_holds_reactor_positions_overnight():
     repo.record_trade = AsyncMock(return_value=1)
 
     executor = TradeExecutor(
-        broker, repo, max_position_pct=1.0, max_simultaneous_positions=10, max_sector_pct=0,
+        broker,
+        repo,
+        max_position_pct=1.0,
+        max_simultaneous_positions=10,
+        max_sector_pct=0,
         reactor_hold_overnight=True,
     )
 
@@ -505,7 +512,10 @@ async def test_close_all_flattens_reactor_when_hold_disabled():
     repo.get_open_trades = AsyncMock(
         return_value=[
             SimpleNamespace(
-                symbol="NVDA", side="buy", filled_quantity=20, filled_price=200.0,
+                symbol="NVDA",
+                side="buy",
+                filled_quantity=20,
+                filled_price=200.0,
                 entry_type="reactor_momentum",
             )
         ]
@@ -514,7 +524,11 @@ async def test_close_all_flattens_reactor_when_hold_disabled():
     repo.record_trade = AsyncMock(return_value=1)
 
     executor = TradeExecutor(
-        broker, repo, max_position_pct=1.0, max_simultaneous_positions=10, max_sector_pct=0,
+        broker,
+        repo,
+        max_position_pct=1.0,
+        max_simultaneous_positions=10,
+        max_sector_pct=0,
         reactor_hold_overnight=False,
     )
 
@@ -659,9 +673,7 @@ async def test_buy_with_valid_response_unchanged_path():
 
 
 def _pos(symbol: str, qty: float, price: float = 200.0):
-    return SimpleNamespace(
-        symbol=symbol, qty=qty, current_price=price, avg_entry_price=price
-    )
+    return SimpleNamespace(symbol=symbol, qty=qty, current_price=price, avg_entry_price=price)
 
 
 def test_existing_position_value_held_and_absent():
@@ -727,21 +739,23 @@ async def test_position_cap_allows_when_cumulative_under_limit():
 
 def _buy(symbol: str, qty: int, **kw):
     return TradeDecision(
-        action=TradeAction.BUY, symbol=symbol, quantity=qty, confidence=0.8,
-        reasoning="t", **kw
+        action=TradeAction.BUY, symbol=symbol, quantity=qty, confidence=0.8, reasoning="t", **kw
     )
 
 
 def test_get_buys_merges_duplicate_same_symbol():
     from halal_trader.domain.models import TradingPlan
 
-    ex = TradeExecutor(MagicMock(), MagicMock(), max_position_pct=0.2,
-                       max_simultaneous_positions=10)
-    plan = TradingPlan(decisions=[
-        _buy("INTU", 15, stop_loss=270.0),
-        _buy("ADBE", 10),
-        _buy("INTU", 15),
-    ])
+    ex = TradeExecutor(
+        MagicMock(), MagicMock(), max_position_pct=0.2, max_simultaneous_positions=10
+    )
+    plan = TradingPlan(
+        decisions=[
+            _buy("INTU", 15, stop_loss=270.0),
+            _buy("ADBE", 10),
+            _buy("INTU", 15),
+        ]
+    )
     buys = ex._get_buys(plan)
     # INTU merged to a single 30-share order; ADBE untouched; order preserved.
     assert [(b.symbol, b.quantity) for b in buys] == [("INTU", 30), ("ADBE", 10)]
@@ -753,8 +767,9 @@ def test_get_buys_merges_duplicate_same_symbol():
 def test_get_buys_noop_for_distinct_symbols():
     from halal_trader.domain.models import TradingPlan
 
-    ex = TradeExecutor(MagicMock(), MagicMock(), max_position_pct=0.2,
-                       max_simultaneous_positions=10)
+    ex = TradeExecutor(
+        MagicMock(), MagicMock(), max_position_pct=0.2, max_simultaneous_positions=10
+    )
     plan = TradingPlan(decisions=[_buy("AAPL", 10), _buy("MSFT", 5)])
     buys = ex._get_buys(plan)
     assert [(b.symbol, b.quantity) for b in buys] == [("AAPL", 10), ("MSFT", 5)]

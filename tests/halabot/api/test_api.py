@@ -23,8 +23,11 @@ async def _client(engine):
 async def test_health_and_beliefs_endpoints(halabot_engine):
     await PgBeliefStore(halabot_engine).put(
         BeliefState(
-            asset="NVDA", regime=Regime.TRENDING_UP, direction=Direction.LONG_BIAS,
-            conviction=0.8, conviction_raw=0.8,
+            asset="NVDA",
+            regime=Regime.TRENDING_UP,
+            direction=Direction.LONG_BIAS,
+            conviction=0.8,
+            conviction_raw=0.8,
             halal=ComplianceVerdict("NVDA", "halal", screened_at=T0),
         )
     )

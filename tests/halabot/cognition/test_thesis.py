@@ -29,8 +29,11 @@ class _FakeLLM:
 
 def _belief() -> BeliefState:
     return BeliefState(
-        asset="NVDA", regime=Regime.TRENDING_UP, direction=Direction.LONG_BIAS,
-        conviction=0.7, levels=Levels(invalidation=95.0),
+        asset="NVDA",
+        regime=Regime.TRENDING_UP,
+        direction=Direction.LONG_BIAS,
+        conviction=0.7,
+        levels=Levels(invalidation=95.0),
         evidence=[EvidenceItem(source="indicator.momentum", direction=0.8, weight=1.0)],
     )
 

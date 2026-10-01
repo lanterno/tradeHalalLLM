@@ -188,9 +188,7 @@ class StockPositionMonitor:
                 try:
                     await self._repo.update_stock_trade_stop_loss(trade.id, fixed)
                 except Exception as e:  # noqa: BLE001 — best-effort; use fixed value regardless
-                    logger.debug(
-                        "stop-loss repair DB update failed for %s: %s", trade.symbol, e
-                    )
+                    logger.debug("stop-loss repair DB update failed for %s: %s", trade.symbol, e)
                 trade.stop_loss = fixed
                 # Not an exit — the repaired stop now sits below price; fall
                 # through so the trailing stop can manage from here.
@@ -324,7 +322,7 @@ class StockPositionMonitor:
             if str(getattr(pos, "symbol", "")).upper() == wanted:
                 try:
                     return max(0.0, float(getattr(pos, "qty", 0) or 0))
-                except (TypeError, ValueError):
+                except TypeError, ValueError:
                     return 0.0
         return 0.0
 
@@ -491,9 +489,7 @@ class StockPositionMonitor:
             # every ~30 s against a leftover stop). Other rejections just abort.
             conflict_id = self._wash_trade_conflict_id(result)
             if conflict_id is None:
-                logger.warning(
-                    "Alpaca rejected exit for %s: %s", trade.symbol, result.get("error")
-                )
+                logger.warning("Alpaca rejected exit for %s: %s", trade.symbol, result.get("error"))
                 return
             logger.warning(
                 "Exit on %s blocked by wash trade vs order %s — cancelling it and retrying",
@@ -503,9 +499,7 @@ class StockPositionMonitor:
             try:
                 await self._mcp.cancel_order(trade.symbol, conflict_id)
             except Exception as e:  # noqa: BLE001
-                logger.warning(
-                    "cancel_order(%s) failed for %s: %s", conflict_id, trade.symbol, e
-                )
+                logger.warning("cancel_order(%s) failed for %s: %s", conflict_id, trade.symbol, e)
                 return
             result = await self._place_exit_order(trade, reason, sell_qty)
             if result is None:

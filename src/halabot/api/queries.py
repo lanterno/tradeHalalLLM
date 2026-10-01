@@ -47,8 +47,12 @@ def _belief_dict(b: Any) -> dict[str, Any]:
         "halal": (b.halal.status if b.halal else None),
         "n_evidence": len(b.evidence),
         "top_evidence": [
-            {"source": e.source, "direction": round(e.direction, 3), "weight": round(e.weight, 3),
-             "detail": e.detail}
+            {
+                "source": e.source,
+                "direction": round(e.direction, 3),
+                "weight": round(e.weight, 3),
+                "detail": e.detail,
+            }
             for e in sorted(b.evidence, key=lambda e: -abs(e.direction * e.weight))[:5]
         ],
         "last_updated": b.last_updated.isoformat() if b.last_updated else None,
@@ -128,8 +132,12 @@ async def conviction_history(
             .limit(limit)
         )
         return [
-            {"ts": r.ts.isoformat(), "raw": r.raw_score, "calibrated": r.calibrated,
-             "belief_version": r.belief_version}
+            {
+                "ts": r.ts.isoformat(),
+                "raw": r.raw_score,
+                "calibrated": r.calibrated,
+                "belief_version": r.belief_version,
+            }
             for r in rows
         ]
 

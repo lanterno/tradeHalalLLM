@@ -110,14 +110,21 @@ async def test_run_walk_forward_feeds_pure_oos_slices_no_leakage():
     async def capture(pair: str, slice_: list[Kline]) -> BacktestResult:
         seen_lengths.append(len(slice_))
         return BacktestResult(
-            pair=pair, start_date="", end_date="",
-            initial_balance=10_000, final_balance=10_000,
+            pair=pair,
+            start_date="",
+            end_date="",
+            initial_balance=10_000,
+            final_balance=10_000,
         )
 
     warmup, test_size = 100, 50
     report = await run_walk_forward(
-        "X", klines, backtest_fn=capture,
-        train_size=200, test_size=test_size, warmup=warmup,
+        "X",
+        klines,
+        backtest_fn=capture,
+        train_size=200,
+        test_size=test_size,
+        warmup=warmup,
     )
     assert report.fold_count > 0
     # Every fold slice is exactly warmup + test_size — no extra train bars.
@@ -134,8 +141,11 @@ async def test_run_walk_forward_skips_folds_without_full_warmup():
         # train_size 60 < warmup 100 → test_start (60) - warmup (100) < 0 → skip.
         assert len(slice_) >= 100  # if ever called, must have a full warmup
         return BacktestResult(
-            pair=pair, start_date="", end_date="",
-            initial_balance=10_000, final_balance=10_000,
+            pair=pair,
+            start_date="",
+            end_date="",
+            initial_balance=10_000,
+            final_balance=10_000,
         )
 
     report = await run_walk_forward(
