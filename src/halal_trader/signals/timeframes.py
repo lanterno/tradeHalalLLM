@@ -10,26 +10,19 @@ from halal_trader.signals.indicators import compute_all
 
 logger = logging.getLogger(__name__)
 
-_TIMEFRAMES = [
-    ("5m", 300),
-    ("15m", 900),
-    ("1h", 3600),
-    ("4h", 14400),
-    ("1d", 86400),
-]
-
 
 class TimeframeAnalyzer:
     """Fetches and analyzes multiple timeframes for trend alignment.
 
-    Subclasses can override :meth:`_fetch_klines` to swap the broker
-    (Alpaca for stocks, Binance for crypto) without touching the
-    alignment / support-resistance math, which is broker-agnostic.
+    Subclasses supply the broker-specific pieces — :attr:`_timeframes`
+    and :meth:`_fetch_klines` (``trading.timeframes.StockTimeframeAnalyzer``
+    pulls Alpaca bars) — while the alignment / support-resistance math
+    here stays broker-agnostic.
     """
 
     # Per-timeframe (interval, cache_ttl_seconds) pairs. Subclasses
-    # override this to point at a broker-appropriate set.
-    _timeframes: list[tuple[str, int]] = _TIMEFRAMES
+    # set a broker-appropriate list.
+    _timeframes: list[tuple[str, int]] = []
 
     def __init__(self, broker: Any) -> None:
         self._broker = broker
@@ -83,12 +76,8 @@ class TimeframeAnalyzer:
         return tf_indicators
 
     async def _fetch_klines(self, pair: str, interval: str, *, limit: int) -> list[Any]:
-        """Hook — return ``Kline``-shaped objects for the given timeframe.
-
-        Default delegates to a Binance-style ``get_klines``; subclasses
-        override for other brokers.
-        """
-        return await self._broker.get_klines(pair, interval=interval, limit=limit)
+        """Hook — return ``Kline``-shaped objects for the given timeframe."""
+        raise NotImplementedError
 
     def _compute_alignment(self, tf_data: dict[str, dict[str, Any]]) -> float:
         """Compute trend alignment score from -1 (all bearish) to +1 (all bullish)."""
@@ -195,8 +184,7 @@ class TimeframeAnalyzer:
 async def build_timeframe_text(analyzer: TimeframeAnalyzer | None, symbols: list[str]) -> str:
     """Run the analyzer and render its block for the prompt.
 
-    Shared between :class:`CryptoCycleService` and ``TradingCycleService``
-    so both bots produce identical multi-timeframe blocks. Returns
+    Called by the stock cycle's ``BuildTimeframeStage``. Returns
     ``""`` when no analyzer is wired or the symbol list is empty;
     swallows analyzer errors and returns ``""`` so the cycle never
     aborts on a transient broker hiccup.

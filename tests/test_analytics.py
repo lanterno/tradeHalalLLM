@@ -27,7 +27,7 @@ class FakeRepo:
     def __init__(self, round_trips):
         self._round_trips = round_trips
 
-    async def get_completed_round_trips(self, limit=500, lookback_days=7):
+    async def get_completed_stock_round_trips(self, limit=500, lookback_days=7):
         return self._round_trips
 
 

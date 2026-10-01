@@ -51,7 +51,7 @@ def test_cli_halal_explain_accepts_trade_id_and_asset_class() -> None:
     # Pass --asset-class to confirm the flag is wired.
     result = runner.invoke(cli, ["halal", "explain", "--help"])
     assert "--asset-class" in result.output
-    assert "crypto" in result.output
+    assert "stock" in result.output
 
 
 # ── Route shape ─────────────────────────────────────────────────
@@ -72,11 +72,11 @@ async def test_explain_route_returns_markdown_for_trade_with_screening() -> None
 
     # Build a Receipt the explainer will turn into markdown.
     payload = {
-        "asset_class": "crypto",
-        "trade": {"symbol": "BTCUSDT", "id": 42},
+        "asset_class": "stock",
+        "trade": {"symbol": "AAPL", "id": 42},
         "screening": {
             "decision": "halal",
-            "source": "coingecko_rules",
+            "source": "zoya",
             "criteria": {"category": "layer-1", "market_cap": 1_000_000_000_000},
         },
         "compliance_status": "halal",
@@ -101,13 +101,13 @@ async def test_explain_route_returns_markdown_for_trade_with_screening() -> None
         new=AsyncMock(return_value=Receipt(payload=payload)),
     ):
         client = TestClient(app)
-        response = client.get("/api/halal/explain/42?asset_class=crypto")
+        response = client.get("/api/halal/explain/42?asset_class=stock")
     assert response.status_code == 200
     body = response.json()
     assert body["trade_id"] == 42
-    assert body["asset_class"] == "crypto"
+    assert body["asset_class"] == "stock"
     assert body["decision"] == "halal"
-    assert "BTCUSDT" in body["body_md"]
+    assert "AAPL" in body["body_md"]
     assert "HALAL" in body["body_md"]
     assert "layer-1" in body["body_md"]
     assert isinstance(body["sources"], list) and body["sources"]
@@ -143,7 +143,7 @@ async def test_explain_route_returns_404_for_unknown_trade() -> None:
         new=AsyncMock(return_value=None),
     ):
         client = TestClient(app)
-        response = client.get("/api/halal/explain/99999?asset_class=crypto")
+        response = client.get("/api/halal/explain/99999?asset_class=stock")
     assert response.status_code == 404
     assert "not found" in response.json()["detail"]
 
@@ -151,7 +151,7 @@ async def test_explain_route_returns_404_for_unknown_trade() -> None:
 @pytest.mark.asyncio
 async def test_explain_route_rejects_bad_asset_class() -> None:
     """Unknown asset class → 400 (the explainer + receipt both only
-    understand crypto / stock)."""
+    understand stock)."""
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
@@ -191,8 +191,8 @@ async def test_explain_route_handles_legacy_trade_without_screening() -> None:
     from halal_trader.web.routes.admin_halal import register
 
     payload = {
-        "asset_class": "crypto",
-        "trade": {"symbol": "BTCUSDT", "id": 7},
+        "asset_class": "stock",
+        "trade": {"symbol": "AAPL", "id": 7},
         "screening": None,
         "compliance_status": "unattested",
     }
@@ -216,9 +216,9 @@ async def test_explain_route_handles_legacy_trade_without_screening() -> None:
         new=AsyncMock(return_value=Receipt(payload=payload)),
     ):
         client = TestClient(app)
-        response = client.get("/api/halal/explain/7?asset_class=crypto")
+        response = client.get("/api/halal/explain/7?asset_class=stock")
     assert response.status_code == 200
     body = response.json()
     # Explainer defaults to "doubtful" when no decision present.
     assert body["decision"] == "doubtful"
-    assert "BTCUSDT" in body["body_md"]
+    assert "AAPL" in body["body_md"]

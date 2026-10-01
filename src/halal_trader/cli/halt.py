@@ -14,44 +14,28 @@ from halal_trader.logging import console
 @click.option("--reason", required=True, help="Why are you halting? (audit trail)")
 @click.option(
     "--close-all",
-    type=click.Choice(["crypto", "stocks", "both"]),
+    type=click.Choice(["stocks"]),
     default=None,
-    help="Also liquidate every open position on this market before halting.",
+    help="Also liquidate every open stock position before halting.",
 )
 def halt(reason: str, close_all: str | None) -> None:
     """Engage the operator kill-switch — bots refuse new entries until resumed.
 
-    With ``--close-all``, every open position on the named market is
-    liquidated FIRST (best-effort, surfaces per-symbol errors), then the
-    kill-switch is engaged so no new positions can open while you
-    investigate.
+    With ``--close-all stocks``, every open position is liquidated FIRST
+    (best-effort, surfaces per-symbol errors), then the kill-switch is
+    engaged so no new positions can open while you investigate.
     """
 
     async def _halt() -> None:
         from halal_trader.config import get_settings
         from halal_trader.core import halt as halt_module
-        from halal_trader.core.liquidate import liquidate_crypto, liquidate_stocks
+        from halal_trader.core.liquidate import liquidate_stocks
         from halal_trader.db.models import init_db
 
         settings = get_settings()
         engine = await init_db(settings.database_url)
         try:
-            if close_all in ("crypto", "both"):
-                from halal_trader.crypto.exchange import BinanceClient
-
-                client = BinanceClient(
-                    api_key=settings.binance.api_key,
-                    secret_key=settings.binance.secret_key,
-                    testnet=settings.binance.testnet,
-                    configured_pairs=settings.crypto.pairs,
-                )
-                try:
-                    await client.connect()
-                    print_liquidation(await liquidate_crypto(client, settings.crypto.pairs))
-                finally:
-                    await client.disconnect()
-
-            if close_all in ("stocks", "both"):
+            if close_all == "stocks":
                 from halal_trader.mcp.client import AlpacaMCPClient
 
                 mcp = AlpacaMCPClient()

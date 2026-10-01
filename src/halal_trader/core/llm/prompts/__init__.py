@@ -8,7 +8,7 @@ mid-week and forgetting to bump the version is impossible: the hash
 changes the moment the bytes change.
 
 The registry is intentionally additive over the existing prompt files
-(``crypto/prompts.py``, ``trading/strategy.py``) so we can adopt
+(``trading/strategy.py``) so we can adopt
 versioning incrementally without a big-bang refactor.
 """
 

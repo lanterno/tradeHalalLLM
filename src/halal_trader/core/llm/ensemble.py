@@ -20,9 +20,9 @@ Cost notes:
   ``input_tokens × cache_price + K × output_tokens × output_price``.
 * For 3 GLM-5.2 variants this is on the order of a cent a cycle.
 
-The interface is deliberately data-shape-agnostic so it works for both
-stock ``TradingPlan`` and crypto ``CryptoTradingPlan`` — anything with
-``decisions[].action / .symbol / .quantity / .confidence`` works.
+The interface is deliberately data-shape-agnostic: anything with
+``decisions[].action / .symbol / .quantity / .confidence`` (e.g. the
+stock ``TradingPlan``) works.
 """
 
 from __future__ import annotations
@@ -40,8 +40,7 @@ async def wrap_existing(plan: Any) -> Any:
     """Trivial awaitable that returns ``plan`` — feeds the primary into
     :func:`run_ensemble` as one of the variants without re-calling the LLM.
 
-    Shared by both ``crypto/strategy.py`` and ``trading/strategy.py``;
-    historically each module had its own private copy. Single home now.
+    Used by ``trading/strategy.py``.
     """
     return plan
 
@@ -55,7 +54,7 @@ class EnsembleVariant:
 
     ``name`` shows up in logs and the audit trail. ``call`` is an awaitable
     returning a plan-shaped object — typically a small lambda over an
-    existing ``CryptoTradingStrategy.analyze`` with different temperature
+    existing ``TradingStrategy.analyze`` with different temperature
     or prompt-version overrides.
     """
 

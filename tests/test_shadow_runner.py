@@ -11,9 +11,9 @@ from halal_trader.core.shadow_runner import (
     SimulatedShadowAccount,
 )
 from halal_trader.domain.models import (
-    CryptoTradeDecision,
-    CryptoTradingPlan,
     TradeAction,
+    TradeDecision,
+    TradingPlan,
 )
 
 # ── Simulator ────────────────────────────────────────────────────
@@ -21,7 +21,7 @@ from halal_trader.domain.models import (
 
 def test_simulator_buy_adds_position() -> None:
     acct = SimulatedShadowAccount(cash=1000.0)
-    d = CryptoTradeDecision(
+    d = TradeDecision(
         action=TradeAction.BUY,
         symbol="BTCUSDT",
         quantity=2.0,
@@ -35,7 +35,7 @@ def test_simulator_buy_adds_position() -> None:
 
 def test_simulator_buy_clamped_by_cash() -> None:
     acct = SimulatedShadowAccount(cash=100.0)
-    d = CryptoTradeDecision(
+    d = TradeDecision(
         action=TradeAction.BUY,
         symbol="BTCUSDT",
         quantity=10.0,
@@ -50,7 +50,7 @@ def test_simulator_buy_clamped_by_cash() -> None:
 
 def test_simulator_sell_only_what_we_own() -> None:
     acct = SimulatedShadowAccount(cash=0.0, positions={"X": 1.0})
-    d = CryptoTradeDecision(
+    d = TradeDecision(
         action=TradeAction.SELL,
         symbol="X",
         quantity=5.0,
@@ -64,7 +64,7 @@ def test_simulator_sell_only_what_we_own() -> None:
 
 def test_simulator_skips_unknown_price() -> None:
     acct = SimulatedShadowAccount(cash=100.0)
-    d = CryptoTradeDecision(
+    d = TradeDecision(
         action=TradeAction.BUY,
         symbol="X",
         quantity=1.0,
@@ -89,7 +89,7 @@ def test_equity_with_positions() -> None:
 async def test_frozen_strategy_tags_plan() -> None:
     class _Inner:
         async def analyze(self):
-            return CryptoTradingPlan(decisions=[], market_outlook="x")
+            return TradingPlan(decisions=[], market_outlook="x")
 
     s = FrozenPromptStrategy(inner=_Inner(), frozen_prompt_version="v0@abc")
     plan = await s.analyze()
@@ -100,9 +100,7 @@ async def test_frozen_strategy_tags_plan() -> None:
 async def test_frozen_strategy_idempotent_tag() -> None:
     class _Inner:
         async def analyze(self):
-            return CryptoTradingPlan(
-                decisions=[], market_outlook="x", risk_notes="frozen_prompt=v0@abc"
-            )
+            return TradingPlan(decisions=[], market_outlook="x", risk_notes="frozen_prompt=v0@abc")
 
     s = FrozenPromptStrategy(inner=_Inner(), frozen_prompt_version="v0@abc")
     plan = await s.analyze()
@@ -113,8 +111,8 @@ async def test_frozen_strategy_idempotent_tag() -> None:
 # ── ShadowRunner ─────────────────────────────────────────────────
 
 
-def _buy(symbol: str = "BTCUSDT", qty: float = 1.0) -> CryptoTradeDecision:
-    return CryptoTradeDecision(
+def _buy(symbol: str = "BTCUSDT", qty: float = 1.0) -> TradeDecision:
+    return TradeDecision(
         action=TradeAction.BUY,
         symbol=symbol,
         quantity=qty,
@@ -127,7 +125,7 @@ def _buy(symbol: str = "BTCUSDT", qty: float = 1.0) -> CryptoTradeDecision:
 async def test_runner_writes_one_row_per_cycle() -> None:
     class _Strat:
         async def analyze(self, **kw):
-            return CryptoTradingPlan(decisions=[])
+            return TradingPlan(decisions=[])
 
     led = ShadowLedger()
     r = ShadowRunner(shadow_strategy=_Strat(), ledger=led, starting_cash=1000)
@@ -152,8 +150,8 @@ async def test_runner_simulates_buys_and_diff_emerges() -> None:
         async def analyze(self, **kw):
             self.calls += 1
             if self.calls == 1:
-                return CryptoTradingPlan(decisions=[_buy(qty=5)])
-            return CryptoTradingPlan(decisions=[])
+                return TradingPlan(decisions=[_buy(qty=5)])
+            return TradingPlan(decisions=[])
 
     led = ShadowLedger()
     r = ShadowRunner(shadow_strategy=_Strat(), ledger=led, starting_cash=1000)

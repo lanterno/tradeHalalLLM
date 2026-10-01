@@ -5,10 +5,20 @@ from __future__ import annotations
 from halal_trader.core.llm.agent import AgentResult, run_agent
 from halal_trader.core.llm.base import BaseLLM
 from halal_trader.core.llm.tools import (
-    CRYPTO_AGENTIC_TOOLS,
+    QUERY_RAG_TOOL,
+    QUERY_REGIME_MEMORY_TOOL,
     Tool,
     ToolCall,
 )
+
+# The loop forwards ``tools`` to the LLM untouched; the scripted double
+# ignores it, so any list works. ``submit_plan`` is the loop's default
+# terminal tool name.
+_TOOLS: list[Tool] = [
+    QUERY_RAG_TOOL,
+    QUERY_REGIME_MEMORY_TOOL,
+    Tool(name="submit_plan", description="terminal", input_schema={"type": "object"}),
+]
 
 
 class _ScriptedLLM(BaseLLM):
@@ -44,7 +54,7 @@ async def test_agent_terminates_on_submit_plan() -> None:
         llm,
         system="be sharp",
         user="cycle prompt",
-        tools=CRYPTO_AGENTIC_TOOLS,
+        tools=_TOOLS,
         handlers={},
     )
     assert isinstance(result, AgentResult)
@@ -79,7 +89,7 @@ async def test_agent_dispatches_intermediate_tools() -> None:
         llm,
         system="agent test",
         user="cycle prompt",
-        tools=CRYPTO_AGENTIC_TOOLS,
+        tools=_TOOLS,
         handlers={"analyze_pair": analyze, "query_rag": query_rag},
     )
     assert calls_seen == ["analyze_pair", "query_rag"]
@@ -102,7 +112,7 @@ async def test_agent_force_finalises_on_max_turns() -> None:
         llm,
         system="",
         user="cycle prompt",
-        tools=CRYPTO_AGENTIC_TOOLS,
+        tools=_TOOLS,
         handlers={"analyze_pair": analyze},
         max_turns=3,
     )
@@ -127,7 +137,7 @@ async def test_agent_records_tool_handler_failure() -> None:
         llm,
         system="",
         user="prompt",
-        tools=CRYPTO_AGENTIC_TOOLS,
+        tools=_TOOLS,
         handlers={"analyze_pair": boom},
     )
     assert "intentional" in result.transcript[0].error

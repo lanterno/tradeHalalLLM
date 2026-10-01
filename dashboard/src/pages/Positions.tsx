@@ -1,35 +1,27 @@
 import { useMemo } from "react";
 import { usePositions } from "../hooks/usePositions";
-import { usePriceStream } from "../hooks/usePriceStream";
 import { StatCard } from "../components/StatCard";
 import { ErrorState } from "../components/ErrorState";
 import { cn, entityOf, formatUsd, formatQty, formatTime, pnlColor } from "../lib/utils";
-import { entityLabel, useMarket } from "../lib/market";
 import { CHART_COLORS, CHART_TOOLTIP } from "../lib/charts";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts";
 
 export default function Positions() {
-  const { market } = useMarket();
   const { data: positions, isLoading, isError, error, refetch } = usePositions();
-  // Live WS prices are a crypto-only feed; stocks positions are marked at the
-  // backend's REST snapshot (current_price = entry until a quote path lands).
-  const symbols = useMemo(
-    () => (market === "crypto" ? (positions ?? []).map(entityOf) : []),
-    [positions, market],
-  );
-  const { prices, connected } = usePriceStream(symbols);
 
+  // Positions are marked at the backend's REST snapshot (current_price =
+  // entry until a quote path lands).
   const enriched = useMemo(() => {
     if (!positions) return [];
     return positions.map((p) => {
-      const current = prices[entityOf(p)] ?? p.current_price ?? p.entry_price;
+      const current = p.current_price ?? p.entry_price;
       const unrealizedPnl = (current - p.entry_price) * p.quantity;
       const unrealizedPct = p.entry_price
         ? (current - p.entry_price) / p.entry_price
         : 0;
       return { ...p, current_price: current, unrealized_pnl: unrealizedPnl, unrealized_pnl_pct: unrealizedPct };
     });
-  }, [positions, prices]);
+  }, [positions]);
 
   const totalUnrealized = enriched.reduce(
     (s, p) => s + (p.unrealized_pnl ?? 0),
@@ -52,19 +44,7 @@ export default function Positions() {
     <div className="space-y-6 p-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-white">Open Positions</h1>
-        {market === "crypto" ? (
-          <div className="flex items-center gap-2 text-xs text-muted">
-            <span
-              className={cn(
-                "h-2 w-2 rounded-full",
-                connected ? "bg-accent animate-pulse" : "bg-muted",
-              )}
-            />
-            {connected ? "Live prices" : "Reconnecting..."}
-          </div>
-        ) : (
-          <span className="text-xs text-muted">Marked at entry (REST snapshot)</span>
-        )}
+        <span className="text-xs text-muted">Marked at entry (REST snapshot)</span>
       </div>
 
       <div className="grid grid-cols-2 gap-4 md:grid-cols-3">
@@ -102,7 +82,7 @@ export default function Positions() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-border text-left text-xs uppercase tracking-wider text-muted">
-                    <th className="px-3 py-2">{entityLabel(market)}</th>
+                    <th className="px-3 py-2">Symbol</th>
                     <th className="px-3 py-2 text-right">Qty</th>
                     <th className="px-3 py-2 text-right">Entry</th>
                     <th className="px-3 py-2 text-right">Current</th>

@@ -1,15 +1,13 @@
 """Tests for the cross-cycle shared helpers.
 
-Three small functions own the per-symbol loops that both cycles run:
+Two small functions own per-symbol loops the stock cycle's stages run:
 
-* ``crypto.regime.build_regime_text`` — detector + indicators → text
 * ``ml.anomaly.build_ml_signals_text`` — anomaly + signal classifier
   + optional pre-rendered forecasts → text
 * ``signals.timeframes.build_timeframe_text`` — analyzer + symbols → text
 
-These had been duplicated between ``crypto/cycle.py`` and
-``trading/cycle.py`` until the cross-cycle dedup pass; the cycle-level
-tests cover the wrappers, and these tests cover the helpers directly.
+The cycle-level tests cover the stage wrappers; these tests cover the
+helpers directly.
 """
 
 from __future__ import annotations
@@ -18,56 +16,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from halal_trader.crypto.regime import MarketRegime, build_regime_text
 from halal_trader.ml.anomaly import build_ml_signals_text
 from halal_trader.signals.timeframes import build_timeframe_text
-
-# ── build_regime_text ────────────────────────────────────────────
-
-
-def test_regime_text_empty_when_detector_missing():
-    assert build_regime_text(None, {"AAPL": {"rsi_14": 50}}) == ""
-
-
-def test_regime_text_empty_when_indicators_empty():
-    detector = MagicMock()
-    assert build_regime_text(detector, {}) == ""
-    assert detector.detect.call_count == 0
-
-
-def test_regime_text_skips_error_indicators():
-    detector = MagicMock()
-    detector.detect.return_value = (MarketRegime.RANGING, 0.6, "use mean reversion")
-    indicators = {
-        "AAPL": {"rsi_14": 50, "ema_9": 100, "ema_21": 99},
-        "BAD": {"error": "insufficient data"},
-    }
-    text = build_regime_text(detector, indicators)
-    # Only AAPL was passed to the detector.
-    assert detector.detect.call_count == 1
-    assert "AAPL" in text
-    assert "BAD" not in text
-
-
-def test_regime_text_swallows_detector_failure():
-    detector = MagicMock()
-    detector.detect.side_effect = RuntimeError("regime explosion")
-    text = build_regime_text(detector, {"AAPL": {"rsi_14": 50}})
-    assert text == ""
-
-
-def test_regime_text_formats_multiple_symbols():
-    detector = MagicMock()
-    detector.detect.side_effect = [
-        (MarketRegime.TRENDING_UP, 0.85, "trade with the trend"),
-        (MarketRegime.RANGING, 0.6, "use mean reversion"),
-    ]
-    text = build_regime_text(detector, {"AAPL": {"rsi_14": 60}, "MSFT": {"rsi_14": 50}})
-    assert "AAPL" in text
-    assert "MSFT" in text
-    assert "TRENDING_UP" in text
-    assert "RANGING" in text
-
 
 # ── build_ml_signals_text ────────────────────────────────────────
 

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI
 from fastapi.responses import JSONResponse
 
 from halal_trader.core.context import DashboardContext
@@ -13,31 +13,14 @@ def register(app: FastAPI) -> None:
     @app.get("/api/analytics")
     async def api_analytics(
         days: int = 7,
-        market: str = "crypto",
         ctx: DashboardContext = Depends(get_ctx),
     ) -> JSONResponse:
-        """Rolling P&L / win-rate / drawdown stats for one market.
+        """Rolling P&L / win-rate / drawdown stats over closed stock round-trips.
 
-        ``market="crypto"`` (default, back-compat) reads
-        ``ctx.analytics`` (the crypto :class:`PerformanceAnalytics`
-        built at dashboard lifespan). ``market="stocks"`` constructs
-        a stocks-asset :class:`CrossAssetAnalytics` against the same
-        repo so the stocks-side round-trip metrics surface in the
-        dashboard once trades close.
+        Reads ``ctx.analytics`` (the :class:`PerformanceAnalytics` built
+        at dashboard lifespan).
         """
-        from halal_trader.core.analytics import CrossAssetAnalytics
-
-        market = market.lower()
-        if market == "crypto":
-            stats = await ctx.analytics.compute_stats(lookback_days=days)
-        elif market in ("stock", "stocks"):
-            stocks_analytics = CrossAssetAnalytics(ctx.repo, asset_class="stock")
-            stats = await stocks_analytics.compute_stats(lookback_days=days)
-        else:
-            raise HTTPException(
-                status_code=400,
-                detail=f"market must be 'crypto' or 'stocks', got {market!r}",
-            )
+        stats = await ctx.analytics.compute_stats(lookback_days=days)
         pf = stats.profit_factor
         if pf == float("inf"):
             pf = 999999.0

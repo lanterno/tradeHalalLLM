@@ -1,66 +1,16 @@
-"""Bounded recent-news feed for splicing into the LLM prompt.
+"""Render recent ``NewsEvent`` items into the strategy prompt's news block.
 
-The :class:`NewsEventReactor` already fires callbacks on every event,
-but the strategy prompt only runs at cycle cadence (≥ 30s) and has no
-direct subscription. This module gives the cycle a *snapshot view* of
-the last ``capacity`` events so the LLM can reason about freshly-broken
-news without us re-polling CryptoPanic per cycle.
-
-Why a separate module:
-
-* The reactor's job is "react in real time" (trigger emergency
-  mini-cycles, send Telegram alerts). The feed's job is "summarise for
-  the next normal cycle." Both consume the same ``NewsEvent`` stream
-  but have different retention rules.
-* The buffer is intentionally small (default 10) and time-windowed so
-  the prompt section stays compact and stale events drop out — we don't
-  want the LLM still anchoring on a 6-hour-old headline.
+The stock cycle's ``FetchStockNewsStage`` pulls headlines per cycle from
+the configured collector and passes them through
+:func:`format_news_for_prompt`, which keeps the section compact: at most
+``limit`` items, optionally restricted to the symbols being traded.
 """
 
 from __future__ import annotations
 
-import time
-from collections import deque
-from dataclasses import dataclass
 from typing import Sequence
 
 from halal_trader.sentiment.events import NewsEvent
-
-
-@dataclass
-class _Entry:
-    event: NewsEvent
-    received_at: float  # monotonic seconds
-
-
-class RecentNewsFeed:
-    """Append-only bounded buffer of recent ``NewsEvent`` items.
-
-    Thread-safety: not required — the reactor runs as a single asyncio
-    task that pushes here, and the cycle consumes via :meth:`snapshot`
-    on its own task. asyncio is cooperative so concurrent push/snapshot
-    can't interleave mid-deque-mutation.
-    """
-
-    def __init__(self, *, capacity: int = 10, max_age_seconds: int = 1800) -> None:
-        self._buf: deque[_Entry] = deque(maxlen=capacity)
-        self._max_age = max_age_seconds
-
-    def push(self, event: NewsEvent) -> None:
-        self._buf.append(_Entry(event=event, received_at=time.monotonic()))
-
-    def snapshot(self) -> list[NewsEvent]:
-        """Return events newer than ``max_age_seconds``, oldest first.
-
-        Stale entries are pruned lazily on read so we don't need a
-        background sweep — the bounded deque caps memory either way.
-        """
-        cutoff = time.monotonic() - self._max_age
-        return [e.event for e in self._buf if e.received_at >= cutoff]
-
-    def clear(self) -> None:
-        self._buf.clear()
-
 
 _SENTIMENT_GLYPH = {"positive": "▲", "negative": "▼", "neutral": "·"}
 

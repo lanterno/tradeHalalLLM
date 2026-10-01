@@ -36,15 +36,12 @@ async def _build_summary(ctx: DashboardContext) -> dict[str, Any]:
 
     risk = ctx.runtime.risk_state or {}
     drawdown = risk.get("drawdown_pct") if isinstance(risk, dict) else None
-    # The risk_state push carries which bot wrote it ("crypto" / "stocks" /
-    # absent → unknown) so a glance at the mobile summary tells the
-    # operator which cycle the drawdown belongs to.
+    # The risk_state push carries which bot wrote it ("stocks" / absent →
+    # unknown) so a glance at the mobile summary tells the operator which
+    # cycle the drawdown belongs to.
     risk_market = risk.get("market") if isinstance(risk, dict) else None
 
-    # Today's realized P&L — try both markets and report the most
-    # recent non-zero row (or the most recent row, period). Stocks-only
-    # operators were previously stuck on $0 because this only read the
-    # crypto ledger.
+    # Today's realized P&L — the most recent stocks ``daily_pnl`` row.
     pnl_today_usd: float | None = None
     try:
         most_recent: dict[str, Any] | None = None
@@ -54,17 +51,6 @@ async def _build_summary(ctx: DashboardContext) -> dict[str, Any]:
                 most_recent = stocks_pnl[0]
         except Exception as exc:  # noqa: BLE001
             logger.debug("stocks pnl read failed: %s", exc)
-        try:
-            crypto_pnl = await ctx.repo.get_crypto_pnl_history(limit=1)
-            if crypto_pnl:
-                # Pick whichever row is more recent by date string
-                # (both ledgers use YYYY-MM-DD which sorts lexically).
-                if most_recent is None or str(crypto_pnl[0].get("date") or "") > str(
-                    most_recent.get("date") or ""
-                ):
-                    most_recent = crypto_pnl[0]
-        except Exception as exc:  # noqa: BLE001
-            logger.debug("crypto pnl read failed: %s", exc)
         if most_recent is not None:
             pnl_today_usd = float(most_recent.get("realized_pnl") or 0.0)
     except Exception as e:

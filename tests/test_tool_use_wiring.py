@@ -16,7 +16,6 @@ from halal_trader.core.llm.base import BaseLLM
 from halal_trader.core.llm.fallback import FallbackLLM
 from halal_trader.core.llm.tools import (
     SUBMIT_DECISIONS_TOOL,
-    SUBMIT_PLAN_TOOL,
     Tool,
     ToolCall,
 )
@@ -58,11 +57,6 @@ def test_submit_decisions_tool_projects_for_openai() -> None:
     assert payload["type"] == "function"
     assert payload["function"]["name"] == "submit_decisions"
     assert payload["function"]["parameters"]["properties"]["decisions"]["type"] == "array"
-
-
-def test_submit_plan_tool_still_exists_for_agentic_surface() -> None:
-    """The richer SUBMIT_PLAN_TOOL stays around for Wave H."""
-    assert SUBMIT_PLAN_TOOL.name == "submit_plan"
 
 
 # ── FallbackLLM.generate_tool_call delegation ───────────────────

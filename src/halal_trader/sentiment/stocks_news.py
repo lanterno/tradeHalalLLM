@@ -1,10 +1,9 @@
 """Equities news collector — Yahoo Finance search endpoint, no API key.
 
-The crypto pipeline gets per-cycle news via :class:`NewsEventReactor`
-+ :class:`RecentNewsFeed`. The reactor polls CryptoPanic which is
-crypto-only; stocks need an equivalent source. This module fills the
-gap with Yahoo Finance's public ``v1/finance/search`` endpoint —
-already used elsewhere in the codebase (``trading/options_iv.py``,
+Feeds the stock cycle's news block. Uses Finnhub's company-news endpoint
+when a key is configured and Yahoo Finance's public
+``v1/finance/search`` endpoint otherwise — the latter already used
+elsewhere in the codebase (``trading/options_iv.py``,
 ``trading/options_catalyst_adapter.py``) so the dep surface and
 caching pattern is familiar.
 
@@ -13,16 +12,14 @@ Design:
 * No long-running reactor — the stocks cycle is 15-minute cadence so
   per-cycle pulls are cheap enough. ``fetch_news`` is async and
   batches a symbol list with bounded concurrency.
-* Returns :class:`NewsEvent` (the same shape the crypto pipeline
-  feeds into :class:`RecentNewsFeed`) so :class:`BuildNewsStage`
-  consumes either path identically.
+* Returns :class:`NewsEvent`, which ``FetchStockNewsStage`` renders via
+  :func:`sentiment.feed.format_news_for_prompt`.
 * Sentiment is classified per-headline via
   :func:`sentiment.headline_polarity.classify_headline` — a small
   curated lexicon (same pattern as ``trading/fed_speak.py``'s
   hawkish/dovish scorer). Yahoo's response has no polarity field;
   the classifier reads the headline string and emits
-  ``"positive"`` / ``"negative"`` / ``"neutral"`` (the same
-  literals the CryptoPanic path uses).
+  ``"positive"`` / ``"negative"`` / ``"neutral"``.
 * 15-minute per-symbol cache — same TTL the options IV adapter uses,
   matching the 15-minute stocks cycle so each pass hits the cache
   once and the network once.
@@ -68,9 +65,8 @@ _FINNHUB_API_BASE = "https://finnhub.io/api/v1/company-news"
 class StockNewsCollector:
     """Per-symbol news fetcher backed by Yahoo Finance search.
 
-    Returns :class:`NewsEvent` objects so the existing
-    :class:`RecentNewsFeed` + :class:`BuildNewsStage` render them
-    identically to crypto-side CryptoPanic items. Cache is bounded by
+    Returns :class:`NewsEvent` objects for
+    :func:`sentiment.feed.format_news_for_prompt`. Cache is bounded by
     symbol+TTL — repeated calls within the TTL window hit memory only.
 
     Session-level circuit breaker: after ``_BREAKER_THRESHOLD``
@@ -319,7 +315,7 @@ def _parse_news_payload(symbol: str, payload: dict[str, Any]) -> list[NewsEvent]
             continue
         # Yahoo's timestamp is epoch seconds. Render as ISO 8601 so the
         # downstream lexical-sort + formatter work the same as the
-        # CryptoPanic path (which already emits ISO strings).
+        # Finnhub path.
         published = _epoch_to_iso(ts) if isinstance(ts, (int, float)) else ""
         clean_title = title.strip()
         out.append(

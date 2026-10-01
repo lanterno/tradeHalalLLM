@@ -1,6 +1,6 @@
 """Wave B cycle-pipeline primitives.
 
-Three building blocks the crypto and stock cycles share:
+Three building blocks the stock cycle is built on:
 
 * :class:`CycleState` — dataclass carrier with one field per
   prompt-context block. Each cycle builds a fresh instance, runs it
@@ -15,9 +15,8 @@ Three building blocks the crypto and stock cycles share:
   optionally short-circuits when ``state.halt`` is set.
 
 The :func:`stage` async context manager is also exported standalone
-for the few inline cycle blocks that haven't been promoted to stage
-classes yet (e.g. the crypto cycle's `strategy_analyze` block, which
-must propagate exceptions rather than swallow them).
+for inline cycle blocks that haven't been promoted to stage classes
+(e.g. a block that must propagate exceptions rather than swallow them).
 """
 
 from __future__ import annotations
@@ -51,8 +50,7 @@ class StageOutcome:
 class CycleState:
     """Per-cycle data carrier — the carrier the Wave B stage list mutates.
 
-    Both ``CryptoCycleService._run_cycle_impl`` and
-    ``TradingCycleService._run_cycle_impl`` build a fresh ``CycleState``
+    ``TradingCycleService._run_cycle_impl`` builds a fresh ``CycleState``
     each cycle, run a list of :class:`CycleStage` instances against it
     via :func:`run_stages`, then read every prompt-context field off
     the state to assemble ``analyze_kwargs`` for the LLM call. Each
@@ -76,33 +74,22 @@ class CycleState:
     today_pnl: float = 0.0
 
     # ── Market data (per cycle) ────────────────────────────────
-    klines_by_symbol: dict[str, list[Any]] = field(default_factory=dict)
     indicators_cache: dict[str, dict[str, Any]] = field(default_factory=dict)
-    orderbooks: dict[str, dict[str, Any]] = field(default_factory=dict)
-    snapshots: dict[str, Any] = field(default_factory=dict)  # stocks-side
-    bars: dict[str, Any] = field(default_factory=dict)  # stocks-side
-    current_prices: dict[str, float] = field(default_factory=dict)  # crypto WS prices
+    snapshots: dict[str, Any] = field(default_factory=dict)
+    bars: dict[str, Any] = field(default_factory=dict)
 
     # ── Prompt-context blocks (each owned by one stage) ────────
     risk_text: str = ""
-    regime_text: str = ""
-    sentiment_text: str = ""
+    regime_text: str = ""  # no stage writes it now; the strategy prompt keeps the slot
     timeframe_text: str = ""
     ml_signals_text: str = ""
-    forecasts_text: str = ""  # Chronos / price-forecast text — seed for ml-signals
-    microstructure_text: str = ""
+    forecasts_text: str = ""  # price-forecast text — seed for ml-signals
     news_text: str = ""
     catalysts_text: str = ""
     performance_text: str = ""
-    exchange_rules_text: str = ""
     active_adjustments: str = ""
-    # Wave G: predicted slippage per halal pair surfaced to the LLM so
-    # the strategy can reason about expected execution cost (e.g.
-    # downgrade a low-edge buy when slippage is high).
-    slippage_text: str = ""
 
     # ── Outputs ────────────────────────────────────────────────
-    plan: Any = None
     halt: bool = False  # if any earlier stage decided the cycle should not trade
     # Structured risk state from the risk stage — kept alongside
     # ``risk_text`` so the dashboard's /api/risk/state can render the

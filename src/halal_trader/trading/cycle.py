@@ -44,7 +44,6 @@ class TradingCycleService(BaseCycleService):
         engine=None,
         live_mode_checker=None,
         shadow_runner: Any = None,
-        regime_detector: Any = None,
         ml_anomaly_detector: Any = None,
         ml_signal_classifier: Any = None,
         timeframe_analyzer: Any = None,
@@ -66,37 +65,31 @@ class TradingCycleService(BaseCycleService):
         self._catalyst_feed = catalyst_feed
         # Optional shadow runner — runs a frozen-prompt strategy on the
         # same per-cycle inputs and records a divergence row to the
-        # shadow ledger. Mirrors the crypto wiring; off when disabled.
+        # shadow ledger. Off when disabled.
         self._shadow_runner = shadow_runner
-        # Optional regime detector — classifies each symbol's market state
-        # (trending / ranging / high-vol) from indicators and surfaces a
-        # tactical-instruction block to the LLM prompt. Mirrors crypto.
-        self._regime_detector = regime_detector
         # Optional ML inference path — anomaly detector flags abnormal
         # indicator vectors; signal classifier converts the same vector
         # into a buy/hold/sell confidence. Both consume the per-symbol
-        # indicator dict already computed for risk/regime; no extra
+        # indicator dict already computed for risk; no extra
         # bar fetch. Forecaster is intentionally omitted — daily bars
         # are too sparse for Chronos's 96-step minimum.
         self._ml_anomaly = ml_anomaly_detector
         self._ml_signal = ml_signal_classifier
         # Optional multi-timeframe analyzer — pulls hourly/daily/weekly
-        # bars and surfaces a trend-alignment score per symbol. Same
-        # interface as the crypto analyzer.
+        # bars and surfaces a trend-alignment score per symbol.
         self._timeframes = timeframe_analyzer
         # Optional insights hub — when wired, the cycle pushes the
         # structured risk state into ``hub.runtime.risk_state`` so the
         # dashboard's risk panel renders the stocks bot's heat /
-        # drawdown / correlation. Mirrors crypto's pattern.
+        # drawdown / correlation.
         self._hub = insights_hub
         # Optional Telegram notifier — fires `notify_trade` on filled
-        # buys/sells so the operator gets the same Telegram alerts on
-        # stocks fills they already get for crypto.
+        # buys/sells so the operator gets a Telegram alert per fill.
         self._notifier = notifier
         # Stocks-side parity (round-7 follow-up): rolling-window
         # performance summary + active self-improve adjustments. The
         # analytics impl just needs ``compute_stats`` + ``format_for_prompt``
-        # (``CrossAssetAnalytics(repo, asset_class="stock")`` satisfies);
+        # (``portfolio.analytics.PerformanceAnalytics`` satisfies);
         # ``self_review`` just needs ``format_adjustments_for_prompt()``.
         # Both default to None — stage emits an empty block.
         self._analytics = analytics
@@ -179,12 +172,10 @@ class TradingCycleService(BaseCycleService):
         # ── Wave B: drive a single CycleState through the stage list ──
         from halal_trader.core.cycle_pipeline import CycleState, run_stages
         from halal_trader.core.cycle_stages import (
-            ApplyRegimeGateStage,
             BuildActiveAdjustmentsStage,
             BuildCatalystsStage,
             BuildMlSignalsStage,
             BuildPerformanceStage,
-            BuildRegimeStage,
             BuildStockRiskStage,
             BuildTimeframeStage,
             FetchStockNewsStage,
@@ -202,7 +193,6 @@ class TradingCycleService(BaseCycleService):
             state,
             [
                 BuildStockRiskStage(),
-                BuildRegimeStage(self._regime_detector),
                 BuildMlSignalsStage(
                     anomaly_detector=self._ml_anomaly,
                     signal_classifier=self._ml_signal,
@@ -210,8 +200,7 @@ class TradingCycleService(BaseCycleService):
                 BuildTimeframeStage(self._timeframes),
                 BuildCatalystsStage(self._catalyst_feed),
                 # 7-day lookback — stocks cycle is daily-ish (15min cron,
-                # but trades close intraday). Matches the crypto 24h
-                # window in spirit (one trading day's worth of round-trips).
+                # but trades close intraday).
                 BuildPerformanceStage(self._analytics, lookback_days=7),
                 BuildActiveAdjustmentsStage(self._self_review),
                 # Equities news pull (Yahoo Finance) — 15-min cadence
@@ -386,12 +375,6 @@ class TradingCycleService(BaseCycleService):
         )
         plan = await self._strategy.analyze(**analyze_kwargs)
 
-        # Mirror the crypto cycle's post-analyze regime gate: strip
-        # BUYs for any symbol that the rule-based detector classifies
-        # as a confirmed downtrend at ≥0.6 confidence.
-        state.plan = plan
-        await run_stages(state, [ApplyRegimeGateStage(self._regime_detector)])
-
         logger.info(
             "Trading plan: %s | %d buys, %d sells",
             plan.market_outlook[:80],
@@ -424,9 +407,8 @@ class TradingCycleService(BaseCycleService):
     async def _handle_execution_results(self, results: list[dict[str, Any]]) -> None:
         """Process executor results: notify on fills, record failures.
 
-        Mirrors the crypto cycle's :class:`ExecuteAndNotifyStage` post-
-        execute loop but kept inline because the stocks cycle doesn't
-        yet drive the post-LLM block through a stage list.
+        Kept inline because the stocks cycle doesn't drive the post-LLM
+        block through a stage list.
 
         Failures (``status`` in ``"error"`` / ``"rejected"``) bump the
         self-review's per-symbol counter so the 10-failures trigger

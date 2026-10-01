@@ -23,11 +23,10 @@ def register(app: FastAPI) -> None:
             {
                 "llm_provider": "glm",
                 "llm_model": settings.llm.model,
-                "crypto_pairs": settings.crypto.pairs,
-                "crypto_trading_interval_seconds": settings.crypto.trading_interval_seconds,
-                "crypto_max_position_pct": settings.crypto.max_position_pct,
-                "crypto_daily_loss_limit": settings.crypto.daily_loss_limit,
-                "crypto_daily_return_target": settings.crypto.daily_return_target,
+                "stocks_trading_interval_minutes": settings.stocks.trading_interval_minutes,
+                "stocks_max_position_pct": settings.stocks.max_position_pct,
+                "stocks_daily_loss_limit": settings.stocks.daily_loss_limit,
+                "stocks_daily_return_target": settings.stocks.daily_return_target,
                 "database": settings.database_url.split("@")[-1],
             }
         )

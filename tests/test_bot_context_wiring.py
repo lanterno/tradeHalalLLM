@@ -79,8 +79,7 @@ def test_runtime_view_defaults_are_safe() -> None:
     assert rv.bot_running is False
     assert rv.started_at is None
     assert rv.last_cycle is None
-    assert rv.ws_manager is None
-    assert rv.crypto_broker is None
+    assert rv.stock_broker is None
 
 
 # ── BaseTradingBot owns the runtime ─────────────────────────────

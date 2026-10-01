@@ -1,6 +1,6 @@
 """DB-vs-broker reconciliation — surface drift between recorded trades and exchange state.
 
-Runs periodically (every 5 min for crypto; after each cycle for stocks).
+Runs after each stocks cycle.
 On drift > ``threshold_pct`` for any symbol it emits a structured
 ``reconcile.drift`` event, writes a :class:`ReconciliationLog` row, and
 sends a rate-limited Telegram alert via :class:`AlertSink`.
@@ -85,118 +85,6 @@ def _drift_pct(db_qty: float, broker_qty: float) -> float:
     delta = abs(db_qty - broker_qty)
     base = max(abs(db_qty), abs(broker_qty), 1e-9)
     return delta / base
-
-
-# ── Crypto reconciler ──────────────────────────────────────────
-
-
-async def reconcile_crypto(
-    *,
-    engine: AsyncEngine,
-    broker: Any,
-    threshold_pct: float = DEFAULT_DRIFT_THRESHOLD,
-    alerts: "AlertSink | None" = None,
-) -> ReconcileReport:
-    """Compare aggregate open-trade quantity per asset against broker balances.
-
-    Crypto positions on Binance are tracked as raw balances (no per-position
-    rows). We sum open BUY trades by base asset (e.g. ``BTC``) and compare
-    against the corresponding ``free + locked`` balance the exchange reports.
-
-    ``get_open_crypto_trades`` only filters out ``rejected``; we additionally
-    skip ``pending`` / ``submitted`` / ``canceled`` / ``error`` rows so that
-    an order which never actually settled doesn't carry its requested
-    quantity into the DB sum (this was the same orphan path that produced
-    100% phantom drift on the stocks side).
-    """
-    from halal_trader.db.repos import RepoBundle
-
-    repos = RepoBundle.from_engine(engine)
-    open_trades = await repos.crypto_trades.get_open_crypto_trades()
-
-    db_by_asset: dict[str, float] = {}
-    for trade in open_trades:
-        if getattr(trade, "side", "") != "buy":
-            continue
-        status = str(getattr(trade, "status", "") or "").lower()
-        if status in _NON_EXECUTED_STATUSES:
-            continue
-        base = trade.pair.upper().removesuffix("USDT").removesuffix("BUSD") if trade.pair else ""
-        if not base:
-            continue
-        # Prefer filled_quantity (broker truth) over the requested
-        # quantity. Fall back to quantity for legacy rows that predate
-        # the fill-confirmer.
-        filled = float(getattr(trade, "filled_quantity", 0) or 0)
-        qty = filled if filled > 0 else float(getattr(trade, "quantity", 0) or 0)
-        if qty <= 0:
-            continue
-        db_by_asset[base] = db_by_asset.get(base, 0.0) + qty
-
-    balances = await broker.get_balances()
-    broker_by_asset: dict[str, float] = {
-        b.asset.upper(): float(b.free) + float(b.locked) for b in balances
-    }
-
-    report = ReconcileReport(market="crypto")
-    seen: set[str] = set()
-    for asset, db_qty in db_by_asset.items():
-        seen.add(asset)
-        report.checked_symbols += 1
-        broker_qty = broker_by_asset.get(asset, 0.0)
-        pct = _drift_pct(db_qty, broker_qty)
-        if pct > threshold_pct:
-            price = _safe_cached_price(broker, f"{asset}USDT")
-            drift_usd = abs(db_qty - broker_qty) * price if price is not None else None
-            drift = Drift(
-                market="crypto",
-                symbol=asset,
-                db_quantity=db_qty,
-                broker_quantity=broker_qty,
-                drift_pct=pct,
-                drift_usd=drift_usd,
-            )
-            report.drifts.append(drift)
-
-    # Surface broker-side surplus too (asset present in balances but no DB row).
-    for asset, broker_qty in broker_by_asset.items():
-        if asset in seen or broker_qty <= 0:
-            continue
-        if asset == "USDT" or asset == "BUSD":
-            continue
-        report.checked_symbols += 1
-        pct = _drift_pct(0.0, broker_qty)
-        if pct > threshold_pct:
-            price = _safe_cached_price(broker, f"{asset}USDT")
-            drift_usd = broker_qty * price if price is not None else None
-            if drift_usd is not None and drift_usd < 5.0:
-                # Exchange dust below the dust threshold — too noisy to flag.
-                continue
-            report.drifts.append(
-                Drift(
-                    market="crypto",
-                    symbol=asset,
-                    db_quantity=0.0,
-                    broker_quantity=broker_qty,
-                    drift_pct=pct,
-                    drift_usd=drift_usd,
-                    notes="balance present on exchange with no open trade row",
-                )
-            )
-
-    await _persist_and_alert(engine, report, alerts)
-    return report
-
-
-def _safe_cached_price(broker: Any, symbol: str) -> float | None:
-    fn = getattr(broker, "get_cached_price", None)
-    if not callable(fn):
-        return None
-    try:
-        price = fn(symbol)
-        return float(price) if price else None
-    except Exception:
-        return None
 
 
 # ── Stock reconciler ───────────────────────────────────────────
@@ -459,21 +347,11 @@ async def _persist_and_alert(
             await session.commit()
 
     if alerts is not None:
-        # Crypto: untracked broker balances are informational, not
-        # operator-actionable — Binance testnet has ~50 faucet assets,
-        # alerting on each one burns the rate limit. Stocks: any
-        # broker position with no DB row IS actionable (the equities
+        # Any broker position with no DB row IS actionable (the equities
         # universe is small enough that an untracked AAPL position is
         # signal, not noise). Settling drifts (fresh-fill race) never
-        # alert regardless of market.
-        if report.market == "crypto":
-            actionable = [
-                d
-                for d in report.drifts
-                if not d.is_settling and not (d.db_quantity == 0.0 and d.broker_quantity > 0.0)
-            ]
-        else:
-            actionable = [d for d in report.drifts if not d.is_settling]
+        # alert.
+        actionable = [d for d in report.drifts if not d.is_settling]
         if actionable:
             summary = _summarize_drifts(actionable)
             await alerts.notify(

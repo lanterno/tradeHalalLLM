@@ -146,9 +146,6 @@ files = [
     "src/halal_trader/db/repository.py",
     # Item 5 follow-up promotion — strict-clean as of this commit.
     "src/halal_trader/web",
-    "src/halal_trader/crypto/cycle.py",
-    "src/halal_trader/crypto/scheduler.py",
-    "src/halal_trader/crypto/components.py",
     # New engine — strict-clean from day one (re-architecture).
     "src/halabot",
 ]
@@ -157,22 +154,6 @@ warn_redundant_casts = true
 warn_unused_ignores = false
 no_implicit_optional = true
 strict = true
-
-# Pre-existing untracked WIP modules — not yet checked-in, scheduled for
-# follow-up batches. Keep them out of the strict gate so unrelated commits
-# aren't blocked. Drop entries as they get cleaned up.
-[[tool.mypy.overrides]]
-module = [
-    "halal_trader.core.ab_compare",
-    "halal_trader.core.api_reference",
-    "halal_trader.core.chaos",
-    "halal_trader.core.committee",
-    "halal_trader.core.cross_asset_signal",
-    "halal_trader.core.cycle_stages",
-    "halal_trader.core.scenario_sim",
-    "halal_trader.domain.policies",
-]
-ignore_errors = true
 
 # ── uv: CPU-only PyTorch ──
 # The default torch wheel on linux/x86_64 drags in ~2GB of nvidia-*-cu12 CUDA

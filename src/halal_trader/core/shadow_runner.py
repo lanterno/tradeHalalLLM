@@ -24,8 +24,7 @@ Two pieces:
 The simulator is deliberately simple: each shadow buy adds notional at
 the latest close; sells release the same. There's no slippage / fee
 model — equality with the live curve is what matters, not absolute
-realism. If you need fidelity, drive the shadow through
-:mod:`halal_trader.crypto.backtest` instead.
+realism.
 """
 
 from __future__ import annotations

@@ -50,7 +50,7 @@ def _seed_decisions(client: TestClient) -> None:
                     {
                         "ts": datetime(2026, 4, 26, 12, minute, 0, tzinfo=UTC),
                         "sum": f"cycle {minute}",
-                        "ver": f"crypto.strategy.system@{version}",
+                        "ver": f"trading.strategy.system@{version}",
                         "it": in_tok,
                         "ot": out_tok,
                         "crt": cache,
@@ -72,7 +72,7 @@ def test_replay_returns_decision_payload(client):
     assert r.status_code == 200
     body = r.json()
     assert body["provider"] == "anthropic"
-    assert body["prompt_version"] == "crypto.strategy.system@v1"
+    assert body["prompt_version"] == "trading.strategy.system@v1"
     assert body["cost_usd"] == 0.01
 
 
@@ -82,8 +82,8 @@ def test_prompt_versions_groups_and_aggregates(client):
     assert r.status_code == 200
     rows = r.json()
     by_version = {row["version"]: row for row in rows}
-    v1 = by_version["crypto.strategy.system@v1"]
-    v2 = by_version["crypto.strategy.system@v2"]
+    v1 = by_version["trading.strategy.system@v1"]
+    v2 = by_version["trading.strategy.system@v2"]
     assert v1["count"] == 2
     assert v2["count"] == 1
     # v1 cost = 0.01 + 0.011 = 0.021
@@ -93,17 +93,17 @@ def test_prompt_versions_groups_and_aggregates(client):
 
 
 def test_halal_audit_one_trade_404(client):
-    r = client.get("/api/research/halal-audit/crypto/9999")
+    r = client.get("/api/research/halal-audit/stock/9999")
     assert r.status_code == 404
 
 
 def test_halal_audit_invalid_asset_class(client):
-    r = client.get("/api/research/halal-audit/options/1")
+    r = client.get("/api/research/halal-audit/crypto/1")
     assert r.status_code == 400
 
 
 def test_halal_audit_for_symbol_returns_empty_list(client):
-    r = client.get("/api/research/halal-audit/crypto/symbol/BTCUSDT")
+    r = client.get("/api/research/halal-audit/stock/symbol/AAPL")
     assert r.status_code == 200
     assert r.json() == []
 
@@ -120,7 +120,7 @@ def test_halal_audit_for_symbol_returns_receipts(client):
                 sa.text(
                     "INSERT INTO halal_screenings "
                     "(timestamp, symbol, asset_class, source, decision, cache_hit) "
-                    "VALUES (:ts, 'BTC', 'crypto', 'coingecko_rules', 'halal', false) "
+                    "VALUES (:ts, 'AAPL', 'stock', 'zoya', 'halal', false) "
                     "RETURNING id"
                 ),
                 {"ts": ts},
@@ -128,18 +128,17 @@ def test_halal_audit_for_symbol_returns_receipts(client):
             sid = conn.execute(sa.text("SELECT max(id) FROM halal_screenings")).scalar_one()
             conn.execute(
                 sa.text(
-                    "INSERT INTO crypto_trades "
-                    "(timestamp, pair, side, quantity, price, halal_screening_id, "
-                    " status, exchange) "
-                    "VALUES (:ts, 'BTCUSDT', 'buy', 0.01, 70000.0, :sid, 'open', "
-                    " 'binance')"
+                    "INSERT INTO trades "
+                    "(timestamp, symbol, side, quantity, price, halal_screening_id, "
+                    " status) "
+                    "VALUES (:ts, 'AAPL', 'buy', 10, 200.0, :sid, 'filled')"
                 ),
                 {"ts": ts, "sid": sid},
             )
     finally:
         eng.dispose()
 
-    r = client.get("/api/research/halal-audit/crypto/symbol/BTCUSDT")
+    r = client.get("/api/research/halal-audit/stock/symbol/AAPL")
     assert r.status_code == 200
     receipts = r.json()
     assert len(receipts) == 1

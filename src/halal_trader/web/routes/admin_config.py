@@ -86,12 +86,10 @@ def register(app: FastAPI) -> None:
 
     @app.get("/api/admin/prompts")
     async def list_prompts(ctx: DashboardContext = Depends(get_ctx)) -> JSONResponse:
-        import halal_trader.crypto.prompts as crypto_prompts
         import halal_trader.trading.strategy as trading_strategy
         from halal_trader.core.llm.prompts import list_versions, register
 
         for module, attr in (
-            (crypto_prompts, "PROMPT_VERSION"),
             (trading_strategy, "PROMPT_VERSION"),
             (trading_strategy, "USER_PROMPT_VERSION"),
         ):

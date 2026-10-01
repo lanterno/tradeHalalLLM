@@ -42,14 +42,11 @@ def test_existing_strategy_prompts_expose_version_constants():
     ``_reset_for_tests`` would otherwise produce a false negative — the
     modules don't re-register on subsequent imports.
     """
-    import halal_trader.crypto.prompts as crypto_prompts
     import halal_trader.trading.strategy as trading_strategy
 
-    assert crypto_prompts.PROMPT_VERSION.name == "crypto.strategy.system"
     assert trading_strategy.PROMPT_VERSION.name == "trading.strategy.system"
     assert trading_strategy.USER_PROMPT_VERSION.name == "trading.strategy.user"
     for pv in (
-        crypto_prompts.PROMPT_VERSION,
         trading_strategy.PROMPT_VERSION,
         trading_strategy.USER_PROMPT_VERSION,
     ):

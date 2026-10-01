@@ -1,4 +1,4 @@
-"""SSE /api/sse, WebSocket /ws/prices, and live-cycle stream /ws/cycle."""
+"""SSE /api/sse and the live-cycle stream /ws/cycle."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import logging
 from collections.abc import AsyncIterator
 from datetime import datetime
 
-from fastapi import Depends, FastAPI, Query, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
 
 from halal_trader.core.context import DashboardContext
@@ -21,57 +21,22 @@ def register(app: FastAPI) -> None:
     @app.get("/api/sse")
     async def sse(
         ctx: DashboardContext = Depends(get_ctx),
-        market: str = "crypto",
     ) -> StreamingResponse:
-        """SSE feed of the 5 most-recent trades, refreshing every 10s.
+        """SSE feed of the 5 most-recent stock trades, refreshing every 10s.
 
-        ``market="crypto"`` (default, back-compat) streams from the
-        crypto ledger. ``market="stocks"`` streams from the stocks
-        ``trades`` table. The /ws/cycle WebSocket (below) is the
-        modern event-bus path; this endpoint is the legacy polling
-        stream kept for older frontend integrations.
+        The /ws/cycle WebSocket (below) is the modern event-bus path;
+        this endpoint is the legacy polling stream kept for older
+        frontend integrations.
         """
-        market_lower = market.lower()
-        is_stocks = market_lower in ("stock", "stocks")
 
         async def event_stream() -> AsyncIterator[str]:
             while True:
-                if is_stocks:
-                    trades = await ctx.repo.get_recent_trades(5)
-                else:
-                    trades = await ctx.repo.get_recent_crypto_trades(5)
-                data = json.dumps({"trades": trades, "market": market_lower}, default=str)
+                trades = await ctx.repo.get_recent_trades(5)
+                data = json.dumps({"trades": trades, "market": "stocks"}, default=str)
                 yield f"data: {data}\n\n"
                 await asyncio.sleep(10)
 
         return StreamingResponse(event_stream(), media_type="text/event-stream")
-
-    @app.websocket("/ws/prices")
-    async def ws_prices(
-        websocket: WebSocket,
-        symbols: list[str] = Query(default=[]),
-    ) -> None:
-        # WebSocket routes don't get FastAPI's Depends resolution the
-        # same way as HTTP routes; pull the context off the ASGI app.
-        ctx: DashboardContext | None = getattr(websocket.app.state, "ctx", None)
-        await websocket.accept()
-        try:
-            while True:
-                prices: dict[str, float] = {}
-                ws_mgr = ctx.runtime.ws_manager if ctx else None
-                for sym in symbols:
-                    price = None
-                    if ws_mgr and hasattr(ws_mgr, "get_latest_price"):
-                        price = ws_mgr.get_latest_price(sym)
-                    if price is not None:
-                        prices[sym] = price
-                if prices:
-                    await websocket.send_json(prices)
-                await asyncio.sleep(1)
-        except WebSocketDisconnect:
-            pass
-        except Exception:
-            logger.debug("WebSocket connection closed")
 
     @app.websocket("/ws/cycle")
     async def ws_cycle(websocket: WebSocket, topic: str = "*") -> None:

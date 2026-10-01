@@ -19,100 +19,8 @@ def _alert_sink() -> tuple[AlertSink, MagicMock]:
     return AlertSink(notifier=notifier), notifier
 
 
-def _balance(asset: str, free: float, locked: float = 0.0) -> SimpleNamespace:
-    return SimpleNamespace(asset=asset, free=free, locked=locked)
-
-
 def _stock_position(symbol: str, qty: float) -> SimpleNamespace:
     return SimpleNamespace(symbol=symbol, qty=qty)
-
-
-# ── Crypto ─────────────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_crypto_clean_when_quantities_match(engine):
-    repo = Repository(engine)
-    await repo.record_crypto_trade(pair="BTCUSDT", side="buy", quantity=0.5, status="filled")
-
-    broker = MagicMock()
-    broker.get_balances = AsyncMock(return_value=[_balance("BTC", 0.5)])
-    broker.get_cached_price = MagicMock(return_value=68000.0)
-
-    report = await reconcile.reconcile_crypto(engine=engine, broker=broker)
-    assert not report.has_drift
-    assert report.checked_symbols >= 1
-
-
-@pytest.mark.asyncio
-async def test_crypto_drift_above_threshold_logged(engine):
-    repo = Repository(engine)
-    await repo.record_crypto_trade(pair="BTCUSDT", side="buy", quantity=1.0, status="filled")
-
-    broker = MagicMock()
-    broker.get_balances = AsyncMock(return_value=[_balance("BTC", 0.7)])
-    broker.get_cached_price = MagicMock(return_value=70000.0)
-
-    sink, notifier = _alert_sink()
-    report = await reconcile.reconcile_crypto(engine=engine, broker=broker, alerts=sink)
-    assert report.has_drift
-    drift = report.drifts[0]
-    assert drift.symbol == "BTC"
-    assert drift.db_quantity == 1.0
-    assert drift.broker_quantity == 0.7
-    assert pytest.approx(drift.drift_pct, rel=1e-3) == 0.3
-    assert drift.drift_usd == pytest.approx(0.3 * 70000)
-
-    notifier.notify_error.assert_awaited_once()
-    rows = await reconcile.get_recent_logs(engine)
-    assert len(rows) == 1
-    assert rows[0]["symbol"] == "BTC"
-
-
-@pytest.mark.asyncio
-async def test_crypto_drift_below_threshold_skipped(engine):
-    repo = Repository(engine)
-    await repo.record_crypto_trade(pair="BTCUSDT", side="buy", quantity=1.0, status="filled")
-
-    broker = MagicMock()
-    broker.get_balances = AsyncMock(return_value=[_balance("BTC", 0.998)])
-    broker.get_cached_price = MagicMock(return_value=70000.0)
-
-    report = await reconcile.reconcile_crypto(engine=engine, broker=broker, threshold_pct=0.01)
-    assert not report.has_drift
-
-
-@pytest.mark.asyncio
-async def test_crypto_surplus_on_broker_flagged(engine):
-    broker = MagicMock()
-    broker.get_balances = AsyncMock(return_value=[_balance("ETH", 2.0)])
-    broker.get_cached_price = MagicMock(return_value=3500.0)
-
-    report = await reconcile.reconcile_crypto(engine=engine, broker=broker)
-    assert report.has_drift
-    assert report.drifts[0].symbol == "ETH"
-    assert report.drifts[0].db_quantity == 0.0
-    assert report.drifts[0].notes is not None
-
-
-@pytest.mark.asyncio
-async def test_crypto_surplus_dust_below_5usd_ignored(engine):
-    broker = MagicMock()
-    broker.get_balances = AsyncMock(return_value=[_balance("ETH", 0.001)])
-    broker.get_cached_price = MagicMock(return_value=3500.0)
-
-    report = await reconcile.reconcile_crypto(engine=engine, broker=broker)
-    assert not report.has_drift  # 0.001 * 3500 = $3.50, below $5 dust
-
-
-@pytest.mark.asyncio
-async def test_crypto_ignores_usdt_balance(engine):
-    broker = MagicMock()
-    broker.get_balances = AsyncMock(return_value=[_balance("USDT", 1000.0), _balance("BUSD", 50.0)])
-    broker.get_cached_price = MagicMock(return_value=None)
-
-    report = await reconcile.reconcile_crypto(engine=engine, broker=broker)
-    assert not report.has_drift
 
 
 # ── Stocks ─────────────────────────────────────────────────────
@@ -155,21 +63,23 @@ async def test_stocks_position_with_no_trade_row(engine):
     notifier.notify_error.assert_awaited_once()
 
 
-# ── Persistence helper ───────────────────────────────────────
-
-
 @pytest.mark.asyncio
 async def test_get_recent_logs_orders_desc(engine):
+    from datetime import timedelta
+
     repo = Repository(engine)
-    await repo.record_crypto_trade(pair="BTCUSDT", side="buy", quantity=1.0, status="filled")
-    await repo.record_crypto_trade(pair="ETHUSDT", side="buy", quantity=2.0, status="filled")
+    await repo.record_trade(symbol="AAPL", side="buy", quantity=10, status="filled")
+    await repo.record_trade(symbol="MSFT", side="buy", quantity=20, status="filled")
 
     broker = MagicMock()
-    broker.get_balances = AsyncMock(return_value=[_balance("BTC", 0.5), _balance("ETH", 1.0)])
-    broker.get_cached_price = MagicMock(return_value=10000.0)
+    broker.get_all_positions = AsyncMock(
+        return_value=[_stock_position("AAPL", 5), _stock_position("MSFT", 10)]
+    )
 
-    await reconcile.reconcile_crypto(engine=engine, broker=broker)
+    # No settlement grace: both fills are seconds old, and the drift must
+    # be persisted rather than treated as a fresh-fill race.
+    await reconcile.reconcile_stocks(engine=engine, broker=broker, settlement_grace=timedelta(0))
 
     logs = await reconcile.get_recent_logs(engine, limit=10)
     assert len(logs) == 2
-    assert {row["symbol"] for row in logs} == {"BTC", "ETH"}
+    assert {row["symbol"] for row in logs} == {"AAPL", "MSFT"}

@@ -68,25 +68,3 @@ def test_throttle_disabled_when_budget_nonpositive():
 def test_throttle_monotonic_decreasing():
     vals = [drawdown_throttle(d, max_drawdown_budget=0.25) for d in (0.0, 0.05, 0.1, 0.2, 0.25)]
     assert vals == sorted(vals, reverse=True)
-
-
-# ── backtest integration: throttle shrinks size in drawdown ──────
-
-
-def test_backtest_drawdown_throttle_reduces_position():
-    from halal_trader.crypto.backtest import SimulatedExecutor
-
-    def _sized_qty(budget):
-        ex = SimulatedExecutor(initial_balance=10_000, drawdown_throttle_budget=budget)
-        # Simulate a 10% drawdown: peak 10k in the curve, balance now 9k.
-        ex.equity_curve = [10_000.0]
-        ex.balance = 9_000.0
-        ok = ex.buy("BTCUSDT", price=100.0, timestamp=0)
-        assert ok
-        assert ex.position is not None
-        return ex.position.quantity
-
-    throttled = _sized_qty(0.20)  # 10% dd vs 20% budget → 0.5x multiplier
-    full = _sized_qty(None)  # throttle off
-    assert throttled < full
-    assert throttled == pytest.approx(full * 0.5, rel=1e-6)

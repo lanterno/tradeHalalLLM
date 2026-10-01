@@ -48,11 +48,11 @@ def test_allows_critical_from_noisy_logger():
 
 def test_allows_info_from_application_logger():
     """Application loggers (`halal_trader.*`) keep their INFO messages."""
-    assert _filt().filter(_record("halal_trader.crypto.cycle", logging.INFO)) is True
+    assert _filt().filter(_record("halal_trader.trading.cycle", logging.INFO)) is True
 
 
 def test_allows_debug_from_application_logger():
-    assert _filt().filter(_record("halal_trader.crypto.cycle", logging.DEBUG)) is True
+    assert _filt().filter(_record("halal_trader.trading.cycle", logging.DEBUG)) is True
 
 
 # ── Block paths ──────────────────────────────────────────────

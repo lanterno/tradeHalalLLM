@@ -98,13 +98,13 @@ def test_list_prompts_includes_strategy_modules(client):
     assert r.status_code == 200
     rows = r.json()
     names = {row["name"] for row in rows}
-    assert "crypto.strategy.system" in names
     assert "trading.strategy.system" in names
+    assert "trading.strategy.user" in names
 
 
 def test_set_active_prompt_round_trips(client):
     rows = client.get("/api/admin/prompts").json()
-    target = next(r for r in rows if r["name"] == "crypto.strategy.system")
+    target = next(r for r in rows if r["name"] == "trading.strategy.system")
     r = client.post("/api/admin/prompts/active", json={"version": target["short"]})
     assert r.status_code == 200
     # After setting, the listing should mark this version active.

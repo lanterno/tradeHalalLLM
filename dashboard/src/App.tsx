@@ -9,7 +9,6 @@ const BeliefBoard = lazy(() => import("./pages/BeliefBoard"));
 const Positions = lazy(() => import("./pages/Positions"));
 const Trades = lazy(() => import("./pages/Trades"));
 const Analytics = lazy(() => import("./pages/Analytics"));
-const Sentiment = lazy(() => import("./pages/Sentiment"));
 const Decisions = lazy(() => import("./pages/Decisions"));
 const Halal = lazy(() => import("./pages/Halal"));
 const System = lazy(() => import("./pages/System"));
@@ -66,14 +65,6 @@ export default function App() {
           element={
             <Suspense fallback={<PageSkeleton />}>
               <Analytics />
-            </Suspense>
-          }
-        />
-        <Route
-          path="sentiment"
-          element={
-            <Suspense fallback={<PageSkeleton />}>
-              <Sentiment />
             </Suspense>
           }
         />

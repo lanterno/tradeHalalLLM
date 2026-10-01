@@ -48,8 +48,6 @@ def expected_token(today: datetime | None = None) -> str:
 
 def is_live_mode(settings: Settings, *, market: str) -> bool:
     """Return True if the configured market is operating against real money."""
-    if market == "crypto":
-        return not settings.binance.testnet
     if market == "stocks":
         return not settings.alpaca.paper_trade
     raise ValueError(f"unknown market: {market}")
@@ -92,15 +90,10 @@ class LiveModeChecker:
         return self._tripped
 
     def _effective_loss_limit(self) -> float:
-        if self.market == "crypto":
-            return self.settings.crypto.daily_loss_limit
         return self.settings.stocks.daily_loss_limit
 
     def _effective_max_position_notional(self, account_balance: float) -> float:
-        if self.market == "crypto":
-            pct = self.settings.crypto.max_position_pct
-        else:
-            pct = self.settings.stocks.max_position_pct
+        pct = self.settings.stocks.max_position_pct
         return max(account_balance * pct, 0.0)
 
     async def assert_safe(
@@ -175,6 +168,4 @@ class LiveModeChecker:
         return False
 
     def _max_position_pct(self) -> float:
-        if self.market == "crypto":
-            return self.settings.crypto.max_position_pct
         return self.settings.stocks.max_position_pct

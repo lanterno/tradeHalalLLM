@@ -1,6 +1,6 @@
 """Per-trade operator intervention endpoints.
 
-The crypto monitor + stock monitor watch SL/TP between cycles, but the
+The stock position monitor watches SL/TP between cycles, but the
 LLM occasionally misses one or sets it loose. The dashboard now lets
 the operator amend SL/TP, manually close with a reason, and inspect a
 trade's full audit drawer (decision id → halal screening → indicator
@@ -22,7 +22,7 @@ from pydantic import BaseModel, Field
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from halal_trader.core.context import DashboardContext
-from halal_trader.db.models import CryptoTrade, Trade
+from halal_trader.db.models import Trade
 from halal_trader.web.dependencies import get_ctx
 from halal_trader.web.middleware.confirm import require_confirmation
 
@@ -30,13 +30,13 @@ logger = logging.getLogger(__name__)
 
 
 class EditSLTPRequest(BaseModel):
-    asset_class: str = Field(pattern="^(stock|crypto)$")
+    asset_class: str = Field(default="stock", pattern="^stock$")
     stop_loss: float | None = Field(default=None, ge=0)
     target_price: float | None = Field(default=None, ge=0)
 
 
 class ManualCloseRequest(BaseModel):
-    asset_class: str = Field(pattern="^(stock|crypto)$")
+    asset_class: str = Field(default="stock", pattern="^stock$")
     exit_price: float = Field(ge=0)
     reason: str = Field(default="operator_manual_close", min_length=1, max_length=100)
 
@@ -55,10 +55,8 @@ def register(app: FastAPI) -> None:
         if req.stop_loss is None and req.target_price is None:
             raise HTTPException(422, "must provide stop_loss or target_price")
 
-        model = CryptoTrade if req.asset_class == "crypto" else Trade
-
         async with AsyncSession(ctx.engine) as session:
-            trade: Any = await session.get(model, trade_id)
+            trade: Any = await session.get(Trade, trade_id)
             if trade is None:
                 raise HTTPException(404, f"trade {trade_id} not found")
             if trade.side != "buy":
@@ -107,12 +105,7 @@ def register(app: FastAPI) -> None:
         ctx: DashboardContext = Depends(get_ctx),
     ) -> JSONResponse:
         """Stamp a trade as closed at an operator-supplied exit price."""
-        if req.asset_class == "crypto":
-            await ctx.repo.close_crypto_trade(
-                trade_id, exit_price=req.exit_price, exit_reason=req.reason
-            )
-        else:
-            await ctx.repo.close_trade(trade_id, exit_price=req.exit_price, exit_reason=req.reason)
+        await ctx.repo.close_trade(trade_id, exit_price=req.exit_price, exit_reason=req.reason)
         return JSONResponse(
             {
                 "trade_id": trade_id,
@@ -129,12 +122,11 @@ def register(app: FastAPI) -> None:
         ctx: DashboardContext = Depends(get_ctx),
     ) -> JSONResponse:
         """Combined audit drawer: trade row + halal receipt + indicator snapshot."""
-        if asset_class not in ("stock", "crypto"):
-            raise HTTPException(400, "asset_class must be 'stock' or 'crypto'")
+        if asset_class != "stock":
+            raise HTTPException(400, "asset_class must be 'stock'")
 
-        model = CryptoTrade if asset_class == "crypto" else Trade
         async with AsyncSession(ctx.engine) as session:
-            trade = await session.get(model, trade_id)
+            trade = await session.get(Trade, trade_id)
             if trade is None:
                 raise HTTPException(404, f"trade {trade_id} not found")
 

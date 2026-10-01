@@ -1,14 +1,11 @@
 """Order-fill confirmation — turn broker order responses into FillResult.
 
-Both bots persist `submitted_at`, `filled_at`, `filled_price`, and
+The bot persists `submitted_at`, `filled_at`, `filled_price`, and
 `filled_quantity` so reconciliation, alerts, and metrics can rely on
 "submitted" vs "filled" being distinct rather than conflated as
 ``status='pending'`` forever.
 
-For Binance: market orders return immediately with the fill data already
-populated, so :func:`confirm_binance` parses the response.
-
-For Alpaca (stocks): MCP tool calls return a submission ack — we have to
+Alpaca (stocks) MCP tool calls return a submission ack — we have to
 poll ``get_orders`` until the order is ``filled``, ``partially_filled``,
 ``rejected``, ``canceled``, or the timeout elapses.
 """
@@ -55,53 +52,6 @@ _TERMINAL_STATES = {
     TradeStatus.CANCELED.value,
     "expired",
 }
-
-
-def confirm_binance(order_response: dict[str, Any], submitted_at: datetime) -> FillResult:
-    """Translate a Binance order response into a :class:`FillResult`.
-
-    Binance MARKET orders come back with ``status``, ``executedQty``, and
-    either ``fills`` (newer) or ``cumulativeQuoteQty`` (older). Only
-    ``status='FILLED'`` rows count as fully filled; ``PARTIALLY_FILLED``
-    falls through as the same so callers can decide.
-    """
-    order_id = str(order_response.get("orderId", ""))
-    raw_status = str(order_response.get("status", "")).lower() or "pending"
-
-    fills = order_response.get("fills") or []
-    if fills:
-        total_qty = sum(float(f.get("qty", 0)) for f in fills)
-        total_cost = sum(float(f.get("price", 0)) * float(f.get("qty", 0)) for f in fills)
-        filled_qty = total_qty
-        filled_price: float | None = (total_cost / total_qty) if total_qty > 0 else None
-    else:
-        executed = float(order_response.get("executedQty", 0))
-        cumulative = float(order_response.get("cumulativeQuoteQty", 0))
-        filled_qty = executed
-        filled_price = (cumulative / executed) if executed > 0 and cumulative > 0 else None
-
-    status_map: dict[str, str] = {
-        "filled": TradeStatus.FILLED,
-        "partially_filled": TradeStatus.PARTIALLY_FILLED,
-        "rejected": TradeStatus.REJECTED,
-        "canceled": TradeStatus.CANCELED,
-        "expired": TradeStatus.REJECTED,
-        "new": TradeStatus.PENDING,
-        "pending_new": TradeStatus.PENDING,
-    }
-    status = status_map.get(raw_status, raw_status)
-
-    filled_at = datetime.now(UTC) if status == TradeStatus.FILLED and filled_qty > 0 else None
-
-    return FillResult(
-        status=status,
-        order_id=order_id,
-        filled_quantity=filled_qty,
-        filled_price=filled_price,
-        submitted_at=submitted_at,
-        filled_at=filled_at,
-        raw=order_response,
-    )
 
 
 async def confirm_alpaca(

@@ -25,8 +25,8 @@ def halal_group() -> None:
 @click.argument("trade_id", type=int)
 @click.option(
     "--asset-class",
-    type=click.Choice(["crypto", "stock"]),
-    default="crypto",
+    type=click.Choice(["stock"]),
+    default="stock",
     show_default=True,
 )
 def explain(trade_id: int, asset_class: str) -> None:

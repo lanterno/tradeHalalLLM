@@ -66,8 +66,8 @@ def register(app: FastAPI) -> None:
         trade_id: int,
         ctx: DashboardContext = Depends(get_ctx),
     ) -> Response:
-        if asset_class not in ("stock", "crypto"):
-            raise HTTPException(400, "asset_class must be 'stock' or 'crypto'")
+        if asset_class != "stock":
+            raise HTTPException(400, "asset_class must be 'stock'")
         receipt = await export_receipt(ctx.engine, trade_id=trade_id, asset_class=asset_class)
         if receipt is None:
             raise HTTPException(404, f"no {asset_class} trade with id={trade_id}")
@@ -80,8 +80,8 @@ def register(app: FastAPI) -> None:
         limit: int = 50,
         ctx: DashboardContext = Depends(get_ctx),
     ) -> JSONResponse:
-        if asset_class not in ("stock", "crypto"):
-            raise HTTPException(400, "asset_class must be 'stock' or 'crypto'")
+        if asset_class != "stock":
+            raise HTTPException(400, "asset_class must be 'stock'")
         receipts = await export_for_symbol(
             ctx.engine, symbol=symbol, asset_class=asset_class, limit=limit
         )

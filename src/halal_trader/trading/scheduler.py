@@ -113,7 +113,7 @@ class TradingBot(BaseTradingBot):
             )
         self.screener = HalalScreener(repo, zoya)
 
-        # Optional adversarial co-bot for stocks (mirrors crypto). Off
+        # Optional adversarial co-bot for stocks. Off
         # by default; flipped on via LLM_ADVERSARIAL_ENABLED.
         attacker_llm = None
         if getattr(self.settings.llm, "adversarial_enabled", False):
@@ -239,12 +239,11 @@ class TradingBot(BaseTradingBot):
 
         catalyst_feed = StockCatalystFeed(sources=catalyst_sources) if catalyst_sources else None
 
-        # Stocks-side rolling-performance analytics — same surface as
-        # the crypto cycle (``BuildPerformanceStage`` reads
-        # ``compute_stats`` + ``format_for_prompt``). Built once here so
+        # Stocks-side rolling-performance analytics (``BuildPerformanceStage``
+        # reads ``compute_stats`` + ``format_for_prompt``). Built once here so
         # the cycle's stage list can stamp ``state.performance_text``
         # on each pass without a per-cycle constructor.
-        from halal_trader.core.analytics import CrossAssetAnalytics
+        from halal_trader.portfolio.analytics import PerformanceAnalytics
         from halal_trader.sentiment.stocks_news import (
             FinnhubNewsCollector,
             StockNewsCollector,
@@ -255,7 +254,7 @@ class TradingBot(BaseTradingBot):
         assert repo is not None  # populated by BaseTradingBot.initialize()
         bundle = self._bundle
         assert bundle is not None  # built alongside repo by initialize()
-        stocks_analytics = CrossAssetAnalytics(repo, asset_class="stock")
+        stocks_analytics = PerformanceAnalytics(repo)
         # Yahoo Finance — no API key, 15-min cache inside the collector.
         # Closed in :meth:`shutdown` so the underlying ``httpx`` client
         # doesn't leak past process exit.
@@ -275,10 +274,10 @@ class TradingBot(BaseTradingBot):
 
         # Stocks-side self-review — reviews closed Trade round-trips and
         # suggests bounded knob overrides (``max_position_pct``,
-        # ``daily_loss_limit``). Mirrors crypto's wiring but with a
-        # smaller knob menu because ``TradingStrategy`` doesn't carry
-        # global SL/TP fallbacks. ``load_from_db`` restores any prior
-        # adjustments so they survive a process restart.
+        # ``daily_loss_limit``). A small knob menu because
+        # ``TradingStrategy`` doesn't carry global SL/TP fallbacks.
+        # ``load_from_db`` restores any prior adjustments so they survive
+        # a process restart.
         stocks_self_review = StockTradeSelfReview(
             llm,
             strategy_adjustments=bundle.strategy_adjustments,
@@ -383,8 +382,8 @@ class TradingBot(BaseTradingBot):
             self_review=stocks_self_review,
             news_collector=self._stocks_news,
             # Multi-timeframe trend alignment (1H/1D/1W via Alpaca) — the strongest
-            # signal in halabot's per-source attribution. Reuses the crypto
-            # TimeframeAnalyzer math; errors degrade to an empty block (cycle-safe).
+            # signal in halabot's per-source attribution. Uses the shared
+            # signals.timeframes math; errors degrade to an empty block (cycle-safe).
             timeframe_analyzer=StockTimeframeAnalyzer(self.broker),
         )
 
@@ -760,7 +759,6 @@ class TradingBot(BaseTradingBot):
 
         Before each cycle, check whether the self-review wants to fire
         an emergency review (3 consecutive losses or 10 exec failures).
-        Mirrors ``crypto/scheduler.py:_run_cycle_loop`` lines 451-456.
         Failures degrade silently — the cycle must run regardless.
         """
         _, _, _, cycle_service = self._require_initialized()
@@ -790,8 +788,7 @@ class TradingBot(BaseTradingBot):
             # Record daily P&L
             summary = await portfolio.record_day_end()
 
-            # Enrich with market tag + date + LLM cost/calls. Mirrors
-            # the crypto path in crypto/scheduler.py:_daily_end so the
+            # Enrich with market tag + date + LLM cost/calls so the
             # richer Telegram summary fields fire.
             summary["market"] = "stocks"
             from datetime import UTC, datetime
@@ -855,7 +852,7 @@ class TradingBot(BaseTradingBot):
 
             logger.info("Day summary: %s", summary)
 
-            # End-of-day self-review — mirrors crypto/_daily_end. Pulls
+            # End-of-day self-review. Pulls
             # the day's closed round-trips, asks the LLM what patterns
             # to learn, persists bounded knob overrides. Failures
             # (network, LLM down, no trades) degrade silently — the
@@ -871,7 +868,7 @@ class TradingBot(BaseTradingBot):
                 except Exception as exc:
                     logger.debug("Stocks self-review failed: %s", exc)
 
-            # Send daily summary via Telegram — mirrors crypto/_daily_end.
+            # Send daily summary via Telegram.
             if self._notifier and self._notifier.enabled:
                 try:
                     await self._notifier.notify_daily_summary(summary or {})
@@ -929,7 +926,7 @@ class TradingBot(BaseTradingBot):
         """Start the trading bot with scheduled jobs."""
         from halal_trader.core.observability import set_service
 
-        set_service("stock")  # tag this process's logs (shared file w/ crypto)
+        set_service("stock")  # tag this process's logs
         self._acquire_lock()
         await self.initialize()
         try:

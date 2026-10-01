@@ -57,15 +57,12 @@ def test_runtime_view_collection_defaults_are_independent():
 
 
 def test_runtime_view_optional_broker_handles_default_none():
-    """``crypto_broker`` / ``stock_broker`` / `ws_manager` /
-    `sentiment_manager` are only populated when the bot is co-hosted
-    with the dashboard. Dashboard-only processes must see them as
-    None to branch correctly."""
+    """``stock_broker`` / ``stocks_news_reactor`` are only populated when
+    the bot is co-hosted with the dashboard. Dashboard-only processes
+    must see them as None to branch correctly."""
     rv = RuntimeView()
-    assert rv.crypto_broker is None
     assert rv.stock_broker is None
-    assert rv.ws_manager is None
-    assert rv.sentiment_manager is None
+    assert rv.stocks_news_reactor is None
 
 
 def test_runtime_view_is_mutable():

@@ -22,10 +22,7 @@ def _client(
     drift: DriftMonitor | None = None,
     shadow: ShadowLedger | None = None,
     calibration: CalibrationCurve | None = None,
-    basis: Any = None,
     regime: Any = None,
-    stress_verdicts: list | None = None,
-    stress_ts: str | None = None,
     runtime: RuntimeView | None = None,
 ) -> TestClient:
     app = FastAPI()
@@ -35,11 +32,6 @@ def _client(
         calibration=(calibration if calibration is not None else CalibrationCurve.identity()),
         regime=regime,
     )
-    if basis is not None:
-        hub.basis = basis
-    if stress_verdicts is not None:
-        hub.stress_verdicts = stress_verdicts
-        hub.stress_ts = stress_ts
     ctx = DashboardContext(
         engine=MagicMock(),
         repo=MagicMock(),
@@ -98,34 +90,6 @@ def test_shadow_with_ledger() -> None:
     assert body["available"] is True
     assert body["n"] == 40
     assert body["level"] in ("ok", "watch", "diverged")
-
-
-# ── stress ───────────────────────────────────────────────────────
-
-
-def test_stress_unavailable() -> None:
-    client = _client()
-    assert client.get("/api/insights/stress").json() == {"available": False}
-
-
-def test_stress_with_verdicts() -> None:
-    from halal_trader.crypto.stress import StressVerdict
-
-    verdicts = [
-        StressVerdict(
-            scenario_name="flash_crash",
-            severity=0.0,
-            buys=0,
-            sells=0,
-            holds=1,
-            notes=["sane"],
-        )
-    ]
-    client = _client(stress_verdicts=verdicts, stress_ts="2026-04-26T00:00:00Z")
-    body = client.get("/api/insights/stress").json()
-    assert body["available"] is True
-    assert body["verdicts"][0]["scenario_name"] == "flash_crash"
-    assert body["verdicts"][0]["passed"] is True
 
 
 # ── calibration ──────────────────────────────────────────────────
@@ -193,23 +157,6 @@ async def test_regime_with_snapshots(database_url) -> None:
         assert body["recent"][0]["date"] == "2026-04-26"
     finally:
         await engine.dispose()
-
-
-def test_basis_unavailable() -> None:
-    client = _client()
-    # Default BasisTracker has empty history → unavailable.
-    assert client.get("/api/insights/basis").json() == {"available": False}
-
-
-def test_basis_with_history() -> None:
-    from halal_trader.crypto.basis import BasisTracker
-
-    tracker = BasisTracker()
-    tracker.observe(pair="BTCUSDT", spot_price=100.0, perp_price=100.5, funding_rate_pct=0.0001)
-    client = _client(basis=tracker)
-    body = client.get("/api/insights/basis").json()
-    assert body["available"] is True
-    assert "BTCUSDT" in body["pairs"]
 
 
 def test_treasury_unavailable_without_account_snapshot() -> None:

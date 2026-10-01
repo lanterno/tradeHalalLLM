@@ -1,4 +1,4 @@
-"""CrossAssetAnalytics tests — switches between crypto and stock round-trips."""
+"""PerformanceAnalytics over real closed stock round-trips in the test database."""
 
 from __future__ import annotations
 
@@ -6,9 +6,9 @@ from datetime import UTC, datetime, timedelta
 
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from halal_trader.core.analytics import CrossAssetAnalytics
 from halal_trader.db.models import Trade
 from halal_trader.db.repository import Repository
+from halal_trader.portfolio.analytics import PerformanceAnalytics
 
 
 async def _seed_stock_round_trips(engine, repo: Repository) -> None:
@@ -33,7 +33,7 @@ async def _seed_stock_round_trips(engine, repo: Repository) -> None:
 
 async def test_stock_analytics_returns_zero_when_no_trades(engine):
     repo = Repository(engine)
-    analytics = CrossAssetAnalytics(repo, asset_class="stock")
+    analytics = PerformanceAnalytics(repo)
     stats = await analytics.compute_stats(lookback_days=7)
     assert stats.total_trades == 0
     assert stats.win_rate == 0
@@ -42,7 +42,7 @@ async def test_stock_analytics_returns_zero_when_no_trades(engine):
 async def test_stock_analytics_aggregates_round_trips(engine):
     repo = Repository(engine)
     await _seed_stock_round_trips(engine, repo)
-    analytics = CrossAssetAnalytics(repo, asset_class="stock")
+    analytics = PerformanceAnalytics(repo)
     stats = await analytics.compute_stats(lookback_days=7)
     assert stats.total_trades == 3
     assert stats.wins == 2
@@ -72,7 +72,7 @@ async def test_stock_analytics_excludes_zero_entry_phantom(engine):
         session.add(trade)
         await session.commit()
 
-    analytics = CrossAssetAnalytics(repo, asset_class="stock")
+    analytics = PerformanceAnalytics(repo)
     stats = await analytics.compute_stats(lookback_days=7)
     # Phantom excluded entirely — counts and P&L match the 3 real round-trips.
     assert stats.total_trades == 3
@@ -80,18 +80,10 @@ async def test_stock_analytics_excludes_zero_entry_phantom(engine):
     assert "TSLA" not in {stats.best_pair, stats.worst_pair}
 
 
-async def test_crypto_analytics_path_unchanged(engine):
-    """Default asset_class='crypto' must delegate to the original analytics."""
-    repo = Repository(engine)
-    analytics = CrossAssetAnalytics(repo)
-    stats = await analytics.compute_stats(lookback_days=7)
-    assert stats.total_trades == 0
-
-
 async def test_format_for_prompt_renders_text(engine):
     repo = Repository(engine)
     await _seed_stock_round_trips(engine, repo)
-    analytics = CrossAssetAnalytics(repo, asset_class="stock")
+    analytics = PerformanceAnalytics(repo)
     stats = await analytics.compute_stats(lookback_days=7)
     text = analytics.format_for_prompt(stats)
     assert "Win rate" in text or "win" in text.lower()
