@@ -10,7 +10,7 @@ from typing import Any
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-from halal_trader.config import get_settings
+from halal_trader.config import Settings, get_settings
 from halal_trader.domain.models import Account, MarketClock, Position
 from halal_trader.market_hours import now_eastern, today_eastern
 
@@ -44,6 +44,25 @@ def _unwrap_mcp_envelope(parsed: Any) -> Any:
     return parsed
 
 
+def server_parameters(settings: Settings) -> StdioServerParameters:
+    """How the broker subprocess is launched: pinned version, paper flag, keys.
+
+    The alpaca-mcp-server CLI has no "serve" subcommand: it defaults to the
+    stdio transport when launched with no args, which is exactly what MCP's
+    StdioServerParameters expects. `uvx pkg@X.Y.Z` pins the exact release
+    (see AlpacaSettings.mcp_server_version for why it must be pinned).
+    """
+    return StdioServerParameters(
+        command="uvx",
+        args=[f"alpaca-mcp-server@{settings.alpaca.mcp_server_version}"],
+        env={
+            "ALPACA_API_KEY": settings.alpaca.api_key,
+            "ALPACA_SECRET_KEY": settings.alpaca.secret_key,
+            "ALPACA_PAPER_TRADE": str(settings.alpaca.paper_trade),
+        },
+    )
+
+
 class AlpacaMCPClient:
     """Programmatic MCP client for the Alpaca trading server.
 
@@ -60,20 +79,7 @@ class AlpacaMCPClient:
 
     async def connect(self) -> None:
         """Spawn the Alpaca MCP server and establish a session."""
-        settings = get_settings()
-
-        # The alpaca-mcp-server CLI has no "serve" subcommand — it
-        # defaults to stdio transport when launched with no args, which
-        # is exactly what MCP's StdioServerParameters expects.
-        server_params = StdioServerParameters(
-            command="uvx",
-            args=["alpaca-mcp-server"],
-            env={
-                "ALPACA_API_KEY": settings.alpaca.api_key,
-                "ALPACA_SECRET_KEY": settings.alpaca.secret_key,
-                "ALPACA_PAPER_TRADE": str(settings.alpaca.paper_trade),
-            },
-        )
+        server_params = server_parameters(get_settings())
 
         transport = await self._exit_stack.enter_async_context(stdio_client(server_params))
         read_stream, write_stream = transport

@@ -32,6 +32,13 @@ class AlpacaSettings(BaseSettings):
     api_key: str = Field(default="")
     secret_key: str = Field(default="")
     paper_trade: bool = Field(default=True)
+    # The broker adapter is a subprocess fetched by `uvx` at startup. Unpinned,
+    # every container restart silently took whatever PyPI had that day: five
+    # upstream schema changes each caused a silent no-trade outage, and the
+    # 2026-10-01 restart jumped 2.1.1 -> 2.3.2 unannounced. 2.1.1 is what every
+    # July run used and what mcp/client.py's parsers were last verified against.
+    # Bump deliberately, after recorded-payload contract tests pass.
+    mcp_server_version: str = Field(default="2.1.1", pattern=r"^\d+\.\d+\.\d+$")
 
 
 class BinanceSettings(BaseSettings):
