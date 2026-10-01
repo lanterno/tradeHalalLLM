@@ -166,19 +166,6 @@ class LLMSettings(BaseSettings):
     # UTC day (exits keep working: the position monitor uses no LLM).
     daily_usd_cap: float = Field(default=0.0)
     budget_enforce: bool = Field(default=False)
-    # Adversarial co-bot — runs a cheap follow-up LLM call that critiques
-    # each plan and downsizes/skips buys when it surfaces a strong
-    # counter-thesis. Off by default (extra cost; opt-in).
-    adversarial_enabled: bool = Field(default=False)
-    # Ensemble fan-out — number of additional LLM variants that vote
-    # alongside the primary. Median quantity / confidence wins; agreement
-    # score scales sizing in [0.5, 1.0]. 0 disables.
-    ensemble_size: int = Field(default=0, ge=0, le=5)
-    # Shadow strategy — runs an analyze() pass per cycle on the same
-    # inputs and simulates fills against latest prices. Used to detect
-    # decay between live (mutating) and shadow (frozen-prompt) curves.
-    shadow_enabled: bool = Field(default=False)
-    shadow_starting_cash: float = Field(default=1000.0, gt=0)
     glm: GLMSettings = Field(default_factory=GLMSettings)
 
 
@@ -216,14 +203,6 @@ class StockSettings(BaseSettings):
     # 09:05 job — degrades silently on any failure. Turn off if the ~20
     # extra fetches make the job too slow.
     recommendation_expected_move: bool = Field(default=True)
-
-    # Wave H stocks-side agentic mode. Off by default; opt in to drive
-    # the LLM through a bounded tool-calling loop (query_rag,
-    # query_regime_memory, submit_decisions) before each cycle's
-    # decision.
-    agentic_enabled: bool = Field(default=False)
-    agentic_max_turns: int = Field(default=5, ge=1, le=20)
-    agentic_max_seconds: float = Field(default=30.0, gt=0, le=120.0)
 
     # News-momentum reactor: hard ceiling on classifier API calls per
     # UTC day. Trip is silent (score=0.0) with one warning log per day.

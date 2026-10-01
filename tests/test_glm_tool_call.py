@@ -1,8 +1,8 @@
-"""Tests for :meth:`GLMLLM.generate_tool_call` — the agentic tool-use path.
+"""Tests for :meth:`GLMLLM.generate_tool_call` — the strategy's tool-use path.
 
 `test_glm_usage.py` covers the `generate(...)` text path and the
 endpoint dialects. This file pins the parallel `generate_tool_call`
-path that the Wave H agentic loop relies on: the kwargs assembly
+path the strategy's forced ``submit_decisions`` call relies on: the kwargs assembly
 (tools serialised via ``for_openai``, ``tool_choice`` shape when
 forced), the tool_calls walker that turns SDK entries into
 ``ToolCall`` dataclasses (including malformed-arguments recovery),
@@ -133,8 +133,7 @@ async def test_system_prompt_emits_system_role_message():
 
 @pytest.mark.asyncio
 async def test_user_prompt_is_single_message_without_system():
-    """The model's input is a single user-role message — multi-turn
-    history is the agentic loop's job, not this method's."""
+    """The model's input is a single user-role message."""
     llm = _llm()
     create_mock = _wire(llm, _stub_response([]))
     await llm.generate_tool_call("user prompt here", tools=[_tool()])
@@ -171,8 +170,7 @@ async def test_single_tool_call_yields_one_call():
 
 @pytest.mark.asyncio
 async def test_multiple_tool_calls_all_returned():
-    """The agentic loop expects all tool calls in a single response —
-    e.g. analyze_pair followed by submit_plan in the same turn."""
+    """Every tool call in one response is returned, in order."""
     llm = _llm()
     _wire(
         llm,

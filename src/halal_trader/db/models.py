@@ -136,9 +136,8 @@ class LlmDecision(SQLModel, table=True):
     cache_write_tokens: int | None = None
     cost_usd: float | None = None  # rounded float — Decimal aggregation done in code
 
-    # Wave H — agentic mode persists each tool call's name/args/result
-    # so the dashboard can render a tree of the model's chain-of-thought.
-    # None when the cycle ran in single-prompt mode.
+    # Written by the agentic tool-calling mode, deleted 2026-10-01; the
+    # column stays until a migration drops it. Always None for new rows.
     tool_transcript: list | None = Field(
         default=None,
         sa_column=sa.Column("tool_transcript", JSONB, nullable=True),
@@ -662,11 +661,9 @@ class RegimeSnapshotRow(SQLModel, table=True):
 class PromptGenome(SQLModel, table=True):
     """One candidate prompt produced by the prompt-evolution GA.
 
-    Each row is a slot→allele mapping (``genome``) with its measured
-    fitness over a panel of replay snapshots, plus optional lineage
-    pointers for the dashboard's evolution tree view. The dashboard
-    can promote a row to live by writing its ``short`` to the
-    ``ACTIVE_PROMPT_VERSION`` runtime-config key.
+    The GA was deleted on 2026-10-01 (its fitness never depended on the
+    prompt, and no strategy read a promoted genome). Nothing writes this
+    table; the model stays so the schema matches the migrations.
     """
 
     __tablename__ = "prompt_genomes"

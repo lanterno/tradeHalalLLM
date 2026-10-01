@@ -142,16 +142,6 @@ class TradingBot(BaseTradingBot):
             )
         self.screener = HalalScreener(repo, zoya)
 
-        # Optional adversarial co-bot for stocks. Off
-        # by default; flipped on via LLM_ADVERSARIAL_ENABLED.
-        attacker_llm = None
-        if getattr(self.settings.llm, "adversarial_enabled", False):
-            try:
-                attacker_llm = create_llm(self.settings)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("stocks adversarial LLM init failed: %s — disabling", exc)
-                attacker_llm = None
-
         # Strategy & executor
         strategy = TradingStrategy(
             llm,
@@ -161,17 +151,6 @@ class TradingBot(BaseTradingBot):
             daily_loss_limit=self.settings.stocks.daily_loss_limit,
             daily_return_target=self.settings.stocks.daily_return_target,
             max_simultaneous_positions=self.settings.stocks.max_simultaneous_positions,
-            attacker_llm=attacker_llm,
-            # Wave H follow-up: stocks-side agentic mode. Default off;
-            # ``agentic_hub`` stays None until the stocks bot grows its
-            # own InsightsHub (RAG + regime memory are DB-backed, so
-            # adding the hub is purely a composition-root change).
-            # When enabled with no hub, the handlers degrade gracefully
-            # to "not wired" messages.
-            agentic_enabled=self.settings.stocks.agentic_enabled,
-            agentic_max_turns=self.settings.stocks.agentic_max_turns,
-            agentic_max_seconds=self.settings.stocks.agentic_max_seconds,
-            agentic_hub=None,
         )
         # Operator alert on strategy-LLM credit exhaustion (rate-limited
         # by the sink). The classifier already had this; the strategy

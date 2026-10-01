@@ -17,7 +17,6 @@ from halal_trader.cli import insights as insights_cmd
 from halal_trader.cli import ledger as ledger_cmd
 from halal_trader.cli import llm_decisions as llm_decisions_cmd
 from halal_trader.cli import ml as ml_cmd
-from halal_trader.cli import prompts as prompts_cmd
 from halal_trader.cli import quant as quant_cmd
 from halal_trader.cli import recommend as recommend_cmd
 from halal_trader.cli import reconcile as reconcile_cmd
@@ -75,9 +74,6 @@ cli.add_command(recommend_cmd.recommend)
 
 # ── Quantitative range-model tools (advisory) ──────────────────
 cli.add_command(quant_cmd.quant)
-
-# ── Prompt evolution (Wave F) ──────────────────────────────────
-cli.add_command(prompts_cmd.prompts_group)
 
 # ── ML model artefacts (Wave K) ────────────────────────────────
 cli.add_command(ml_cmd.ml_group)
