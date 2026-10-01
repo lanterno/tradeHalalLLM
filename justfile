@@ -303,7 +303,10 @@ home-health:
         [ "$(docker inspect -f '{{{{.State.Status}}' "$c" 2>/dev/null)" = running ] \
             || { echo "$c not running"; exit 1; }
     done
-    curl -fsS --max-time 3 http://127.0.0.1:6010/api/health >/dev/null
+    # /api/health/bot is 503 unless the bot's process heartbeat (written to
+    # the DB every 60 s) is fresh -- a hung or crash-looping bot fails this
+    # even while its container reads "running".
+    curl -fsS --max-time 3 http://127.0.0.1:6010/api/health/bot >/dev/null
 
 # Last 100 lines from every service, no --follow (for callers that expect it to finish)
 home-logs:
