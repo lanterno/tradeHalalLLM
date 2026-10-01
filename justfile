@@ -240,3 +240,32 @@ home-backup dest:
     docker exec halal-trader-pg pg_dump -U trader -d halal_trader -Fc -f /tmp/home-backup.dump
     docker cp halal-trader-pg:/tmp/home-backup.dump "{{dest}}/halal_trader.dump"
     docker exec halal-trader-pg rm -f /tmp/home-backup.dump
+
+# Restore a home-backup dump into a scratch database, compare it with the live
+# one table by table, then drop it. Never touches halal_trader itself.
+# Usage: just restore-drill /path/to/halal_trader.dump
+restore-drill file:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    pg() { docker exec halal-trader-pg psql -U trader -tAq "$@"; }
+    pg -d postgres -c 'DROP DATABASE IF EXISTS restore_drill' -c 'CREATE DATABASE restore_drill'
+    trap 'pg -d postgres -c "DROP DATABASE IF EXISTS restore_drill" >/dev/null; docker exec halal-trader-pg rm -f /tmp/restore-drill.dump' EXIT
+    docker cp "{{file}}" halal-trader-pg:/tmp/restore-drill.dump
+    start=$(date +%s)
+    docker exec halal-trader-pg pg_restore -U trader -d restore_drill --no-owner --exit-on-error /tmp/restore-drill.dump
+    echo "restored in $(( $(date +%s) - start ))s"
+    printf '%-22s %12s %12s\n' table restored live
+    status=0
+    for t in alembic_version trades daily_pnl llm_decisions halal_cache broker_activities broker_equity heartbeats hb_outcome hb_belief_state; do
+        r=$(pg -d restore_drill -c "SELECT count(*) FROM $t" 2>/dev/null || echo missing)
+        l=$(pg -d halal_trader -c "SELECT count(*) FROM $t" 2>/dev/null || echo missing)
+        printf '%-22s %12s %12s\n' "$t" "$r" "$l"
+        # A table the live DB has must come back. Counts may differ: the live
+        # bot keeps writing after the dump was taken.
+        if [ "$r" = missing ] && [ "$l" != missing ]; then status=1; fi
+    done
+    rv=$(pg -d restore_drill -c 'SELECT version_num FROM alembic_version')
+    lv=$(pg -d halal_trader -c 'SELECT version_num FROM alembic_version')
+    echo "schema: restored $rv, live $lv"
+    [ "$rv" = "$lv" ] || { echo "SCHEMA MISMATCH"; status=1; }
+    exit $status

@@ -1,10 +1,34 @@
 # Backups + point-in-time recovery
 
-This is the project's backup architecture and the on-call's
-restore-drill procedure. Targets: **RPO ≤ 5 minutes**, **RTO ≤ 30
-minutes**. Treat this document as a runbook — when the operator
-needs to restore, they should be able to follow it without
-referencing other docs.
+## What actually runs today (2026-10-01)
+
+- **Nightly full dump.** The home stack's backup timer (03:00) runs
+  `just home-backup <dir>`: a `pg_dump -Fc` of the whole `halal_trader`
+  database (~250 MB) into a dated directory on the Windows side of the
+  machine, so it survives losing the WSL install.
+- **RPO ≈ 24 hours.** There is no WAL archiving; everything below the
+  "Target design" heading is not configured. Do not read the old
+  "RPO ≤ 5 minutes" figure as a fact about this deployment.
+- **The broker ledger is re-derivable.** `broker_activities` and
+  `broker_equity` are copies of Alpaca's own record; after a restore,
+  `halal-trader ledger sync` refills whatever the dump missed. The tables
+  that exist nowhere else are the bot's annotations: `trades` reasoning
+  and entry types, `daily_pnl` baselines, `llm_decisions`, the halal
+  cache and compliance tables, and the shadow's `hb_*` history.
+- **Restore drill:** `just restore-drill <dump>` restores into a scratch
+  database, compares table counts and schema revision with the live
+  database, and drops the scratch copy. First run 2026-10-01: a 1.3 GB
+  database restored in 27 s, every table and the Alembic revision matched.
+  Run it after any change to the backup path, and before going live.
+- **Before live capital (gate G1):** an hourly dump of the books (all
+  tables except the shadow's `hb_event_log` / `hb_belief_state`, which are
+  most of the size) or the WAL archiving described below, plus a drill.
+
+## Target design (not configured)
+
+The rest of this document is the WAL-archiving architecture to adopt before
+real capital is at risk. It was written as if it were in place; it is not.
+Targets for that design: **RPO ≤ 5 minutes**, **RTO ≤ 30 minutes**.
 
 > **Related runbooks.** A live database failure is the
 > [`db-connection-lost`](db-connection-lost.md) PAGE alert; a
