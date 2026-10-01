@@ -12,7 +12,13 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from halal_trader.core import events
-from halal_trader.core.heartbeat import STOCK_CYCLE, STOCK_MONITOR, STOCK_PROCESS, beat
+from halal_trader.core.heartbeat import (
+    STOCK_CYCLE,
+    STOCK_LEDGER,
+    STOCK_MONITOR,
+    STOCK_PROCESS,
+    beat,
+)
 from halal_trader.core.llm import create_llm
 from halal_trader.core.scheduler import BaseTradingBot
 from halal_trader.domain.ports import Broker, ComplianceScreener
@@ -797,6 +803,45 @@ class TradingBot(BaseTradingBot):
         await cycle_service.run_cycle()
         await beat(self._engine, STOCK_CYCLE)
 
+    async def sync_broker_ledger(self) -> None:
+        """After-close job: copy Alpaca's record into the ledger and check ours.
+
+        The broker's fills and equity are the books of truth
+        (execution/ledger.py). Today's fills are reconciled against the fills
+        this bot recorded; any difference alerts, because a fill the bot does
+        not know about is a position it is not managing.
+        """
+        from halal_trader.execution.alpaca_rest import AlpacaRestClient
+        from halal_trader.execution.ledger import reconcile_fills, sync_broker_ledger
+
+        if self._engine is None:
+            return
+        alpaca = self.settings.alpaca
+        try:
+            client = AlpacaRestClient(alpaca.api_key, alpaca.secret_key, paper=alpaca.paper_trade)
+        except ValueError as exc:
+            logger.warning("broker ledger sync skipped: %s", exc)
+            return
+        try:
+            await sync_broker_ledger(self._engine, client)
+            rec = await reconcile_fills(self._engine, today_eastern())
+        except Exception as exc:  # noqa: BLE001 -- the job must not take the bot down
+            logger.error("broker ledger sync failed: %r", exc)
+            await self._alerts.notify("ledger.sync_failed", repr(exc)[:500])
+            return
+        finally:
+            await client.aclose()
+        await beat(self._engine, STOCK_LEDGER, {"broker_fills": rec.broker_fills})
+        if rec.clean:
+            logger.info("broker ledger: %d fills today, books agree", rec.broker_fills)
+            return
+        lines = [
+            f"{d.symbol} {d.side}: broker {d.broker_qty:g} vs recorded {d.recorded_qty:g}"
+            for d in rec.drifts
+        ]
+        logger.warning("broker ledger drift on %s: %s", rec.day, "; ".join(lines))
+        await self._alerts.notify("ledger.fill_drift", f"{rec.day}: " + "; ".join(lines))
+
     async def end_of_day(self) -> None:
         """End-of-day job: close all positions, record P&L."""
         logger.info("=== END OF DAY ROUTINE ===")
@@ -1044,6 +1089,15 @@ class TradingBot(BaseTradingBot):
                 id="end_of_day",
                 replace_existing=True,
                 misfire_grace_time=1800,
+                coalesce=True,
+            )
+            # After the close, when the day's fills are final at the broker.
+            self.scheduler.add_job(
+                self.sync_broker_ledger,
+                CronTrigger(day_of_week="mon-fri", hour=16, minute=30, timezone=MARKET_TZ),
+                id="broker_ledger",
+                replace_existing=True,
+                misfire_grace_time=3600,
                 coalesce=True,
             )
             self.scheduler.add_job(

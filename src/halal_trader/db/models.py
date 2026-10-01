@@ -1,7 +1,7 @@
 """SQLModel table definitions and database initialization."""
 
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -713,6 +713,48 @@ class MlArtefact(SQLModel, table=True):
     sklearn_version: str = ""
     feature_hash: str = ""
     created_at: datetime = Field(
+        default_factory=lambda: datetime.now(UTC), sa_type=sa.DateTime(timezone=True)
+    )
+
+
+class BrokerActivity(SQLModel, table=True):
+    """Alpaca's own record of every account activity -- the ledger of truth.
+
+    Synced (insert-only, keyed by Alpaca's activity id) by
+    execution/ledger.py. Fills, fees, dividends and transfers all land here
+    as the broker reported them; the internal ``trades`` table is reconciled
+    against this, never the other way round.
+    """
+
+    __tablename__ = "broker_activities"
+
+    id: str = Field(primary_key=True)
+    activity_type: str = Field(index=True)
+    transaction_time: datetime = Field(index=True, sa_type=sa.DateTime(timezone=True))
+    symbol: str | None = Field(default=None, index=True)
+    side: str | None = None
+    qty: float | None = None
+    price: float | None = None
+    net_amount: float | None = None
+    order_id: str | None = None
+    raw: dict[str, Any] = Field(sa_column=sa.Column("raw", JSONB, nullable=False))
+
+
+class BrokerEquity(SQLModel, table=True):
+    """Daily closing account equity as Alpaca reports it (portfolio history).
+
+    The basis for performance measurement: returns, drawdown and Sharpe come
+    from here, not from the bot's own daily_pnl bookkeeping, which disagreed
+    with the broker by several points over the 2026 paper record.
+    """
+
+    __tablename__ = "broker_equity"
+
+    day: date = Field(primary_key=True)
+    equity: float
+    profit_loss: float
+    profit_loss_pct: float
+    synced_at: datetime = Field(
         default_factory=lambda: datetime.now(UTC), sa_type=sa.DateTime(timezone=True)
     )
 

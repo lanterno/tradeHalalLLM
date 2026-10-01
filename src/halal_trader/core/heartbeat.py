@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 STOCK_PROCESS = "stock.process"  # the bot's run loop is turning
 STOCK_CYCLE = "stock.cycle"  # a trading cycle finished (only during market hours)
 STOCK_MONITOR = "stock.monitor"  # the SL/TP monitor completed a tick
+STOCK_LEDGER = "stock.ledger"  # the after-close broker-ledger sync succeeded
 
 # How old a beat may get before the component counts as dead. Generous
 # multiples of each component's cadence, so a slow tick is not an alarm.
@@ -34,6 +35,7 @@ STALE_AFTER: dict[str, timedelta] = {
     STOCK_PROCESS: timedelta(minutes=3),  # beats every 60 s
     STOCK_MONITOR: timedelta(minutes=5),  # ticks every 30 s while it has work
     STOCK_CYCLE: timedelta(minutes=45),  # every 15 min, market hours only
+    STOCK_LEDGER: timedelta(days=4),  # once a trading day; spans a long weekend
 }
 
 _UPSERT = text(

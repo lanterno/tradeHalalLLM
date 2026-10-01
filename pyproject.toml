@@ -147,6 +147,13 @@ files = [
     "src/halal_trader/web",
     # New engine — strict-clean from day one (re-architecture).
     "src/halabot",
+    # Target-layout packages (docs/MODERNIZATION_PLAN.md): strict from day one.
+    "src/halal_trader/execution",
+    "src/halal_trader/signals",
+    "src/halal_trader/portfolio",
+    # Already strict-clean when measured on 2026-10-01; gated so they stay so.
+    "src/halal_trader/quant",
+    "src/halal_trader/mcp",
 ]
 ignore_missing_imports = true
 warn_redundant_casts = true

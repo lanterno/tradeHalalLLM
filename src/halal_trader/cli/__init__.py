@@ -14,6 +14,7 @@ from halal_trader.cli import db as db_cmd
 from halal_trader.cli import halal as halal_cmd
 from halal_trader.cli import halt as halt_cmd
 from halal_trader.cli import insights as insights_cmd
+from halal_trader.cli import ledger as ledger_cmd
 from halal_trader.cli import llm_decisions as llm_decisions_cmd
 from halal_trader.cli import ml as ml_cmd
 from halal_trader.cli import prompts as prompts_cmd
@@ -52,6 +53,9 @@ cli.add_command(db_cmd.db_group)
 cli.add_command(halt_cmd.halt)
 cli.add_command(halt_cmd.resume)
 cli.add_command(halt_cmd.halt_status)
+
+# ── Broker ledger (the books of truth) ─────────────────────────
+cli.add_command(ledger_cmd.ledger)
 
 # ── Reconciliation ─────────────────────────────────────────────
 # Now a Click group: `reconcile check {market}` + `reconcile fix-orphans`

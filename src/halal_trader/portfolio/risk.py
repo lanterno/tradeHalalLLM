@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from typing import Any
 
 import numpy as np
 
@@ -59,7 +60,7 @@ class PortfolioRiskEngine:
     def evaluate(
         self,
         klines_by_symbol: dict[str, list[Kline]],
-        indicators_cache: dict[str, dict],
+        indicators_cache: dict[str, dict[str, Any]],
         open_positions_value: dict[str, float],
         unrealized_pnl: dict[str, float],
         total_equity: float,
@@ -161,7 +162,7 @@ class PortfolioRiskEngine:
                     values.append(corr_matrix[a][b])
         return float(np.mean(values)) if values else 0.0
 
-    def _adaptive_corr_threshold(self, indicators_cache: dict[str, dict]) -> float:
+    def _adaptive_corr_threshold(self, indicators_cache: dict[str, dict[str, Any]]) -> float:
         """Tighten the correlation cutoff when realised vol runs hot.
 
         Static thresholds (the legacy 0.7) over-restrict during calm
@@ -181,7 +182,7 @@ class PortfolioRiskEngine:
             for ind in indicators_cache.values()
             if not ind.get("error")
         ]
-        atrs = [a for a in atrs if a and a > 0]
+        atrs = [float(a) for a in atrs if a and a > 0]
         if not atrs:
             return self._high_corr_threshold
 
@@ -197,7 +198,7 @@ class PortfolioRiskEngine:
 
     def _compute_adjusted_sizing(
         self,
-        indicators_cache: dict[str, dict],
+        indicators_cache: dict[str, dict[str, Any]],
         corr_matrix: dict[str, dict[str, float]],
         open_symbols: list[str],
     ) -> dict[str, float]:
@@ -213,7 +214,8 @@ class PortfolioRiskEngine:
 
             pct = self._base_max_position_pct
 
-            atr_pct = indicators.get("atr_pct", indicators.get("atr_14", 0))
+            raw_atr = indicators.get("atr_pct", indicators.get("atr_14", 0))
+            atr_pct = float(raw_atr) if raw_atr is not None else 0.0
             if atr_pct > 0 and self._atr_baseline > 0:
                 vol_scale = min(2.0, max(0.3, self._atr_baseline / atr_pct))
                 pct *= vol_scale
