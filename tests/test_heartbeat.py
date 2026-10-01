@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -58,7 +58,22 @@ def test_staleness_follows_each_components_cadence() -> None:
 
 
 @pytest.fixture
-def client(database_url: str, tmp_path, monkeypatch: pytest.MonkeyPatch):  # type: ignore[no-untyped-def]
+def market_open(monkeypatch: pytest.MonkeyPatch) -> dict[str, bool]:
+    """Pin market state (default: closed) so liveness doesn't depend on when tests run."""
+    from datetime import time as dtime
+
+    import halal_trader.market_hours as mh
+
+    state = {"open": False}
+    monkeypatch.setattr(mh, "is_market_open_local", lambda: state["open"])
+    monkeypatch.setattr(
+        mh, "now_eastern", lambda: datetime.combine(date(2026, 10, 1), dtime(14, 0), mh.MARKET_TZ)
+    )
+    return state
+
+
+@pytest.fixture
+def client(database_url: str, tmp_path, monkeypatch: pytest.MonkeyPatch, market_open):  # type: ignore[no-untyped-def]
     from halal_trader.web import app as web_app
 
     monkeypatch.setenv("LOG_DIR", str(tmp_path / "logs"))
@@ -119,3 +134,51 @@ async def test_monitor_reports_each_completed_tick(monkeypatch: pytest.MonkeyPat
     await mon._run_loop()
 
     assert ticks == [{"market_open": True, "open_trades": 0}]
+
+
+# ── the liveness verdict ──────────────────────────────────────────────
+
+
+NOW = datetime(2026, 10, 1, 15, 0, tzinfo=UTC)
+
+
+def _beats(**ages_min: float) -> dict[str, Beat]:
+    names = {"process": STOCK_PROCESS, "cycle": STOCK_CYCLE}
+    return {names[k]: Beat(names[k], NOW - timedelta(minutes=v), None) for k, v in ages_min.items()}
+
+
+@pytest.mark.parametrize(
+    ("beats", "cycles_due", "alive"),
+    [
+        ({}, False, False),  # never beat
+        ({"process": 10}, False, False),  # process dead
+        ({"process": 1}, False, True),  # off-hours: process is enough
+        ({"process": 1, "cycle": 600}, False, True),  # yesterday's cycle is fine off-hours
+        ({"process": 1, "cycle": 600}, True, False),  # market open, no recent cycle: hung
+        ({"process": 1}, True, False),  # market open, never cycled
+        ({"process": 1, "cycle": 10}, True, True),  # market open, cycling
+    ],
+)
+def test_bot_liveness_verdict(beats: dict, cycles_due: bool, alive: bool) -> None:
+    from halal_trader.core.heartbeat import bot_liveness
+
+    verdict, reason = bot_liveness(_beats(**beats), now=NOW, cycles_due=cycles_due)
+
+    assert verdict is alive
+    assert (reason is None) is alive  # a dead verdict always says why
+
+
+def test_a_hung_cycle_during_market_hours_is_a_dead_bot(
+    client: TestClient, database_url: str, market_open: dict[str, bool]
+) -> None:
+    market_open["open"] = True
+    _beat_now(database_url, STOCK_PROCESS)  # the process is turning...
+    _beat_now(database_url, STOCK_CYCLE, minutes_ago=60)  # ...but no cycle for an hour
+
+    r = client.get("/api/health/bot")
+
+    assert r.status_code == 503
+    assert "trading cycle" in r.json()["bot"]["_verdict"]["reason"]
+
+    _beat_now(database_url, STOCK_CYCLE)
+    assert client.get("/api/health/bot").status_code == 200

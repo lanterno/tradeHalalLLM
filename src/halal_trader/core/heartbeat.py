@@ -93,3 +93,26 @@ async def read_beats(engine: AsyncEngine) -> dict[str, Beat]:
     async with engine.connect() as conn:
         rows = await conn.execute(text("SELECT component, beat_at, detail FROM heartbeats"))
         return {r.component: Beat(r.component, r.beat_at, r.detail) for r in rows}
+
+
+def bot_liveness(
+    beats: dict[str, Beat], *, now: datetime, cycles_due: bool
+) -> tuple[bool, str | None]:
+    """Is the stock bot alive and working? ``(alive, reason-if-not)``.
+
+    Alive means the process heartbeat is fresh -- and, when trading cycles
+    are due (market open long enough for one to have run), that a cycle has
+    completed recently. The second part catches a cycle that hangs: the
+    process keeps beating while no trading happens, which a cancelling
+    deadline would "fix" at the risk of an order placed but never recorded.
+    """
+    process = beats.get(STOCK_PROCESS)
+    if process is None:
+        return False, "no process heartbeat on record"
+    if process.is_stale(now):
+        return False, f"process heartbeat stale ({process.age(now)} old)"
+    if cycles_due:
+        cycle = beats.get(STOCK_CYCLE)
+        if cycle is None or cycle.is_stale(now):
+            return False, "no trading cycle completed in the last 45 min of market hours"
+    return True, None

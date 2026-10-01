@@ -5,6 +5,7 @@ import fcntl
 import logging
 import os
 import signal
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
@@ -1006,6 +1007,42 @@ class TradingBot(BaseTradingBot):
 
     # ── Main Loop ───────────────────────────────────────────────
 
+    async def _supervise(
+        self,
+        name: str,
+        run: Callable[[], Awaitable[None]],
+        *,
+        backoff_s: float = 5.0,
+    ) -> None:
+        """Run a long-lived component; restart it if it crashes or returns.
+
+        The SL/TP monitor and the news reactor used to be bare create_task()s:
+        an exception that escaped either one ended it silently while the bot
+        kept trading -- with no stop-loss enforcement in the monitor's case.
+        Cancellation (shutdown) passes through; anything else alerts and
+        restarts after a short backoff.
+        """
+        while self._running:
+            try:
+                await run()
+                if not self._running:
+                    return
+                reason = "returned unexpectedly"
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 -- the whole point is to survive it
+                reason = f"crashed: {type(exc).__name__}: {exc}"
+                logger.exception("%s %s -- restarting in %.0fs", name, reason, backoff_s)
+            else:
+                logger.error("%s %s -- restarting in %.0fs", name, reason, backoff_s)
+            try:
+                await self._alerts.notify(
+                    f"supervisor.{name.replace(' ', '_')}", f"Stock bot {name} {reason}"
+                )
+            except Exception as alert_err:  # noqa: BLE001
+                logger.warning("supervisor alert failed: %r", alert_err)
+            await asyncio.sleep(backoff_s)
+
     def _install_signal_handlers(self, loop: asyncio.AbstractEventLoop) -> None:
         """Turn SIGTERM / SIGINT into a clean stop of the run loop.
 
@@ -1152,14 +1189,16 @@ class TradingBot(BaseTradingBot):
             # ``enabled`` check short-circuits the loop when disabled.
             if self._news_reactor is not None and self._news_reactor.enabled:
                 self._news_reactor_task = asyncio.create_task(
-                    self._news_reactor.run(), name="stocks-news-reactor"
+                    self._supervise("news reactor", self._news_reactor.run),
+                    name="stocks-news-reactor",
                 )
 
             # Spawn the intra-cycle position monitor (SL/TP + trailing
             # stops). Runs alongside the scheduler; cancelled in shutdown.
             if self._monitor is not None:
                 self._monitor_task = asyncio.create_task(
-                    self._monitor.run(), name="stock-position-monitor"
+                    self._supervise("position monitor", self._monitor.run),
+                    name="stock-position-monitor",
                 )
                 logger.info(
                     "Stock position monitor spawned (check every %.0fs)",
