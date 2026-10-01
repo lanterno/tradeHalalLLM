@@ -24,9 +24,25 @@ throughput, not review.
   money, choosing a model/provider, or a destructive/irreversible op. Otherwise
   proceed.
 - **Hard invariants that override all of the above** (never violate for
-  throughput): paper/testnet only — never real money; halal compliance is
-  non-negotiable (long-only, no short/interest/leverage/derivatives); never
-  destabilize the live bot; the `src/halabot` engine never trades (see below).
+  throughput): paper only until a strategy passes the written capital gates
+  (below); halal compliance is non-negotiable (long-only, no short/interest/
+  leverage/derivatives); never destabilize the live bot; the `src/halabot`
+  engine never trades (see below).
+
+## Direction (decided 2026-10-01)
+
+- **Halal stock trading is the product and is being developed full-time**;
+  the refactor aims to *improve* it (edge, universe, execution), not only
+  harden it. The roadmap and the decisions behind it are in the local-only
+  `docs/MODERNIZATION_PLAN.md` (§9); see CLAUDE.md for why it isn't committed.
+- **Crypto trading is abandoned**; its code is deleted.
+- **Real capital only through staged, pre-signed gates** (paper → small live →
+  scale; thresholds in the plan). Until the first gate is signed, everything
+  stays paper. A live account would be a cash account (no margin).
+- **Free or cheap services first**, paid upgrades only when evidence shows
+  they are the binding constraint.
+- **Single developer, no PR process**: commit straight to `main`; the
+  pre-commit hook and CI are the gate.
 
 ## Trading strategy direction (stocks): **fast in, slow out**
 

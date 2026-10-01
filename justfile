@@ -13,97 +13,16 @@ dev:
 
 # ── Stock bot ─────────────────────────────────────────────
 
-# Start stock trading bot (caffeinate -i = no idle sleep / App Nap)
+# Start the stock trading bot in the foreground (the deployed bot runs in
+# docker via home-up; use this only with the fleet's trader-stocks stopped --
+# two bots on one account will fight)
 stocks:
-    caffeinate -dimsu uv run halal-trader start
+    uv run halal-trader start
 
-# Run a single stock trading cycle
+# Run a single stock trading cycle. CAUTION: today this also runs the
+# end-of-day flatten, closing every position on the account (plan 1.11).
 stocks-once:
     uv run halal-trader start --once
-
-# Show Alpaca account and positions
-status:
-    uv run halal-trader status
-
-# ── launchd (macOS auto-start + auto-restart) ─────────────
-
-# Install stocks + watchdog only (default; enable crypto separately when ready)
-launchd-install:
-    @mkdir -p ~/Library/LaunchAgents logs
-    cp infra/launchd/com.halabot.stocks.plist ~/Library/LaunchAgents/
-    cp infra/launchd/com.halabot.watchdog.plist ~/Library/LaunchAgents/
-    -launchctl bootout "gui/$(id -u)/com.halabot.stocks" 2>/dev/null
-    -launchctl bootout "gui/$(id -u)/com.halabot.watchdog" 2>/dev/null
-    launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.halabot.stocks.plist
-    launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.halabot.watchdog.plist
-    @echo "Installed stocks + watchdog. (Crypto stays disabled — run \`just launchd-enable-crypto\` to turn it on.)"
-
-# Install ALL three agents (stocks + crypto + watchdog) — needs Binance creds in .env
-launchd-install-all:
-    @mkdir -p ~/Library/LaunchAgents logs
-    cp infra/launchd/com.halabot.stocks.plist ~/Library/LaunchAgents/
-    cp infra/launchd/com.halabot.crypto.plist ~/Library/LaunchAgents/
-    cp infra/launchd/com.halabot.watchdog.plist ~/Library/LaunchAgents/
-    -launchctl bootout "gui/$(id -u)/com.halabot.stocks" 2>/dev/null
-    -launchctl bootout "gui/$(id -u)/com.halabot.crypto" 2>/dev/null
-    -launchctl bootout "gui/$(id -u)/com.halabot.watchdog" 2>/dev/null
-    launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.halabot.stocks.plist
-    launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.halabot.crypto.plist
-    launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.halabot.watchdog.plist
-    @echo "Installed stocks + crypto + watchdog."
-
-# Enable + start the read-only re-architecture shadow engine (halabot)
-launchd-enable-shadow:
-    @mkdir -p ~/Library/LaunchAgents logs
-    cp infra/launchd/com.halabot.shadow.plist ~/Library/LaunchAgents/
-    -launchctl bootout "gui/$(id -u)/com.halabot.shadow" 2>/dev/null
-    launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.halabot.shadow.plist
-    @echo "Shadow engine enabled (read-only; logs shadow proposals, never trades)."
-
-# Stop the shadow engine (plist stays on disk)
-launchd-disable-shadow:
-    -launchctl bootout "gui/$(id -u)/com.halabot.shadow"
-    @echo "Shadow engine disabled."
-
-# Enable + start the crypto agent (needs Binance creds in .env)
-launchd-enable-crypto:
-    cp infra/launchd/com.halabot.crypto.plist ~/Library/LaunchAgents/
-    -launchctl bootout "gui/$(id -u)/com.halabot.crypto" 2>/dev/null
-    launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.halabot.crypto.plist
-    @echo "Crypto agent enabled."
-
-# Bootout the crypto agent (keeps plist on disk — re-enable with launchd-enable-crypto)
-launchd-disable-crypto:
-    -launchctl bootout "gui/$(id -u)/com.halabot.crypto"
-    @echo "Crypto agent disabled. Plist stays at ~/Library/LaunchAgents/com.halabot.crypto.plist."
-
-# Remove the launchd agents
-launchd-uninstall:
-    -launchctl bootout "gui/$(id -u)/com.halabot.stocks"
-    -launchctl bootout "gui/$(id -u)/com.halabot.crypto"
-    -launchctl bootout "gui/$(id -u)/com.halabot.watchdog"
-    rm -f ~/Library/LaunchAgents/com.halabot.stocks.plist
-    rm -f ~/Library/LaunchAgents/com.halabot.crypto.plist
-    rm -f ~/Library/LaunchAgents/com.halabot.watchdog.plist
-    @echo "Removed."
-
-# Restart just the stocks agent
-launchd-restart-stocks:
-    launchctl kickstart -k "gui/$(id -u)/com.halabot.stocks"
-
-# Restart just the crypto agent
-launchd-restart-crypto:
-    launchctl kickstart -k "gui/$(id -u)/com.halabot.crypto"
-
-# Show launchd agent status + pids
-launchd-status:
-    @launchctl print "gui/$(id -u)/com.halabot.stocks" 2>/dev/null | grep -E 'state|pid|last exit' || echo "stocks: not loaded"
-    @launchctl print "gui/$(id -u)/com.halabot.crypto" 2>/dev/null | grep -E 'state|pid|last exit' || echo "crypto: not loaded"
-    @launchctl print "gui/$(id -u)/com.halabot.watchdog" 2>/dev/null | grep -E 'state|pid|last exit' || echo "watchdog: not loaded"
-
-# Run the dead-man-switch watchdog once (smoke test)
-watchdog:
-    uv run halal-trader watchdog --any-time --dry-run
 
 # ── Info ──────────────────────────────────────────────────
 

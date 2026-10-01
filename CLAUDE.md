@@ -4,97 +4,77 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-LLM-powered halal day-trading bot for **stocks** (Alpaca paper trading via MCP) and **crypto** (Binance testnet/prod). Python 3.14+, managed with `uv`. Single-user, paper/testnet only — never real money.
+LLM-powered halal day-trading bot for **US stocks** (Alpaca paper trading via MCP). Python 3.14+, managed with `uv`. Single developer, working directly on `main`. Paper only, until a strategy passes the written capital gates (see below).
 
-**Read `docs/OPERATOR_CONTEXT.md` first.** It holds the non-code-derivable context any session needs: the working agreement (dev mode — work directly on `main`, autonomous, commit at green checkpoints, surface only operator-only decisions), the stocks strategy intent (**fast in, slow out**), why the sole LLM provider is GLM-5.2 via OpenRouter (don't undo it — the bot won't start without `GLM_API_KEY`), open **operator-gated** issues you can't fix in code (Zoya sandbox → tiny random universe drives symbol fixation; ~100% reconcile drift is ledger-only and the fix-drift tool is destructive/operator-gated — don't touch `_aggregate_stocks_positions`), and hard-won `src/halabot` engineering lessons (validate every edge with `halabot backtest` on disjoint OOS windows; conviction is already near-optimal; the engine is shadow-only and never trades).
+**Crypto trading was abandoned on 2026-10-01** and its code deleted. The `crypto_*` tables remain in the schema until an operator-gated migration drops them; nothing writes to them.
+
+**Read `docs/OPERATOR_CONTEXT.md` first.** It holds the non-code-derivable context: the working agreement, the stocks strategy intent (**fast in, slow out**), why the sole LLM provider is GLM-5.2 via OpenRouter (don't undo it; the bot won't start without `GLM_API_KEY`), operator-gated issues you can't fix in code (Zoya sandbox, reconcile drift and the destructive fix-drift tool; don't touch `_aggregate_stocks_positions`), and the `src/halabot` engineering lessons (validate every edge with `halabot backtest` on disjoint OOS windows; the engine is shadow-only and never trades).
+
+The roadmap is `docs/MODERNIZATION_PLAN.md` with its evidence in `docs/assessment/2026-10-01/`. Both are **kept local on purpose and not committed**: the repo is public and they map open weaknesses. Read them, update them, but don't `git add` them.
 
 ## Common commands
 
-Use the `justfile` recipes (each wraps `uv run halal-trader …`). `just` with no args lists recipes.
-
 ```bash
-just install            # uv sync
-just dev                # uv sync --extra dev --extra all  (ml + sentiment + dashboard)
-just test               # pytest (asyncio_mode=auto, testpaths=tests)
-just lint               # ruff check src/ tests/
-just format             # ruff format + ruff check --fix
-just typecheck          # mypy (strict on domain/ + core/ only)
-just precommit          # run all pre-commit hooks against every tracked file
-just precommit-install  # one-time: wire pre-commit into .git/hooks/
+just dev                # uv sync --extra dev --extra all
+just test               # pytest (needs Postgres on localhost:5433; see Database)
+just lint / just format # ruff (one version: the lock's, also used by the pre-commit hook)
+just typecheck          # mypy strict over the gated packages (pyproject [tool.mypy] files)
+just precommit          # every pre-commit hook over every tracked file
 
-# Stocks
-just stocks             # halal-trader start  (APScheduler, market hours)
-just stocks-once        # halal-trader start --once
-just status             # halal-trader status
-
-# Crypto (24/7 asyncio loop)
-just crypto             # halal-trader crypto start
-just crypto-once        # halal-trader crypto start --once
-just crypto-status      # Binance balances + ticker prices
-just crypto-stats       # win rate / profit factor / drawdown
-just crypto-screen      # refresh CoinGecko-based halal list
-
-just dashboard          # FastAPI + React SPA on :8082 (serves dashboard/dist)
-just logs / logs-tail   # pretty-print JSON log files (cycle_id + event tags)
-just pg-up / pg-down    # bring the Postgres+pgvector container up/down (port 5433)
-just db-reset           # ⚠ DROP+CREATE halal_trader and re-run migrations
-just test-db-reset      # drop the test database (safe; recreated by next pytest run)
+# The deployed fleet (runs as part of the ~/lab/home stack)
+just home-up            # postgres + migrate + stocks + shadow + web, in docker
+just home-down / home-build / home-logs / home-health / home-backup <dir>
+just docker-logs [svc]  # follow one service (default trader-stocks)
 
 # Operator
-halal-trader halt --reason "..."     # engage kill-switch (bots refuse new entries)
-halal-trader resume                  # disengage kill-switch
-halal-trader halt-status             # show current state + last audit row
-halal-trader db migrate              # apply pending Alembic revisions
-halal-trader db current              # show current vs head revision
-halal-trader db stamp head           # one-time adopt a pre-Alembic DB
+halal-trader halt --reason "..."   # kill-switch: bots refuse new entries (monitor still exits)
+halal-trader resume / halt-status
+halal-trader db migrate | current | stamp head | revision -m "..."
+halal-trader recommend [--show|--scorecard]   # advisory daily pick, never trades
+halabot backtest ... / halabot ab-report      # shadow engine research tools
 ```
 
-**Database**: Postgres 16 + pgvector. Bring up the container with `just pg-up` (uses `infra/docker-compose.yml`); the bot connects to `localhost:5433` per `DATABASE_URL` in `.env.example`. The test suite uses a separate `halal_trader_test` database that `tests/conftest.py` recreates per session and TRUNCATEs per test — running tests requires the same Postgres container reachable on `localhost:5433`.
+Every compose recipe goes through `home_compose` in the justfile: the project name pinned to `infra` (that keeps the live `infra_pg-data` volume attached) with `infra/compose.home.yml` layered on (dashboard on `127.0.0.1:6010`, Postgres on `127.0.0.1:5433`). Never run `docker compose` on the base file alone: it recreates the live containers with both ports on every interface.
 
-Run a single test file/case: `uv run pytest tests/test_crypto_executor.py -k test_name`.
+**Database**: Postgres 16 + pgvector, Alembic is the single schema authority (`init_db()` refuses to start on a wrong revision; it never runs DDL). Tests use per-worker `halal_trader_test*` databases on the same server. `tests/conftest.py` refuses any database name that isn't disposable, runs tests without the operator's `.env` (`HALAL_TRADER_ENV_FILE`), and blocks outbound network (`TEST_ALLOW_NETWORK=1` to opt out once).
 
-Backtest: `uv run halal-trader crypto backtest --pair BTCUSDT --candles 1000 [--llm --cycle-interval 5]`. The `--llm` mode caches results in `models/llm_backtest_cache.json` keyed by prompt hash, so repeated runs skip LLM calls.
-
-Dashboard frontend: `cd dashboard && npm install && npm run build` (Vite output goes to `dashboard/dist`, which `web/app.py` serves). `npm run dev` for hot reload.
-
-DB migrations: Alembic is the single schema authority. `init_db()` opens the engine and verifies the DB is at head; it never runs DDL. Use `halal-trader db migrate` (forwards), `halal-trader db current` (status), `halal-trader db stamp head` (one-time adoption of a pre-Alembic DB), `halal-trader db revision -m "..."` (new migration). The bot refuses to start with `SchemaError` if the DB is at the wrong revision.
+Dashboard frontend: `cd dashboard && npm install && npm run build` (served from `dashboard/dist` by `web/app.py`); `npm run dev` for hot reload.
 
 ## Architecture
 
-Authoritative diagrams + tables live in `docs/ARCHITECTURE.md`. Key points that span multiple files:
+Authoritative diagrams: `docs/ARCHITECTURE.md` (partly pre-dates the crypto removal; trust the code).
 
-**Two parallel bots, shared infrastructure.** The stock bot (`trading/`) and crypto bot (`crypto/`) are independent composition roots that both extend `core/scheduler.py:BaseTradingBot`. They share the LLM abstraction (`core/llm/`), DB layer (`db/`), domain models/ports (`domain/`), and `Settings` (`config.py`). Don't merge their cycle logic — they have very different cadences (15min cron vs 60s asyncio loop) and execution paths (Alpaca MCP subprocess vs `python-binance` async REST + WebSocket).
+**One live bot, one shadow engine, one dashboard; three containers, one database.** `trading/scheduler.py:TradingBot` (APScheduler cron, 15-min cycles in market hours) drives `TradingCycleService` → `TradingStrategy` (one GLM tool call) → `TradeExecutor` (Alpaca via the MCP stdio subprocess). Between cycles, `StockPositionMonitor` enforces SL/TP and trailing stops every 30 s, and `StockNewsEventReactor` can place half-size "fast in" momentum entries. `src/halabot` runs alongside as `halabot shadow` and only logs proposals. The web (`web/app.py`) is a separate process: **the database is the only contract between them**. In-process state (`RuntimeView`, `InsightsHub`, `EventBus`) does not reach the web.
 
-**Hex-ish layering.** `domain/ports.py` defines `Protocol`s (Broker, LLMProvider, ComplianceScreener, …); concrete adapters live under `mcp/` (Alpaca MCP stdio client), `crypto/exchange.py` (Binance), `core/llm/` (GLM-5.2 over OpenAI-compatible endpoints + `FallbackLLM` chain), `halal/` (Zoya), `crypto/screener.py` (CoinGecko). When adding a provider, implement the port — don't import concrete classes into cycle/strategy code.
+**Hex-ish layering.** `domain/ports.py` holds the Protocols (`Broker`, `ComplianceScreener`, `LLMBackend`, …); adapters live in `mcp/` (Alpaca), `halal/` (Zoya + cache), `core/llm/` (GLM). Shared maths lives in `signals/` (indicators, multi-timeframe) and `portfolio/` (risk engine, performance analytics).
 
-**Crypto cycle = `CryptoCycleService.run_cycle()`** in `crypto/cycle.py`. Each cycle: refresh symbol filters → check `PortfolioTracker.should_halt_trading()` → fetch halal pairs → pull klines (throttled, 5 concurrent) via WebSocket buffer → compute indicators → run `PortfolioRiskEngine` (correlation/heat/drawdown) → call LLM with the full prompt context (see ARCHITECTURE.md "What the LLM Receives") → regime gate → `CryptoExecutor.execute_plan()` → snapshot indicators for filled buys. The whole cycle is wrapped in `asyncio.wait_for(interval * 2)` so a stuck cycle doesn't block the bot.
+**Single LLM provider: GLM-5.2** via `core/llm/factory.py:create_llm`, OpenAI-compatible (OpenRouter by default; `FallbackLLM` chains a second endpoint if `GLM_FALLBACK_BASE_URL` is set). Strips `<think>…</think>`. A tool call with unparseable arguments, or missing the schema's required keys, is a **failed** call recorded as such, never a silent empty plan.
 
-**Position monitor is independent of the cycle.** `crypto/monitor.py:PositionMonitor` runs as a background task every `crypto_monitor_interval` seconds (default 2s), enforcing SL/TP/trailing stops via WebSocket prices. It coordinates with the executor via a shared `exiting_pairs` set to prevent concurrent buy/sell on the same pair. After closing a trade, it calls `retrainer.on_trade_closed()` to label the indicator snapshot for ML training. **Don't put SL/TP enforcement in the cycle** — the cycle's cadence is too slow.
+## Invariants (pinned by `tests/invariants/`)
 
-**News reactor can preempt the cycle.** `sentiment/events.py:NewsEventReactor` polls CryptoPanic every 30s; on a high-impact event, it triggers an emergency mini-cycle outside the normal loop. Be mindful of this when adding state that assumes cycles run on a fixed cadence.
-
-**Single LLM provider: GLM-5.2.** There is no provider switch anymore. `core/llm/factory.py:create_llm(settings)` builds a `GLMLLM` (`core/llm/glm.py`) that speaks OpenAI-compatible endpoints — OpenRouter by default (`GLM_API_KEY` + `GLM_BASE_URL`, model `LLM_MODEL=z-ai/glm-5.2`). If `GLM_FALLBACK_BASE_URL` (+ `GLM_FALLBACK_MODEL`/`GLM_FALLBACK_API_KEY`) is set, the primary is wrapped in `FallbackLLM`, which chains the two GLM endpoints (e.g. OpenRouter primary, Z.ai direct fallback; exponential backoff 60s→30min after all fail). The endpoint strips `<think>…</think>` reasoning blocks — keep that behavior when adding a new endpoint.
-
-**Self-improvement.** After each crypto cycle, `crypto/self_improve.py` lets the LLM tune `max_position_pct`, `stop_loss_pct`, `take_profit_pct` within bounded ranges. Changes below `1e-6` are silently dropped. Records `StrategyAdjustment` rows.
-
-**ML retraining loop.** Buys record an `IndicatorSnapshot` (RSI, MACD, volume ratio, ATR, BB position). When the position closes, `ml/retrainer.py:RetrainingScheduler.on_trade_closed()` labels the snapshot with `return_pct` and (every 20 trades) retrains the IsolationForest anomaly detector + signal classifier. The anomaly detector also supports incremental updates (`add_sample` / `auto_train`) — don't re-read the full DB on every cycle.
+- **Halal at the order boundary.** Every BUY passes `TradeExecutor._execute_buy`, which refuses any symbol the screener does not hold halal and **fails closed** if the screen can't be read. The prompt's symbol list is advisory; this gate is the rule. Every new order path must go through it.
+- **Long-only.** No short action exists; sells are clamped to the broker-held quantity (`core/long_only.py`).
+- **Kill-switch first.** `BaseCycleService.run_cycle` checks `core/halt.is_halted` before anything else; the reactor checks it too.
+- **Reactor entries obey the cycle's gates**: daily loss limit, the risk engine's last halt, max simultaneous positions. All fail closed.
+- **Daily loss limit is anchored to the day's first equity** (`daily_pnl`), not to whatever equity a restarted process sees.
+- **halabot execution stays dormant** (`tests/halabot/execution/test_dormant.py`; keep `ENGINE_LIVE` unset).
+- **The stock process never loads `binance`** (`tests/test_no_crypto_imports.py`).
 
 ## Conventions / gotchas
 
-- **Settings are a singleton.** `config.py:get_settings()` caches a `Settings()` instance. Don't construct `Settings` directly elsewhere — pass `settings` via DI.
-- **DB connection.** `Settings.database_url` is the canonical async URL (asyncpg); `Settings.database_url_sync()` derives the matching `+psycopg` URL for Alembic / sync admin scripts. Never hardcode a URL — always go through `get_settings()`.
-- **Async repository.** `db/repository.py` is fully async; `Repository(engine)` is constructed once in `BaseTradingBot.initialize()` and shared. Don't open new engines per cycle.
-- **Three logger sinks.** `logging.py` configures Rich console + JSON `logs/halal_trader.log` (rotated) + `logs/error.log`. The `just logs*` recipes parse the JSON format via `scripts/format_logs.py` — don't switch to plain-text logging without updating those.
-- **Structured event logging.** Use `extra={"event": events.X, ...}` with constants from `core/events.py`. `cycle_id`/`monitor_id`/`request_id` ContextVars in `core/observability.py` are auto-attached to every JSON record by `ObservabilityFilter`. `BaseCycleService.run_cycle()` already wraps each cycle in `cycle_context()` — don't manage these manually unless you're starting a sub-scope (e.g. per-trade `monitor_context()` in `crypto/monitor.py`).
-- **Operator alerts.** Errors that need human attention go through `AlertSink.notify(error_type, details)` in `notifications/telegram.py`, NOT directly via `notifier.notify_error`. The sink rate-limits per `error_type` (15-min sliding window). The cycle's `cycle.failed` exception path already fires it; surface new failure modes by adding an `extra={"event": ...}` log + a sink call site.
-- **Kill-switch is a first-class gate.** `BaseCycleService.run_cycle` checks `core/halt.is_halted(engine)` BEFORE any other logic. Use `halal-trader halt --reason "..."` to engage; the monitor's per-trade SL/TP loop still runs (closing risk is preferred to holding under failure).
-- **Fill confirmation.** `core/fills.py:confirm_binance` (immediate-fill response parser) and `confirm_alpaca` (poll loop) populate `submitted_at`/`filled_at`/`filled_price`/`filled_quantity` on every trade row. Don't conflate `submitted` with `filled` anywhere downstream — `core/reconcile.py` aggregates filled quantities only.
-- **CLI lazy-imports.** Heavy modules (binance, fastapi, ml) are imported inside command functions in `cli.py` so `--help` stays fast. Keep that pattern when adding commands.
-- **Halal compliance is non-negotiable.** Every new tradable asset path must go through the relevant screener (Zoya for stocks, `crypto/screener.py` for crypto). See `.cursor/rules/project-strategy.mdc`.
-- **Optional extras.** `[ml]`, `[sentiment]`, `[dashboard]`, `[fingpt]` extras gate their respective imports. Code that uses them must degrade gracefully when the extras aren't installed (see `cli.py:dashboard` for the pattern).
-- **Binance error codes.** `-1013` (invalid quantity) and `-2010` (insufficient balance) are treated as rejections, NOT circuit-breaker errors. `-1003` triggers ~30s rate-limit backoff. The per-pair circuit breaker is for *unexpected* errors only.
-- **Min buy notional is $50.** Below that the executor refuses the order. Many tests assume this — don't lower it without checking `tests/test_crypto_executor.py`.
+- **Settings are a singleton** (`config.py:get_settings()`); pass `settings` by DI, never construct `Settings` elsewhere. Every field must be documented in `.env.example` and `.env.stocks.example` (`tests/test_settings_parity.py`).
+- **The broker server is frozen.** The image runs alpaca-mcp-server from `infra/alpaca-mcp-server.txt`, an exact `pip freeze` installed at build time; host runs use `uvx alpaca-mcp-server@<ALPACA_MCP_SERVER_VERSION>`. Never let it float: an unpinned server, or a pinned server with floating dependencies, has broken the bot at startup. Upgrade by re-freezing, bumping the version default (a test keeps the two in sync), and smoke-testing a live cycle.
+- **Liveness is in the database.** `core/heartbeat.py`: the bot beats `stock.process` (60 s), `stock.cycle`, `stock.monitor`; `/api/health/bot` is 503 when stale, and `just home-health` uses it. Add a beat for any new long-running component.
+- **Signals.** The bot and the shadow install SIGTERM/SIGINT handlers (they are PID 1 in docker); compose gives them `init: true` and a 30 s grace period. Keep `shutdown()` fast.
+- **Deploy live-path changes outside US market hours** (before 09:00 or after 16:00 ET), rebuild with `just home-build`, recreate only what changed, and watch the first cycle: the failure mode is silent no-action, not a crash.
+- **Async repository.** `db/repository.py` is async; one `Repository(engine)` per process. Don't open engines per cycle.
+- **Structured events.** `extra={"event": events.X, ...}` with constants from `core/events.py`; correlation ids come from `core/observability.py`.
+- **Operator alerts** go through `AlertSink.notify(error_type, details)` (`notifications/telegram.py`), which rate-limits per type.
+- **Fill confirmation.** `core/fills.py:confirm_alpaca` fills `submitted_at`/`filled_at`/`filled_price`/`filled_quantity`; never conflate submitted with filled.
+- **CLI lazy imports.** Heavy modules are imported inside command functions so `--help` stays fast.
+- **Optional extras** (`[ml]`, `[dashboard]`) must degrade gracefully when absent.
+- **PEP 758** `except A, B:` (no parentheses) is valid Python 3.14 and what ruff formats to. Don't "fix" it.
 
-## Product strategy (from `.cursor/rules/project-strategy.mdc`)
+## Product strategy
 
-This is a small home-built bot competing against institutions. The edge is aggressive adoption of new tech (LLMs, HuggingFace models), alternative data (Reddit, news APIs), and rapid iteration. When choosing between conservative and aggressive approaches, lean aggressive. Always prefer integrating an existing OSS model or API over building from scratch. Halal compliance applies to every feature regardless of profitability.
+A small home-built bot competing with institutions, now developed full-time. Edge comes from new tech (LLMs, open models), alternative data and fast iteration, **measured** on one research harness before any capital moves. Halal compliance applies to every feature regardless of profitability.
