@@ -23,8 +23,8 @@ stocks:
 status:
     uv run halal-trader status
 
-# Run a single stock trading cycle. CAUTION: today this also runs the
-# end-of-day flatten, closing every position on the account (plan 1.11).
+# Run one pre-market check and one trading cycle, then exit (refuses to run
+# while another bot holds the lock)
 stocks-once:
     uv run halal-trader start --once
 

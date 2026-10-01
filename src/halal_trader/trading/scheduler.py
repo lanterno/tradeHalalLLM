@@ -43,6 +43,9 @@ from halal_trader.trading.timeframes import StockTimeframeAnalyzer
 
 logger = logging.getLogger(__name__)
 
+# pg advisory-lock key for "one stock bot per database" (ASCII 'HALALSTK').
+_TRADING_LOCK_KEY = 0x48414C414C53544B
+
 
 _PID_FILE = Path("halal_trader.pid")
 
@@ -565,6 +568,7 @@ class TradingBot(BaseTradingBot):
                 logger.debug("Stock news collector close failed: %s", exc)
         await self._mcp_client.disconnect()
         self._release_lock()
+        await self._release_trading_lock()
         await super().shutdown()
         logger.info("Trading bot shut down")
 
@@ -1008,6 +1012,66 @@ class TradingBot(BaseTradingBot):
 
     # ── Main Loop ───────────────────────────────────────────────
 
+    async def _acquire_trading_lock(self) -> None:
+        """Hold a Postgres advisory lock for the life of this process.
+
+        The PID file lock is per filesystem: a bot started on the host and
+        the bot in the container never saw each other's lock, so two bots
+        could trade one account at once (assessment infra-tooling#8). The
+        database is the one thing every copy shares. Session-level advisory
+        locks die with the connection, so a crashed bot cannot leave it stuck.
+        """
+        from sqlalchemy import text
+
+        if self._engine is None:
+            return
+        conn = await self._engine.connect()
+        got = (
+            await conn.execute(text("SELECT pg_try_advisory_lock(:k)"), {"k": _TRADING_LOCK_KEY})
+        ).scalar()
+        if not got:
+            await conn.close()
+            raise RuntimeError(
+                "another stock bot holds the trading lock on this database -- "
+                "refusing to start a second one (stop the other first)"
+            )
+        self._trading_lock_conn = conn
+        logger.info("Acquired the database trading lock")
+
+    async def _release_trading_lock(self) -> None:
+        conn = getattr(self, "_trading_lock_conn", None)
+        if conn is None:
+            return
+        self._trading_lock_conn = None
+        from sqlalchemy import text
+
+        try:
+            # Unlock explicitly: close() only returns a pooled connection to
+            # the pool, and the lock would ride along with it.
+            await conn.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": _TRADING_LOCK_KEY})
+            await conn.close()
+        except Exception as exc:  # noqa: BLE001 -- drop the session; that frees the lock too
+            logger.debug("trading lock release failed (%r); invalidating the connection", exc)
+            await conn.invalidate()
+
+    async def run_once(self) -> None:
+        """One pre-market check and one trading cycle, then exit.
+
+        Overrides the base template, which ran the daily END too: for stocks
+        that is the end-of-day routine, which flattens every position on the
+        account -- `halal-trader start --once` used as a smoke test would
+        close the live bot's book. It also takes the single-instance lock, so
+        it refuses to run beside a live bot rather than racing it.
+        """
+        self._acquire_lock()
+        await self.initialize()
+        await self._acquire_trading_lock()
+        try:
+            await self.pre_market()
+            await self._get_cycle_service().run_cycle()
+        finally:
+            await self.shutdown()
+
     async def _supervise(
         self,
         name: str,
@@ -1071,6 +1135,7 @@ class TradingBot(BaseTradingBot):
         set_service("stock")  # tag this process's logs
         self._acquire_lock()
         await self.initialize()
+        await self._acquire_trading_lock()
         try:
             self._running = True
             self._install_signal_handlers(asyncio.get_running_loop())
