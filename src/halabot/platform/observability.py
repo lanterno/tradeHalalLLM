@@ -53,3 +53,8 @@ def setup_logging(level: int | str = "INFO") -> None:
         root.removeHandler(h)
     root.addHandler(handler)
     root.setLevel(level.upper() if isinstance(level, str) else level)
+    # httpx logs every request URL at INFO, and some APIs (FRED) take their
+    # key as a query parameter: at INFO the key was written to the shadow's
+    # log on every poll. Warnings and errors from these libraries still show.
+    for name in ("httpx", "httpcore"):
+        logging.getLogger(name).setLevel(logging.WARNING)
