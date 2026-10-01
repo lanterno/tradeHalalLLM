@@ -25,13 +25,11 @@ the gap is visible in the alert message itself.
 |---|---|---|
 | `halt.engaged` | PAGE | [halt-engaged.md](halt-engaged.md) |
 | `chain.backoff` | WARN | [chain-backoff.md](chain-backoff.md) |
-| `drift.breach` | WARN | [drift-breach.md](drift-breach.md) |
 | `broker.api.error_rate` | PAGE | [broker-api-error-rate.md](broker-api-error-rate.md) |
 | `cycle.stuck` | PAGE | [cycle-stuck.md](cycle-stuck.md) |
 | `llm.circuit_breaker` | PAGE | [llm-circuit-breaker.md](llm-circuit-breaker.md) |
 | `db.connection_lost` | PAGE | [db-connection-lost.md](db-connection-lost.md) |
 | `halal.screener.stale` | WARN | [halal-screener-stale.md](halal-screener-stale.md) |
-| `snapshot.store.failure` | WARN | [snapshot-store-failure.md](snapshot-store-failure.md) |
 
 ## Operations playbooks
 
