@@ -501,7 +501,11 @@ class HalalScreening(SQLModel, table=True):
 
 
 class ThesisTagRow(SQLModel, table=True):
-    """One thesis tag attached to a closed trade."""
+    """One thesis tag attached to a closed trade.
+
+    Nothing writes this table since ``core/thesis`` was deleted on 2026-10-01;
+    the model stays so the schema matches the migrations.
+    """
 
     __tablename__ = "thesis_tags"
 
@@ -545,6 +549,9 @@ class RegretRecordRow(SQLModel, table=True):
 
     Aggregate queries (mean, p99, by symbol/setup_type) run as proper
     SQL against this table.
+
+    Nothing writes this table since ``core/regret`` was deleted on 2026-10-01;
+    the model stays so the schema matches the migrations.
     """
 
     __tablename__ = "regret_records"
@@ -594,6 +601,9 @@ class ReplaySnapshotRow(SQLModel, table=True):
     (snapshot fields can come and go via the dataclass). The top-level
     columns are extracted from the snapshot for cheap listing /
     filtering by the dashboard.
+
+    Nothing writes this table since ``core/replay`` was deleted on 2026-10-01;
+    the model stays so the schema matches the migrations.
     """
 
     __tablename__ = "replay_snapshots"
