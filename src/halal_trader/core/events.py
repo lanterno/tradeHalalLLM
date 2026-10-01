@@ -24,6 +24,9 @@ BAND_COVERAGE_DRIFT: Final[str] = "band.coverage_drift"
 TRADE_BUY_PLACED: Final[str] = "trade.buy.placed"
 TRADE_SELL_PLACED: Final[str] = "trade.sell.placed"
 TRADE_REJECTED: Final[str] = "trade.rejected"
+# A BUY refused at the order boundary because the symbol is not (provably)
+# halal -- the screen said no, or could not be read (fail closed).
+HALAL_GATE_REJECTED: Final[str] = "trade.rejected.halal"
 TRADE_FILL_PARTIAL: Final[str] = "trade.fill.partial"
 TRADE_FILLED: Final[str] = "trade.filled"
 TRADE_EXIT_SL: Final[str] = "trade.exit.stop_loss"

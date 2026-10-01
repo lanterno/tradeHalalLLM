@@ -10,7 +10,7 @@ from halal_trader.core.fills import confirm_alpaca
 from halal_trader.core.long_only import clamp_sell_to_long
 from halal_trader.db.repos import TradeRepo
 from halal_trader.domain.models import TradeAction, TradeDecision, TradingPlan
-from halal_trader.domain.ports import Broker
+from halal_trader.domain.ports import Broker, ComplianceScreener
 from halal_trader.domain.status import TradeStatus
 
 logger = logging.getLogger(__name__)
@@ -151,6 +151,7 @@ class TradeExecutor(BaseExecutor):
         reactor_entry_min_intraday_change_pct: float = 0.002,
         reactor_trailing_stop_distance_pct: float = 0.08,
         reactor_hold_overnight: bool = True,
+        screener: ComplianceScreener | None = None,
     ) -> None:
         super().__init__(
             max_position_pct=max_position_pct,
@@ -158,6 +159,14 @@ class TradeExecutor(BaseExecutor):
         )
         self._repo = repo
         self._broker = broker
+        # The halal gate at the order boundary. Every BUY -- LLM cycle and
+        # news reactor alike -- passes _execute_buy, which refuses a symbol the
+        # screener does not hold as halal, failing CLOSED when the screen can't
+        # be read. Before this the halal rule lived only in the prompt's symbol
+        # list, so a hallucinated ticker or a name the screen had since dropped
+        # reached place_order unchecked. None (tests that don't exercise it)
+        # skips the gate; the composition root always passes one.
+        self._screener = screener
         # 0 disables the sector check; keep the default at 40% so even
         # an operator who hasn't tuned this gets a sane diversification
         # floor on day one.
@@ -391,6 +400,14 @@ class TradeExecutor(BaseExecutor):
         # news-reactor entry from a scheduled-cycle one. None for
         # ordinary cycle buys.
         entry_type = kwargs.get("entry_type")
+        halal_reject = await self._check_halal(decision.symbol)
+        if halal_reject is not None:
+            return {
+                "symbol": decision.symbol,
+                "action": "buy",
+                "status": "rejected",
+                "reason": halal_reject,
+            }
         # Last-N-min-before-close lockout. Refuses NEW BUYs late in
         # the session because positions opened in the final minutes
         # can't be managed and become forced exits at EOD.
@@ -974,6 +991,35 @@ class TradeExecutor(BaseExecutor):
             self._recent_close_cooldown_minutes,
         )
         return reason
+
+    async def _check_halal(self, symbol: str) -> str | None:
+        """Refuse a BUY the screener does not hold as halal. Fails CLOSED.
+
+        Unlike the cooldown gates, which fail open on a repo hiccup, this one
+        refuses on any error: halal compliance outranks availability, and the
+        cost of a refused entry on a screen outage is one skipped trade.
+        """
+        if self._screener is None:
+            return None
+        try:
+            halal = await self._screener.is_halal(symbol)
+        except Exception as exc:  # noqa: BLE001 -- any failure means "not proven halal"
+            logger.warning(
+                "BUY rejected: halal screen unavailable for %s (%s: %s) -- failing closed",
+                symbol,
+                type(exc).__name__,
+                exc,
+                extra={"event": events.HALAL_GATE_REJECTED, "symbol": symbol},
+            )
+            return f"halal screen unavailable ({type(exc).__name__}); failing closed"
+        if not halal:
+            logger.warning(
+                "BUY rejected: %s is not in the halal-screened universe",
+                symbol,
+                extra={"event": events.HALAL_GATE_REJECTED, "symbol": symbol},
+            )
+            return f"{symbol} is not in the halal-screened universe"
+        return None
 
     def _check_market_close_lockout(self) -> str | None:
         """Refuse new BUYs in the last ``no_new_positions_minutes_before_close``

@@ -165,6 +165,7 @@ class TradingBot(BaseTradingBot):
                 self.settings.stocks.reactor_trailing_stop_distance_pct
             ),
             reactor_hold_overnight=self.settings.stocks.reactor_hold_overnight,
+            screener=self.screener,
         )
         self.portfolio = PortfolioTracker(
             self.broker,
