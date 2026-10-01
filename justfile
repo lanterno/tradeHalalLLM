@@ -224,13 +224,21 @@ db-reset:
         uv run halal-trader db migrate && \
         echo "Database reset and migrated." || echo "Cancelled."
 
-# Bring up the Postgres + pgvector container (localhost:5433)
+# Every compose recipe in this file goes through this one command. The
+# project name is pinned to `infra` (that is what keeps the live
+# infra_pg-data volume attached) and infra/compose.home.yml is always layered
+# on: dashboard on 127.0.0.1:6010, Postgres on 127.0.0.1:5433. A recipe that
+# used the base file alone would recreate the running containers with both
+# ports published on every interface.
+home_compose := "docker compose -p infra -f infra/docker-compose.yml -f infra/compose.home.yml"
+
+# Bring up the Postgres + pgvector container (127.0.0.1:5433)
 pg-up:
-    cd infra && docker compose up -d postgres
+    {{home_compose}} up -d postgres
 
 # Stop the Postgres container (data persists in the named volume)
 pg-down:
-    cd infra && docker compose stop postgres
+    {{home_compose}} stop postgres
 
 # Dump the whole DB (schema + data + alembic version) to ./halabot-db.dump
 # for moving to another machine. Custom format, compressed. The file is
@@ -255,51 +263,52 @@ test-db-reset:
     docker exec halal-trader-pg psql -U trader -d postgres -c 'DROP DATABASE IF EXISTS halal_trader_test'
 
 # ── Full Docker stack (postgres + bots + web in containers) ──
+# The same fleet the home stack runs (see home-* below); these are the
+# hands-on verbs. All go through {{home_compose}}.
 
 # Build the bot image (multi-stage: deps + venv → slim runtime)
 docker-build:
-    docker compose -f infra/docker-compose.yml build
+    {{home_compose}} build
 
-# Start everything (postgres + crypto + stocks + web) in the background
+# Start the fleet (postgres + migrate + stocks + shadow + web) in the background
 docker-up:
-    docker compose -f infra/docker-compose.yml up -d
+    {{home_compose}} up -d
 
 # Stop and remove all containers (data volumes persist)
 docker-down:
-    docker compose -f infra/docker-compose.yml down
+    {{home_compose}} down
 
-# Rebuild from scratch and recreate all containers (picks up .env + code changes)
+# Rebuild and recreate all containers (picks up .env + code changes)
 docker-rebuild:
-    docker compose -f infra/docker-compose.yml build
-    docker compose -f infra/docker-compose.yml up -d --force-recreate
+    {{home_compose}} build
+    {{home_compose}} up -d --force-recreate
 
-# Tail logs from a single service (default: crypto). Usage: just docker-logs [service]
-docker-logs service="trader-crypto":
-    docker compose -f infra/docker-compose.yml logs -f --tail=50 {{service}}
+# Follow logs from one service (default: stocks). Usage: just docker-logs [service]
+docker-logs service="trader-stocks":
+    {{home_compose}} logs -f --tail=50 {{service}}
 
-# Tail logs from every service interleaved
+# Follow logs from every service interleaved
 docker-logs-all:
-    docker compose -f infra/docker-compose.yml logs -f --tail=20
+    {{home_compose}} logs -f --tail=20
 
 # Apply Alembic migrations inside the running stack
 docker-migrate:
-    docker compose -f infra/docker-compose.yml run --rm trader-crypto halal-trader db migrate
+    {{home_compose}} run --rm trader-migrate
 
 # Open a psql shell against the containerised Postgres
 docker-psql:
-    docker compose -f infra/docker-compose.yml exec postgres psql -U trader halal_trader
+    {{home_compose}} exec postgres psql -U trader halal_trader
 
 # Quick health check on every service + the web API
 docker-status:
-    @docker compose -f infra/docker-compose.yml ps
+    @{{home_compose}} ps
     @echo "---"
-    @curl -s -o /dev/null -w "Web /api/health → HTTP %{http_code}\n" http://localhost:8082/api/health
+    @curl -s -o /dev/null -w "Web /api/health → HTTP %{http_code}\n" http://127.0.0.1:6010/api/health
 
 # ── Home stack (~/lab/home services.toml) ─────────────────
 # The verbs ~/lab/home's services.toml names. Same fleet as docker-up, plus
 # infra/compose.home.yml: dashboard on 127.0.0.1:6010, Postgres on loopback.
-# Project name pinned to `infra` so the live infra_pg-data volume stays attached.
-home_compose := "docker compose -p infra -f infra/docker-compose.yml -f infra/compose.home.yml"
+# home_compose is defined once, above pg-up, and every compose recipe uses it.
 
 # Start the fleet in the background (postgres + migrate + stocks + shadow + web)
 home-up:
