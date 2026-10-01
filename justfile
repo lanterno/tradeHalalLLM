@@ -19,6 +19,10 @@ dev:
 stocks:
     uv run halal-trader start
 
+# Show Alpaca account, positions and market clock
+status:
+    uv run halal-trader status
+
 # Run a single stock trading cycle. CAUTION: today this also runs the
 # end-of-day flatten, closing every position on the account (plan 1.11).
 stocks-once:
