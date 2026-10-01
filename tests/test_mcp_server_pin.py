@@ -17,13 +17,13 @@ def test_uvx_launches_the_pinned_release() -> None:
     params = server_parameters(_settings())
 
     assert params.command == "uvx"
-    assert params.args == ["alpaca-mcp-server@2.1.1"]
+    assert params.args == ["alpaca-mcp-server@2.3.2"]
 
 
 def test_pin_follows_the_setting() -> None:
-    params = server_parameters(_settings(mcp_server_version="2.3.2"))
+    params = server_parameters(_settings(mcp_server_version="9.9.9"))
 
-    assert params.args == ["alpaca-mcp-server@2.3.2"]
+    assert params.args == ["alpaca-mcp-server@9.9.9"]
 
 
 def test_paper_flag_and_keys_reach_the_subprocess() -> None:

@@ -35,10 +35,17 @@ class AlpacaSettings(BaseSettings):
     # The broker adapter is a subprocess fetched by `uvx` at startup. Unpinned,
     # every container restart silently took whatever PyPI had that day: five
     # upstream schema changes each caused a silent no-trade outage, and the
-    # 2026-10-01 restart jumped 2.1.1 -> 2.3.2 unannounced. 2.1.1 is what every
-    # July run used and what mcp/client.py's parsers were last verified against.
-    # Bump deliberately, after recorded-payload contract tests pass.
-    mcp_server_version: str = Field(default="2.1.1", pattern=r"^\d+\.\d+\.\d+$")
+    # 2026-10-01 restart jumped 2.1.1 -> 2.3.2 unannounced.
+    #
+    # Pinning the top-level release is necessary but NOT sufficient: uvx still
+    # resolves the server's own dependencies fresh. Proven the same day --
+    # 2.1.1 (July's version) no longer starts, because it imports
+    # fastmcp.tools.tool and today's fastmcp has removed it. 2.3.2 is what the
+    # live bot connected with on 2026-10-01. The durable fix is to stop
+    # resolving at runtime at all (bake the server into the image with a locked
+    # closure, then replace MCP with alpaca-py: plan 1.6 / 3.2). Bump this only
+    # after the recorded-payload contract tests pass.
+    mcp_server_version: str = Field(default="2.3.2", pattern=r"^\d+\.\d+\.\d+$")
 
 
 class BinanceSettings(BaseSettings):
