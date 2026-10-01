@@ -1,10 +1,8 @@
-"""Tests for the DB-backed RAG / thesis / regret stores."""
+"""Tests for the DB-backed RAG store."""
 
 from __future__ import annotations
 
 from halal_trader.core.llm.rag_db import DBRationaleStore
-from halal_trader.core.regret_db import DBRegretRecorder
-from halal_trader.core.thesis_db import DBThesisTagStore
 
 # ── DBRationaleStore ─────────────────────────────────────────────
 
@@ -85,73 +83,3 @@ async def test_rag_store_uses_hnsw_index(engine) -> None:
         )
         plan = "\n".join(r[0] for r in rows.all())
     assert "ix_rag_rationales_embedding_hnsw" in plan, plan
-
-
-# ── DBThesisTagStore ─────────────────────────────────────────────
-
-
-async def test_thesis_store_set_and_get(engine) -> None:
-    store = DBThesisTagStore(engine=engine)
-    await store.set("t1", "breakout", confidence=0.8, reason="20d high")
-    assert await store.get("t1") == "breakout"
-
-
-async def test_thesis_store_set_overwrites(engine) -> None:
-    store = DBThesisTagStore(engine=engine)
-    await store.set("t1", "breakout")
-    await store.set("t1", "scalp")
-    assert await store.get("t1") == "scalp"
-
-
-async def test_thesis_store_unknown_tag_coerced(engine) -> None:
-    store = DBThesisTagStore(engine=engine)
-    await store.set("t1", "made_up_tag")
-    assert await store.get("t1") == "unknown"
-
-
-async def test_thesis_store_all(engine) -> None:
-    store = DBThesisTagStore(engine=engine)
-    await store.set("a", "breakout")
-    await store.set("b", "trend_follow")
-    assert await store.all() == {"a": "breakout", "b": "trend_follow"}
-
-
-# ── DBRegretRecorder ─────────────────────────────────────────────
-
-
-async def test_regret_recorder_append(engine) -> None:
-    rec = DBRegretRecorder(engine=engine)
-    await rec.append(
-        {
-            "trade_id": "t1",
-            "symbol": "BTCUSDT",
-            "regret": 0.5,
-            "optimal_size_pct": 1.0,
-            "actual_size_pct": 0.5,
-            "pnl_pct": 0.02,
-            "note": "x",
-            "ts": "2026-04-27T00:00:00+00:00",
-        }
-    )
-    rows = await rec.all()
-    assert len(rows) == 1
-    assert rows[0]["trade_id"] == "t1"
-    assert rows[0]["regret"] == 0.5
-
-
-async def test_regret_recorder_idempotent(engine) -> None:
-    rec = DBRegretRecorder(engine=engine)
-    payload = {
-        "trade_id": "t1",
-        "symbol": "X",
-        "regret": 0.5,
-        "optimal_size_pct": 1.0,
-        "actual_size_pct": 0.5,
-        "pnl_pct": 0.01,
-        "note": "",
-        "ts": "2026-04-27T00:00:00+00:00",
-    }
-    await rec.append(payload)
-    await rec.append(payload)  # second append must be no-op
-    rows = await rec.all()
-    assert len(rows) == 1

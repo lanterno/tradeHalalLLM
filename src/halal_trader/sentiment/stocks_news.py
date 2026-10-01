@@ -2,10 +2,7 @@
 
 Feeds the stock cycle's news block. Uses Finnhub's company-news endpoint
 when a key is configured and Yahoo Finance's public
-``v1/finance/search`` endpoint otherwise — the latter already used
-elsewhere in the codebase (``trading/options_iv.py``,
-``trading/options_catalyst_adapter.py``) so the dep surface and
-caching pattern is familiar.
+``v1/finance/search`` endpoint otherwise.
 
 Design:
 
@@ -20,9 +17,8 @@ Design:
   hawkish/dovish scorer). Yahoo's response has no polarity field;
   the classifier reads the headline string and emits
   ``"positive"`` / ``"negative"`` / ``"neutral"``.
-* 15-minute per-symbol cache — same TTL the options IV adapter uses,
-  matching the 15-minute stocks cycle so each pass hits the cache
-  once and the network once.
+* 15-minute per-symbol cache, matching the 15-minute stocks cycle
+  so each pass hits the cache once and the network once.
 """
 
 from __future__ import annotations
@@ -46,7 +42,7 @@ _CACHE_TTL_S = 15 * 60  # 15 min — matches the stocks-cycle cadence
 _DEFAULT_NEWS_PER_SYMBOL = 5
 _HTTP_TIMEOUT_S = 10.0
 # Yahoo blocks Python's default user-agent. A plain browser UA is the
-# minimum that gets a 200 back; matches what trading/options_iv.py uses.
+# minimum that gets a 200 back.
 _UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"

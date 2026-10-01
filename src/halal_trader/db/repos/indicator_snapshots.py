@@ -1,10 +1,9 @@
 """Indicator-snapshot repository — features captured at trade entry.
 
 Wave D extraction. Each buy snapshots the indicator vector that drove
-the decision; the position monitor labels the row with realized return
-on close. The retraining loop reads ``get_labeled_snapshots`` to refit
-the anomaly detector / signal classifier. Matching protocol in
-``protocols.py``.
+the decision. Labelling and ``get_labeled_snapshots`` served the ML
+retrainer, deleted on 2026-10-01; nothing labels rows now. Matching
+protocol in ``protocols.py``.
 """
 
 from __future__ import annotations

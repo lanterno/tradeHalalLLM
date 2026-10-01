@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 from halal_trader.core.llm.tools import (
-    QUERY_RAG_TOOL,
-    QUERY_REGIME_MEMORY_TOOL,
     SUBMIT_DECISIONS_TOOL,
     Tool,
     ToolCall,
@@ -23,11 +21,6 @@ def test_openai_projection_wraps_in_function_envelope() -> None:
     fn = payload["function"]
     assert fn["name"] == "submit_decisions"
     assert fn["parameters"]["type"] == "object"
-
-
-def test_agentic_helper_tools_have_stable_names() -> None:
-    assert QUERY_RAG_TOOL.name == "query_rag"
-    assert QUERY_REGIME_MEMORY_TOOL.name == "query_regime_memory"
 
 
 def test_tool_call_dataclass_round_trips() -> None:

@@ -20,8 +20,7 @@ Buckets are tuned for human-scale latencies (1ms – 60s).
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Coroutine
-from typing import Any, ParamSpec, TypeVar
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -110,46 +109,6 @@ def observe_broker_call(*, broker: str, method: str, ms: float, error: bool) -> 
     m["broker_call_ms"].labels(broker=broker, method=method, error="1" if error else "0").observe(
         ms
     )
-
-
-_P = ParamSpec("_P")
-_R = TypeVar("_R")
-
-
-def timed_broker_call(
-    broker: str,
-    method: str,
-) -> "Callable[[Callable[_P, Coroutine[Any, Any, _R]]], Callable[_P, Coroutine[Any, Any, _R]]]":
-    """Decorator: time + emit ``observe_broker_call`` around an async method.
-
-    Use on bound methods of broker clients (Binance, Alpaca MCP) so every
-    public call gets an entry in ``halal_trader_broker_call_ms``. The
-    decorator preserves the method's signature via ``functools.wraps``
-    and re-raises exceptions unchanged (the histogram records the error
-    label and the elapsed time, but never swallows the failure).
-    """
-    import functools
-    import time
-
-    def decorator(
-        fn: "Callable[_P, Coroutine[Any, Any, _R]]",
-    ) -> "Callable[_P, Coroutine[Any, Any, _R]]":
-        @functools.wraps(fn)
-        async def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> _R:
-            t0 = time.monotonic()
-            error = False
-            try:
-                return await fn(*args, **kwargs)
-            except Exception:
-                error = True
-                raise
-            finally:
-                ms = (time.monotonic() - t0) * 1000.0
-                observe_broker_call(broker=broker, method=method, ms=ms, error=error)
-
-        return wrapper
-
-    return decorator
 
 
 def event_published(topic: str) -> None:

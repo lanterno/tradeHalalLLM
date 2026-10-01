@@ -136,9 +136,8 @@ class LlmDecision(SQLModel, table=True):
     cache_write_tokens: int | None = None
     cost_usd: float | None = None  # rounded float — Decimal aggregation done in code
 
-    # Wave H — agentic mode persists each tool call's name/args/result
-    # so the dashboard can render a tree of the model's chain-of-thought.
-    # None when the cycle ran in single-prompt mode.
+    # Written by the agentic tool-calling mode, deleted 2026-10-01; the
+    # column stays until a migration drops it. Always None for new rows.
     tool_transcript: list | None = Field(
         default=None,
         sa_column=sa.Column("tool_transcript", JSONB, nullable=True),
@@ -502,7 +501,11 @@ class HalalScreening(SQLModel, table=True):
 
 
 class ThesisTagRow(SQLModel, table=True):
-    """One thesis tag attached to a closed trade."""
+    """One thesis tag attached to a closed trade.
+
+    Nothing writes this table since ``core/thesis`` was deleted on 2026-10-01;
+    the model stays so the schema matches the migrations.
+    """
 
     __tablename__ = "thesis_tags"
 
@@ -546,6 +549,9 @@ class RegretRecordRow(SQLModel, table=True):
 
     Aggregate queries (mean, p99, by symbol/setup_type) run as proper
     SQL against this table.
+
+    Nothing writes this table since ``core/regret`` was deleted on 2026-10-01;
+    the model stays so the schema matches the migrations.
     """
 
     __tablename__ = "regret_records"
@@ -595,6 +601,9 @@ class ReplaySnapshotRow(SQLModel, table=True):
     (snapshot fields can come and go via the dataclass). The top-level
     columns are extracted from the snapshot for cheap listing /
     filtering by the dashboard.
+
+    Nothing writes this table since ``core/replay`` was deleted on 2026-10-01;
+    the model stays so the schema matches the migrations.
     """
 
     __tablename__ = "replay_snapshots"
@@ -637,6 +646,10 @@ class ShariaExceptionRow(SQLModel, table=True):
 class RegimeSnapshotRow(SQLModel, table=True):
     """One day's regime snapshot (features + outcome).
 
+    Nothing reads or writes this table since ``ml/regime_memory`` was
+    deleted on 2026-10-01; the model stays so the schema matches the
+    migrations.
+
     Features are JSON-serialised; the embedding vector lives next to
     them so cosine similarity queries don't have to recompute it.
     The pgvector(N) promotion is one alembic migration away — the
@@ -662,11 +675,9 @@ class RegimeSnapshotRow(SQLModel, table=True):
 class PromptGenome(SQLModel, table=True):
     """One candidate prompt produced by the prompt-evolution GA.
 
-    Each row is a slot→allele mapping (``genome``) with its measured
-    fitness over a panel of replay snapshots, plus optional lineage
-    pointers for the dashboard's evolution tree view. The dashboard
-    can promote a row to live by writing its ``short`` to the
-    ``ACTIVE_PROMPT_VERSION`` runtime-config key.
+    The GA was deleted on 2026-10-01 (its fitness never depended on the
+    prompt, and no strategy read a promoted genome). Nothing writes this
+    table; the model stays so the schema matches the migrations.
     """
 
     __tablename__ = "prompt_genomes"
@@ -692,11 +703,14 @@ class PromptGenome(SQLModel, table=True):
 class MlArtefact(SQLModel, table=True):
     """Versioned ML model blob.
 
+    Nothing reads or writes this table since the ``ml/`` stack was
+    deleted on 2026-10-01; the model stays so the schema matches the
+    migrations.
+
     Wave K replaces ``models/*.pkl`` with this table so the bot's
     state replicates with the DB and rolls back atomically alongside
-    the schema. Each row is one (name, version) — the loader picks
-    the highest version for a given name; the retrainer inserts a
-    new row with version+1.
+    the schema. Each row is one (name, version); the highest version
+    for a name was the live one.
 
     The payload stores either a sklearn pickle (BYTEA) or a small
     JSON blob (slippage model, calibration curve), keyed by

@@ -155,16 +155,6 @@ class TradingBot(BaseTradingBot):
         # Halal screener
         self.screener = HalalScreener(repo, _zoya_for(self.settings))
 
-        # Optional adversarial co-bot for stocks. Off
-        # by default; flipped on via LLM_ADVERSARIAL_ENABLED.
-        attacker_llm = None
-        if getattr(self.settings.llm, "adversarial_enabled", False):
-            try:
-                attacker_llm = create_llm(self.settings)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("stocks adversarial LLM init failed: %s — disabling", exc)
-                attacker_llm = None
-
         # Strategy & executor
         strategy = TradingStrategy(
             llm,
@@ -174,17 +164,6 @@ class TradingBot(BaseTradingBot):
             daily_loss_limit=self.settings.stocks.daily_loss_limit,
             daily_return_target=self.settings.stocks.daily_return_target,
             max_simultaneous_positions=self.settings.stocks.max_simultaneous_positions,
-            attacker_llm=attacker_llm,
-            # Wave H follow-up: stocks-side agentic mode. Default off;
-            # ``agentic_hub`` stays None until the stocks bot grows its
-            # own InsightsHub (RAG + regime memory are DB-backed, so
-            # adding the hub is purely a composition-root change).
-            # When enabled with no hub, the handlers degrade gracefully
-            # to "not wired" messages.
-            agentic_enabled=self.settings.stocks.agentic_enabled,
-            agentic_max_turns=self.settings.stocks.agentic_max_turns,
-            agentic_max_seconds=self.settings.stocks.agentic_max_seconds,
-            agentic_hub=None,
         )
         # Operator alert on strategy-LLM credit exhaustion (rate-limited
         # by the sink). The classifier already had this; the strategy
@@ -250,12 +229,12 @@ class TradingBot(BaseTradingBot):
             notifier=self._notifier,
         )
 
-        # Catalyst feed — wires whichever sources are configured. The
-        # FRED feed pulls scheduled CPI/FOMC/NFP/GDP release dates so
-        # CatalystRiskPolicy can shrink position sizing in the 4h
-        # window before each. EDGAR streams 8-K material events the
-        # SEC publishes within minutes of the filing. Empty keys
-        # disable each source cleanly.
+        # Catalyst feed — wires whichever sources are configured; the
+        # cycle renders them into the prompt's RECENT CATALYSTS block.
+        # FRED supplies scheduled CPI/FOMC/NFP/GDP release dates, EDGAR
+        # the 8-K material events the SEC publishes within minutes of
+        # the filing. Empty keys disable each source cleanly. (Nothing
+        # sizes positions off catalysts.)
         catalyst_sources: list[Any] = []
         if self.settings.fred.api_key:
             from halal_trader.trading.fred_catalysts import (
@@ -271,12 +250,10 @@ class TradingBot(BaseTradingBot):
             catalyst_sources.append(EDGAREightKSource(user_agent=self.settings.edgar.user_agent))
 
         # Fed-speak is always-on (no key required).
-        # Yahoo options-IV is RETIRED: Yahoo's auth change 401s every symbol
-        # permanently, so the source only ever yielded empty results while
-        # burning a failing request + log line per cycle. The module +
-        # adapter (trading/options_iv.py, options_catalyst_adapter.py) are kept
-        # as dormant scaffolding — re-wire OptionsIVCatalystSource here only
-        # once a real fix lands (crumb auth or a different IV provider).
+        # A Yahoo options-IV source lived here until Yahoo's auth change
+        # 401'd every symbol; it was deleted on 2026-10-01 (the last tree
+        # with it is 8b4be75: trading/options_iv.py and
+        # options_catalyst_adapter.py). Start from there for a new IV provider.
         from halal_trader.trading.fed_speak_adapter import FedSpeakCatalystSource
 
         catalyst_sources.append(FedSpeakCatalystSource())
@@ -394,11 +371,6 @@ class TradingBot(BaseTradingBot):
                     halt_check=lambda: is_halted(self._engine),
                 )
                 self._news_reactor.on_event(self._on_news_event)
-                # Surface the reactor on the dashboard runtime so
-                # /api/system/status can show classifier health (provider
-                # rotation, quota state, daily call volume) without
-                # operators grepping JSON logs.
-                self._runtime.stocks_news_reactor = self._news_reactor
                 logger.info(
                     "StockNewsEventReactor wired (%d symbols, threshold=%.2f, "
                     "daily_classify_cap=%d, entries=%s, size=%.0f%% of cap, "

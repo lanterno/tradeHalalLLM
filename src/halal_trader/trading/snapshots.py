@@ -1,9 +1,8 @@
 """Stock-side indicator snapshot writer.
 
-Mirrors the crypto pattern: when a stock BUY fills we record the same
-9-feature indicator vector keyed by ``trade_id`` so the shared
-``RetrainingScheduler`` can label outcomes and retrain ML models on
-stock trades too.
+When a stock BUY fills we record the 9-feature indicator vector keyed
+by ``trade_id``. The ML retrainer that labelled and trained on these
+rows was deleted on 2026-10-01; the rows are kept as research data.
 
 The ``IndicatorSnapshot.pair`` column is reused — it stores whichever
 trading symbol the snapshot is for (BTCUSDT, AAPL, …) regardless of

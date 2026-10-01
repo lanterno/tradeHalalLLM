@@ -1,18 +1,13 @@
-"""Typed contexts that replace the ``app_state: dict[str, Any]`` bag.
+"""Typed context that replaces the ``app_state: dict[str, Any]`` bag.
 
-The bot and the dashboard each carry a single immutable container of
-their long-lived dependencies. Routes / cycle / monitor / CLI commands
-take it via DI; nothing else reaches into a global dict.
+:class:`DashboardContext` is what the FastAPI app needs (engine, repos,
+settings) plus a small mutable :class:`RuntimeView`. Routes take it via
+DI; nothing reaches into a global dict.
 
-* :class:`DashboardContext` — what the FastAPI app needs (engine,
-  repos, hub, plus mutable runtime fields the cycle pushes into).
-* :class:`BotContext` — superset for the trading bot itself
-  (broker, LLM, settings, …).
-
-Both are frozen dataclasses for the static slice and carry a small
-mutable :class:`RuntimeView` for the few fields the cycle has to
-update at runtime (last cycle id, latest risk-state summary,
-account snapshot, etc).
+The web runs in its own process, so nothing in the bot writes this
+``RuntimeView``: only ``started_at`` is ever set. The bot-side
+``BotContext`` / ``attach_to_app`` co-host path that would have filled
+it was never wired and was deleted on 2026-10-01.
 """
 
 from __future__ import annotations
@@ -26,7 +21,6 @@ if TYPE_CHECKING:
 
     from halal_trader.config import Settings
     from halal_trader.core.event_bus import EventBus
-    from halal_trader.core.insights_hub import InsightsHub
     from halal_trader.db.repository import Repository
     from halal_trader.portfolio.analytics import PerformanceAnalytics
 
@@ -72,38 +66,7 @@ class DashboardContext:
 
     engine: "AsyncEngine"
     repo: "Repository"
-    hub: "InsightsHub"
     analytics: "PerformanceAnalytics"
     settings: "Settings"
     bus: "EventBus"
     runtime: RuntimeView
-
-
-@dataclass(frozen=True, slots=True)
-class BotContext:
-    """Same primitives as the dashboard plus the bot-only deps.
-
-    Built once by the bot's composition root. Passed into every
-    cycle / monitor / background loop so nothing has to reach for
-    ``get_settings()`` ad-hoc.
-    """
-
-    engine: "AsyncEngine"
-    repo: "Repository"
-    hub: "InsightsHub"
-    analytics: "PerformanceAnalytics"
-    settings: "Settings"
-    bus: "EventBus"
-    runtime: RuntimeView
-
-    def to_dashboard_context(self) -> DashboardContext:
-        """Project the bot's context onto the dashboard's narrower shape."""
-        return DashboardContext(
-            engine=self.engine,
-            repo=self.repo,
-            hub=self.hub,
-            analytics=self.analytics,
-            settings=self.settings,
-            bus=self.bus,
-            runtime=self.runtime,
-        )

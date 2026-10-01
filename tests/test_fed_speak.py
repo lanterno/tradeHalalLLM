@@ -13,7 +13,6 @@ from halal_trader.trading.fed_speak import (
     FedSpeech,
     aggregate_signal,
     fed_speak_to_catalysts,
-    format_fed_speak_for_prompt,
     parse_rss,
     score_text,
 )
@@ -209,32 +208,6 @@ async def test_fetcher_http_error_returns_no_data_signal() -> None:
     sig = await f.fetch()
     assert sig.label == "no_data"
     await f.aclose()
-
-
-# ── Prompt formatting ────────────────────────────────────────────
-
-
-def test_format_empty_returns_empty() -> None:
-    sig = FedSpeakSignal(
-        n_speeches=0, hawkish_score=0, dovish_score=0, net_drift=0, label="no_data"
-    )
-    assert format_fed_speak_for_prompt(sig) == ""
-
-
-def test_format_renders_quote_lines() -> None:
-    sig = FedSpeakSignal(
-        n_speeches=2,
-        hawkish_score=4.0,
-        dovish_score=1.0,
-        net_drift=3.0,
-        label="hawkish_drift",
-        most_hawkish_quote="Powell — restrictive stance",
-        most_dovish_quote="Williams — gradual approach",
-    )
-    text = format_fed_speak_for_prompt(sig)
-    assert "hawkish_drift" in text
-    assert "Powell" in text
-    assert "Williams" in text
 
 
 # ── Catalyst integration ─────────────────────────────────────────

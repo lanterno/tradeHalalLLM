@@ -485,41 +485,6 @@ async def test_exit_skipped_when_position_lookup_flakes(engine):
 # ── Repo round-trip surface ─────────────────────────────────────
 
 
-async def test_exit_calls_retrainer_with_return_pct(engine):
-    """When wired with a retrainer, a successful exit feeds it the realized return."""
-    repo = Repository(engine)
-    try:
-        tid = await repo.record_trade(
-            symbol="AAPL", side="buy", quantity=10, price=200.0, stop_loss=190.0, target_price=220.0
-        )
-        retrainer = MagicMock()
-        retrainer.on_trade_closed = AsyncMock()
-        mon = _monitor(repo)
-        mon._retrainer = retrainer
-        # Exit at $185 → -7.5% from entry of 200.
-        await mon._exit(_trade(id_=tid, entry=200.0), price=185.0, reason="stop_loss")
-
-        retrainer.on_trade_closed.assert_awaited_once()
-        args, _ = retrainer.on_trade_closed.await_args
-        assert args[0] == tid
-        assert abs(args[1] - (-0.075)) < 1e-6
-    finally:
-        await engine.dispose()
-
-
-async def test_exit_swallows_retrainer_exception(engine):
-    """A blowing-up retrainer must not abort the close path."""
-    repo = Repository(engine)
-    tid = await repo.record_trade(
-        symbol="AAPL", side="buy", quantity=10, price=200.0, stop_loss=190.0, target_price=220.0
-    )
-    retrainer = MagicMock()
-    retrainer.on_trade_closed = AsyncMock(side_effect=RuntimeError("retrain dead"))
-    mon = _monitor(repo)
-    mon._retrainer = retrainer
-    await mon._exit(_trade(id_=tid), price=185.0, reason="stop_loss")  # must not raise
-
-
 async def test_exit_calls_notifier_when_wired(engine):
     """An SL/TP exit fires `notify_sl_tp` so the operator gets the same
     Telegram alert the crypto monitor already sends."""

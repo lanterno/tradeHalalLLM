@@ -7,10 +7,8 @@ These commands let an operator audit the LLM trail without writing SQL:
 * ``llm-decisions cost-summary`` — daily spend roll-up by provider/model
 
 Today we store ``prompt_summary`` and ``raw_response`` (not the full
-assembled prompt), so a true "re-run against the same LLM" workflow
-also needs the snapshot store at ``core/replay.py``. These commands are
-the audit half of the replay story; ``halal-trader insights replay``
-covers the rerun half.
+assembled prompt), so a decision cannot be re-run against the same
+LLM; these commands are the audit trail only.
 """
 
 from __future__ import annotations

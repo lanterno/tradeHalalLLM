@@ -82,8 +82,6 @@ class CycleState:
     risk_text: str = ""
     regime_text: str = ""  # no stage writes it now; the strategy prompt keeps the slot
     timeframe_text: str = ""
-    ml_signals_text: str = ""
-    forecasts_text: str = ""  # price-forecast text — seed for ml-signals
     news_text: str = ""
     catalysts_text: str = ""
     performance_text: str = ""

@@ -9,7 +9,6 @@ from fastapi.testclient import TestClient
 
 from halal_trader.core.context import DashboardContext, RuntimeView
 from halal_trader.core.event_bus import EventBus
-from halal_trader.core.insights_hub import InsightsHub
 from halal_trader.web.routes.streaming import register
 
 
@@ -18,7 +17,6 @@ def _client_with_bus(bus: EventBus) -> TestClient:
     ctx = DashboardContext(
         engine=None,  # type: ignore[arg-type]
         repo=None,  # type: ignore[arg-type]
-        hub=InsightsHub(),
         analytics=None,  # type: ignore[arg-type]
         settings=None,  # type: ignore[arg-type]
         bus=bus,

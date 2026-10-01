@@ -54,22 +54,3 @@ def register(name: str, template: str) -> PromptVersion:
     pv = PromptVersion(name=name, version_id=version_id, template=template)
     _REGISTRY[name] = pv
     return pv
-
-
-def get_version(name: str) -> PromptVersion:
-    """Return the registered version, raising KeyError if unknown."""
-    return _REGISTRY[name]
-
-
-def list_versions() -> dict[str, PromptVersion]:
-    """A copy of the registry — useful for ``halal-trader prompts list``."""
-    return dict(_REGISTRY)
-
-
-def _reset_for_tests() -> None:
-    """Clear the registry — tests only.
-
-    The registry is process-global by design; tests that re-register
-    prompts use this to start fresh.
-    """
-    _REGISTRY.clear()

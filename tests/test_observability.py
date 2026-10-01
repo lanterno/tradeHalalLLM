@@ -12,11 +12,7 @@ from halal_trader.core.observability import (
     ObservabilityFilter,
     cycle_context,
     cycle_id_var,
-    monitor_context,
-    monitor_id_var,
     new_id,
-    request_context,
-    request_id_var,
 )
 
 
@@ -40,18 +36,6 @@ def test_cycle_context_accepts_explicit_id():
     with cycle_context("cycle-deadbeef") as cid:
         assert cid == "cycle-deadbeef"
         assert cycle_id_var.get() == "cycle-deadbeef"
-
-
-def test_monitor_and_request_contexts_independent():
-    with cycle_context("cycle-aaaaaaaa"):
-        with monitor_context("mon-bbbbbbbb"):
-            with request_context("req-cccccccc"):
-                assert cycle_id_var.get() == "cycle-aaaaaaaa"
-                assert monitor_id_var.get() == "mon-bbbbbbbb"
-                assert request_id_var.get() == "req-cccccccc"
-            assert request_id_var.get() == ""
-        assert monitor_id_var.get() == ""
-    assert cycle_id_var.get() == ""
 
 
 def test_observability_filter_attaches_only_set_ids():
@@ -91,7 +75,7 @@ def test_observability_filter_attaches_service_when_set():
     can be filtered by which bot emitted each line. It's a process-wide
     global (not a ContextVar) so the tag survives into APScheduler job
     contexts / worker threads where the cycle records are actually emitted."""
-    from halal_trader.core.observability import get_service, set_service
+    from halal_trader.core.observability import set_service
 
     filt = ObservabilityFilter()
 
@@ -106,7 +90,6 @@ def test_observability_filter_attaches_service_when_set():
             exc_info=None,
         )
 
-    assert get_service() == ""  # default unset
     rec_default = _rec()
     filt.filter(rec_default)
     assert not hasattr(rec_default, "service")  # unset → field omitted
@@ -116,7 +99,6 @@ def test_observability_filter_attaches_service_when_set():
         rec_tagged = _rec()
         filt.filter(rec_tagged)
         assert rec_tagged.service == "stock"
-        assert get_service() == "stock"
     finally:
         set_service("")  # restore default for other tests
 

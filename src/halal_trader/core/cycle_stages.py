@@ -30,36 +30,6 @@ class CycleStage(Protocol):
     async def run(self, state: CycleState) -> CycleState: ...
 
 
-class BuildMlSignalsStage:
-    """Run anomaly + signal classifier inference and stamp ``state.ml_signals_text``.
-
-    Threads any pre-computed ``state.forecasts_text`` through the shared
-    formatter so a single block carries both the anomaly/confidence
-    output and a forecast block when one is present.
-    """
-
-    name = "build_ml_signals_text"
-
-    def __init__(
-        self,
-        anomaly_detector: Any | None = None,
-        signal_classifier: Any | None = None,
-    ) -> None:
-        self._anomaly = anomaly_detector
-        self._signal = signal_classifier
-
-    async def run(self, state: CycleState) -> CycleState:
-        from halal_trader.ml.anomaly import build_ml_signals_text
-
-        state.ml_signals_text = build_ml_signals_text(
-            indicators_by_symbol=state.indicators_cache,
-            anomaly_detector=self._anomaly,
-            signal_classifier=self._signal,
-            forecasts_text=state.forecasts_text,
-        )
-        return state
-
-
 # ── Build-timeframe stage ────────────────────────────────────────
 
 
@@ -177,8 +147,7 @@ class BuildStockRiskStage:
     Populates four fields:
 
     * ``state.risk_text`` — the prompt block.
-    * ``state.indicators_cache`` — the per-symbol indicator dict that
-      downstream stages (ML signals) read.
+    * ``state.indicators_cache`` — the per-symbol indicator dict.
     * ``state.risk_state`` — the structured ``PortfolioRiskState`` so
       the dashboard's risk panel can render heat / drawdown / correlation.
     * ``state.halt`` — mirrors ``state.risk_state.is_halted`` so the

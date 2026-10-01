@@ -363,8 +363,8 @@ class TradeExecutor(BaseExecutor):
         """Execute all decisions in a TradingPlan, returning execution results.
 
         ``bars`` is the per-symbol bar payload from the cycle. When passed,
-        every successful BUY records a stock-side IndicatorSnapshot for the
-        shared retrainer. ``positions`` (current open positions) feeds the
+        every successful BUY records a stock-side IndicatorSnapshot.
+        ``positions`` (current open positions) feeds the
         sector-rotation halal cap.
         """
         return await self._execute_plan_common(plan, bars=bars or {}, positions=positions or [])

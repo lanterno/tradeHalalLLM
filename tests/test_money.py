@@ -5,7 +5,6 @@ from decimal import Decimal
 from halal_trader.domain.money import (
     notional,
     pnl,
-    quantize_qty,
     quantize_usd,
     return_pct,
     to_decimal,
@@ -25,14 +24,6 @@ def test_quantize_usd_uses_bankers_rounding():
     assert quantize_usd("1.005") == Decimal("1.00")  # half to even → 0
     assert quantize_usd("1.015") == Decimal("1.02")  # half to even → 2
     assert quantize_usd("1.234") == Decimal("1.23")
-
-
-def test_quantize_qty_with_explicit_step():
-    # Binance BTCUSDT step is 0.00001 today; verify we round to that grid.
-    step = Decimal("0.00001")
-    assert quantize_qty("0.123456789", step=step) == Decimal("0.12346")
-    # Default 8 dp when step omitted.
-    assert quantize_qty("0.123456789") == Decimal("0.12345679")
 
 
 def test_notional_round_trip():

@@ -1,18 +1,13 @@
 """Post-close analytics fan-out — one call hooks every recorder.
 
-The monitor / executor close path needs to fire several recorders
-when a trade closes (drift observation, thesis tag, regret record,
-round-trip purification, ML retraining label). Calling each of them
-inline at the close-site bloats the monitor and makes it harder to
-test.
+The monitor's close path fires the post-close recorders (RAG rationale,
+round-trip purification) through one call instead of inline at the
+close-site.
 
 This module exposes a single :func:`record_close` that takes a small
 :class:`CloseEvent` describing the closed trade plus an optional
-context (indicators at entry, reasoning) and dispatches to:
+context (reasoning) and dispatches to:
 
-* :class:`DriftMonitor` (process-wide, via ``insights_hub.drift``)
-* :class:`DBThesisTagStore` (persistent thesis tag) + heuristic tagger
-* :class:`DBRegretRecorder`
 * :class:`DBRationaleStore` (RAG over reasoning + outcome)
 * :class:`RoundTripLedger` purification accrual
 
@@ -20,15 +15,14 @@ Each step is best-effort: a failure in one recorder does not prevent
 the others from running. Errors are logged at debug level; the call
 to :func:`record_close` never raises.
 
-The ``insights_hub`` is the default sink; tests can pass an explicit
-hub to assert behaviour in isolation.
+The stock bot wires only the RAG store (``trading/scheduler.py``).
 """
 
 from __future__ import annotations
 
 import logging
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
@@ -51,11 +45,9 @@ class CloseEvent:
     realized_pnl_usd: float
     return_pct: float
     quantity: float = 0.0
-    indicators: dict[str, float] = field(default_factory=dict)
     reasoning: str = ""
     setup_type: str | None = None
     hold_seconds: int = 0
-    confidence: float | None = None
     closed_at: datetime | None = None
 
 
@@ -70,9 +62,6 @@ class CloseRecorders:
     All store fields are async — DB-backed.
     """
 
-    hub: Any | None = None  # InsightsHub
-    thesis_store: Any | None = None  # DBThesisTagStore
-    regret_recorder: Any | None = None  # DBRegretRecorder
     purification_ledger: Any | None = None  # RoundTripLedger
     purification_rules: Mapping[str, Any] | None = None
     rag_store: Any | None = None  # DBRationaleStore
@@ -93,79 +82,6 @@ async def record_close(event: CloseEvent, recorders: CloseRecorders) -> dict[str
         "symbol": event.symbol,
         "return_pct": event.return_pct,
     }
-
-    # Drift monitor — feed the residual / return as the signal.
-    if recorders.hub is not None and getattr(recorders.hub, "drift", None) is not None:
-        try:
-            recorders.hub.drift.observe(event.return_pct)
-            summary["drift_state"] = recorders.hub.drift.state
-        except Exception as exc:  # noqa: BLE001
-            logger.debug("drift observe failed: %s", exc)
-
-    # Thesis tagger — heuristic only at close-time; LLM refinement is async.
-    if recorders.thesis_store is not None:
-        try:
-            from halal_trader.core.thesis import (
-                TaggedTradeContext,
-                heuristic_tag,
-            )
-
-            ctx = TaggedTradeContext(
-                trade_id=event.trade_id,
-                symbol=event.symbol,
-                side=event.side,
-                entry_price=event.entry_price,
-                exit_price=event.exit_price,
-                exit_reason=event.exit_reason,
-                pnl_pct=event.return_pct,
-                hold_seconds=event.hold_seconds,
-                setup_type=event.setup_type,
-                indicators=event.indicators,
-                reasoning=event.reasoning,
-            )
-            tag = heuristic_tag(ctx)
-            await recorders.thesis_store.set(
-                event.trade_id,
-                tag,
-                method="heuristic",
-                reason="close-time tag",
-            )
-            summary["thesis_tag"] = tag
-        except Exception as exc:  # noqa: BLE001
-            logger.debug("thesis tagger failed: %s", exc)
-
-    # Regret recorder.
-    if recorders.regret_recorder is not None:
-        try:
-            from halal_trader.core.regret import (
-                ClosedTradeView,
-                hindsight_regret,
-            )
-
-            view = ClosedTradeView(
-                trade_id=event.trade_id,
-                symbol=event.symbol,
-                action_size_pct=1.0,
-                pnl_pct=event.return_pct,
-                confidence=event.confidence or 0.5,
-                setup_type=event.setup_type,
-            )
-            rec = hindsight_regret(view)
-            payload = {
-                "trade_id": rec.trade_id,
-                "symbol": rec.symbol,
-                "regret": rec.regret,
-                "optimal_size_pct": rec.optimal_size_pct,
-                "actual_size_pct": rec.actual_size_pct,
-                "pnl_pct": rec.pnl_pct,
-                "note": rec.note,
-                "setup_type": event.setup_type,
-                "ts": (event.closed_at or datetime.now(UTC)).isoformat(),
-            }
-            await recorders.regret_recorder.append(payload)
-            summary["regret"] = rec.regret
-        except Exception as exc:  # noqa: BLE001
-            logger.debug("regret recorder failed: %s", exc)
 
     # RAG store — embed the rationale + outcome for later retrieval.
     if recorders.rag_store is not None and event.reasoning:

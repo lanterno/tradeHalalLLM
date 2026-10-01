@@ -35,46 +35,6 @@ def test_render_includes_broker_histogram_with_error_label() -> None:
 # ── Wave-J wiring: confirm observation sites actually fire ───────
 
 
-def test_timed_broker_call_decorator_records_success() -> None:
-    """The ``timed_broker_call`` decorator should observe a successful
-    call with ``error=False`` and a finite millisecond value."""
-    import asyncio
-
-    from halal_trader.core.metrics import timed_broker_call
-
-    @timed_broker_call("binance", "fake_method")
-    async def fake_call() -> str:
-        return "ok"
-
-    result = asyncio.run(fake_call())
-    assert result == "ok"
-    text = render_prometheus_text().decode("utf-8")
-    assert 'broker="binance"' in text
-    assert 'method="fake_method"' in text
-
-
-def test_timed_broker_call_decorator_records_failure_and_reraises() -> None:
-    """Exceptions in the wrapped coro propagate; the histogram still gets
-    the ``error="1"`` observation."""
-    import asyncio
-
-    from halal_trader.core.metrics import timed_broker_call
-
-    @timed_broker_call("binance", "fails")
-    async def boom() -> None:
-        raise RuntimeError("api down")
-
-    try:
-        asyncio.run(boom())
-    except RuntimeError:
-        pass
-    else:
-        raise AssertionError("decorator should not swallow exceptions")
-    text = render_prometheus_text().decode("utf-8")
-    assert 'method="fails"' in text
-    assert 'error="1"' in text
-
-
 def test_record_usage_emits_llm_histogram() -> None:
     """``BaseLLM._record_usage`` should both stamp ``last_usage`` and emit
     the ``halal_trader_llm_call_ms`` observation."""

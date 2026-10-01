@@ -14,9 +14,7 @@ versioning incrementally without a big-bang refactor.
 
 from halal_trader.core.llm.prompts.registry import (
     PromptVersion,
-    get_version,
-    list_versions,
     register,
 )
 
-__all__ = ["PromptVersion", "get_version", "list_versions", "register"]
+__all__ = ["PromptVersion", "register"]

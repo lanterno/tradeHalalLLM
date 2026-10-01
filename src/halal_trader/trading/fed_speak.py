@@ -365,30 +365,6 @@ def _extract_speaker(title: str) -> str:
     return title.strip()
 
 
-# ── Prompt formatting ────────────────────────────────────────────
-
-
-def format_fed_speak_for_prompt(signal: FedSpeakSignal) -> str:
-    """One-block summary for the macro-catalysts section of the prompt.
-
-    Empty result returns "" so the prompt builder can elide it.
-    """
-    if signal.n_speeches == 0:
-        return ""
-    sign = "+" if signal.net_drift >= 0 else ""
-    lines = [
-        "Fed-speak drift (last week):",
-        f"  stance={signal.label} | net {sign}{signal.net_drift:.1f} "
-        f"(hawkish {signal.hawkish_score:.1f}, dovish {signal.dovish_score:.1f}) "
-        f"across {signal.n_speeches} speech(es)",
-    ]
-    if signal.most_hawkish_quote:
-        lines.append(f"  most hawkish: {signal.most_hawkish_quote[:100]}")
-    if signal.most_dovish_quote:
-        lines.append(f"  most dovish: {signal.most_dovish_quote[:100]}")
-    return "\n".join(lines)
-
-
 # ── Sequence helper for the catalyst feed ────────────────────────
 
 
@@ -397,10 +373,7 @@ def fed_speak_to_catalysts(signal: FedSpeakSignal, symbols: Sequence[str]) -> li
     can consume.
 
     Macro signals aren't tied to a single ticker; we emit one Catalyst
-    per requested symbol with kind ``"fed_speak"``. The
-    ``CatalystRiskPolicy`` can opt into shrinking sizing on hawkish or
-    dovish drifts — for now we set kind to a neutral macro tag and
-    leave the policy choice to the operator.
+    per requested symbol with the neutral macro kind ``"fed_speak"``.
     """
     from halal_trader.trading.catalysts import Catalyst
 

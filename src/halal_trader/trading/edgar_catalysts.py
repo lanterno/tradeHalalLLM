@@ -7,8 +7,8 @@ The filings hit EDGAR within minutes and are free + unauthenticated;
 they predate most retail news aggregators by an hour or more.
 
 This source pulls each watched ticker's recent 8-Ks and emits one
-:class:`Catalyst` per filing. The cycle's ``CatalystRiskPolicy`` then
-shrinks position sizing in the 4h window after a material event lands.
+:class:`Catalyst` per filing, which the cycle renders into the
+prompt's catalysts block.
 
 Design choices:
 

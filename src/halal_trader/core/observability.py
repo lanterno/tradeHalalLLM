@@ -33,11 +33,6 @@ def set_service(name: str) -> None:
     _service_name = name
 
 
-def get_service() -> str:
-    """Return the process-wide service tag (\"\" if unset)."""
-    return _service_name
-
-
 def new_id(prefix: str) -> str:
     """Return ``prefix-XXXXXXXX`` with 4 hex bytes of randomness."""
     return f"{prefix}-{secrets.token_hex(4)}"
@@ -52,28 +47,6 @@ def cycle_context(cycle_id: str | None = None) -> Iterator[str]:
         yield cid
     finally:
         cycle_id_var.reset(token)
-
-
-@contextmanager
-def monitor_context(monitor_id: str | None = None) -> Iterator[str]:
-    """Set ``monitor_id_var`` for the duration of the block (per-trade exits)."""
-    mid = monitor_id or new_id("mon")
-    token = monitor_id_var.set(mid)
-    try:
-        yield mid
-    finally:
-        monitor_id_var.reset(token)
-
-
-@contextmanager
-def request_context(request_id: str | None = None) -> Iterator[str]:
-    """Set ``request_id_var`` for the duration of an HTTP request."""
-    rid = request_id or new_id("req")
-    token = request_id_var.set(rid)
-    try:
-        yield rid
-    finally:
-        request_id_var.reset(token)
 
 
 class ObservabilityFilter(logging.Filter):

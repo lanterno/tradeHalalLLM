@@ -62,7 +62,6 @@ class StockPositionMonitor:
         trend_break_enabled: bool = True,
         trend_break_ma_period: int = 20,
         trend_break_timeframe: str = "1Hour",
-        retrainer: Any = None,
         close_recorders: object | None = None,
         notifier: Any = None,
         on_tick: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
@@ -88,12 +87,7 @@ class StockPositionMonitor:
         # activates immediately (no activation gate) so a winner runs but
         # is never left unprotected — the "slow out" half of the strategy.
         self._reactor_trailing_distance_pct = reactor_trailing_stop_distance_pct
-        # Optional stock-namespaced RetrainingScheduler — same shape the
-        # crypto monitor uses, so closed stock trades feed the ML loop
-        # without us re-implementing the labeling pipeline.
-        self._retrainer = retrainer
-        # Optional post-close fan-out — drift / thesis / regret /
-        # purification dispatch via core.post_close.record_close.
+        # Optional post-close fan-out (core.post_close.record_close).
         self._close_recorders = close_recorders
         # Optional Telegram notifier — fires `notify_sl_tp` on each
         # SL/TP exit (parity with the crypto position monitor).
@@ -437,7 +431,7 @@ class StockPositionMonitor:
 
         Best-effort: the position is already closed at the broker and in the
         DB by the time this runs, so a ledger-write failure must not break
-        the exit flow (notifier / retrainer / post-close still follow).
+        the exit flow (notifier / post-close still follow).
         """
         from halal_trader.trading.executor import _extract_order_id
 
@@ -547,7 +541,7 @@ class StockPositionMonitor:
         # the reconcile signed sum nets this position to zero (close_trade
         # alone leaves the BUY phantom-counting against the broker). Runs
         # AFTER close_trade so a ledger failure can never leave the position
-        # un-closed and re-selling every tick. The retrainer / post-close
+        # un-closed and re-selling every tick. The post-close
         # hooks below stay keyed on the BUY id — the SELL row is ledger-only.
         await self._record_exit_sell(trade, price, reason, result, submitted_at, sell_qty)
         self._high_water.pop(trade.id, None)
@@ -569,14 +563,6 @@ class StockPositionMonitor:
                 )
             except Exception as e:  # noqa: BLE001
                 logger.debug("notify_sl_tp failed for %s: %s", trade.symbol, e)
-
-        if self._retrainer is not None:
-            entry = trade.filled_price or trade.price
-            return_pct = (price - entry) / entry if entry else 0.0
-            try:
-                await self._retrainer.on_trade_closed(trade.id, return_pct)
-            except Exception as e:  # noqa: BLE001 — retrain failure must not abort exit path
-                logger.debug("retrainer.on_trade_closed failed for %s: %s", trade.symbol, e)
 
         if self._close_recorders is not None:
             try:

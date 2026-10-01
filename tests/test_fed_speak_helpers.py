@@ -1,7 +1,7 @@
 """Tests for the private RSS-parsing helpers in :mod:`trading.fed_speak`.
 
 Existing `test_fed_speak.py` covers `score_text`, `aggregate_signal`,
-`parse_rss`, and `format_fed_speak_for_prompt`. This file pins the
+and `parse_rss`. This file pins the
 small string helpers underneath: `_extract_tag`, `_strip_cdata`,
 `_clean_html`, `_parse_pubdate`, `_extract_speaker`.
 """
