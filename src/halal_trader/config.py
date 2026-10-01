@@ -8,13 +8,17 @@ The top-level ``Settings`` exposes domain-grouped sub-models (``settings.binance
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# HALAL_TRADER_ENV_FILE exists so the test suite can point settings at a file
+# that does not exist: with a bare ".env" every pytest run from the repo root
+# loaded the operator's live API keys.
 _BASE_CONFIG = SettingsConfigDict(
-    env_file=".env",
+    env_file=os.environ.get("HALAL_TRADER_ENV_FILE", ".env"),
     env_file_encoding="utf-8",
     extra="ignore",
 )

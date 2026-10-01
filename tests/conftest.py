@@ -26,6 +26,7 @@ project's docker-compose is the expected target.
 from __future__ import annotations
 
 import os
+import re
 import tempfile
 import zlib
 from collections.abc import AsyncIterator, Iterator
@@ -47,6 +48,51 @@ os.environ.setdefault("COLUMNS", "240")
 # LOG_DIR at a temp dir before any settings are read keeps the suite's
 # logging entirely out of the repo's log files.
 os.environ.setdefault("LOG_DIR", tempfile.mkdtemp(prefix="halabot-test-logs-"))
+
+# Never load the operator's real .env (live Alpaca/OpenRouter/Telegram keys).
+# Must be set before halal_trader.config is first imported -- the env_file
+# path is read when the settings classes are defined. Each test gets the
+# code defaults plus whatever it sets explicitly.
+os.environ["HALAL_TRADER_ENV_FILE"] = str(Path(tempfile.gettempdir()) / "halal-trader-no-env")
+
+# No outbound network from tests. A test that reaches Alpaca, OpenRouter,
+# Finnhub or Telegram is either flaky or spending/trading for real; stub the
+# client instead. Loopback (the Postgres the suite needs) and Unix sockets
+# stay allowed. Set TEST_ALLOW_NETWORK=1 to opt out for a one-off run.
+import ipaddress  # noqa: E402
+import socket  # noqa: E402
+
+_real_connect = socket.socket.connect
+_real_connect_ex = socket.socket.connect_ex
+
+
+def _is_loopback(address: object) -> bool:
+    host = address[0] if isinstance(address, tuple) else None
+    if not isinstance(host, str):
+        return True  # AF_UNIX paths and other non-IP families
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host.split("%", 1)[0]).is_loopback
+    except ValueError:
+        return False
+
+
+def _guarded(real):  # type: ignore[no-untyped-def]
+    def connect(self, address):  # type: ignore[no-untyped-def]
+        if not _is_loopback(address):
+            raise RuntimeError(
+                f"test tried to open a network connection to {address!r}; "
+                "stub the client (or set TEST_ALLOW_NETWORK=1 for a one-off run)"
+            )
+        return real(self, address)
+
+    return connect
+
+
+if os.environ.get("TEST_ALLOW_NETWORK") != "1":
+    socket.socket.connect = _guarded(_real_connect)  # type: ignore[method-assign]
+    socket.socket.connect_ex = _guarded(_real_connect_ex)  # type: ignore[method-assign]
 
 import psycopg  # noqa: E402
 import pytest  # noqa: E402
@@ -104,7 +150,35 @@ PG_TEST_URL_ASYNC = _async_url(PG_DBNAME)
 PG_TEST_URL_SYNC = _sync_url(PG_DBNAME)
 
 
+# The suite drops and recreates databases on whatever server TEST_PG_* points
+# at -- by default the same Postgres the live bot uses (:5433). Nothing used to
+# stop TEST_PG_DB=halal_trader from dropping the live database. This is an
+# allowlist, not a denylist: a name has to look disposable to be touched.
+_DISPOSABLE_DB = re.compile(
+    r"^[a-z0-9_]+_test(_gw\d+)?$"  # session DBs: <base>_test, <base>_test_gw3
+    r"|^halal_trader_(alembic|init)_[0-9a-f]{10}$"  # per-test scratch DBs
+)
+
+
+def _assert_disposable_db(dbname: str) -> None:
+    if not _DISPOSABLE_DB.fullmatch(dbname):
+        raise RuntimeError(
+            f"refusing to create/drop database {dbname!r}: test databases must be "
+            "named *_test (TEST_PG_DB) or be a halal_trader_{alembic,init}_<hex> "
+            "scratch DB -- this guard keeps the suite off the live database"
+        )
+
+
+if not _DISPOSABLE_DB.fullmatch(_worker_dbname()):
+    pytest.exit(
+        f"TEST_PG_DB={_PG_TEST_DB_BASE!r} is not a disposable test database name "
+        "(must end in _test); refusing to run a suite that drops it.",
+        returncode=4,
+    )
+
+
 def _terminate_and_drop(dbname: str) -> None:
+    _assert_disposable_db(dbname)
     with psycopg.connect(_ADMIN_DSN_SYNC, autocommit=True) as conn:
         with conn.cursor() as cur:
             cur.execute(

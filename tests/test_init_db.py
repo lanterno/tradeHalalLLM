@@ -20,6 +20,7 @@ from tests.conftest import (
     PG_PASS,
     PG_PORT,
     PG_USER,
+    _assert_disposable_db,
     _terminate_and_drop,
 )
 
@@ -32,6 +33,7 @@ def _scratch_db_url() -> tuple[str, str]:
     ``SQLModel.metadata.create_all`` runs.
     """
     name = f"halal_trader_init_{uuid.uuid4().hex[:10]}"
+    _assert_disposable_db(name)
     with psycopg.connect(_ADMIN_DSN_SYNC, autocommit=True) as conn:
         with conn.cursor() as cur:
             cur.execute(f'CREATE DATABASE "{name}"')
