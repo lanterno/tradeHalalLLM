@@ -86,7 +86,6 @@ async def test_explain_route_returns_markdown_for_trade_with_screening() -> None
     ctx = DashboardContext(
         engine=MagicMock(),
         repo=MagicMock(),
-        hub=MagicMock(),
         analytics=MagicMock(),
         settings=MagicMock(),
         bus=MagicMock(),
@@ -128,7 +127,6 @@ async def test_explain_route_returns_404_for_unknown_trade() -> None:
     ctx = DashboardContext(
         engine=MagicMock(),
         repo=MagicMock(),
-        hub=MagicMock(),
         analytics=MagicMock(),
         settings=MagicMock(),
         bus=MagicMock(),
@@ -163,7 +161,6 @@ async def test_explain_route_rejects_bad_asset_class() -> None:
     ctx = DashboardContext(
         engine=MagicMock(),
         repo=MagicMock(),
-        hub=MagicMock(),
         analytics=MagicMock(),
         settings=MagicMock(),
         bus=MagicMock(),
@@ -201,7 +198,6 @@ async def test_explain_route_handles_legacy_trade_without_screening() -> None:
     ctx = DashboardContext(
         engine=MagicMock(),
         repo=MagicMock(),
-        hub=MagicMock(),
         analytics=MagicMock(),
         settings=MagicMock(),
         bus=MagicMock(),

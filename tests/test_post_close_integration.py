@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
+from halal_trader.core.llm.rag_db import DBRationaleStore
 from halal_trader.core.post_close import (
     CloseEvent,
     CloseRecorders,
     record_close,
 )
-from halal_trader.core.regret_db import DBRegretRecorder
-from halal_trader.core.thesis_db import DBThesisTagStore
 from halal_trader.halal.round_trip_purification import (
     RoundTripLedger,
     RoundTripRule,
@@ -33,53 +32,40 @@ def _e(symbol: str, *, pnl: float, gain: float, **kw):
     return CloseEvent(**base)
 
 
-async def test_full_post_close_flow_to_dashboard_shape(engine) -> None:
-    """One winning close → thesis tagged + regret + purification."""
-    thesis_store = DBThesisTagStore(engine=engine)
-    regret_recorder = DBRegretRecorder(engine=engine)
+async def test_full_post_close_flow(engine) -> None:
+    """One winning close → rationale stored + purification accrued."""
+    rag = DBRationaleStore(engine=engine)
     ledger = RoundTripLedger(engine=engine)
     rec = CloseRecorders(
-        thesis_store=thesis_store,
-        regret_recorder=regret_recorder,
+        rag_store=rag,
         purification_ledger=ledger,
         purification_rules={"BTCUSDT": RoundTripRule(symbol="BTCUSDT", impure_ratio=0.02)},
     )
     summary = await record_close(_e("BTCUSDT", pnl=0.02, gain=100.0), rec)
 
-    assert await thesis_store.get("BTCUSDT-1") is not None
-
-    rows = await regret_recorder.all()
-    assert len(rows) == 1
-    assert rows[0]["trade_id"] == "BTCUSDT-1"
-    assert rows[0]["pnl_pct"] == 0.02
-
+    assert await rag.size() == 1
     assert await ledger.outstanding() == 2.0
     assert summary["purification_due_usd"] == 2.0
 
 
 async def test_loss_close_skips_purification(engine) -> None:
-    thesis_store = DBThesisTagStore(engine=engine)
-    regret_recorder = DBRegretRecorder(engine=engine)
+    rag = DBRationaleStore(engine=engine)
     ledger = RoundTripLedger(engine=engine)
     rec = CloseRecorders(
-        thesis_store=thesis_store,
-        regret_recorder=regret_recorder,
+        rag_store=rag,
         purification_ledger=ledger,
         purification_rules={"BTCUSDT": RoundTripRule(symbol="BTCUSDT", impure_ratio=0.02)},
     )
     await record_close(_e("BTCUSDT", pnl=-0.02, gain=-100.0), rec)
     assert await ledger.outstanding() == 0.0
-    assert await thesis_store.get("BTCUSDT-1") is not None
-    assert len(await regret_recorder.all()) == 1
+    assert await rag.size() == 1
 
 
 async def test_multiple_closes_aggregate(engine) -> None:
-    thesis_store = DBThesisTagStore(engine=engine)
-    regret_recorder = DBRegretRecorder(engine=engine)
+    rag = DBRationaleStore(engine=engine)
     ledger = RoundTripLedger(engine=engine)
     rec = CloseRecorders(
-        thesis_store=thesis_store,
-        regret_recorder=regret_recorder,
+        rag_store=rag,
         purification_ledger=ledger,
         purification_rules={"AAPL": RoundTripRule(symbol="AAPL", impure_ratio=0.01)},
     )
@@ -95,4 +81,4 @@ async def test_multiple_closes_aggregate(engine) -> None:
             rec,
         )
     assert await ledger.outstanding() > 0
-    assert len(await regret_recorder.all()) == 20
+    assert await rag.size() == 20

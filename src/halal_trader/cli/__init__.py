@@ -65,7 +65,7 @@ cli.add_command(llm_decisions_cmd.llm_decisions)
 # ── Dashboard ──────────────────────────────────────────────────
 cli.add_command(dashboard_cmd.dashboard)
 
-# ── Insights (purification / replay / catalysts / RAG / receipts) ──
+# ── Insights (purification / catalysts / RAG / receipts) ───────
 cli.add_command(insights_cmd.insights)
 
 # ── Daily halal recommendation (advisory stock-of-the-day) ─────

@@ -21,7 +21,6 @@ from typing import Any
 from halal_trader.config import get_settings
 from halal_trader.core.context import DashboardContext, RuntimeView
 from halal_trader.core.event_bus import EventBus
-from halal_trader.core.insights_hub import InsightsHub
 from halal_trader.db.models import init_db
 from halal_trader.db.repository import Repository
 from halal_trader.portfolio.analytics import PerformanceAnalytics
@@ -58,25 +57,14 @@ def create_app() -> Any:
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
-        # Co-host pattern: when the bot ran ``attach_to_app`` before the
-        # dashboard's lifespan fired, ``_app.state.ctx`` is already set
-        # to the bot's projected DashboardContext. In that mode the bot
-        # owns the engine, hub, and event bus — the lifespan must NOT
-        # build a parallel set or dispose the engine on shutdown.
-        if getattr(_app.state, "ctx", None) is not None:
-            yield
-            return
-
         settings = get_settings()
         engine = await init_db(settings.database_url)
         repo = Repository(engine)
         analytics = PerformanceAnalytics(repo)
-        hub = InsightsHub()
         runtime = RuntimeView(started_at=datetime.now(UTC))
         ctx = DashboardContext(
             engine=engine,
             repo=repo,
-            hub=hub,
             analytics=analytics,
             settings=settings,
             bus=EventBus(),

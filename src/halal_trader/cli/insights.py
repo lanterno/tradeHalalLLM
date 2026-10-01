@@ -1,7 +1,7 @@
 """Insights CLI — surface the new analysis modules at the terminal.
 
 Each subcommand is a thin Click wrapper over one analysis store
-(purification ledger, replay snapshots, catalysts, RAG,
+(purification ledger, catalysts, RAG,
 the halal exception queue, compliance receipts).
 
 Heavy modules (sqlmodel, ml) are imported inside command bodies
@@ -20,24 +20,6 @@ import click
 @click.group("insights")
 def insights() -> None:
     """Run analytics over recent trades and synthetic scenarios."""
-
-
-@insights.command("shadow")
-def shadow_cmd() -> None:
-    """Show divergence between live and shadow equity curves.
-
-    The shadow ledger is in-process state on the running bot — a
-    standalone CLI invocation can't observe it. The dashboard's
-    ``/api/insights/shadow`` route is the right surface; this stub
-    stays so a tab-completing operator gets a clear hint instead
-    of a silent "empty" lie.
-    """
-    from halal_trader.logging import console
-
-    console.print(
-        "[yellow]Shadow ledger lives in the running bot's process — "
-        "use the dashboard's /api/insights/shadow endpoint, not the CLI.[/]"
-    )
 
 
 @insights.command("purification")
@@ -68,33 +50,6 @@ def purification_cmd() -> None:
                 console.print("[bold]By symbol:[/]")
                 for sym, due in sorted(summary["by_symbol"].items(), key=lambda kv: -kv[1]):
                     console.print(f"  {sym:<10} ${due:.2f}")
-        finally:
-            await engine.dispose()
-
-    asyncio.run(_run())
-
-
-@insights.command("replay")
-@click.option("--limit", default=20, show_default=True)
-def replay_cmd(limit: int) -> None:
-    """List recent cycle snapshots in the replay store."""
-
-    async def _run() -> None:
-        from halal_trader.config import get_settings
-        from halal_trader.core.replay import ReplayStore
-        from halal_trader.db.models import init_db
-        from halal_trader.logging import console
-
-        settings = get_settings()
-        engine = await init_db(settings.database_url)
-        try:
-            store = ReplayStore(engine=engine)
-            ids = await store.list_cycle_ids(limit=limit)
-            if not ids:
-                console.print("[yellow]Replay store empty.[/]")
-                return
-            for cid in ids:
-                console.print(f"  {cid}")
         finally:
             await engine.dispose()
 

@@ -1,19 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
-import { fetchShadow, fetchPurification } from "../api/insights";
+import { fetchPurification } from "../api/insights";
 
-// Refresh cadence: 30s — these endpoints reflect cycle-level state
-// that doesn't change faster than that. Tiles re-fetch on focus too,
-// which gives operator-driven freshness when actively investigating.
-const REFRESH_MS = 30_000;
-
-export function useShadow() {
-  return useQuery({
-    queryKey: ["insights", "shadow"],
-    queryFn: fetchShadow,
-    refetchInterval: REFRESH_MS,
-  });
-}
-
+// Purification accrues once per closed winning trade, so a 5-minute poll
+// is plenty. The tile also re-fetches on window focus.
 export function usePurification() {
   return useQuery({
     queryKey: ["insights", "purification"],

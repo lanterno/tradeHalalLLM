@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
-
 from fastapi import Depends, FastAPI
 from fastapi.responses import JSONResponse
 
@@ -12,72 +10,6 @@ from halal_trader.web.dependencies import get_ctx
 
 
 def register(app: FastAPI) -> None:
-    @app.get("/api/insights/shadow")
-    async def api_shadow(ctx: DashboardContext = Depends(get_ctx)) -> JSONResponse:
-        ledger = ctx.hub.shadow
-        if ledger is None or ledger.size == 0:
-            return JSONResponse({"available": False})
-        from halal_trader.core.shadow import (
-            divergence_metrics,
-            shadow_alert_state,
-        )
-
-        metrics = divergence_metrics(ledger.entries)
-        level = shadow_alert_state(metrics)
-        return JSONResponse(
-            {
-                "available": True,
-                "n": ledger.size,
-                "level": level,
-                "metrics": (
-                    {
-                        "n": metrics.n,
-                        "mean_diff_pct": metrics.mean_diff_pct,
-                        "last_diff_pct": metrics.last_diff_pct,
-                        "max_drawdown_diff": metrics.max_drawdown_diff,
-                        "paired_t_score": metrics.paired_t_score,
-                        "direction": metrics.direction,
-                    }
-                    if metrics is not None
-                    else None
-                ),
-                "ts": datetime.now(UTC).isoformat(),
-            }
-        )
-
-    @app.get("/api/insights/treasury")
-    async def api_treasury(ctx: DashboardContext = Depends(get_ctx)) -> JSONResponse:
-        try:
-            from halal_trader.core.treasury import (
-                TreasuryPolicy,
-                estimate_annual_yield_usd,
-                plan_idle_cash,
-            )
-        except Exception:  # noqa: BLE001
-            return JSONResponse({"available": False})
-        cached = ctx.runtime.account_snapshot
-        if not cached:
-            return JSONResponse({"available": False})
-        policy = TreasuryPolicy()
-        plan = plan_idle_cash(
-            cash_balance=float(cached.get("cash", 0)),
-            positions_value=float(cached.get("positions_value", 0)),
-            current_treasury_value=float(cached.get("treasury_value", 0)),
-            policy=policy,
-        )
-        return JSONResponse(
-            {
-                "available": True,
-                "action": plan.action,
-                "amount_usd": plan.amount_usd,
-                "instrument": plan.instrument,
-                "reason": plan.reason,
-                "estimated_yield_usd_year": estimate_annual_yield_usd(
-                    cached.get("treasury_value", 0)
-                ),
-            }
-        )
-
     @app.get("/api/insights/purification")
     async def api_purification(
         ctx: DashboardContext = Depends(get_ctx),
@@ -91,20 +23,6 @@ def register(app: FastAPI) -> None:
         if await ledger.count() == 0:
             return JSONResponse({"available": False})
         return JSONResponse({"available": True, **(await outstanding_round_trip_due(ledger))})
-
-    @app.get("/api/insights/replay")
-    async def api_replay(limit: int = 50, ctx: DashboardContext = Depends(get_ctx)) -> JSONResponse:
-        from halal_trader.core.replay import ReplayStore
-
-        store = ReplayStore(engine=ctx.engine)
-        cycle_ids = await store.list_cycle_ids(limit=limit)
-        return JSONResponse(
-            {
-                "available": True,
-                "n": len(cycle_ids),
-                "cycle_ids": cycle_ids,
-            }
-        )
 
     @app.get("/api/insights/exceptions")
     async def api_exceptions(

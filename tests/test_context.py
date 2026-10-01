@@ -1,12 +1,9 @@
-"""Tests for :mod:`core.context` — `BotContext`, `DashboardContext`,
-and `RuntimeView`.
+"""Tests for :mod:`core.context` — `DashboardContext` and `RuntimeView`.
 
 These types replace the old `app_state: dict[str, Any]` bag. Tests
-elsewhere (`test_web_insights`, `test_ws_cycle`, `test_prometheus`)
-use them as construction helpers — this file pins the contract:
-field defaults, the projection from `BotContext` to `DashboardContext`,
-and the frozen + mutable boundary (static deps frozen, `runtime`
-view mutable).
+elsewhere (`test_ws_cycle`, `test_prometheus`) use them as construction
+helpers — this file pins the contract: field defaults and the frozen +
+mutable boundary (static deps frozen, `runtime` view mutable).
 """
 
 from __future__ import annotations
@@ -15,7 +12,7 @@ from dataclasses import FrozenInstanceError, fields
 
 import pytest
 
-from halal_trader.core.context import BotContext, DashboardContext, RuntimeView
+from halal_trader.core.context import DashboardContext, RuntimeView
 
 
 def _ctx_kwargs() -> dict:
@@ -23,7 +20,6 @@ def _ctx_kwargs() -> dict:
     return {
         "engine": object(),
         "repo": object(),
-        "hub": object(),
         "analytics": object(),
         "settings": object(),
         "bus": object(),
@@ -85,14 +81,13 @@ def test_runtime_view_llm_cost_optional_float():
 # ── DashboardContext shape ─────────────────────────────────
 
 
-def test_dashboard_context_holds_all_seven_fields():
-    """The dataclass projects exactly seven fields — pin so a future
+def test_dashboard_context_holds_all_six_fields():
+    """The dataclass projects exactly six fields — pin so a future
     field add (or removal) is intentional."""
     field_names = {f.name for f in fields(DashboardContext)}
     assert field_names == {
         "engine",
         "repo",
-        "hub",
         "analytics",
         "settings",
         "bus",
@@ -121,80 +116,6 @@ def test_dashboard_context_runtime_field_remains_mutable():
         ctx.runtime = RuntimeView()  # type: ignore[misc]
 
 
-# ── BotContext shape ──────────────────────────────────────
-
-
-def test_bot_context_holds_same_seven_fields_as_dashboard():
-    """BotContext currently mirrors DashboardContext (the docstring
-    says "superset" but no extra fields exist yet). When a bot-only
-    field is added, this test breaks — re-evaluate the projection."""
-    bot_fields = {f.name for f in fields(BotContext)}
-    dash_fields = {f.name for f in fields(DashboardContext)}
-    assert bot_fields == dash_fields
-
-
-def test_bot_context_is_frozen():
-    ctx = BotContext(**_ctx_kwargs())
-    with pytest.raises(FrozenInstanceError):
-        ctx.engine = object()  # type: ignore[misc]
-
-
-# ── BotContext.to_dashboard_context() projection ───────────
-
-
-def test_to_dashboard_context_returns_dashboard_context_instance():
-    bot = BotContext(**_ctx_kwargs())
-    dash = bot.to_dashboard_context()
-    assert isinstance(dash, DashboardContext)
-
-
-def test_to_dashboard_context_passes_field_identity_through():
-    """The projection must NOT copy the held objects — engine, repo,
-    runtime, etc. all flow through by identity. Otherwise the
-    dashboard would observe a stale snapshot of the runtime view
-    instead of the live one the cycle is mutating."""
-    kwargs = _ctx_kwargs()
-    bot = BotContext(**kwargs)
-    dash = bot.to_dashboard_context()
-
-    assert dash.engine is kwargs["engine"]
-    assert dash.repo is kwargs["repo"]
-    assert dash.hub is kwargs["hub"]
-    assert dash.analytics is kwargs["analytics"]
-    assert dash.settings is kwargs["settings"]
-    assert dash.bus is kwargs["bus"]
-    assert dash.runtime is kwargs["runtime"]  # critical — same view
-
-
-def test_to_dashboard_context_runtime_mutations_visible_in_both():
-    """The shared RuntimeView is the whole point of the projection —
-    the cycle pushes into bot.runtime and the dashboard reads from
-    dash.runtime. If they were separate views, the dashboard would
-    show stale data."""
-    bot = BotContext(**_ctx_kwargs())
-    dash = bot.to_dashboard_context()
-
-    bot.runtime.bot_running = True
-    bot.runtime.risk_state = {"drawdown": 0.1}
-
-    assert dash.runtime.bot_running is True
-    assert dash.runtime.risk_state == {"drawdown": 0.1}
-
-
-def test_to_dashboard_context_is_idempotent():
-    """Calling the projection twice yields equivalent dashboard
-    contexts pointing at the same underlying objects (a fresh frozen
-    wrapper each time, but identical contents)."""
-    bot = BotContext(**_ctx_kwargs())
-    a = bot.to_dashboard_context()
-    b = bot.to_dashboard_context()
-    # Different wrapper instances (frozen dataclass; no caching).
-    assert a is not b
-    # But every field they hold is the same object.
-    assert a.engine is b.engine
-    assert a.runtime is b.runtime
-
-
 # ── slots invariants ────────────────────────────────────
 
 
@@ -203,9 +124,4 @@ def test_dashboard_context_uses_slots():
     rather than assignment (slots+frozen interact in confusing ways
     that make `pytest.raises` brittle)."""
     ctx = DashboardContext(**_ctx_kwargs())
-    assert not hasattr(ctx, "__dict__")
-
-
-def test_bot_context_uses_slots():
-    ctx = BotContext(**_ctx_kwargs())
     assert not hasattr(ctx, "__dict__")

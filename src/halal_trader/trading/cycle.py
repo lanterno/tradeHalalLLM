@@ -4,7 +4,6 @@ import logging
 from typing import Any
 
 from halal_trader.core.cycle import BaseCycleService
-from halal_trader.core.observability import cycle_id_var
 from halal_trader.domain.ports import Broker, ComplianceScreener
 from halal_trader.market_hours import is_market_open_local, now_eastern
 from halal_trader.trading.executor import TradeExecutor
@@ -43,9 +42,7 @@ class TradingCycleService(BaseCycleService):
         alerts=None,
         engine=None,
         live_mode_checker=None,
-        shadow_runner: Any = None,
         timeframe_analyzer: Any = None,
-        insights_hub: Any = None,
         notifier: Any = None,
         analytics: Any = None,
         self_review: Any = None,
@@ -65,18 +62,9 @@ class TradingCycleService(BaseCycleService):
         # Optional StockCatalystFeed (Phase 3.5) — gives the LLM live news,
         # earnings, insider activity. Cycle proceeds normally if absent.
         self._catalyst_feed = catalyst_feed
-        # Optional shadow runner — runs a frozen-prompt strategy on the
-        # same per-cycle inputs and records a divergence row to the
-        # shadow ledger. Off when disabled.
-        self._shadow_runner = shadow_runner
         # Optional multi-timeframe analyzer — pulls hourly/daily/weekly
         # bars and surfaces a trend-alignment score per symbol.
         self._timeframes = timeframe_analyzer
-        # Optional insights hub — when wired, the cycle pushes the
-        # structured risk state into ``hub.runtime.risk_state`` so the
-        # dashboard's risk panel renders the stocks bot's heat /
-        # drawdown / correlation.
-        self._hub = insights_hub
         # Optional Telegram notifier — fires `notify_trade` on filled
         # buys/sells so the operator gets a Telegram alert per fill.
         self._notifier = notifier
@@ -199,26 +187,7 @@ class TradingCycleService(BaseCycleService):
             ],
             stop_on_halt=True,
         )
-        # Push the structured risk state into the hub's runtime view so
-        # the dashboard's /api/risk/state can render the stocks bot's
-        # heat / drawdown / correlation. Best-effort: no hub → no push.
-        runtime = getattr(self._hub, "runtime", None)
         rs = state.risk_state
-        if runtime is not None and rs is not None:
-            from datetime import UTC
-            from datetime import datetime as _dt
-
-            runtime.risk_state = {
-                "market": "stocks",
-                "is_halted": getattr(rs, "is_halted", False),
-                "halt_reason": getattr(rs, "halt_reason", ""),
-                "portfolio_heat_pct": getattr(rs, "portfolio_heat_pct", None),
-                "drawdown_pct": getattr(rs, "drawdown_pct", None),
-                "avg_correlation": getattr(rs, "avg_correlation", None),
-                "summary": state.risk_text,
-                "pushed_at": _dt.now(UTC).isoformat(),
-            }
-
         self.last_risk_halt = (
             str(getattr(rs, "halt_reason", "") or "unspecified") if state.halt else None
         )
@@ -378,18 +347,6 @@ class TradingCycleService(BaseCycleService):
         else:
             logger.info("No trades to execute this cycle")
 
-        if self._shadow_runner is not None:
-            try:
-                latest_prices = _extract_latest_prices(snapshots)
-                await self._shadow_runner.observe_cycle(
-                    cycle_id=cycle_id_var.get() or "cycle-unknown",
-                    live_equity=account.effective_equity or account.equity or 0.0,
-                    latest_prices=latest_prices,
-                    analyze_kwargs=analyze_kwargs,
-                )
-            except Exception as exc:  # noqa: BLE001
-                logger.debug("stocks shadow runner observe_cycle failed: %s", exc)
-
     # ── Private helpers ──────────────────────────────────────────
 
     async def _handle_execution_results(self, results: list[dict[str, Any]]) -> None:
@@ -481,19 +438,3 @@ class TradingCycleService(BaseCycleService):
             except Exception as e:
                 logger.debug("Failed to get bars for %s: %s", sym, e)
         return snapshots, bars
-
-
-def _extract_latest_prices(snapshots: dict[str, Any]) -> dict[str, float]:
-    """Best-effort latest-price map for the shadow simulator.
-
-    Anything that can't be priced is silently dropped — the simulator
-    skips positions it can't value.
-    """
-    from halal_trader.trading.bars import extract_last_price
-
-    prices: dict[str, float] = {}
-    for sym, snap in snapshots.items():
-        price = extract_last_price(snap, sym)
-        if price is not None:
-            prices[sym] = price
-    return prices

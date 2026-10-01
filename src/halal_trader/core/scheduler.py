@@ -5,18 +5,14 @@ from __future__ import annotations
 import abc
 import logging
 from datetime import timedelta
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from halal_trader.config import get_settings
-from halal_trader.core.context import RuntimeView
 from halal_trader.db.models import init_db
 from halal_trader.db.repos import RepoBundle
 from halal_trader.db.repository import Repository
-
-if TYPE_CHECKING:
-    from halal_trader.core.context import BotContext
 
 logger = logging.getLogger(__name__)
 
@@ -30,14 +26,6 @@ class BaseTradingBot(abc.ABC):
         self._engine: AsyncEngine | None = None
         self._repo: Repository | None = None
         self._bundle: RepoBundle | None = None
-        # Wave A: every long-lived dependency the bot needs flows
-        # through one frozen BotContext. The cycle / monitor / cli
-        # commands take ``self._ctx`` instead of reaching into a
-        # global ``app_state`` dict. The mutable RuntimeView inside
-        # ``_ctx.runtime`` is the bot's "what am I doing right now"
-        # view that the dashboard polls.
-        self._runtime: RuntimeView = RuntimeView()
-        self._ctx: "BotContext | None" = None
 
     async def initialize(self) -> None:
         """Set up the database and delegate component creation to the subclass."""
@@ -85,19 +73,6 @@ class BaseTradingBot(abc.ABC):
     @abc.abstractmethod
     async def run(self) -> None:
         """Start the bot's main loop (subclass-specific)."""
-
-    def attach_to_app(self, app: Any) -> None:
-        """Co-host: project the bot's :class:`BotContext` onto a FastAPI
-        app's ``state.ctx`` so the dashboard sees live runtime values.
-
-        Call this AFTER :meth:`initialize` (which builds ``self._ctx``)
-        and BEFORE the dashboard's lifespan fires — the lifespan sees a
-        pre-installed ``ctx`` and skips its own standalone build path,
-        keeping the engine, event bus, and hub single-instanced.
-        """
-        if self._ctx is None:
-            raise RuntimeError("Bot must be initialized before attach_to_app()")
-        app.state.ctx = self._ctx.to_dashboard_context()
 
     async def _prune_audit_log(self) -> None:
         """Delete ``web_actions`` rows older than the retention window.

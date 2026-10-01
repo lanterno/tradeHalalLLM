@@ -11,7 +11,6 @@ dependencies = [
     "pydantic-settings",
     # Data / ORM
     "sqlmodel",
-    "aiosqlite",
     "greenlet",
     "alembic",
     # Scheduling
@@ -35,8 +34,6 @@ dependencies = [
     "asyncpg>=0.31.0",
     "psycopg[binary]>=3.3.3",
     "pgvector>=0.4.2",
-    # Structured concurrency for the supervisor
-    "anyio>=4",
     # Prometheus client for native histograms (Wave J)
     "prometheus-client>=0.20",
 ]

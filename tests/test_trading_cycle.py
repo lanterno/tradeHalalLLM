@@ -92,7 +92,6 @@ async def test_post_cycle_no_op_when_no_engine():
 def test_constructor_threads_through_optional_kwargs():
     """The kwargs added across recent parity work all stick."""
     notifier = MagicMock()
-    hub = MagicMock()
     timeframes = MagicMock()
     svc = TradingCycleService(
         broker=AsyncMock(),
@@ -101,11 +100,9 @@ def test_constructor_threads_through_optional_kwargs():
         executor=AsyncMock(),
         portfolio=AsyncMock(),
         timeframe_analyzer=timeframes,
-        insights_hub=hub,
         notifier=notifier,
     )
     assert svc._timeframes is timeframes
-    assert svc._hub is hub
     assert svc._notifier is notifier
 
 
