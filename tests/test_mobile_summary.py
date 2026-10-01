@@ -70,8 +70,11 @@ def test_summary_drawdown_market_none_when_no_risk_state(client):
 
 
 def test_summary_reflects_engaged_halt(client):
-    """After /api/admin/halt, the mobile summary should show enabled=True."""
-    client.post("/api/admin/halt", json={"reason": "test halt drill"})
+    """After a halt, the mobile summary should show enabled=True."""
+    r = client.post(
+        "/api/system/halt", json={"reason": "test halt drill"}, headers={"X-Halt-Confirm": "yes"}
+    )
+    assert r.status_code == 200, r.text
     body = client.get("/api/mobile/summary").json()
     assert body["halt"]["enabled"] is True
     assert body["halt"]["reason"] == "test halt drill"

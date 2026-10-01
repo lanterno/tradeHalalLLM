@@ -5,7 +5,6 @@ sector allocation so the operator can drive compliance workflows from
 the dashboard:
 
 * GET / POST / DELETE on the purification ledger.
-* POST /api/admin/halal/refresh to force a halal-cache rebuild.
 * GET sector-allocation breakdown (current exposure per sector vs cap).
 """
 
@@ -119,25 +118,6 @@ def register(app: FastAPI) -> None:
         if not ok:
             raise HTTPException(404, f"purification entry {entry_id} not found")
         return JSONResponse({"id": entry_id, "paid": True})
-
-    @app.post(
-        "/api/admin/halal/refresh",
-        dependencies=[Depends(require_confirmation)],
-    )
-    async def force_halal_refresh(
-        ctx: DashboardContext = Depends(get_ctx),
-    ) -> JSONResponse:
-        from halal_trader.halal.cache import HalalScreener
-
-        screener = HalalScreener(ctx.repo, zoya=None)
-        await screener.ensure_cache(force=True)
-        symbols = await screener.get_halal_symbols()
-        return JSONResponse(
-            {
-                "refreshed": True,
-                "halal_symbol_count": len(symbols),
-            }
-        )
 
     @app.get("/api/admin/halal/sector-allocation")
     async def sector_allocation(
