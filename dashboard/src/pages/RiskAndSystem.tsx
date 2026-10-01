@@ -127,7 +127,7 @@ export default function RiskAndSystem() {
         <p className="mt-3 text-xs text-muted">
           Engaging the halt blocks NEW positions on every cycle. In-flight
           SL/TP exits still run. Use the CLI{" "}
-          <code className="font-mono">halal-trader halt --close-all=both</code>{" "}
+          <code className="font-mono">halal-trader halt --close-all stocks</code>{" "}
           for the full panic button (also liquidates positions).
         </p>
       </section>
@@ -137,16 +137,15 @@ export default function RiskAndSystem() {
         <h2 className="mb-3 text-sm font-medium uppercase tracking-wider text-muted">
           Portfolio Risk (last cycle{risk.data?.market ? ` · ${risk.data.market}` : ""})
           {(() => {
-            // Stale-snapshot badge: surface "stale Nm" when the cycle
-            // hasn't pushed in a while. Stocks cycle is 15 min, crypto
-            // cycle is ~60 s — different thresholds keep the badge
-            // honest for each.
+            // Stale-snapshot badge: "stale Nm" when the last cycle's risk
+            // read is older than one 15-min cycle plus slack. Age is taken
+            // at fetch time (dataUpdatedAt, refreshed every 15 s) rather
+            // than Date.now(), which would make render impure.
             const pushedAt = risk.data?.pushed_at;
-            if (!pushedAt) return null;
-            const ageMs = Date.now() - new Date(pushedAt).getTime();
+            if (!pushedAt || !risk.dataUpdatedAt) return null;
+            const ageMs = risk.dataUpdatedAt - new Date(pushedAt).getTime();
             if (Number.isNaN(ageMs)) return null;
-            const market = risk.data?.market;
-            const thresholdMs = market === "stocks" ? 20 * 60 * 1000 : 3 * 60 * 1000;
+            const thresholdMs = 20 * 60 * 1000;
             if (ageMs < thresholdMs) return null;
             const ageMin = Math.floor(ageMs / 60000);
             return (

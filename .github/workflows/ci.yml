@@ -92,3 +92,30 @@ jobs:
           uv run coverage report
           --include='src/halal_trader/domain/*,src/halal_trader/core/*'
           --fail-under=85
+
+  dashboard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: dashboard
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Lint
+        if: success() || failure()
+        run: npm run lint
+
+      # `npm run build` type-checks (tsc -b) and then bundles with Vite.
+      - name: Type check and build
+        if: success() || failure()
+        run: npm run build
