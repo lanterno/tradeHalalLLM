@@ -12,21 +12,6 @@ from halal_trader.web.dependencies import get_ctx
 
 
 def register(app: FastAPI) -> None:
-    @app.get("/api/insights/drift")
-    async def api_drift(ctx: DashboardContext = Depends(get_ctx)) -> JSONResponse:
-        mon = ctx.hub.drift
-        if mon is None:
-            return JSONResponse({"available": False})
-        return JSONResponse(
-            {
-                "available": True,
-                "state": mon.state,
-                "n": mon.n,
-                "drift_count": mon.drift_count,
-                "last_drift_at": mon.last_drift_at,
-            }
-        )
-
     @app.get("/api/insights/shadow")
     async def api_shadow(ctx: DashboardContext = Depends(get_ctx)) -> JSONResponse:
         ledger = ctx.hub.shadow
@@ -57,32 +42,6 @@ def register(app: FastAPI) -> None:
                     else None
                 ),
                 "ts": datetime.now(UTC).isoformat(),
-            }
-        )
-
-    @app.get("/api/insights/regime")
-    async def api_regime(ctx: DashboardContext = Depends(get_ctx)) -> JSONResponse:
-        mem = ctx.hub.regime
-        if mem is None:
-            return JSONResponse({"available": False})
-        size = await mem.size()
-        if size == 0:
-            return JSONResponse({"available": False})
-        recent = await mem.recent(limit=10)
-        return JSONResponse(
-            {
-                "available": True,
-                "size": size,
-                "recent": [
-                    {
-                        "date": s.date,
-                        "outcome_pnl_pct": s.outcome_pnl_pct,
-                        "outcome_win_rate": s.outcome_win_rate,
-                        "outcome_n_trades": s.outcome_n_trades,
-                        "note": s.note,
-                    }
-                    for s in recent
-                ],
             }
         )
 
@@ -239,21 +198,5 @@ def register(app: FastAPI) -> None:
                     for r, sim in hits
                 ],
                 "aggregate": await store.aggregate(hits),
-            }
-        )
-
-    @app.get("/api/insights/calibration")
-    async def api_calibration(
-        ctx: DashboardContext = Depends(get_ctx),
-    ) -> JSONResponse:
-        curve = ctx.hub.calibration
-        if curve is None:
-            return JSONResponse({"available": False})
-        return JSONResponse(
-            {
-                "available": True,
-                "method": curve.method,
-                "n_samples": curve.n_samples,
-                "anchors": curve.anchors,
             }
         )

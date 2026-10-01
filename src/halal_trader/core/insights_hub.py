@@ -16,21 +16,13 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from halal_trader.core.shadow import ShadowLedger
-from halal_trader.ml.calibration import CalibrationCurve
-from halal_trader.ml.drift import DriftMonitor
-from halal_trader.ml.regime_memory import RegimeMemory
 
 
 @dataclass
 class InsightsHub:
     """Container for in-process analytics state."""
 
-    drift: DriftMonitor = field(default_factory=DriftMonitor)
-    # DB-backed when wired from an engine (the web app does). Stays
-    # None for pure-CLI contexts.
-    regime: RegimeMemory | None = None
     shadow: ShadowLedger = field(default_factory=ShadowLedger)
-    calibration: CalibrationCurve = field(default_factory=CalibrationCurve.identity)
     # Optional reference to the dashboard's mutable RuntimeView so the
     # cycle can push live state (risk_state, last_cycle, …) into the
     # surface the dashboard reads. Threaded by the composition root.
@@ -49,9 +41,6 @@ class InsightsHub:
         values for optional components are fine.
         """
         return {
-            "drift_monitor": self.drift,
-            "regime_memory": self.regime,
             "shadow_ledger": self.shadow,
-            "calibration_curve": self.calibration,
             "rag": self.rag,
         }

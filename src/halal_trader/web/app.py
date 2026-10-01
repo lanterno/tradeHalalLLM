@@ -71,13 +71,7 @@ def create_app() -> Any:
         engine = await init_db(settings.database_url)
         repo = Repository(engine)
         analytics = PerformanceAnalytics(repo)
-        # The standalone dashboard process builds an empty hub —
-        # DB-backed insights (regime, replay, exception queue) come
-        # through the engine directly; the in-memory ones stay empty
-        # until a co-hosted bot writes to them.
-        from halal_trader.ml.regime_memory import RegimeMemory
-
-        hub = InsightsHub(regime=RegimeMemory(engine=engine))
+        hub = InsightsHub()
         runtime = RuntimeView(started_at=datetime.now(UTC))
         ctx = DashboardContext(
             engine=engine,

@@ -269,14 +269,7 @@ class StockSettings(BaseSettings):
     stop_loss_reentry_cooldown_minutes: int = Field(default=120, ge=0)
 
 
-# ── ML / Notifications / Live-mode / Logging ──────────────────
-
-
-class MLSettings(BaseSettings):
-    model_config = SettingsConfigDict(**_BASE_CONFIG, env_prefix="ML_")
-    enabled: bool = Field(default=False)
-    device: str = Field(default="cpu")
-    models_dir: Path = Field(default=Path("models"))
+# ── Notifications / Live-mode / Logging ───────────────────────
 
 
 class TelegramSettings(BaseSettings):
@@ -365,7 +358,6 @@ class Settings(BaseSettings):
     web: WebSettings = Field(default_factory=WebSettings)
     llm: LLMSettings = Field(default_factory=LLMSettings)
     stocks: StockSettings = Field(default_factory=StockSettings)
-    ml: MLSettings = Field(default_factory=MLSettings)
     telegram: TelegramSettings = Field(default_factory=TelegramSettings)
     slack: SlackSettings = Field(default_factory=SlackSettings)
     discord: DiscordSettings = Field(default_factory=DiscordSettings)

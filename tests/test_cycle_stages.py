@@ -16,44 +16,10 @@ from halal_trader.core.cycle_pipeline import CycleState
 from halal_trader.core.cycle_stages import (
     BuildActiveAdjustmentsStage,
     BuildCatalystsStage,
-    BuildMlSignalsStage,
     BuildPerformanceStage,
     BuildStockRiskStage,
     BuildTimeframeStage,
 )
-
-# ── BuildMlSignalsStage ──────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_ml_signals_stage_no_detectors_keeps_pre_rendered_forecasts():
-    """When no detectors are wired, an upstream forecast block survives."""
-    state = CycleState(
-        indicators_cache={"AAPL": {"rsi_14": 50}},
-        forecasts_text="forecast block from upstream",
-    )
-    out = await BuildMlSignalsStage(anomaly_detector=None, signal_classifier=None).run(state)
-    # Helper returns forecasts_text unchanged when both detectors are None.
-    assert out.ml_signals_text == "forecast block from upstream"
-
-
-@pytest.mark.asyncio
-async def test_ml_signals_stage_runs_detectors():
-    anomaly = MagicMock()
-    anomaly.detect.return_value = (True, 0.92)
-    signal = MagicMock()
-    signal.predict_confidence.return_value = 0.71
-    state = CycleState(indicators_cache={"AAPL": {"rsi_14": 50}})
-    out = await BuildMlSignalsStage(anomaly_detector=anomaly, signal_classifier=signal).run(state)
-    assert "ANOMALY DETECTED" in out.ml_signals_text
-    assert "ML confidence" in out.ml_signals_text
-    assert anomaly.add_sample.call_count == 1
-
-
-@pytest.mark.asyncio
-async def test_ml_signals_stage_has_stable_name():
-    assert BuildMlSignalsStage().name == "build_ml_signals_text"
-
 
 # ── BuildTimeframeStage ──────────────────────────────────────────
 

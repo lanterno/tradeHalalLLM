@@ -5,14 +5,6 @@ import { apiFetch } from "./client";
 // to a tile-friendly shape; absent/unavailable returns null so the tile
 // can render an empty-state message instead of throwing.
 
-export interface DriftState {
-  available: true;
-  state: "warming_up" | "stable" | "drift";
-  n: number;
-  drift_count: number;
-  last_drift_at: number | null;
-}
-
 export interface ShadowState {
   available: true;
   n: number;
@@ -40,10 +32,6 @@ async function fetchOptional<T>(path: string): Promise<T | null> {
   const res = await apiFetch<{ available?: boolean } & Record<string, unknown>>(path);
   if (res.available === false) return null;
   return res as T;
-}
-
-export async function fetchDrift(): Promise<DriftState | null> {
-  return fetchOptional<DriftState>("/api/insights/drift");
 }
 
 export async function fetchShadow(): Promise<ShadowState | null> {

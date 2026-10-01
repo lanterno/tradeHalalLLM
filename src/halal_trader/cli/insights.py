@@ -1,7 +1,7 @@
 """Insights CLI — surface the new analysis modules at the terminal.
 
 Each subcommand is a thin Click wrapper over one analysis store
-(regime memory, purification ledger, replay snapshots, catalysts, RAG,
+(purification ledger, replay snapshots, catalysts, RAG,
 the halal exception queue, compliance receipts).
 
 Heavy modules (sqlmodel, ml) are imported inside command bodies
@@ -38,33 +38,6 @@ def shadow_cmd() -> None:
         "[yellow]Shadow ledger lives in the running bot's process — "
         "use the dashboard's /api/insights/shadow endpoint, not the CLI.[/]"
     )
-
-
-@insights.command("regime")
-def regime_cmd() -> None:
-    """Show recent entries from the regime memory store."""
-
-    async def _run() -> None:
-        from halal_trader.config import get_settings
-        from halal_trader.db.models import init_db
-        from halal_trader.logging import console
-        from halal_trader.ml.regime_memory import RegimeMemory
-
-        settings = get_settings()
-        engine = await init_db(settings.database_url)
-        try:
-            mem = RegimeMemory(engine=engine)
-            size = await mem.size()
-            if size == 0:
-                console.print("[yellow]Regime memory empty.[/]")
-                return
-            console.print(f"[bold]Regime memory:[/] {size} snapshot(s)")
-            for s in await mem.recent(limit=10):
-                console.print(f"  {s.label()}")
-        finally:
-            await engine.dispose()
-
-    asyncio.run(_run())
 
 
 @insights.command("purification")

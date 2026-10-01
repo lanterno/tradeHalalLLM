@@ -18,7 +18,6 @@ from halal_trader.core.cycle_pipeline import CycleState
 from halal_trader.core.cycle_stages import (
     BuildActiveAdjustmentsStage,
     BuildCatalystsStage,
-    BuildMlSignalsStage,
     BuildPerformanceStage,
     BuildTimeframeStage,
     FetchStockNewsStage,
@@ -28,11 +27,6 @@ from halal_trader.core.cycle_stages import (
 @pytest.mark.asyncio
 async def test_full_stage_pipeline_populates_every_text_field():
     """Drive the stock prompt-context stages over one state."""
-    anomaly = MagicMock()
-    anomaly.detect.return_value = (False, 0.1)
-    signal = MagicMock()
-    signal.predict_confidence.return_value = 0.55
-
     timeframe = MagicMock()
     timeframe.analyze = AsyncMock(
         return_value={
@@ -78,7 +72,6 @@ async def test_full_stage_pipeline_populates_every_text_field():
     )
 
     stages = [
-        BuildMlSignalsStage(anomaly_detector=anomaly, signal_classifier=signal),
         BuildTimeframeStage(analyzer=timeframe),
         BuildCatalystsStage(feed=feed),
         BuildPerformanceStage(analytics=analytics),
@@ -90,8 +83,6 @@ async def test_full_stage_pipeline_populates_every_text_field():
         # Every stage returns the state in place (the contract).
         assert out is state
 
-    # ML stage emits a confidence section even with no anomalies.
-    assert "ML confidence" in state.ml_signals_text
     assert "AAPL" in state.timeframe_text
     assert "BULLISH" in state.timeframe_text  # alignment 0.7 → BULLISH bucket
     assert "AAPL" in state.catalysts_text
@@ -107,7 +98,6 @@ async def test_pipeline_runs_with_no_deps_wired():
     """Every stage's no-op path: empty state in, empty state out."""
     state = CycleState()
     stages = [
-        BuildMlSignalsStage(),
         BuildTimeframeStage(analyzer=None),
         BuildCatalystsStage(feed=None),
         BuildPerformanceStage(analytics=None),
@@ -118,8 +108,6 @@ async def test_pipeline_runs_with_no_deps_wired():
         await stage.run(state)
     # Every text field is still the empty default.
     assert state.regime_text == ""
-    assert state.ml_signals_text == ""
-    assert state.forecasts_text == ""
     assert state.timeframe_text == ""
     assert state.performance_text == ""
     assert state.active_adjustments == ""
@@ -211,7 +199,7 @@ async def test_run_stages_publishes_per_stage_events():
     state = CycleState()
     await run_stages(
         state,
-        [BuildTimeframeStage(analyzer=None), BuildMlSignalsStage()],
+        [BuildTimeframeStage(analyzer=None), BuildCatalystsStage(feed=None)],
         bus=bus,
     )
     # 2 stages × (start + end) = 4 publishes.

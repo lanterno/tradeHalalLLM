@@ -22,20 +22,11 @@ def test_cycle_state_defaults_construct_without_args():
     assert state.bars == {}
     assert state.risk_text == ""
     assert state.regime_text == ""
-    assert state.ml_signals_text == ""
-    assert state.forecasts_text == ""  # Chronos forecaster seed for the ML stage
     assert state.timeframe_text == ""
     assert state.halt is False
     assert state.risk_state is None  # structured PortfolioRiskState slot
     assert state.stage_outcomes == []
     assert state.today_pnl == 0.0
-
-
-def test_cycle_state_carries_forecasts_text_field():
-    """`BuildMlSignalsStage` reads this; the field's existence is
-    load-bearing for the stage chain."""
-    state = CycleState(forecasts_text="ML predicts UP 2%")
-    assert state.forecasts_text == "ML predicts UP 2%"
 
 
 def test_cycle_state_collections_are_per_instance():
@@ -57,7 +48,6 @@ def test_cycle_state_carries_text_block_per_prompt_source():
         "risk_text",
         "regime_text",
         "timeframe_text",
-        "ml_signals_text",
         "news_text",
         "catalysts_text",
         "performance_text",

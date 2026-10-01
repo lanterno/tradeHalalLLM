@@ -115,6 +115,10 @@ Empty decisions list is appropriate ONLY when one of the narrow HOLD conditions 
 above applies. Otherwise, find your 1–4 setups and submit them.
 """
 
+# The ML SIGNALS block is fixed text: the stage that could fill it (anomaly
+# detector + signal classifier) never had a model wired and was deleted on
+# 2026-10-01. The line stays so the prompt the model sees did not change with
+# the deletion; drop it with the next deliberate prompt revision.
 USER_PROMPT_TEMPLATE = """\
 === PORTFOLIO STATUS ===
 Buying Power: ${buying_power:,.2f}
@@ -168,7 +172,7 @@ Today's P&L: ${today_pnl:+,.2f} ({today_pnl_pct:+.2%})
 {regime_text}
 
 === ML SIGNALS ===
-{ml_signals_text}
+No ML signals available.
 
 === MULTI-TIMEFRAME ANALYSIS ===
 {timeframe_text}
@@ -695,7 +699,6 @@ class TradingStrategy(BaseStrategy):
         risk_text: str = "",
         catalysts_text: str = "",
         regime_text: str = "",
-        ml_signals_text: str = "",
         timeframe_text: str = "",
         performance_text: str = "",
         active_adjustments: str = "",
@@ -740,7 +743,6 @@ class TradingStrategy(BaseStrategy):
             sentiment_text=sentiment_text,
             risk_text=risk_text or "No portfolio risk data available.",
             regime_text=regime_text or "No regime data available.",
-            ml_signals_text=ml_signals_text or "No ML signals available.",
             timeframe_text=timeframe_text or "No multi-timeframe data available.",
             catalysts_text=catalysts_text or "No recent catalysts.",
             performance_text=performance_text or "No completed trades yet.",

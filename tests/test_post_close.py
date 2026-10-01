@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from halal_trader.core.insights_hub import InsightsHub
 from halal_trader.core.llm.rag_db import DBRationaleStore
 from halal_trader.core.post_close import (
     CloseEvent,
@@ -33,23 +32,6 @@ def _event(pnl: float = 0.02, gain_usd: float = 50.0, **kwargs) -> CloseEvent:
     )
     base.update(kwargs)
     return CloseEvent(**base)
-
-
-# ── Drift dispatch ───────────────────────────────────────────────
-
-
-async def test_drift_observed() -> None:
-    hub = InsightsHub()
-    rec = CloseRecorders(hub=hub)
-    summary = await record_close(_event(pnl=0.01), rec)
-    assert hub.drift.n == 1
-    assert "drift_state" in summary
-
-
-async def test_no_hub_skips_drift_silently() -> None:
-    rec = CloseRecorders()
-    summary = await record_close(_event(), rec)
-    assert "drift_state" not in summary
 
 
 # ── Thesis dispatch ──────────────────────────────────────────────
@@ -119,14 +101,12 @@ async def test_record_close_never_raises_on_recorder_failure() -> None:
 
 async def test_full_fan_out(engine) -> None:
     """End-to-end: every recorder fires for one event."""
-    hub = InsightsHub()
     store = DBThesisTagStore(engine=engine)
     side = DBRegretRecorder(engine=engine)
     rag = DBRationaleStore(engine=engine)
     led = RoundTripLedger(engine=engine)
     rules = {"BTCUSDT": RoundTripRule(symbol="BTCUSDT", impure_ratio=0.02)}
     rec = CloseRecorders(
-        hub=hub,
         thesis_store=store,
         regret_recorder=side,
         rag_store=rag,
@@ -134,9 +114,8 @@ async def test_full_fan_out(engine) -> None:
         purification_rules=rules,
     )
     summary = await record_close(_event(pnl=0.02, gain_usd=100), rec)
-    assert hub.drift.n == 1
     assert await store.get("t1") is not None
     assert len(await side.all()) == 1
     assert await led.outstanding() == 2.0
-    for key in ("drift_state", "thesis_tag", "regret", "purification_due_usd", "rag_added"):
+    for key in ("thesis_tag", "regret", "purification_due_usd", "rag_added"):
         assert key in summary

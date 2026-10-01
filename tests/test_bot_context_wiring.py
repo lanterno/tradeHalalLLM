@@ -143,7 +143,6 @@ def test_insights_hub_snapshot_replaces_to_app_state() -> None:
     assert not hasattr(hub, "to_app_state"), "Legacy method should be removed"
     snap = hub.snapshot()
     assert isinstance(snap, dict)
-    assert "drift_monitor" in snap
     assert "shadow_ledger" in snap
 
 

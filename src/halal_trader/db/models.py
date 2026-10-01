@@ -636,6 +636,10 @@ class ShariaExceptionRow(SQLModel, table=True):
 class RegimeSnapshotRow(SQLModel, table=True):
     """One day's regime snapshot (features + outcome).
 
+    Nothing reads or writes this table since ``ml/regime_memory`` was
+    deleted on 2026-10-01; the model stays so the schema matches the
+    migrations.
+
     Features are JSON-serialised; the embedding vector lives next to
     them so cosine similarity queries don't have to recompute it.
     The pgvector(N) promotion is one alembic migration away — the
@@ -689,11 +693,14 @@ class PromptGenome(SQLModel, table=True):
 class MlArtefact(SQLModel, table=True):
     """Versioned ML model blob.
 
+    Nothing reads or writes this table since the ``ml/`` stack was
+    deleted on 2026-10-01; the model stays so the schema matches the
+    migrations.
+
     Wave K replaces ``models/*.pkl`` with this table so the bot's
     state replicates with the DB and rolls back atomically alongside
-    the schema. Each row is one (name, version) — the loader picks
-    the highest version for a given name; the retrainer inserts a
-    new row with version+1.
+    the schema. Each row is one (name, version); the highest version
+    for a name was the live one.
 
     The payload stores either a sklearn pickle (BYTEA) or a small
     JSON blob (slippage model, calibration curve), keyed by

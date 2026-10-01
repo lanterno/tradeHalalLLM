@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Any
 from unittest.mock import MagicMock
 
 from fastapi import FastAPI
@@ -12,26 +11,16 @@ from halal_trader.core.context import DashboardContext, RuntimeView
 from halal_trader.core.event_bus import EventBus
 from halal_trader.core.insights_hub import InsightsHub
 from halal_trader.core.shadow import ShadowLedger
-from halal_trader.ml.calibration import CalibrationCurve
-from halal_trader.ml.drift import DriftMonitor
 from halal_trader.web.routes.insights import register
 
 
 def _client(
     *,
-    drift: DriftMonitor | None = None,
     shadow: ShadowLedger | None = None,
-    calibration: CalibrationCurve | None = None,
-    regime: Any = None,
     runtime: RuntimeView | None = None,
 ) -> TestClient:
     app = FastAPI()
-    hub = InsightsHub(
-        drift=drift if drift is not None else DriftMonitor(),
-        shadow=shadow if shadow is not None else ShadowLedger(),
-        calibration=(calibration if calibration is not None else CalibrationCurve.identity()),
-        regime=regime,
-    )
+    hub = InsightsHub(shadow=shadow if shadow is not None else ShadowLedger())
     ctx = DashboardContext(
         engine=MagicMock(),
         repo=MagicMock(),
@@ -44,32 +33,6 @@ def _client(
     app.state.ctx = ctx
     register(app)
     return TestClient(app)
-
-
-# ── drift ────────────────────────────────────────────────────────
-
-
-def test_drift_unavailable_without_monitor() -> None:
-    # The default DriftMonitor has n=0, so drift route reports it but
-    # with state="warming_up". We only assert the route still works.
-    client = _client()
-    r = client.get("/api/insights/drift")
-    assert r.status_code == 200
-    body = r.json()
-    assert "state" in body
-
-
-def test_drift_with_monitor() -> None:
-    mon = DriftMonitor()
-    for _ in range(50):
-        mon.observe(0.0)
-    client = _client(drift=mon)
-    r = client.get("/api/insights/drift")
-    assert r.status_code == 200
-    body = r.json()
-    assert body["available"] is True
-    assert body["n"] == 50
-    assert body["state"] in ("stable", "drift", "warming_up")
 
 
 # ── shadow ───────────────────────────────────────────────────────
@@ -92,71 +55,7 @@ def test_shadow_with_ledger() -> None:
     assert body["level"] in ("ok", "watch", "diverged")
 
 
-# ── calibration ──────────────────────────────────────────────────
-
-
-def test_calibration_unavailable() -> None:
-    # Default CalibrationCurve.identity() is non-None, so the route
-    # reports it as available with method="identity".
-    client = _client()
-    body = client.get("/api/insights/calibration").json()
-    assert body["available"] is True
-    assert body["method"] == "identity"
-
-
-def test_calibration_with_curve() -> None:
-    curve = CalibrationCurve(anchors=[(0.0, 0.0), (1.0, 0.7)], method="platt", n_samples=100)
-    client = _client(calibration=curve)
-    body = client.get("/api/insights/calibration").json()
-    assert body["available"] is True
-    assert body["method"] == "platt"
-    assert body["n_samples"] == 100
-
-
 # ── new surfaces ─────────────────────────────────────────────────
-
-
-def test_regime_unavailable() -> None:
-    client = _client()
-    assert client.get("/api/insights/regime").json() == {"available": False}
-
-
-async def test_regime_with_snapshots(database_url) -> None:
-    """End-to-end: route reads a DB-backed RegimeMemory."""
-    import httpx
-    from fastapi import FastAPI
-
-    from halal_trader.db.models import init_db
-    from halal_trader.ml.regime_memory import RegimeFeatures, RegimeMemory
-
-    engine = await init_db(database_url)
-    try:
-        mem = RegimeMemory(engine=engine)
-        await mem.add_today(
-            RegimeFeatures(volatility=0.01), today="2026-04-26", outcome_pnl_pct=0.01
-        )
-        app = FastAPI()
-        hub = InsightsHub(regime=mem)
-        ctx = DashboardContext(
-            engine=engine,
-            repo=MagicMock(),
-            hub=hub,
-            analytics=MagicMock(),
-            settings=MagicMock(),
-            bus=EventBus(),
-            runtime=RuntimeView(),
-        )
-        app.state.ctx = ctx
-        register(app)
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
-            response = await ac.get("/api/insights/regime")
-        body = response.json()
-        assert body["available"] is True
-        assert body["size"] == 1
-        assert body["recent"][0]["date"] == "2026-04-26"
-    finally:
-        await engine.dispose()
 
 
 def test_treasury_unavailable_without_account_snapshot() -> None:

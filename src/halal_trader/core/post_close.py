@@ -1,8 +1,8 @@
 """Post-close analytics fan-out — one call hooks every recorder.
 
 The monitor / executor close path needs to fire several recorders
-when a trade closes (drift observation, thesis tag, regret record,
-round-trip purification, ML retraining label). Calling each of them
+when a trade closes (thesis tag, regret record, RAG rationale,
+round-trip purification). Calling each of them
 inline at the close-site bloats the monitor and makes it harder to
 test.
 
@@ -10,7 +10,6 @@ This module exposes a single :func:`record_close` that takes a small
 :class:`CloseEvent` describing the closed trade plus an optional
 context (indicators at entry, reasoning) and dispatches to:
 
-* :class:`DriftMonitor` (process-wide, via ``insights_hub.drift``)
 * :class:`DBThesisTagStore` (persistent thesis tag) + heuristic tagger
 * :class:`DBRegretRecorder`
 * :class:`DBRationaleStore` (RAG over reasoning + outcome)
@@ -20,8 +19,7 @@ Each step is best-effort: a failure in one recorder does not prevent
 the others from running. Errors are logged at debug level; the call
 to :func:`record_close` never raises.
 
-The ``insights_hub`` is the default sink; tests can pass an explicit
-hub to assert behaviour in isolation.
+The stock bot wires only the RAG store (``trading/scheduler.py``).
 """
 
 from __future__ import annotations
@@ -70,7 +68,6 @@ class CloseRecorders:
     All store fields are async — DB-backed.
     """
 
-    hub: Any | None = None  # InsightsHub
     thesis_store: Any | None = None  # DBThesisTagStore
     regret_recorder: Any | None = None  # DBRegretRecorder
     purification_ledger: Any | None = None  # RoundTripLedger
@@ -93,14 +90,6 @@ async def record_close(event: CloseEvent, recorders: CloseRecorders) -> dict[str
         "symbol": event.symbol,
         "return_pct": event.return_pct,
     }
-
-    # Drift monitor — feed the residual / return as the signal.
-    if recorders.hub is not None and getattr(recorders.hub, "drift", None) is not None:
-        try:
-            recorders.hub.drift.observe(event.return_pct)
-            summary["drift_state"] = recorders.hub.drift.state
-        except Exception as exc:  # noqa: BLE001
-            logger.debug("drift observe failed: %s", exc)
 
     # Thesis tagger — heuristic only at close-time; LLM refinement is async.
     if recorders.thesis_store is not None:

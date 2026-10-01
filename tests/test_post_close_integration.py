@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from halal_trader.core.insights_hub import InsightsHub
 from halal_trader.core.post_close import (
     CloseEvent,
     CloseRecorders,
@@ -35,27 +34,17 @@ def _e(symbol: str, *, pnl: float, gain: float, **kw):
 
 
 async def test_full_post_close_flow_to_dashboard_shape(engine) -> None:
-    """One winning close → drift observed + thesis tagged + regret + purification."""
-    hub = InsightsHub()
+    """One winning close → thesis tagged + regret + purification."""
     thesis_store = DBThesisTagStore(engine=engine)
     regret_recorder = DBRegretRecorder(engine=engine)
     ledger = RoundTripLedger(engine=engine)
     rec = CloseRecorders(
-        hub=hub,
         thesis_store=thesis_store,
         regret_recorder=regret_recorder,
         purification_ledger=ledger,
         purification_rules={"BTCUSDT": RoundTripRule(symbol="BTCUSDT", impure_ratio=0.02)},
     )
     summary = await record_close(_e("BTCUSDT", pnl=0.02, gain=100.0), rec)
-
-    assert hub.drift.n == 1
-    assert hub.drift.state in ("warming_up", "stable", "drift")
-
-    snap = hub.snapshot()
-    assert "drift_monitor" in snap
-    assert "shadow_ledger" in snap
-    assert "regime_memory" in snap
 
     assert await thesis_store.get("BTCUSDT-1") is not None
 
@@ -69,12 +58,10 @@ async def test_full_post_close_flow_to_dashboard_shape(engine) -> None:
 
 
 async def test_loss_close_skips_purification(engine) -> None:
-    hub = InsightsHub()
     thesis_store = DBThesisTagStore(engine=engine)
     regret_recorder = DBRegretRecorder(engine=engine)
     ledger = RoundTripLedger(engine=engine)
     rec = CloseRecorders(
-        hub=hub,
         thesis_store=thesis_store,
         regret_recorder=regret_recorder,
         purification_ledger=ledger,
@@ -82,18 +69,15 @@ async def test_loss_close_skips_purification(engine) -> None:
     )
     await record_close(_e("BTCUSDT", pnl=-0.02, gain=-100.0), rec)
     assert await ledger.outstanding() == 0.0
-    assert hub.drift.n == 1
     assert await thesis_store.get("BTCUSDT-1") is not None
     assert len(await regret_recorder.all()) == 1
 
 
 async def test_multiple_closes_aggregate(engine) -> None:
-    hub = InsightsHub()
     thesis_store = DBThesisTagStore(engine=engine)
     regret_recorder = DBRegretRecorder(engine=engine)
     ledger = RoundTripLedger(engine=engine)
     rec = CloseRecorders(
-        hub=hub,
         thesis_store=thesis_store,
         regret_recorder=regret_recorder,
         purification_ledger=ledger,
@@ -110,6 +94,5 @@ async def test_multiple_closes_aggregate(engine) -> None:
             ),
             rec,
         )
-    assert hub.drift.n == 20
     assert await ledger.outstanding() > 0
     assert len(await regret_recorder.all()) == 20

@@ -44,8 +44,6 @@ class TradingCycleService(BaseCycleService):
         engine=None,
         live_mode_checker=None,
         shadow_runner: Any = None,
-        ml_anomaly_detector: Any = None,
-        ml_signal_classifier: Any = None,
         timeframe_analyzer: Any = None,
         insights_hub: Any = None,
         notifier: Any = None,
@@ -71,14 +69,6 @@ class TradingCycleService(BaseCycleService):
         # same per-cycle inputs and records a divergence row to the
         # shadow ledger. Off when disabled.
         self._shadow_runner = shadow_runner
-        # Optional ML inference path — anomaly detector flags abnormal
-        # indicator vectors; signal classifier converts the same vector
-        # into a buy/hold/sell confidence. Both consume the per-symbol
-        # indicator dict already computed for risk; no extra
-        # bar fetch. Forecaster is intentionally omitted — daily bars
-        # are too sparse for Chronos's 96-step minimum.
-        self._ml_anomaly = ml_anomaly_detector
-        self._ml_signal = ml_signal_classifier
         # Optional multi-timeframe analyzer — pulls hourly/daily/weekly
         # bars and surfaces a trend-alignment score per symbol.
         self._timeframes = timeframe_analyzer
@@ -178,7 +168,6 @@ class TradingCycleService(BaseCycleService):
         from halal_trader.core.cycle_stages import (
             BuildActiveAdjustmentsStage,
             BuildCatalystsStage,
-            BuildMlSignalsStage,
             BuildPerformanceStage,
             BuildStockRiskStage,
             BuildTimeframeStage,
@@ -197,10 +186,6 @@ class TradingCycleService(BaseCycleService):
             state,
             [
                 BuildStockRiskStage(),
-                BuildMlSignalsStage(
-                    anomaly_detector=self._ml_anomaly,
-                    signal_classifier=self._ml_signal,
-                ),
                 BuildTimeframeStage(self._timeframes),
                 BuildCatalystsStage(self._catalyst_feed),
                 # 7-day lookback — stocks cycle is daily-ish (15min cron,
@@ -366,7 +351,6 @@ class TradingCycleService(BaseCycleService):
             today_pnl=today_pnl,
             risk_text=state.risk_text,
             regime_text=state.regime_text,
-            ml_signals_text=state.ml_signals_text,
             timeframe_text=state.timeframe_text,
             catalysts_text=state.catalysts_text,
             performance_text=state.performance_text,

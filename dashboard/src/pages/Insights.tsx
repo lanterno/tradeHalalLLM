@@ -1,18 +1,12 @@
 import { StatCard } from "../components/StatCard";
 import { ErrorState } from "../components/ErrorState";
-import { useDrift, usePurification, useShadow } from "../hooks/useInsights";
+import { usePurification, useShadow } from "../hooks/useInsights";
 import { formatPct, formatUsd } from "../lib/utils";
 
 const SHADOW_LEVEL_TONE: Record<string, string> = {
   ok: "text-accent",
   watch: "text-amber-400",
   diverged: "text-loss",
-};
-
-const DRIFT_STATE_TONE: Record<string, string> = {
-  stable: "text-accent",
-  warming_up: "text-muted",
-  drift: "text-loss",
 };
 
 function EmptyTile({ label, message }: { label: string; message: string }) {
@@ -26,12 +20,6 @@ function EmptyTile({ label, message }: { label: string; message: string }) {
 }
 
 export default function Insights() {
-  const {
-    data: drift,
-    isError: driftIsError,
-    error: driftError,
-    refetch: driftRefetch,
-  } = useDrift();
   const {
     data: shadow,
     isError: shadowIsError,
@@ -54,22 +42,6 @@ export default function Insights() {
 
       {/* Top row: live model-health tiles */}
       <div className="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-4">
-        {driftIsError ? (
-          <ErrorState compact error={driftError} onRetry={driftRefetch} />
-        ) : drift ? (
-          <StatCard
-            label="Concept Drift"
-            value={
-              <span className={DRIFT_STATE_TONE[drift.state] ?? "text-white"}>
-                {drift.state}
-              </span>
-            }
-            sub={`n=${drift.n} · ${drift.drift_count} drift event(s)`}
-          />
-        ) : (
-          <EmptyTile label="Concept Drift" message="No residuals yet" />
-        )}
-
         {shadowIsError ? (
           <ErrorState compact error={shadowError} onRetry={shadowRefetch} />
         ) : shadow && shadow.metrics ? (
