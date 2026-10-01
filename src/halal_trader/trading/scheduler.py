@@ -4,6 +4,7 @@ import asyncio
 import fcntl
 import logging
 import os
+import signal
 from pathlib import Path
 from typing import Any
 
@@ -945,6 +946,26 @@ class TradingBot(BaseTradingBot):
 
     # ── Main Loop ───────────────────────────────────────────────
 
+    def _install_signal_handlers(self, loop: asyncio.AbstractEventLoop) -> None:
+        """Turn SIGTERM / SIGINT into a clean stop of the run loop.
+
+        In docker this process is PID 1, and PID 1 ignores any signal it has
+        no handler for: every `docker stop` / redeploy waited out the grace
+        period and ended in SIGKILL, so shutdown() -- cancel the monitor and
+        reactor, disconnect the broker, release the lock -- never ran.
+        Clearing _running lets run()'s finally block do all of that.
+        """
+
+        def request_stop(sig: signal.Signals) -> None:
+            logger.info("Received %s -- stopping after the current step", sig.name)
+            self._running = False
+
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            try:
+                loop.add_signal_handler(sig, request_stop, sig)
+            except NotImplementedError, RuntimeError:  # non-main thread / platform without it
+                logger.debug("signal handler for %s not installed", sig.name)
+
     async def run(self) -> None:
         """Start the trading bot with scheduled jobs."""
         from halal_trader.core.observability import set_service
@@ -954,6 +975,7 @@ class TradingBot(BaseTradingBot):
         await self.initialize()
         try:
             self._running = True
+            self._install_signal_handlers(asyncio.get_running_loop())
 
             interval = self.settings.stocks.trading_interval_minutes
 

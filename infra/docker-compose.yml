@@ -93,6 +93,12 @@ services:
       - trader-data:/app/data
       - trader-logs:/app/logs
     command: ["halal-trader", "start"]
+    # PID 1 in a container ignores signals it has no handler for; the bot now
+    # installs one, and `init` (tini) forwards signals and reaps the broker
+    # subprocess. The grace period gives shutdown() time to cancel the
+    # monitor/reactor and close the broker before docker sends SIGKILL.
+    init: true
+    stop_grace_period: 30s
     depends_on:
       trader-migrate:
         condition: service_completed_successfully
@@ -114,6 +120,12 @@ services:
       - trader-data:/app/data
       - trader-logs:/app/logs
     command: ["halabot", "shadow", "--interval", "900"]
+    # PID 1 in a container ignores signals it has no handler for; the bot now
+    # installs one, and `init` (tini) forwards signals and reaps the broker
+    # subprocess. The grace period gives shutdown() time to cancel the
+    # monitor/reactor and close the broker before docker sends SIGKILL.
+    init: true
+    stop_grace_period: 30s
     depends_on:
       trader-migrate:
         condition: service_completed_successfully

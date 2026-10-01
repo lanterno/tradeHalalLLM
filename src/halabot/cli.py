@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import signal
 from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any
 
@@ -192,7 +193,9 @@ async def _run_shadow(
             click.echo(f"shadow running (poll/heartbeat every {interval:.0f}s) — Ctrl-C to stop")
             try:
                 stop = asyncio.Event()
+                _stop_on_signals(asyncio.get_running_loop(), stop)
                 await stop.wait()
+                click.echo("stopping…")
             except KeyboardInterrupt, asyncio.CancelledError:
                 click.echo("stopping…")
 
@@ -209,6 +212,20 @@ async def _run_shadow(
         await mcp.disconnect()
         await engine.stop()
         await ht_engine.dispose()
+
+
+def _stop_on_signals(loop: asyncio.AbstractEventLoop, stop: asyncio.Event) -> None:
+    """SIGTERM / SIGINT set ``stop`` so the shadow's finally block runs.
+
+    In docker the shadow is PID 1, which ignores signals it has no handler
+    for: `docker stop` used to end in SIGKILL with sources, the broker
+    subprocess and the DB engines never closed.
+    """
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            loop.add_signal_handler(sig, stop.set)
+        except NotImplementedError, RuntimeError:
+            logger.debug("signal handler for %s not installed", sig.name)
 
 
 @cli.command("ab-report")
