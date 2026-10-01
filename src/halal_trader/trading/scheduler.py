@@ -622,10 +622,29 @@ class TradingBot(BaseTradingBot):
             logger.debug("reactor entry market-clock check failed: %s", exc)
             return None, "Observation only — market state unknown"
 
+        # The same entry gates the scheduled cycle applies, which this path
+        # used to skip ("fast in" was also "unguarded in"): the daily loss
+        # limit and the risk engine's last verdict. Both fail CLOSED -- a
+        # reactor entry is optional, so "can't tell" means "don't".
+        if self.portfolio is not None:
+            try:
+                if await self.portfolio.should_halt_trading():
+                    return None, "Observation only — daily loss limit reached"
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("reactor entry loss-limit check failed: %r", exc)
+                return None, "Observation only — daily P&L unknown"
+        risk_halt = getattr(self.cycle_service, "last_risk_halt", None)
+        if risk_halt:
+            return None, f"Observation only — risk engine halt: {risk_halt}"
+
+        # Positions feed the max-positions cap and the per-name/sector caps.
+        # An empty list on a failed read used to make every cap see an
+        # empty book; refuse instead.
         try:
             positions = await self.broker.get_all_positions()
-        except Exception:  # noqa: BLE001
-            positions = []
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("reactor entry positions read failed: %r", exc)
+            return None, "Observation only — positions unknown"
 
         cls = event.classification
         try:

@@ -61,6 +61,10 @@ class TradingCycleService(BaseCycleService):
         self._strategy = strategy
         self._executor = executor
         self._portfolio = portfolio
+        # The risk engine's verdict from the most recent cycle that computed
+        # one (None = not halted). The news reactor enters between cycles and
+        # reads this, so a cycle-level risk halt also stops reactor entries.
+        self.last_risk_halt: str | None = None
         # Optional StockCatalystFeed (Phase 3.5) — gives the LLM live news,
         # earnings, insider activity. Cycle proceeds normally if absent.
         self._catalyst_feed = catalyst_feed
@@ -241,11 +245,11 @@ class TradingCycleService(BaseCycleService):
                 "pushed_at": _dt.now(UTC).isoformat(),
             }
 
+        self.last_risk_halt = (
+            str(getattr(rs, "halt_reason", "") or "unspecified") if state.halt else None
+        )
         if state.halt:
-            logger.warning(
-                "Stocks risk engine halt: %s",
-                getattr(rs, "halt_reason", "unspecified"),
-            )
+            logger.warning("Stocks risk engine halt: %s", self.last_risk_halt)
             return
 
         # Surface recent exits + their hard buy-gate status to the LLM

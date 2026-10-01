@@ -242,6 +242,21 @@ class TradeExecutor(BaseExecutor):
         ``status='skipped'`` + a ``reason`` when a gate declines.
         """
         symbol = symbol.upper()
+        # Max-simultaneous-positions cap. The cycle enforces it in
+        # _execute_plan_common; the reactor enters outside the cycle and
+        # used to skip it. Adding to a name already held does not open a
+        # new position, so only a NEW name counts against the cap.
+        held = {str(getattr(p, "symbol", "")).upper() for p in (positions or [])}
+        if symbol not in held and len(held) >= self._max_simultaneous_positions:
+            return {
+                "symbol": symbol,
+                "action": "buy",
+                "status": "rejected",
+                "reason": (
+                    f"reactor entry: max simultaneous positions "
+                    f"({self._max_simultaneous_positions}) reached"
+                ),
+            }
         snapshot = await self._broker.get_stock_snapshot(symbol)
         price = self._extract_price(snapshot, symbol)
         if price <= 0:
