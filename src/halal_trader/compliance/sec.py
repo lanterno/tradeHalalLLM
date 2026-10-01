@@ -60,7 +60,7 @@ class SecClient:
         if self._owns_client:
             await self._client.aclose()
 
-    async def _get(self, url: str) -> Any:
+    async def _fetch(self, url: str) -> httpx.Response | None:
         loop = asyncio.get_running_loop()
         wait = self._last + self._min_interval - loop.time()
         if wait > 0:
@@ -70,7 +70,19 @@ class SecClient:
         if response.status_code == 404:
             return None
         response.raise_for_status()
-        return response.json()
+        return response
+
+    async def _get(self, url: str) -> Any:
+        response = await self._fetch(url)
+        return response.json() if response is not None else None
+
+    async def text(self, url: str) -> str | None:
+        response = await self._fetch(url)
+        return response.text if response is not None else None
+
+    async def submissions(self, cik: int) -> dict[str, Any] | None:
+        payload = await self._get(f"https://data.sec.gov/submissions/CIK{cik:010d}.json")
+        return payload if isinstance(payload, dict) else None
 
     async def companies(self) -> dict[str, Company]:
         """Ticker -> company, for every SEC registrant with a listed ticker."""
@@ -83,13 +95,12 @@ class SecClient:
 
     async def sic(self, cik: int) -> tuple[int | None, str]:
         """(SIC code, description) from the company's submissions record."""
-        payload = await self._get(f"https://data.sec.gov/submissions/CIK{cik:010d}.json")
+        payload = await self.submissions(cik)
         if not payload:
             return None, ""
         code = payload.get("sic")
-        return (int(code) if code not in (None, "") else None), str(
-            payload.get("sicDescription") or ""
-        )
+        desc = str(payload.get("sicDescription") or "")
+        return (int(str(code)) if code not in (None, "") else None), desc
 
     async def frame(self, taxonomy: str, concept: str, unit: str, period: str) -> dict[int, Fact]:
         """One concept for every filer in one period: CIK -> Fact.

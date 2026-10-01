@@ -58,3 +58,68 @@ def screen_cmd(symbols: str) -> None:
         if len(results) <= 40 or r.verdict != "halal":
             reason = "; ".join(r.reasons) or "passes"
             console.print(f"  {r.symbol:6} {r.verdict:9} {reason}")
+
+
+@compliance.command("validate")
+def validate_cmd() -> None:
+    """Compare the latest screen with SPUS and HLAL holdings (SEC N-PORT)."""
+
+    async def _run() -> tuple[Any, list[Any]]:
+        from sqlalchemy import text
+
+        from halal_trader.compliance.etf_holdings import HALAL_ETFS, latest_holdings
+        from halal_trader.compliance.sec import SecClient
+        from halal_trader.compliance.validate import Verdict, compare
+        from halal_trader.config import get_settings
+        from halal_trader.db.models import init_db
+
+        settings = get_settings()
+        engine = await init_db(settings.database_url)
+        sec = SecClient(settings.edgar.user_agent)
+        try:
+            holdings = [await latest_holdings(sec, etf) for etf in HALAL_ETFS]
+            async with engine.connect() as conn:
+                rows = await conn.execute(
+                    text(
+                        "SELECT symbol, verdict, reasons, metrics->>'market_cap' AS mc "
+                        "FROM halal_screen_results "
+                        "WHERE as_of = (SELECT max(as_of) FROM halal_screen_results)"
+                    )
+                )
+                verdicts = {
+                    r.symbol: Verdict(
+                        r.symbol, r.verdict, list(r.reasons), float(r.mc) if r.mc else None
+                    )
+                    for r in rows
+                }
+        finally:
+            await sec.aclose()
+            await engine.dispose()
+        if not verdicts:
+            raise click.ClickException("no screen results yet: run `compliance screen` first")
+        tickers: set[str] = set().union(*(h.tickers for h in holdings))
+        return compare(verdicts, tickers), holdings
+
+    v, holdings = asyncio.run(_run())
+    for h in holdings:
+        console.print(f"{h.etf}: {len(h.holdings)} equity holdings as of {h.period_end}")
+    console.print(
+        f"ETF names screened: {v.screened_etf_names}/{v.etf_names}; "
+        f"we agree on {v.agree} ({v.agreement:.0%})"
+    )
+    for title, items in (
+        ("ETF holds, we REJECT (possible false negatives)", v.etf_held_we_reject),
+        ("ETF holds, we are DOUBTFUL (missing data)", v.etf_held_we_doubt),
+        (
+            "We PASS, no ETF holds, market cap >= $50B (possible false positives)",
+            v.large_halal_not_in_etfs,
+        ),
+    ):
+        console.print(f"\n[bold]{title}: {len(items)}[/bold]")
+        for item in items[:40]:
+            console.print(f"  {item.symbol:6} {'; '.join(item.reasons) or 'passes'}")
+    if v.etf_held_not_screened:
+        console.print(
+            f"\nETF names outside the screened set: {len(v.etf_held_not_screened)} "
+            f"(e.g. {', '.join(v.etf_held_not_screened[:10])})"
+        )
