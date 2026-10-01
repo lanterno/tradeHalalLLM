@@ -348,7 +348,18 @@ class BaseStrategy(ABC):
         # take the first. The strategy schema requires exactly one
         # ``submit_*`` call per cycle so this is a defensive guard.
         match = next((c for c in calls if c.name == tool.name), calls[0])
-        return dict(match.args or {})
+        args = dict(match.args or {})
+        # A call missing the schema's required keys is a failure, whatever the
+        # provider: for submit_decisions a real HOLD is
+        # {"decisions": [], "market_outlook": ...}, so {} or a truncated
+        # object can only mean the reply was lost. Raising routes it through
+        # the FAILED-decision path below instead of a silent empty plan.
+        missing = [k for k in tool.input_schema.get("required", []) if k not in args]
+        if missing:
+            raise ValueError(
+                f"tool call {match.name!r} is missing required {missing}: {json.dumps(args)[:500]}"
+            )
+        return args
 
     def _on_llm_success(self) -> None:
         """Hook for subclasses to react to a successful LLM call (e.g. reset counters)."""

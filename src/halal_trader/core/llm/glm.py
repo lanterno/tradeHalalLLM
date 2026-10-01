@@ -204,9 +204,20 @@ class GLMLLM(BaseLLM):
                 fn = getattr(tc, "function", None)
                 if fn is None:
                     continue
+                # Unparseable or missing arguments are a FAILED call, not an
+                # empty one: mapping them to {} let TradingPlan validate an
+                # empty plan and record a "successful" HOLD, discarding the
+                # model's actual text -- the silent no-action failure mode.
+                # Raise with the raw text so the caller records what came back.
+                raw_args = fn.arguments
                 try:
-                    args = json.loads(fn.arguments or "{}")
+                    args = json.loads(raw_args) if raw_args else None
                 except json.JSONDecodeError, TypeError:
-                    args = {}
+                    args = None
+                if not isinstance(args, dict):
+                    raise ValueError(
+                        f"tool call {fn.name!r} returned unparseable arguments: "
+                        f"{str(raw_args)[:500]!r}"
+                    )
                 calls.append(ToolCall(name=fn.name, args=args, id=getattr(tc, "id", None)))
         return calls

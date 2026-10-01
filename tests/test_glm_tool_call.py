@@ -210,24 +210,36 @@ async def test_arguments_json_string_parsed_into_args_dict():
 
 
 @pytest.mark.asyncio
-async def test_malformed_arguments_json_becomes_empty_dict():
-    """Defensive: a host that emits truncated/invalid JSON in
-    ``function.arguments`` yields ``args={}`` rather than raising —
-    the caller's schema validation then rejects the empty plan."""
+async def test_malformed_arguments_raise_with_the_raw_text():
+    """Truncated/invalid JSON in ``function.arguments`` is a FAILED call.
+
+    It used to become ``args={}``, which TradingPlan accepted as an empty
+    plan -- recorded as a successful HOLD with the model's real reply
+    thrown away (the silent no-action failure mode). It must raise, and
+    carry the raw text so the FAILED decision row shows what came back."""
     llm = _llm()
     _wire(llm, _stub_response([_tc("submit_plan", '{"buys": [unterminated')]))
-    calls = await llm.generate_tool_call("hi", tools=[_tool()])
-    assert len(calls) == 1
-    assert calls[0].args == {}
+    with pytest.raises(ValueError, match="unparseable arguments") as exc:
+        await llm.generate_tool_call("hi", tools=[_tool()])
+    assert "unterminated" in str(exc.value)
 
 
 @pytest.mark.asyncio
-async def test_none_arguments_becomes_empty_dict():
-    """``arguments=None`` (SDK quirk) also lands as ``{}``."""
+async def test_none_arguments_raise():
+    """``arguments=None`` (SDK quirk) is a failed call too, not ``{}``."""
     llm = _llm()
     _wire(llm, _stub_response([_tc("submit_plan", None)]))
-    calls = await llm.generate_tool_call("hi", tools=[_tool()])
-    assert calls[0].args == {}
+    with pytest.raises(ValueError, match="unparseable arguments"):
+        await llm.generate_tool_call("hi", tools=[_tool()])
+
+
+@pytest.mark.asyncio
+async def test_non_object_arguments_raise():
+    """Valid JSON that is not an object (e.g. a bare list) is not a tool call."""
+    llm = _llm()
+    _wire(llm, _stub_response([_tc("submit_plan", "[1, 2]")]))
+    with pytest.raises(ValueError, match="unparseable arguments"):
+        await llm.generate_tool_call("hi", tools=[_tool()])
 
 
 # ── usage accounting ────────────────────────────────────────
