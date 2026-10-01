@@ -4,8 +4,26 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
 from halal_trader.domain.models import Account, Position, TradeAction, TradeDecision
 from halal_trader.trading.executor import TradeExecutor
+
+
+@pytest.fixture(autouse=True)
+def _mid_session_clock(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin "now" to 10:30 ET on a regular session day.
+
+    The executor refuses new BUYs in the last 30 min before the close
+    (_check_market_close_lockout reads market_hours.now_eastern). Without
+    a pinned clock every BUY test here failed daily from 15:30 to 16:00 ET.
+    """
+    from datetime import datetime
+
+    from halal_trader import market_hours
+
+    pinned = datetime(2026, 9, 30, 10, 30, tzinfo=market_hours.MARKET_TZ)
+    monkeypatch.setattr(market_hours, "now_eastern", lambda: pinned)
 
 
 def _account(buying_power=10_000, portfolio_value=10_000) -> Account:

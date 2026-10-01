@@ -23,6 +23,22 @@ from halal_trader.domain.models import Account, TradeAction, TradeDecision
 from halal_trader.trading.executor import TradeExecutor, _extract_order_id
 
 
+@pytest.fixture(autouse=True)
+def _mid_session_clock(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin "now" to 10:30 ET on a regular session day.
+
+    The executor refuses new BUYs in the last 30 min before the close
+    (_check_market_close_lockout reads market_hours.now_eastern). Without
+    a pinned clock every BUY test here failed daily from 15:30 to 16:00 ET.
+    """
+    from datetime import datetime
+
+    from halal_trader import market_hours
+
+    pinned = datetime(2026, 9, 30, 10, 30, tzinfo=market_hours.MARKET_TZ)
+    monkeypatch.setattr(market_hours, "now_eastern", lambda: pinned)
+
+
 def _account() -> Account:
     return Account(
         equity=100_000,
