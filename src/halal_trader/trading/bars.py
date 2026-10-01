@@ -20,21 +20,16 @@ from halal_trader.signals.indicators import compute_all
 logger = logging.getLogger(__name__)
 
 
-def bars_to_klines(bars_for_symbol: Any) -> list[Kline]:
-    """Coerce Alpaca's ``get_stock_bars`` response into ``Kline`` objects.
+def extract_bar_dicts(bars_payload: Any) -> list[dict[str, Any]]:
+    """The raw bar dicts inside any ``get_stock_bars`` envelope, in order.
 
-    Alpaca returns a list of dicts with ``t/o/h/l/c/v`` keys, OR a nested
-    ``{"bars": [...]}`` envelope, OR — what ``get_stock_bars`` actually emits —
-    a symbol-keyed ``{"bars": {"NVDA": [...]}}`` envelope. We tolerate all three,
-    plus the ``open``/``high``/``low``/``close``/``volume`` long-key variant some
-    SDK versions emit. (The symbol-keyed shape previously fell through to an empty
-    list, silently starving the monitor's trend-break SMA, ML snapshots, the
-    multi-timeframe analyzer, and risk indicators of data.)
+    Shared by :func:`bars_to_klines` and the prompt formatter, so the one
+    parser proven against live payloads is the only one there is.
     """
-    if not bars_for_symbol:
+    if not bars_payload:
         return []
-    raw_bars: list[dict[str, Any]]
-    if isinstance(bars_for_symbol, dict):
+    raw_bars: list[Any]
+    if isinstance(bars_payload, dict):
         # Peel the response envelopes. The Alpaca MCP server now wraps the
         # payload under "data" (beside an "_alpaca_mcp_security" sibling), the
         # bars endpoint nests them under "bars", and again under each symbol:
@@ -45,7 +40,7 @@ def bars_to_klines(bars_for_symbol: Any) -> list[Kline]:
         # (The prior code peeled only one level, so the current double-nested
         # format silently yielded ZERO klines — starving indicators/ML/the
         # daily recommendation of all bar data.)
-        payload: Any = bars_for_symbol
+        payload: Any = bars_payload
         for key in ("data", "bars"):
             if isinstance(payload, dict) and key in payload:
                 payload = payload[key]
@@ -60,11 +55,26 @@ def bars_to_klines(bars_for_symbol: Any) -> list[Kline]:
             raw_bars = payload
         else:
             return []
-    elif isinstance(bars_for_symbol, list):
-        raw_bars = bars_for_symbol
+    elif isinstance(bars_payload, list):
+        raw_bars = bars_payload
     else:
         return []
 
+    return [b for b in raw_bars if isinstance(b, dict)]
+
+
+def bars_to_klines(bars_for_symbol: Any) -> list[Kline]:
+    """Coerce Alpaca's ``get_stock_bars`` response into ``Kline`` objects.
+
+    Alpaca returns a list of dicts with ``t/o/h/l/c/v`` keys, OR a nested
+    ``{"bars": [...]}`` envelope, OR — what ``get_stock_bars`` actually emits —
+    a symbol-keyed ``{"bars": {"NVDA": [...]}}`` envelope. We tolerate all three,
+    plus the ``open``/``high``/``low``/``close``/``volume`` long-key variant some
+    SDK versions emit. (The symbol-keyed shape previously fell through to an empty
+    list, silently starving the monitor's trend-break SMA, ML snapshots, the
+    multi-timeframe analyzer, and risk indicators of data.)
+    """
+    raw_bars = extract_bar_dicts(bars_for_symbol)
     out: list[Kline] = []
     for i, bar in enumerate(raw_bars):
         if not isinstance(bar, dict):

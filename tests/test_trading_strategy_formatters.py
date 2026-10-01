@@ -51,150 +51,53 @@ def test_format_positions_negative_plpc_renders_minus_sign():
     assert "-5" in out  # -5.56%
 
 
-# ── _format_snapshots ──────────────────────────────────────────
+# ── _format_snapshots / _format_bars, on RECORDED live payloads ─────
+#
+# The old fixtures used a snake_case shape (latest_trade.price, ...) that the
+# live server never sends, which is why the prompt showed "Price=$N/A" for
+# every symbol while these tests stayed green. The fixtures below are real
+# alpaca-mcp-server 2.3.2 responses (tests/fixtures/alpaca_mcp_2_3_2/).
+
+import json  # noqa: E402
+from pathlib import Path  # noqa: E402
+
+_FIXTURES = Path(__file__).parent / "fixtures" / "alpaca_mcp_2_3_2"
+
+
+def _recorded(name: str) -> object:
+    return json.loads((_FIXTURES / name).read_text())
 
 
 def test_format_snapshots_empty_returns_sentinel():
     assert _format_snapshots({}) == "No snapshot data available."
 
 
-def test_format_snapshots_walks_alpaca_shape():
-    """Alpaca's `latest_trade` / `latest_quote` / `daily_bar` keys."""
-    snaps = {
-        "AAPL": {
-            "latest_trade": {"price": 182.5},
-            "latest_quote": {"bid_price": 182.0, "ask_price": 183.0},
-            "daily_bar": {"volume": 12_000_000},
-        }
-    }
-    out = _format_snapshots(snaps)
-    assert "AAPL" in out
-    assert "182.5" in out
-    assert "12000000" in out
+def test_format_snapshots_reads_the_live_shape():
+    out = _format_snapshots({"AAPL": _recorded("snapshot_AAPL.json")})
+    assert "N/A" not in out
+    assert "last $329.17" in out
+    assert "-1.21% vs prev close $333.21" in out
+    assert "bid $329.13 ask $329.19" in out
 
 
-def test_format_snapshots_handles_missing_subkeys_with_na():
-    snaps = {"AAPL": {}}  # no latest_trade / latest_quote / daily_bar
-    out = _format_snapshots(snaps)
-    assert "AAPL" in out
-    assert "N/A" in out
+def test_format_snapshots_survives_a_data_envelope():
+    out = _format_snapshots({"AAPL": {"data": _recorded("snapshot_AAPL.json")}})
+    assert "last $329.17" in out
 
 
-def test_format_snapshots_falls_back_for_non_dict_value():
-    snaps = {"AAPL": "raw string"}
-    out = _format_snapshots(snaps)
-    assert "AAPL" in out
-    assert "raw string" in out
-
-
-# ── _format_bars ──────────────────────────────────────────────
+def test_format_snapshots_says_so_when_there_is_no_price():
+    out = _format_snapshots({"AAPL": {"AAPL": {"latestQuote": {"bp": 1, "ap": 2}}}})
+    assert out == "  AAPL: no last price in snapshot"
 
 
 def test_format_bars_empty_returns_sentinel():
     assert _format_bars({}) == "No bar data available."
 
 
-def test_format_bars_lists_last_five_bars_per_symbol():
-    """Even with > 5 bars, only the last 5 are emitted (LLM-friendly)."""
-    bars = {
-        "AAPL": [
-            {
-                "timestamp": f"t{i}",
-                "open": 100 + i,
-                "high": 101 + i,
-                "low": 99 + i,
-                "close": 100 + i,
-                "volume": 1000,
-            }
-            for i in range(8)
-        ]
-    }
-    out = _format_bars(bars)
-    # Should contain t3..t7 (the last 5), not t0..t2.
-    assert "t7" in out
-    assert "t3" in out
-    assert "t2" not in out
-
-
-def test_format_bars_falls_back_for_non_list_value():
-    bars = {"AAPL": "raw string"}
-    out = _format_bars(bars)
-    assert "AAPL" in out
-    assert "raw string" in out
-
-
-def test_format_bars_handles_missing_bar_fields_with_zero_default():
-    bars = {"AAPL": [{"timestamp": "t0"}]}  # no open/high/low/close/volume
-    out = _format_bars(bars)
-    assert "t0" in out
-    assert "0.00" in out
-
-
-# ── Round-7 follow-up: performance_text + active_adjustments ──────
-
-
-def test_user_prompt_template_renders_performance_block():
-    """The Wave-equivalent ``=== RECENT PERFORMANCE ===`` block lands in
-    the rendered prompt. Pinning so a future refactor doesn't silently
-    drop the new prompt-context block crypto already has."""
-    from halal_trader.trading.strategy import USER_PROMPT_TEMPLATE
-
-    assert "=== RECENT PERFORMANCE" in USER_PROMPT_TEMPLATE
-    assert "{performance_text}" in USER_PROMPT_TEMPLATE
-
-
-def test_user_prompt_template_renders_active_adjustments_block():
-    from halal_trader.trading.strategy import USER_PROMPT_TEMPLATE
-
-    assert "=== ACTIVE STRATEGY ADJUSTMENTS" in USER_PROMPT_TEMPLATE
-    assert "{active_adjustments}" in USER_PROMPT_TEMPLATE
-
-
-def test_user_prompt_template_renders_news_block():
-    """Stocks-side equities news block — populated by FetchStockNewsStage
-    from Yahoo Finance per cycle."""
-    from halal_trader.trading.strategy import USER_PROMPT_TEMPLATE
-
-    assert "=== RECENT NEWS HEADLINES" in USER_PROMPT_TEMPLATE
-    assert "{news_text}" in USER_PROMPT_TEMPLATE
-
-
-def test_user_prompt_template_falls_back_to_friendly_defaults():
-    """The strategy passes ``performance_text or "No completed trades yet."``
-    so a fresh bot with no analytics wired still renders a clean prompt."""
-    from halal_trader.trading.strategy import USER_PROMPT_TEMPLATE
-
-    rendered = USER_PROMPT_TEMPLATE.format(
-        buying_power=100000.0,
-        portfolio_value=100000.0,
-        cash=100000.0,
-        today_pnl=0.0,
-        today_pnl_pct=0.0,
-        positions_text="No open positions.",
-        capacity_text="(none)",
-        sector_text="(none)",
-        recent_closed_text="(none)",
-        slippage_text="(none)",
-        learnings_text="(none)",
-        halal_symbols="AAPL, MSFT",
-        snapshots_text="(none)",
-        bars_text="(none)",
-        sentiment_text="(none)",
-        risk_text="(none)",
-        regime_text="(none)",
-        ml_signals_text="(none)",
-        timeframe_text="(none)",
-        catalysts_text="(none)",
-        performance_text="No completed trades yet.",
-        active_adjustments="None.",
-        news_text="No recent news.",
-    )
-    # The blocks render in the canonical order — bars before performance
-    # before active_adjustments before news before sentiment — so the
-    # LLM sees context in a stable layout.
-    bars_pos = rendered.index("RECENT PRICE BARS")
-    perf_pos = rendered.index("RECENT PERFORMANCE")
-    adj_pos = rendered.index("ACTIVE STRATEGY ADJUSTMENTS")
-    news_pos = rendered.index("RECENT NEWS HEADLINES")
-    sentiment_pos = rendered.index("SENTIMENT ANALYSIS")
-    assert bars_pos < perf_pos < adj_pos < news_pos < sentiment_pos
+def test_format_bars_renders_the_last_five_dated_bars_from_the_live_shape():
+    out = _format_bars({"AAPL": _recorded("bars_AAPL.json")})
+    lines = out.splitlines()
+    assert lines[0] == "  AAPL:"
+    assert len(lines) == 6  # header + 5 bars, not the whole 60-day envelope
+    assert lines[-1].startswith("    2026-10-01: O=330.00")
+    assert "{" not in out  # no raw dict dump

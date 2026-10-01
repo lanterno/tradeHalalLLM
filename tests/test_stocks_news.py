@@ -232,3 +232,35 @@ async def test_fetch_stock_news_stage_swallows_collector_failure():
     state = CycleState(halal_pairs=["AAPL"])
     out = await stage.run(state)
     assert out.news_text == ""
+
+
+def test_the_prompt_gets_the_newest_headlines_tagged_with_their_ticker() -> None:
+    """Regression: the stock collector sorts newest-first and the formatter
+    kept the LAST N, so the LLM saw the stalest headlines, and Finnhub events
+    carried no ticker."""
+    from halal_trader.sentiment.feed import format_news_for_prompt
+    from halal_trader.sentiment.stocks_news import _parse_finnhub_payload
+
+    def payload(sym: str) -> list[dict]:
+        base = 1790870400  # 2026-10-01T16:00Z
+        return [
+            {
+                "headline": f"{sym} news {h}h ago",
+                "url": f"https://x/{sym}/{h}",
+                "datetime": base - h * 3600,
+                "source": "wire",
+            }
+            for h in range(5)
+        ]
+
+    events = _parse_finnhub_payload("AAPL", payload("AAPL"), limit=10) + _parse_finnhub_payload(
+        "MSFT", payload("MSFT"), limit=10
+    )
+    events.sort(key=lambda e: e.published_at, reverse=True)  # what the collector does
+
+    block = format_news_for_prompt(events, limit=4)
+
+    assert "news 0h ago" in block and "news 1h ago" in block
+    assert "news 4h ago" not in block  # the stalest are the ones dropped
+    assert "[AAPL]" in block and "[MSFT]" in block
+    assert format_news_for_prompt(events, limit=10, pair_filter=["AAPL"]).count("[MSFT]") == 0

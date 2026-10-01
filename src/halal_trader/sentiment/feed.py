@@ -40,7 +40,11 @@ def format_news_for_prompt(
         if not events:
             return ""
 
-    chosen = list(events)[-limit:]
+    # Newest ``limit``, whatever order the caller passed: this used to take the
+    # LAST N assuming oldest-first input, but the stock collector sorts
+    # newest-first, so every cycle showed the model the 6 STALEST headlines.
+    # Rendered oldest-to-newest. ISO-8601 strings sort chronologically.
+    chosen = sorted(events, key=lambda e: e.published_at or "")[-limit:]
     lines: list[str] = []
     for ev in chosen:
         glyph = _SENTIMENT_GLYPH.get(ev.sentiment.lower(), "·")

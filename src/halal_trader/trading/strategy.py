@@ -561,45 +561,96 @@ def _format_symbol_headroom(
     return "\n".join(lines)
 
 
+def _snapshot_for(sym: str, data: Any) -> dict[str, Any] | None:
+    """The per-symbol snapshot dict inside an MCP response, whatever the envelope.
+
+    Live (alpaca-mcp-server 2.3.2) shape, recorded in
+    tests/fixtures/alpaca_mcp_2_3_2/: ``{"AAPL": {"latestTrade": {"p": ..},
+    "latestQuote": {"bp": .., "ap": ..}, "dailyBar": {..}, "prevDailyBar": {..}}}``
+    -- symbol-keyed, short camelCase keys, sometimes wrapped in ``"data"``.
+    """
+    if not isinstance(data, dict):
+        return None
+    if isinstance(data.get("data"), dict):
+        data = data["data"]
+    inner = data.get(sym) or data.get(sym.upper())
+    return inner if isinstance(inner, dict) else data
+
+
+def _num(value: Any) -> float | None:
+    try:
+        return float(value) if value is not None else None
+    except TypeError, ValueError:
+        return None
+
+
 def _format_snapshots(snapshots: dict[str, Any]) -> str:
+    """One line per symbol: last price, move vs previous close, quote, volume.
+
+    This used to read ``latest_trade.price``/``latest_quote.bid_price`` -- keys
+    the live server never sends -- so every live cycle showed the model
+    ``Price=$N/A`` for every symbol (assessment trading#2).
+    """
     if not snapshots:
         return "No snapshot data available."
     lines = []
-    if isinstance(snapshots, dict):
-        for sym, data in snapshots.items():
-            if isinstance(data, dict):
-                price = data.get("latest_trade", {}).get("price", "N/A")
-                bid = data.get("latest_quote", {}).get("bid_price", "N/A")
-                ask = data.get("latest_quote", {}).get("ask_price", "N/A")
-                vol = data.get("daily_bar", {}).get("volume", "N/A")
-                lines.append(f"  {sym}: Price=${price} Bid=${bid} Ask=${ask} Vol={vol}")
-            else:
-                lines.append(f"  {sym}: {data}")
-    else:
-        lines.append(str(snapshots))
-    return "\n".join(lines) if lines else str(snapshots)
+    for sym, data in snapshots.items():
+        snap = _snapshot_for(sym, data)
+        if snap is None:
+            lines.append(f"  {sym}: no snapshot")
+            continue
+        trade = snap.get("latestTrade") or snap.get("latest_trade") or {}
+        quote = snap.get("latestQuote") or snap.get("latest_quote") or {}
+        daily = snap.get("dailyBar") or snap.get("daily_bar") or {}
+        prev = snap.get("prevDailyBar") or snap.get("prev_daily_bar") or {}
+        price = _num(trade.get("p", trade.get("price")))
+        bid = _num(quote.get("bp", quote.get("bid_price")))
+        ask = _num(quote.get("ap", quote.get("ask_price")))
+        vol = _num(daily.get("v", daily.get("volume")))
+        prev_close = _num(prev.get("c", prev.get("close")))
+        if price is None:
+            lines.append(f"  {sym}: no last price in snapshot")
+            continue
+        move = (
+            f" ({price / prev_close - 1:+.2%} vs prev close ${prev_close:.2f})"
+            if prev_close
+            else ""
+        )
+        quote_txt = f" bid ${bid:.2f} ask ${ask:.2f}" if bid and ask else ""
+        vol_txt = f" day vol {vol:,.0f}" if vol is not None else ""
+        lines.append(f"  {sym}: last ${price:.2f}{move}{quote_txt}{vol_txt}")
+    return "\n".join(lines)
 
 
-def _format_bars(bars: dict[str, Any]) -> str:
+def _format_bars(bars: dict[str, Any], *, last_n: int = 5) -> str:
+    """The last ``last_n`` daily bars per symbol, one compact line each.
+
+    This used to dump the raw 60-day response envelope (about 5k characters
+    per symbol, up to 20 symbols a cycle) under a "5-day" header, because the
+    live payload is a dict, not the list the formatter expected.
+    """
+    from halal_trader.trading.bars import extract_bar_dicts
+
     if not bars:
         return "No bar data available."
     lines = []
-    if isinstance(bars, dict):
-        for sym, data in bars.items():
-            lines.append(f"  {sym}:")
-            if isinstance(data, list):
-                for bar in data[-5:]:
-                    ts = bar.get("timestamp", "")
-                    lines.append(
-                        f"    {ts}: O={bar.get('open', 0):.2f} H={bar.get('high', 0):.2f} "
-                        f"L={bar.get('low', 0):.2f} "
-                        f"C={bar.get('close', 0):.2f} V={bar.get('volume', 0)}"
-                    )
-            else:
-                lines.append(f"    {data}")
-    else:
-        lines.append(str(bars))
-    return "\n".join(lines) if lines else str(bars)
+    for sym, data in bars.items():
+        rows = extract_bar_dicts(data)[-last_n:]
+        if not rows:
+            lines.append(f"  {sym}: no bars")
+            continue
+        lines.append(f"  {sym}:")
+        for bar in rows:
+            day = str(bar.get("t", bar.get("timestamp", "")))[:10]
+            o, h, low, c = (
+                _num(bar.get(k, bar.get(lk)))
+                for k, lk in (("o", "open"), ("h", "high"), ("l", "low"), ("c", "close"))
+            )
+            v = _num(bar.get("v", bar.get("volume")))
+            if None in (o, h, low, c):
+                continue
+            lines.append(f"    {day}: O={o:.2f} H={h:.2f} L={low:.2f} C={c:.2f} V={(v or 0):,.0f}")
+    return "\n".join(lines)
 
 
 class TradingStrategy(BaseStrategy):
