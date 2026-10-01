@@ -741,3 +741,50 @@ async def test_trend_break_disabled_is_noop():
     exited = await mon._maybe_trend_break_exit(trade, price=205.0)
     assert exited is False
     mcp.get_stock_bars.assert_not_awaited()
+
+
+# ── high-water mark survives a restart ──────────────────────────────
+
+
+async def test_ratchet_persists_the_high_water_mark(engine):
+    repo = Repository(engine)
+    tid = await repo.record_trade(
+        symbol="AAPL", side="buy", quantity=10, price=200.0, stop_loss=190.0, target_price=260.0
+    )
+    mon = StockPositionMonitor(
+        mcp=MagicMock(),
+        repo=repo,
+        check_interval=1,
+        trailing_stop_activation_pct=0.01,
+        trailing_stop_distance_pct=0.02,
+    )
+    tr = _trade(id_=tid, entry=200.0, sl=190.0, tp=260.0)
+    await mon._update_trailing_stop(tr, price=220.0)
+
+    async with engine.begin() as conn:
+        sl, hw = (
+            await conn.execute(
+                sa.text("SELECT stop_loss, high_water_price FROM trades WHERE id = :i"), {"i": tid}
+            )
+        ).first()
+    assert hw == 220.0
+    assert abs(sl - 220.0 * 0.98) < 0.01
+
+
+async def test_a_restarted_monitor_exits_at_a_ratcheted_stop_instead_of_lowering_it(engine):
+    """The restart bug: a fresh monitor has no in-memory high-water mark, so a
+    winner's ratcheted stop (above entry) looked 'never reached' and was
+    repaired DOWN to entry-5% -- giving back the locked-in profit. The
+    persisted high_water_price must make it a real stop hit."""
+    repo = Repository(engine)
+    tid = await repo.record_trade(
+        symbol="AAPL", side="buy", quantity=10, price=200.0, stop_loss=205.0, target_price=230.0
+    )
+    restarted = _monitor(repo)  # empty memory
+    tr = _trade(id_=tid, entry=200.0, sl=205.0, tp=230.0)
+    tr.high_water_price = 210.0  # persisted by the previous process's ratchet
+
+    await restarted._check_trade(tr, price=204.0)
+
+    assert restarted._mcp.place_order.await_count == 1  # exited, profit locked
+    assert tr.stop_loss == 205.0  # not lowered

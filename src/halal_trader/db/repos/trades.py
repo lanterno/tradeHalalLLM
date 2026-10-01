@@ -198,13 +198,22 @@ class TradeRepoImpl:
             await session.commit()
             return count
 
-    async def update_stock_trade_stop_loss(self, trade_id: int, new_stop_loss: float) -> None:
-        """Ratchet up the stop_loss on a stock trade (trailing-stop helper)."""
+    async def update_stock_trade_stop_loss(
+        self, trade_id: int, new_stop_loss: float, high_water: float | None = None
+    ) -> None:
+        """Ratchet up the stop_loss on a stock trade (trailing-stop helper).
+
+        ``high_water`` is the price the ratchet was computed from; it is
+        persisted with the stop so a restarted monitor can tell a stop the
+        price really reached from one recorded above an unreached entry.
+        """
         async with AsyncSession(self._engine) as session:
             trade = await session.get(Trade, trade_id)
             if trade is None:
                 return
             trade.stop_loss = new_stop_loss
+            if high_water is not None:
+                trade.high_water_price = max(high_water, trade.high_water_price or 0.0)
             session.add(trade)
             await session.commit()
 

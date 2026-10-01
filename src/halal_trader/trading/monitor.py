@@ -189,7 +189,7 @@ class StockPositionMonitor:
             # winner ratcheted ABOVE entry then fell back to has high-water
             # >= stop and is a legitimate exit, NOT bogus — never repair it.
             entry = trade.filled_price or trade.price
-            high_water = self._high_water.get(trade.id, entry or 0.0)
+            high_water = self._known_high(trade, entry or 0.0)
             if entry and trade.stop_loss > entry and high_water < trade.stop_loss:
                 fixed = round(entry * (1 - _BOGUS_STOP_REPAIR_PCT), 2)
                 logger.warning(
@@ -217,6 +217,14 @@ class StockPositionMonitor:
         if await self._maybe_trend_break_exit(trade, price):
             return
         await self._update_trailing_stop(trade, price)
+
+    def _known_high(self, trade: Any, entry: float) -> float:
+        """Highest price seen since entry: this process's memory, else the
+        value persisted with the trade (survives restarts), else entry."""
+        if trade.id not in self._high_water:
+            persisted = getattr(trade, "high_water_price", None)
+            self._high_water[trade.id] = max(float(persisted or 0.0), entry)
+        return self._high_water[trade.id]
 
     async def _maybe_trend_break_exit(self, trade: Any, price: float) -> bool:
         """Exit a *winning* reactor position on a structural trend break.
@@ -306,12 +314,14 @@ class StockPositionMonitor:
         gain = (price - entry) / entry
         if gain < activation_pct:
             return
-        prior_high = self._high_water.get(trade.id, entry)
+        prior_high = self._known_high(trade, entry)
         if price > prior_high:
             self._high_water[trade.id] = price
         new_stop = self._high_water[trade.id] * (1 - distance_pct)
         if trade.stop_loss is None or new_stop > trade.stop_loss:
-            await self._repo.update_stock_trade_stop_loss(trade.id, new_stop)
+            await self._repo.update_stock_trade_stop_loss(
+                trade.id, new_stop, high_water=self._high_water[trade.id]
+            )
             logger.info(
                 "Trailing stop on %s: SL %.2f → %.2f (high %.2f, price %.2f)",
                 trade.symbol,

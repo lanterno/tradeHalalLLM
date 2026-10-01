@@ -61,6 +61,11 @@ class Trade(SQLModel, table=True):
     # rule-based exit can close them. None = legacy / "scheduled"
     # (default for cron-cycle entries).
     entry_type: str | None = None
+    # Highest price seen since entry, persisted whenever the trailing stop
+    # ratchets. The monitor's bogus-stop repair compares it with stop_loss;
+    # held only in memory, a restart made a ratcheted, profit-locking stop
+    # look "never reached" and repaired it DOWN instead of exiting.
+    high_water_price: float | None = None
     exit_price: float | None = None
     exit_reason: str | None = None
     closed_at: datetime | None = Field(default=None, sa_type=sa.DateTime(timezone=True))
