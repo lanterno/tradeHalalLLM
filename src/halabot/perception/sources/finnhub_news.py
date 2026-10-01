@@ -69,12 +69,16 @@ class FinnhubNewsSource(PollingSource):
         params_base = {
             "from": (today - timedelta(days=self._lookback)).isoformat(),
             "to": today.isoformat(),
-            "token": self._api_key,
         }
+        # Key in a header, not ?token=: the failure log below prints the
+        # exception, and httpx exceptions carry the full request URL.
+        auth = {"X-Finnhub-Token": self._api_key}
         out: list[dict[str, Any]] = []
         for sym in symbols:
             try:
-                resp = await self._client.get(_FINNHUB_NEWS, params={**params_base, "symbol": sym})
+                resp = await self._client.get(
+                    _FINNHUB_NEWS, params={**params_base, "symbol": sym}, headers=auth
+                )
                 resp.raise_for_status()
                 items = resp.json()
             except Exception as exc:  # noqa: BLE001 — one symbol's failure skips it

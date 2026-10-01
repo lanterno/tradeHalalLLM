@@ -2,6 +2,7 @@
 
 import asyncio
 import fcntl
+import html
 import logging
 import os
 import signal
@@ -596,13 +597,17 @@ class TradingBot(BaseTradingBot):
 
         if self._notifier and self._notifier.enabled:
             try:
+                # Headlines and LLM rationales are third-party / model text:
+                # escape them so they can't inject Telegram HTML (links,
+                # formatting) into an alert the operator acts on.
+                esc = html.escape
                 await self._notifier.send(
                     f"\U0001f4f0 <b>Stocks news-momentum event</b>\n"
-                    f"<b>{event.symbol}</b> · score {cls.score:.2f} · {cls.tag}\n"
-                    f"{event.title}\n"
-                    f"<i>{cls.rationale[:160]}</i>\n"
-                    f"Source: {event.source}\n"
-                    f"<i>{status_note}</i>"
+                    f"<b>{esc(event.symbol)}</b> · score {cls.score:.2f} · {esc(str(cls.tag))}\n"
+                    f"{esc(event.title)}\n"
+                    f"<i>{esc(cls.rationale[:160])}</i>\n"
+                    f"Source: {esc(str(event.source))}\n"
+                    f"<i>{esc(status_note)}</i>"
                 )
             except Exception:  # noqa: BLE001
                 pass

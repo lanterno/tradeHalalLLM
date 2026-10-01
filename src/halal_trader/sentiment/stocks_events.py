@@ -371,9 +371,11 @@ class StockNewsEventReactor:
             "symbol": symbol,
             "from": (today - timedelta(days=1)).isoformat(),
             "to": today.isoformat(),
-            "token": self._api_key,
         }
-        resp = await self._client.get(_FINNHUB_API_BASE, params=params)
+        # Key in a header: a ?token= query param leaks via httpx error URLs.
+        resp = await self._client.get(
+            _FINNHUB_API_BASE, params=params, headers={"X-Finnhub-Token": self._api_key}
+        )
         resp.raise_for_status()
         data = resp.json()
         return data if isinstance(data, list) else []

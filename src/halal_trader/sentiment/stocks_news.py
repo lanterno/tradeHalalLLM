@@ -230,14 +230,13 @@ class FinnhubNewsCollector:
         from_date = (now - timedelta(days=self._lookback_days)).isoformat()
         to_date = now.isoformat()
         client = await self._http()
-        params = {
-            "symbol": sym,
-            "from": from_date,
-            "to": to_date,
-            "token": self._api_key,
-        }
+        params = {"symbol": sym, "from": from_date, "to": to_date}
         try:
-            r = await client.get(_FINNHUB_API_BASE, params=params)
+            # Key in a header, not ?token=: httpx error messages carry the full
+            # URL, so a query-param key leaked into every logged failure.
+            r = await client.get(
+                _FINNHUB_API_BASE, params=params, headers={"X-Finnhub-Token": self._api_key}
+            )
             r.raise_for_status()
             data = r.json()
         except Exception as exc:  # noqa: BLE001

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 import logging
 import time
 from typing import Any
@@ -106,7 +107,7 @@ class TelegramNotifier:
         if order_id:
             msg += f"Order: \u2026{order_id[-8:]}\n"
         if reasoning:
-            msg += f"<i>{reasoning[:200]}</i>\n"
+            msg += f"<i>{html.escape(reasoning[:200])}</i>\n"  # LLM text: escape
         await self.send(msg)
 
     async def notify_sl_tp(
@@ -215,7 +216,8 @@ class TelegramNotifier:
         # the end of long stack traces survives the 500-char cap.
         if len(details) > 500:
             details = f"{details[:300]}\n\u2026(truncated)\u2026\n{details[-180:]}"
-        msg = f"{emoji} <b>{prefix}{label}: {error_type}</b>\n{details}\n"
+        # details carries exception text, headlines and broker payloads.
+        msg = f"{emoji} <b>{prefix}{label}: {html.escape(error_type)}</b>\n{html.escape(details)}\n"
         await self.send(msg)
 
     async def notify_buzz(

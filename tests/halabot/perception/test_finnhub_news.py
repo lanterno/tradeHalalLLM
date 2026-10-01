@@ -30,7 +30,11 @@ class _FakeClient:
         self._by = by_symbol
         self.fail: set[str] = set()
 
-    async def get(self, url, params):
+    async def get(self, url, params, headers=None):
+        # The key travels as a header; a ?token= query param leaks through
+        # logged request URLs.
+        assert "token" not in params
+        assert headers and headers.get("X-Finnhub-Token")
         sym = params["symbol"]
         if sym in self.fail:
             raise httpx.ConnectError("down")
