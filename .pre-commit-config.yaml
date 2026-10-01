@@ -9,12 +9,21 @@ repos:
       - id: end-of-file-fixer
       - id: trailing-whitespace
 
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.15.12
+  # ruff runs from the project's own lock (uv run), not a pinned
+  # ruff-pre-commit rev: the two drifted (0.15.0 vs 0.15.12) and CI's format
+  # step went red on files the hook had passed. One version, one source.
+  - repo: local
     hooks:
       - id: ruff-check
-        args: [--fix]
+        name: ruff check
+        entry: uv run ruff check --fix
+        language: system
+        types_or: [python, pyi]
       - id: ruff-format
+        name: ruff format
+        entry: uv run ruff format
+        language: system
+        types_or: [python, pyi]
 
   - repo: local
     hooks:
