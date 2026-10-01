@@ -242,8 +242,11 @@ class StockPositionMonitor:
         import time as _t
 
         now = _t.monotonic()
-        last = self._last_trend_check.get(trade.id, 0.0)
-        if (now - last) < _TREND_BREAK_MIN_INTERVAL_S:
+        # None, not 0.0, for "never checked": monotonic time counts from
+        # host boot, so on a freshly booted machine `now - 0.0` is below the
+        # interval and the first check of every trade was silently skipped.
+        last = self._last_trend_check.get(trade.id)
+        if last is not None and (now - last) < _TREND_BREAK_MIN_INTERVAL_S:
             return False
         self._last_trend_check[trade.id] = now
 

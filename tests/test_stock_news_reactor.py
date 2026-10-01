@@ -179,7 +179,7 @@ async def test_notify_cooldown_drops_second_callback_for_same_symbol():
 
     for e in events:
         last = r._last_notify.get(e.symbol, 0.0)
-        now_t = _t.monotonic()
+        now_t = _t.time()  # the reactor's cooldown is wall-clock (survives restarts)
         if r._notify_cooldown_s > 0 and (now_t - last) < r._notify_cooldown_s:
             continue
         r._last_notify[e.symbol] = now_t
@@ -210,7 +210,7 @@ async def test_notify_cooldown_zero_disables():
             continue
         # Same dispatch as the poll loop.
         last = r._last_notify.get(e.symbol, 0.0)
-        now_t = _t.monotonic()
+        now_t = _t.time()  # the reactor's cooldown is wall-clock (survives restarts)
         if r._notify_cooldown_s > 0 and (now_t - last) < r._notify_cooldown_s:
             continue
         r._last_notify[e.symbol] = now_t
@@ -236,7 +236,7 @@ async def test_notify_cooldown_per_symbol_not_global():
         if e is None:
             continue
         last = r._last_notify.get(e.symbol, 0.0)
-        now_t = _t.monotonic()
+        now_t = _t.time()  # the reactor's cooldown is wall-clock (survives restarts)
         if r._notify_cooldown_s > 0 and (now_t - last) < r._notify_cooldown_s:
             continue
         r._last_notify[e.symbol] = now_t
