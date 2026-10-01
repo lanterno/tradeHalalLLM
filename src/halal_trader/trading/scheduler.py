@@ -401,6 +401,9 @@ class TradingBot(BaseTradingBot):
             # signal in halabot's per-source attribution. Uses the shared
             # signals.timeframes math; errors degrade to an empty block (cycle-safe).
             timeframe_analyzer=StockTimeframeAnalyzer(self.broker),
+            # Telegram alert per fill. The cycle always supported it; the
+            # composition root never passed the notifier.
+            notifier=self._notifier,
         )
 
         # Advisory daily halal recommendation engine (never trades).

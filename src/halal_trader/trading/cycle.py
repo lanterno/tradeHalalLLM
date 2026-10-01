@@ -393,8 +393,8 @@ class TradingCycleService(BaseCycleService):
                     await self._notifier.notify_trade(
                         pair=r.get("symbol", ""),
                         side=r.get("action", ""),
-                        quantity=r.get("quantity", 0),
-                        price=r.get("price", 0),
+                        quantity=r.get("filled_quantity") or r.get("quantity", 0),
+                        price=r.get("price") or 0,
                         market="stocks",
                         order_id=str(r.get("order_id", "")),
                     )

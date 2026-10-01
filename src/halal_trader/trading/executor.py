@@ -622,6 +622,11 @@ class TradeExecutor(BaseExecutor):
                 "status": fill.status,
                 "order": order_result,
                 "trade_id": trade_id,
+                # What actually filled: read by the per-fill Telegram alert,
+                # which otherwise reported "@ $0.00" and no order id.
+                "price": fill.filled_price,
+                "filled_quantity": fill.filled_quantity,
+                "order_id": order_id,
             }
         except Exception as e:
             logger.error("Failed to place BUY order for %s: %s", decision.symbol, e)
@@ -827,6 +832,9 @@ class TradeExecutor(BaseExecutor):
                 "quantity": decision.quantity,
                 "status": fill.status,
                 "order": result,
+                "price": fill.filled_price,
+                "filled_quantity": fill.filled_quantity,
+                "order_id": order_id,
             }
         except Exception as e:
             logger.error("Failed to place SELL order for %s: %s", decision.symbol, e)
