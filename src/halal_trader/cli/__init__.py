@@ -23,6 +23,7 @@ from halal_trader.cli import prompts as prompts_cmd
 from halal_trader.cli import quant as quant_cmd
 from halal_trader.cli import recommend as recommend_cmd
 from halal_trader.cli import reconcile as reconcile_cmd
+from halal_trader.cli import research as research_cmd
 from halal_trader.cli import stocks as stocks_cmd
 from halal_trader.cli import watchdog as watchdog_cmd
 
@@ -58,6 +59,9 @@ cli.add_command(halt_cmd.halt_status)
 
 # ── In-house Shariah screen (research-grade until validated) ──
 cli.add_command(compliance_cmd.compliance)
+
+# ── Strategy research (backtests) ──────────────────────────────
+cli.add_command(research_cmd.research)
 
 # ── Research market data ───────────────────────────────────────
 cli.add_command(data_cmd.data)

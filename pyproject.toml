@@ -151,6 +151,7 @@ files = [
     "src/halal_trader/execution",
     "src/halal_trader/data",
     "src/halal_trader/compliance",
+    "src/halal_trader/research",
     "src/halal_trader/signals",
     "src/halal_trader/portfolio",
     # Already strict-clean when measured on 2026-10-01; gated so they stay so.
