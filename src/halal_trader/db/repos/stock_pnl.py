@@ -24,14 +24,23 @@ class StockPnlRepoImpl:
     def __init__(self, engine: AsyncEngine) -> None:
         self._engine = engine
 
-    async def start_day(self, starting_equity: float) -> None:
+    async def start_day(self, starting_equity: float) -> float:
+        """Record today's starting equity once; return the one on record.
+
+        Insert-if-absent: the first call of the (Eastern) day wins, and a
+        later call -- a restart at 15:00 -- gets the morning's figure back
+        rather than re-basing the daily loss limit on the current equity.
+        """
         today = today_eastern().isoformat()
         async with AsyncSession(self._engine) as session:
             statement = select(DailyPnl).where(DailyPnl.date == today)
             result = await session.exec(statement)
-            if result.first() is None:
-                session.add(DailyPnl(date=today, starting_equity=starting_equity))
-                await session.commit()
+            existing = result.first()
+            if existing is not None:
+                return float(existing.starting_equity)
+            session.add(DailyPnl(date=today, starting_equity=starting_equity))
+            await session.commit()
+            return starting_equity
 
     async def end_day(self, ending_equity: float, realized_pnl: float, trades_count: int) -> None:
         today = today_eastern().isoformat()

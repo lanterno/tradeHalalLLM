@@ -2,7 +2,10 @@
 
 import logging
 from abc import ABC, abstractmethod
+from datetime import date
 from typing import Any
+
+from halal_trader.market_hours import today_eastern
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +25,9 @@ class BasePortfolioTracker(ABC):
     def __init__(self, *, daily_loss_limit: float) -> None:
         self._daily_loss_limit = daily_loss_limit
         self._starting_equity: float | None = None
+        # The Eastern trading date _starting_equity belongs to. A baseline
+        # from yesterday must never be measured against today's equity.
+        self._starting_date: date | None = None
 
     # ── Abstract hooks ─────────────────────────────────────────
 
@@ -32,7 +38,13 @@ class BasePortfolioTracker(ABC):
     async def _get_today_trades(self) -> list[dict[str, Any]]: ...
 
     @abstractmethod
-    async def _persist_day_start(self, equity: float) -> None: ...
+    async def _persist_day_start(self, equity: float) -> float | None:
+        """Persist today's starting equity; return the figure on record.
+
+        Returning the persisted value (when one already exists for today)
+        is what keeps the daily loss limit anchored across restarts.
+        ``None`` means "no persisted figure", and the fresh equity is used.
+        """
 
     @abstractmethod
     async def _persist_day_end(self, equity: float, pnl: float, count: int) -> None: ...
@@ -42,10 +54,29 @@ class BasePortfolioTracker(ABC):
     async def record_day_start(self) -> float:
         """Record the starting equity for today. Returns starting equity."""
         equity = await self._get_equity()
+        on_record = await self._persist_day_start(equity)
+        if on_record is not None and on_record != equity:
+            logger.info(
+                "%sResuming today's baseline $%.2f from the database (equity now $%.2f)",
+                self._label,
+                on_record,
+                equity,
+            )
+            equity = on_record
         self._starting_equity = equity
-        await self._persist_day_start(equity)
+        self._starting_date = today_eastern()
         logger.info("%sDay started with equity: $%.2f", self._label, equity)
         return equity
+
+    async def _ensure_baseline(self) -> None:
+        """Make sure today's loss-limit baseline exists before it is used.
+
+        Without this a failed pre-market left _starting_equity None and the
+        loss limit measured equity against itself -- it could never trip --
+        and a baseline left over from a previous day was silently reused.
+        """
+        if self._starting_equity is None or self._starting_date != today_eastern():
+            await self.record_day_start()
 
     async def record_day_end(self) -> dict[str, Any]:
         """Record end-of-day stats. Returns summary dict.
@@ -106,6 +137,7 @@ class BasePortfolioTracker(ABC):
 
     async def get_current_pnl(self, **kwargs: Any) -> float:
         """Get the current unrealized + realized P&L for today."""
+        await self._ensure_baseline()
         equity = await self._get_equity(**kwargs)
         starting = self._starting_equity or equity
         return equity - starting

@@ -167,8 +167,8 @@ class Repository:
 
     # ── Stock Daily P&L ────────────────────────────────────────
 
-    async def start_day(self, starting_equity: float) -> None:
-        await self._stock_pnl.start_day(starting_equity)
+    async def start_day(self, starting_equity: float) -> float:
+        return await self._stock_pnl.start_day(starting_equity)
 
     async def end_day(self, ending_equity: float, realized_pnl: float, trades_count: int) -> None:
         await self._stock_pnl.end_day(ending_equity, realized_pnl, trades_count)

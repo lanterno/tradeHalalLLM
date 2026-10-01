@@ -39,8 +39,8 @@ class PortfolioTracker(BasePortfolioTracker):
     async def _get_today_trades(self) -> list[dict[str, Any]]:
         return await self._repo.get_today_trades()
 
-    async def _persist_day_start(self, equity: float) -> None:
-        await self._pnl.start_day(equity)
+    async def _persist_day_start(self, equity: float) -> float | None:
+        return await self._pnl.start_day(equity)
 
     async def _persist_day_end(self, equity: float, pnl: float, count: int) -> None:
         await self._pnl.end_day(equity, pnl, count)
