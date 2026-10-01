@@ -75,7 +75,6 @@ async def _run_shadow(
     from halabot.perception.sources.alpaca_bars import AlpacaBarSource
     from halabot.platform.clock import SystemClock
     from halabot.platform.config import get_settings as get_hb_settings
-    from halabot.platform.events import EventType, new_event
     from halabot.platform.supervisor import Supervisor, heartbeat_loop
     from halal_trader.config import get_settings
     from halal_trader.db.models import init_db
@@ -121,7 +120,17 @@ async def _run_shadow(
     bar_source = AlpacaBarSource(
         mcp, bar_universe, clock, timeframe=timeframe, days=days, interval_s=interval
     )
-    sources: list[Any] = [bar_source]
+    # Compliance first, so beliefs carry a verdict before the first bars land.
+    # Membership in the screened universe (get_halal_symbols -> compliance='halal')
+    # is the shadow's halal verdict; the source re-emits it hourly (inside the
+    # policy's 24h freshness TTL) and lapses names that leave the universe. It
+    # replaces a one-off startup seed that went stale after a day of uptime.
+    from halabot.perception.sources.universe_compliance import UniverseComplianceSource
+
+    compliance_source = UniverseComplianceSource(
+        universe, clock, exclude=frozenset({bench}) if bench else frozenset()
+    )
+    sources: list[Any] = [compliance_source, bar_source]
     finnhub_key = getattr(getattr(settings, "finnhub", None), "api_key", "") or ""
     news_source = None
     if finnhub_key:
@@ -163,26 +172,6 @@ async def _run_shadow(
     try:
         syms = await universe()
         click.echo(f"halal universe: {len(syms)} symbols — {', '.join(sorted(syms)[:12])}")
-
-        # Seed compliance: the universe IS the halal-screened set (get_halal_symbols
-        # returns compliance='halal'), so stamp each belief halal so the policy's
-        # halal gate doesn't block every buy. A live re-screening source replaces
-        # this later; for the shadow, membership in the universe = halal.
-        for sym in syms:
-            await engine.bus.publish(
-                new_event(
-                    clock,
-                    EventType.COMPLIANCE_VERDICT,
-                    source="halal-universe",
-                    asset=sym,
-                    payload={
-                        "status": "halal",
-                        "detail": "halal universe member",
-                        "screening_id": None,
-                        "transient_error": False,
-                    },
-                )
-            )
 
         click.echo(f"sources: {', '.join(s.name for s in sources)}")
         # click.echo lands in a block-buffered stdout under launchd and can sit
