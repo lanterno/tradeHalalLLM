@@ -18,6 +18,10 @@ from halal_trader.market_hours import now_eastern, today_eastern
 logger = logging.getLogger(__name__)
 
 
+class MCPToolError(RuntimeError):
+    """The MCP server reported a tool call as failed (``isError``)."""
+
+
 def _flex_get(d: dict[str, Any], *keys: str, default: Any = None) -> Any:
     """Look up a value trying multiple key variants (snake_case, camelCase, etc.).
 
@@ -124,8 +128,19 @@ class AlpacaMCPClient:
 
     # ── Tool execution ──────────────────────────────────────────
 
-    async def call_tool(self, name: str, arguments: dict[str, Any] | None = None) -> Any:
+    async def call_tool(
+        self,
+        name: str,
+        arguments: dict[str, Any] | None = None,
+        *,
+        raise_on_error: bool = False,
+    ) -> Any:
         """Execute a tool on the Alpaca MCP server and return the result.
+
+        A result the server flags ``isError`` is always logged at ERROR. With
+        ``raise_on_error`` it raises :class:`MCPToolError` instead of being
+        returned as if it were a payload; the position-closing wrappers use
+        it, because their callers cannot tell a refusal from a success.
 
         Times every call and emits the ``halal_trader_broker_call_ms``
         histogram with ``broker="alpaca"`` + the tool name as ``method``,
@@ -168,6 +183,10 @@ class AlpacaMCPClient:
         # Try to parse JSON responses
         combined = "\n".join(str(c) for c in contents)
         logger.debug("Raw MCP response for %s: %s", name, combined[:500])
+        if getattr(result, "isError", False):
+            logger.error("MCP tool %s failed: %s", name, combined[:500])
+            if raise_on_error:
+                raise MCPToolError(f"{name}: {combined[:500]}")
         try:
             parsed = json.loads(combined)
         except json.JSONDecodeError, TypeError:
@@ -468,7 +487,13 @@ class AlpacaMCPClient:
         return result if isinstance(result, dict) else {"result": result}
 
     async def close_position(self, symbol: str) -> Any:
-        return await self.call_tool("close_position", {"symbol": symbol})
+        # The 2.x server's argument is ``symbol_or_asset_id``; ``symbol`` was
+        # refused on every call, silently, until 2026-10-01.
+        return await self.call_tool(
+            "close_position", {"symbol_or_asset_id": symbol}, raise_on_error=True
+        )
 
     async def close_all_positions(self) -> Any:
-        return await self.call_tool("close_all_positions", {"cancel_orders": True})
+        return await self.call_tool(
+            "close_all_positions", {"cancel_orders": True}, raise_on_error=True
+        )

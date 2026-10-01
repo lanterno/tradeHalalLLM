@@ -182,7 +182,7 @@ async def reconcile_fills(engine: AsyncEngine, day: date) -> FillReconciliation:
             text(
                 """
                 SELECT symbol, side, coalesce(filled_quantity, quantity) FROM trades
-                WHERE status IN ('filled', 'partially_filled')
+                WHERE status IN ('filled', 'partially_filled', 'closed')
                   AND (coalesce(filled_at, timestamp) AT TIME ZONE 'America/New_York')::date = :day
                 """
             ),

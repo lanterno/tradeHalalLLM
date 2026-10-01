@@ -132,6 +132,30 @@ def _extract_order_id(order_result: Any) -> str:
     return str(raw) if raw else ""
 
 
+def _accepted_closes(result: Any) -> set[str]:
+    """Symbols whose close order the broker accepted, from either flatten path.
+
+    ``_flatten_except`` reports ``{"closed": [...]}``; Alpaca's batch
+    ``DELETE /v2/positions`` answers ``[{"symbol", "status", "body"}, ...]``
+    with an HTTP status per symbol, which the MCP server wraps as
+    ``{"result": [...]}``. Anything unrecognised accepts nothing.
+    """
+    if isinstance(result, dict) and isinstance(result.get("result"), list):
+        result = result["result"]
+    if isinstance(result, dict) and isinstance(result.get("closed"), list):
+        return {str(s).upper() for s in result["closed"]}
+    if isinstance(result, list):
+        return {
+            str(item.get("symbol", "")).upper()
+            for item in result
+            if isinstance(item, dict)
+            and item.get("symbol")
+            and isinstance(item.get("status"), int)
+            and 200 <= item["status"] < 300
+        }
+    return set()
+
+
 class TradeExecutor(BaseExecutor):
     """Executes stock trading decisions via the broker."""
 
@@ -1353,8 +1377,10 @@ class TradeExecutor(BaseExecutor):
         # destructive; positions are gone after.
         price_by_symbol: dict[str, float] = {}
         broker_symbols: list[str] = []
+        snapshot_ok = False
         try:
             pre_positions = await self._broker.get_all_positions()
+            snapshot_ok = True
             for p in pre_positions:
                 sym = str(getattr(p, "symbol", "") or "").upper()
                 cp = float(getattr(p, "current_price", 0) or 0)
@@ -1402,6 +1428,11 @@ class TradeExecutor(BaseExecutor):
         if not opens:
             return result
 
+        # Only what the broker accepted may be stamped closed. Until
+        # 2026-10-01 every close was refused (a wrong argument name, swallowed
+        # as a payload) and this method still recorded synthetic fills, so
+        # positions stayed open at Alpaca for months while the books said flat.
+        accepted = _accepted_closes(result)
         symbols_to_close: set[str] = set()
         for trade in opens:
             sym = str(getattr(trade, "symbol", "") or "").upper()
@@ -1409,6 +1440,14 @@ class TradeExecutor(BaseExecutor):
                 continue
             if holding_reactor and sym in reactor_syms:
                 continue  # held overnight — don't stamp closed / synthesize SELL
+            # A symbol the broker did not hold is a DB phantom; closing its
+            # rows is cleanup. One it held (or may have) needs an accepted close.
+            if (sym in broker_symbols or not snapshot_ok) and sym not in accepted:
+                logger.error(
+                    "EOD close-all: broker did not accept the close of %s; leaving its trades open",
+                    sym,
+                )
+                continue
             symbols_to_close.add(sym)
 
         closer = getattr(self._repo, "close_open_trades_for_symbol", None)

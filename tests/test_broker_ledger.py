@@ -132,14 +132,16 @@ async def test_sync_is_idempotent_and_incremental(engine: AsyncEngine) -> None:
 # ── reconciliation ────────────────────────────────────────────────────
 
 
-async def _record_trade(engine: AsyncEngine, symbol: str, side: str, qty: float) -> None:
+async def _record_trade(
+    engine: AsyncEngine, symbol: str, side: str, qty: float, status: str = "filled"
+) -> None:
     async with engine.begin() as conn:
         await conn.execute(
             text(
                 "INSERT INTO trades (timestamp, symbol, side, quantity, status, filled_at, "
-                "filled_quantity) VALUES (:t, :s, :side, :q, 'filled', :t, :q)"
+                "filled_quantity) VALUES (:t, :s, :side, :q, :status, :t, :q)"
             ),
-            {"t": T, "s": symbol, "side": side, "q": qty},
+            {"t": T, "s": symbol, "side": side, "q": qty, "status": status},
         )
 
 
@@ -152,6 +154,18 @@ async def test_matching_books_reconcile_clean(engine: AsyncEngine) -> None:
     rec = await reconcile_fills(engine, date(2026, 10, 1))
 
     assert rec.clean and rec.broker_fills == 2
+
+
+async def test_a_buy_whose_position_closed_still_counts_as_filled(engine: AsyncEngine) -> None:
+    """Closing a position re-labels its BUY 'closed'; the fill still happened."""
+    await sync_broker_ledger(  # type: ignore[arg-type]
+        engine,
+        FakeAlpaca([_fill("c1", T, "SHOP", "buy", 10), _fill("c2", T, "SHOP", "sell", 10)], []),
+    )
+    await _record_trade(engine, "SHOP", "buy", 10, status="closed")
+    await _record_trade(engine, "SHOP", "sell", 10)
+
+    assert (await reconcile_fills(engine, date(2026, 10, 1))).clean
 
 
 async def test_drift_is_reported_both_ways(engine: AsyncEngine) -> None:

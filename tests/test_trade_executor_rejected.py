@@ -248,6 +248,11 @@ async def test_sell_fill_closes_open_buy_row():
     assert args[2] == "llm_sell"
 
 
+def _batch_closed(symbols: list[str]) -> dict[str, object]:
+    """Alpaca's DELETE /v2/positions answer, as the MCP server wraps it."""
+    return {"result": [{"symbol": s, "status": 200, "body": {"id": f"o-{s}"}} for s in symbols]}
+
+
 @pytest.mark.asyncio
 async def test_close_all_records_synthetic_sell_for_each_symbol():
     """EOD close-all must record matching SELL Trade rows so the
@@ -263,7 +268,7 @@ async def test_close_all_records_synthetic_sell_for_each_symbol():
             SimpleNamespace(symbol="SHOP", qty=290, current_price=42.5),
         ]
     )
-    broker.close_all_positions = AsyncMock(return_value={"result": "closed"})
+    broker.close_all_positions = AsyncMock(return_value=_batch_closed(["SHOP"]))
 
     repo = MagicMock()
     repo.get_open_trades = AsyncMock(return_value=[])  # the sell-side hold lockout reads it
@@ -309,7 +314,7 @@ async def test_close_all_stamps_closed_at_on_orphan_buys():
             SimpleNamespace(symbol="NOW", qty=90, current_price=820.0),
         ]
     )
-    broker.close_all_positions = AsyncMock(return_value={"result": "closed"})
+    broker.close_all_positions = AsyncMock(return_value=_batch_closed(["SHOP", "NOW"]))
 
     repo = MagicMock()
     repo.get_open_trades = AsyncMock(return_value=[])  # the sell-side hold lockout reads it
@@ -356,7 +361,7 @@ async def test_close_all_survives_pre_snapshot_failure():
 
     broker = MagicMock()
     broker.get_all_positions = AsyncMock(side_effect=RuntimeError("broker down"))
-    broker.close_all_positions = AsyncMock(return_value={"result": "closed"})
+    broker.close_all_positions = AsyncMock(return_value=_batch_closed(["SHOP"]))
 
     repo = MagicMock()
     repo.get_open_trades = AsyncMock(return_value=[])  # the sell-side hold lockout reads it
@@ -532,7 +537,7 @@ async def test_close_all_flattens_reactor_when_hold_disabled():
     broker.get_all_positions = AsyncMock(
         return_value=[SimpleNamespace(symbol="NVDA", qty=20, current_price=210.0)]
     )
-    broker.close_all_positions = AsyncMock(return_value={"result": "closed"})
+    broker.close_all_positions = AsyncMock(return_value=_batch_closed(["NVDA"]))
 
     repo = MagicMock()
     repo.get_open_trades = AsyncMock(return_value=[])  # the sell-side hold lockout reads it
