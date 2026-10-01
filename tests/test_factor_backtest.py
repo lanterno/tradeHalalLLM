@@ -12,6 +12,7 @@ from halal_trader.research.factor_backtest import (
     backtest,
     month_ends,
     scores_at,
+    split_reused_tickers,
     stats,
 )
 
@@ -69,3 +70,25 @@ def test_stats_on_known_returns() -> None:
     s = stats(np.array([0.10, -0.20, 0.05]))
     assert s.total_return == pytest.approx(1.10 * 0.80 * 1.05 - 1)
     assert s.max_drawdown == pytest.approx(-0.20)
+
+
+def test_a_reused_ticker_keeps_only_the_latest_company() -> None:
+    """The 2026-10-01 S1 run read SN (Sanchez Energy -> SharkNinja) as one +11,600% day."""
+    days = _days(6)
+    reused = [0.36, 0.35, 0.36, 41.3, 41.0, 42.0]  # stitched: cents, then a new listing
+    genuine = [10.0, 10.5, 60.0, 61.0, 6.2, 6.0]  # 5.7x up and ~-90% down: real, kept
+    prices = Prices(days, ["SN", "ABVX"], np.column_stack([reused, genuine]))
+
+    cleaned, breaks = split_reused_tickers(prices)
+
+    assert breaks == [("SN", days[3])]
+    assert np.isnan(cleaned.close[:3, 0]).all() and cleaned.close[3, 0] == 41.3
+    np.testing.assert_array_equal(cleaned.close[:, 1], genuine)
+    assert not np.isnan(prices.close).any()  # the input is not modified
+
+
+def test_a_ten_x_drop_is_a_break_too() -> None:
+    days = _days(3)
+    prices = Prices(days, ["X"], np.array([[500.0], [4.0], [4.1]]))
+    cleaned, breaks = split_reused_tickers(prices)
+    assert breaks == [("X", days[1])] and np.isnan(cleaned.close[0, 0])

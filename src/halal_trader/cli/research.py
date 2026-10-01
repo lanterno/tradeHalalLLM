@@ -34,6 +34,7 @@ def factor_backtest_cmd(top: int, cost_bps: float, since: Any) -> None:
         backtest,
         benchmark_returns,
         load_prices,
+        split_reused_tickers,
         stats,
     )
 
@@ -66,6 +67,7 @@ def factor_backtest_cmd(top: int, cost_bps: float, since: Any) -> None:
         return prices, halal
 
     prices, halal = asyncio.run(_load())
+    prices, breaks = split_reused_tickers(prices)
     result = backtest(prices, eligible=halal, top_n=top, cost_bps=cost_bps, start=since.date())
 
     def line(label: str, s: Any) -> str:
@@ -106,4 +108,9 @@ def factor_backtest_cmd(top: int, cost_bps: float, since: Any) -> None:
     last = max(result.holdings) if result.holdings else None
     if last:
         console.print(f"  holdings at {last}: {', '.join(result.holdings[last])}")
+    if breaks:
+        console.print(
+            f"  reused tickers: {len(breaks)} series cut at a 10x one-day move: "
+            + ", ".join(f"{s} {d}" for s, d in breaks)
+        )
     console.print("[yellow]Biased upward by:[/yellow] " + "; ".join(BIASES))

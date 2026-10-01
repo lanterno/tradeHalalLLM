@@ -22,6 +22,7 @@ full event-driven backtester for (plan 3.2), not a capital gate.
 from __future__ import annotations
 
 import math
+import warnings
 from dataclasses import dataclass, field
 from datetime import date
 
@@ -38,6 +39,7 @@ _MOM_LOOKBACK = 252
 _MOM_SKIP = 21
 _VOL_LOOKBACK = 63
 _TRADING_DAYS = 252
+_REUSE_RATIO = 10.0
 
 BIASES = (
     "survivorship: universe = names listed today",
@@ -95,6 +97,35 @@ async def load_prices(engine: AsyncEngine, symbols: list[str], *, since: date) -
     return Prices(days, syms, close)
 
 
+def split_reused_tickers(
+    prices: Prices, *, max_ratio: float = _REUSE_RATIO
+) -> tuple[Prices, list[tuple[str, date]]]:
+    """Drop each symbol's history before a one-day move of ``max_ratio`` or more.
+
+    Alpaca keys bars by symbol, so a recycled ticker stitches two companies
+    into one series with no gap between them: SN was Sanchez Energy at cents
+    until SharkNinja listed on 2023-07-31, which reads as a single +11,600%
+    day; relisted bankruptcies (VAL, CORZ, BTU, WOLF) look the same. The
+    largest genuine one-day moves in the 2016-2026 store are under 7x, the
+    stitches 12x-155x. Only the latest segment is kept, so the earlier
+    company can neither be scored nor held. Returns the breaks it applied.
+    """
+    close = prices.close.copy()
+    breaks: list[tuple[str, date]] = []
+    for j, symbol in enumerate(prices.symbols):
+        col = close[:, j]
+        seen = np.flatnonzero(~np.isnan(col))
+        if len(seen) < 2:
+            continue
+        ratio = col[seen[1:]] / col[seen[:-1]]
+        jumps = np.flatnonzero((ratio >= max_ratio) | (ratio <= 1.0 / max_ratio))
+        if len(jumps):
+            first_kept = int(seen[jumps[-1] + 1])
+            col[:first_kept] = np.nan
+            breaks.append((symbol, prices.days[first_kept]))
+    return Prices(prices.days, prices.symbols, close), breaks
+
+
 def month_ends(days: list[date]) -> list[int]:
     """Indices of the last session of each calendar month."""
     return [i for i in range(len(days)) if i == len(days) - 1 or days[i + 1].month != days[i].month]
@@ -117,7 +148,9 @@ def scores_at(close: FloatArray, t: int) -> FloatArray:
     momentum = p_now / p_then - 1.0
     window = close[t - _VOL_LOOKBACK : t + 1]
     daily = window[1:] / window[:-1] - 1.0
-    vol = np.nanstd(daily, axis=0) * math.sqrt(_TRADING_DAYS)
+    with np.errstate(invalid="ignore"), warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)  # all-NaN columns: not eligible anyway
+        vol = np.nanstd(daily, axis=0) * math.sqrt(_TRADING_DAYS)
     complete = ~np.isnan(window).any(axis=0) & ~np.isnan(momentum) & ~np.isnan(close[t])
     score = np.full(close.shape[1], np.nan)
     if complete.sum() < 2:
