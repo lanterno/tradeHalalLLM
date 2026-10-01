@@ -8,11 +8,30 @@ import pytest
 
 from halal_trader.core.observability import cycle_context
 from halal_trader.core.tracing import (
-    InMemorySpanExporter,
     Span,
+    SpanExporter,
     Tracer,
-    get_active_span,
+    _active_span_var,
 )
+
+
+class InMemorySpanExporter(SpanExporter):
+    """Keeps the last N spans in memory so tests can inspect them."""
+
+    def __init__(self, capacity: int = 1024) -> None:
+        self.capacity = capacity
+        self._spans: list[Span] = []
+
+    def export(self, span: Span) -> None:
+        self._spans.append(span)
+        if len(self._spans) > self.capacity:
+            self._spans = self._spans[-self.capacity :]
+
+    def spans(self) -> list[Span]:
+        return list(self._spans)
+
+    def clear(self) -> None:
+        self._spans.clear()
 
 
 def test_span_records_duration() -> None:
@@ -61,9 +80,9 @@ def test_nested_spans_track_parent() -> None:
     with tr.span("outer") as outer:
         with tr.span("inner") as inner:
             assert inner.parent_id == outer.span_id
-            assert get_active_span() is inner
-        assert get_active_span() is outer
-    assert get_active_span() is None
+            assert _active_span_var.get() is inner
+        assert _active_span_var.get() is outer
+    assert _active_span_var.get() is None
     spans = {s.name: s for s in exp.spans()}
     assert spans["inner"].parent_id == spans["outer"].span_id
     assert spans["outer"].parent_id is None

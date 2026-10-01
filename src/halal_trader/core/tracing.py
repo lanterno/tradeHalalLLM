@@ -25,7 +25,6 @@ A single global :data:`tracer` is exposed; callers do::
 from __future__ import annotations
 
 import logging
-import threading
 import time
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
@@ -139,29 +138,6 @@ class LogSpanExporter(SpanExporter):
         )
 
 
-class InMemorySpanExporter(SpanExporter):
-    """Keeps the last N spans in process — for tests and the dashboard."""
-
-    def __init__(self, capacity: int = 1024) -> None:
-        self.capacity = capacity
-        self._spans: list[Span] = []
-        self._lock = threading.Lock()
-
-    def export(self, span: Span) -> None:
-        with self._lock:
-            self._spans.append(span)
-            if len(self._spans) > self.capacity:
-                self._spans = self._spans[-self.capacity :]
-
-    def spans(self) -> list[Span]:
-        with self._lock:
-            return list(self._spans)
-
-    def clear(self) -> None:
-        with self._lock:
-            self._spans.clear()
-
-
 # ── Tracer ────────────────────────────────────────────────────────
 
 
@@ -247,7 +223,3 @@ class AsyncSpanContext:
 
 # Module-level singleton (mirrors OTel's pattern).
 tracer = Tracer()
-
-
-def get_active_span() -> Span | None:
-    return _active_span_var.get()

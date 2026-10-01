@@ -5,7 +5,6 @@ from __future__ import annotations
 from halal_trader.core.llm.rag import (
     HashingEmbedder,
     RationaleRow,
-    cosine,
     format_rag_for_prompt,
 )
 
@@ -35,12 +34,8 @@ def test_embedder_similar_texts_have_higher_cosine() -> None:
     a = e.embed("rsi 35 with bb lower band touch")
     b = e.embed("rsi 35 oversold at bb lower band")
     c = e.embed("vwap rejection on volume spike")
-    assert cosine(a, b) > cosine(a, c)
-
-
-def test_cosine_zero_vectors() -> None:
-    assert cosine([], []) == 0.0
-    assert cosine([0, 0], [0, 0]) == 0.0
+    # Unit vectors, so the dot product is the cosine similarity.
+    assert sum(x * y for x, y in zip(a, b)) > sum(x * y for x, y in zip(a, c))
 
 
 # ── Prompt format ───────────────────────────────────────────────

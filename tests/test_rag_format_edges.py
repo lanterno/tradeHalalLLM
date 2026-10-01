@@ -3,9 +3,8 @@
 `test_rag.py` covers basic embedder semantics + a smoke render.
 This file pins the rest of `format_rag_for_prompt`'s contract
 (max_rows truncation, text-char limit, newline collapsing, WIN/LOSS
-labelling, sim-with-sign formatting, pnl-pct formatting), `cosine`'s
-length-mismatch defensive, and `HashingEmbedder` reproducibility
-across instances.
+labelling, sim-with-sign formatting, pnl-pct formatting) and
+`HashingEmbedder` reproducibility across instances.
 """
 
 from __future__ import annotations
@@ -13,7 +12,6 @@ from __future__ import annotations
 from halal_trader.core.llm.rag import (
     HashingEmbedder,
     RationaleRow,
-    cosine,
     format_rag_for_prompt,
 )
 
@@ -134,41 +132,6 @@ def test_format_preserves_input_order():
     a_pos = out.index("AAA")
     b_pos = out.index("BBB")
     assert a_pos < b_pos
-
-
-# ── cosine ─────────────────────────────────────────────────
-
-
-def test_cosine_length_mismatch_returns_zero():
-    """Defensive: vectors of different dim → 0 (not a crash). Happens
-    when an old embedder ran with a different `dim` and the rows are
-    backfilled."""
-    assert cosine([1.0, 0.0, 0.0], [1.0, 0.0]) == 0.0
-
-
-def test_cosine_one_empty_returns_zero():
-    """Empty vector on either side → 0."""
-    assert cosine([1.0, 0.0], []) == 0.0
-    assert cosine([], [1.0, 0.0]) == 0.0
-
-
-def test_cosine_orthogonal_vectors_returns_zero():
-    """Perpendicular unit vectors → 0."""
-    a = [1.0, 0.0, 0.0]
-    b = [0.0, 1.0, 0.0]
-    assert cosine(a, b) == 0.0
-
-
-def test_cosine_identical_unit_vectors_returns_one():
-    a = [1.0, 0.0, 0.0]
-    assert cosine(a, a) == 1.0
-
-
-def test_cosine_anti_parallel_unit_vectors_returns_negative_one():
-    """Opposing unit vectors → -1 (max anti-similarity)."""
-    a = [1.0, 0.0]
-    b = [-1.0, 0.0]
-    assert cosine(a, b) == -1.0
 
 
 # ── HashingEmbedder ────────────────────────────────────────

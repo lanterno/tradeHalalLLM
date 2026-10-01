@@ -11,9 +11,8 @@ equity index volatility most are:
 * **GDP** — Gross Domestic Product (release_id 53), quarterly + revisions.
 
 This module turns those into :class:`Catalyst` rows the existing
-``StockCatalystFeed`` consumes — so the stock cycle's ``CatalystRiskPolicy``
-shrinks position sizing in the 4h window before each one without any
-extra wiring.
+``StockCatalystFeed`` consumes, so each release shows up in the
+prompt's catalysts block.
 
 Design choices:
 
@@ -51,8 +50,7 @@ FRED_RELEASE_IDS: dict[str, int] = {
     "gdp": 53,
 }
 
-# Each FRED release maps to a Catalyst ``kind`` so the existing
-# CatalystRiskPolicy.high_impact_kinds tuple can opt-in to it.
+# Each FRED release maps to a Catalyst ``kind``.
 RELEASE_KINDS: dict[str, str] = {
     "cpi": "cpi",
     "nfp": "nfp",
@@ -80,8 +78,7 @@ class FREDReleaseCalendarSource:
     get a list of :class:`Catalyst` rows.
 
     Macro releases aren't tied to a single symbol; we apply each one to
-    *every* requested symbol so the existing ``CatalystRiskPolicy``
-    fires per-symbol sizing reductions consistently. ``symbol`` is
+    *every* requested symbol. ``symbol`` is
     therefore the ticker the operator passed in, not the issuer of the
     release.
     """

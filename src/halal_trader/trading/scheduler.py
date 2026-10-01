@@ -216,12 +216,12 @@ class TradingBot(BaseTradingBot):
             notifier=self._notifier,
         )
 
-        # Catalyst feed — wires whichever sources are configured. The
-        # FRED feed pulls scheduled CPI/FOMC/NFP/GDP release dates so
-        # CatalystRiskPolicy can shrink position sizing in the 4h
-        # window before each. EDGAR streams 8-K material events the
-        # SEC publishes within minutes of the filing. Empty keys
-        # disable each source cleanly.
+        # Catalyst feed — wires whichever sources are configured; the
+        # cycle renders them into the prompt's RECENT CATALYSTS block.
+        # FRED supplies scheduled CPI/FOMC/NFP/GDP release dates, EDGAR
+        # the 8-K material events the SEC publishes within minutes of
+        # the filing. Empty keys disable each source cleanly. (Nothing
+        # sizes positions off catalysts.)
         catalyst_sources: list[Any] = []
         if self.settings.fred.api_key:
             from halal_trader.trading.fred_catalysts import (

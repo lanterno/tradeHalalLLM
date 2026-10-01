@@ -39,17 +39,6 @@ def quantize_usd(value: Any) -> Decimal:
     return to_decimal(value).quantize(USD_QUANT, rounding=ROUND_HALF_EVEN)
 
 
-def quantize_qty(value: Any, *, step: Decimal | None = None) -> Decimal:
-    """Round a quantity to ``step`` (or 8 dp if step is omitted).
-
-    Pass ``step`` from the exchange filter (Binance ``LOT_SIZE.stepSize``) to
-    match venue-specific precision exactly — important so we never submit a
-    sub-step quantity that the exchange will silently truncate.
-    """
-    quant = step if step is not None else QTY_QUANT
-    return to_decimal(value).quantize(quant, rounding=ROUND_HALF_EVEN)
-
-
 def notional(quantity: Any, price: Any) -> Decimal:
     """Quantity × price rounded to USD cents."""
     return quantize_usd(to_decimal(quantity) * to_decimal(price))

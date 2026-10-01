@@ -64,7 +64,7 @@ def test_row_to_dc_handles_none_embedding_with_empty_vector():
 
 def test_row_to_dc_copies_embedding_to_list():
     """The hydration converts the pgvector array to a plain list so
-    downstream code (cosine, JSON serialise) doesn't see a numpy/array
+    downstream code (JSON serialise) doesn't see a numpy/array
     type."""
     out = _row_to_dc(_row(embedding=[1.0, 2.0, 3.0]))
     assert out.vector == [1.0, 2.0, 3.0]

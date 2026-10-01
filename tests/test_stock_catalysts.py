@@ -5,13 +5,9 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
-
 from halal_trader.trading.catalysts import (
-    AlpacaNewsSource,
     Catalyst,
     StockCatalystFeed,
-    _parse_news_item,
     format_catalysts_for_prompt,
 )
 
@@ -118,60 +114,3 @@ async def test_feed_swallows_per_source_exceptions():
     feed = StockCatalystFeed([bad, good])
     result = await feed.fetch_all(["AAPL"])
     assert [c.title for c in result] == ["ok"]
-
-
-# ── AlpacaNewsSource adapter ──────────────────────────────────
-
-
-async def test_alpaca_news_returns_empty_when_client_lacks_method():
-    client = MagicMock(spec=[])  # no get_stock_news attribute
-    src = AlpacaNewsSource(client)
-    assert await src.fetch(["AAPL"]) == []
-
-
-async def test_alpaca_news_swallows_client_exception():
-    client = MagicMock()
-    client.get_stock_news = AsyncMock(side_effect=RuntimeError("403"))
-    src = AlpacaNewsSource(client)
-    assert await src.fetch(["AAPL"]) == []
-
-
-async def test_alpaca_news_parses_payload():
-    client = MagicMock()
-    client.get_stock_news = AsyncMock(
-        return_value=[
-            {
-                "headline": "Apple beats Q1",
-                "symbols": ["AAPL"],
-                "created_at": "2026-04-26T15:00:00Z",
-                "source": "Bloomberg",
-                "sentiment": "positive",
-            }
-        ]
-    )
-    src = AlpacaNewsSource(client)
-    cats = await src.fetch(["AAPL"])
-    assert len(cats) == 1
-    assert cats[0].symbol == "AAPL"
-    assert cats[0].title == "Apple beats Q1"
-    assert cats[0].sentiment == "positive"
-    assert cats[0].source == "Bloomberg"
-
-
-def test_parse_news_item_handles_missing_fields():
-    cat = _parse_news_item({})
-    assert cat.title == ""
-    assert cat.kind == "news"
-    assert cat.symbol == ""
-
-
-@pytest.mark.parametrize(
-    "ts_str,expected_year",
-    [
-        ("2026-04-26T15:00:00Z", 2026),
-        ("2025-12-31T23:59:59+00:00", 2025),
-    ],
-)
-def test_parse_news_item_iso_timestamp(ts_str, expected_year):
-    cat = _parse_news_item({"headline": "x", "created_at": ts_str})
-    assert cat.timestamp.year == expected_year
