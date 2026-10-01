@@ -14,8 +14,8 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from halal_trader.core.llm.prompts import register as _register_prompt
-from halal_trader.crypto.indicators import format_indicators_for_prompt
 from halal_trader.domain.models import CryptoAccount, Kline
+from halal_trader.signals.indicators import format_indicators_for_prompt
 
 if TYPE_CHECKING:
     from halal_trader.core.llm.prompt_evo import AllelePool, PromptGenome
@@ -284,7 +284,7 @@ def build_indicators_text(
         if indicators_cache is not None and pair in indicators_cache:
             inds = indicators_cache[pair]
         else:
-            from halal_trader.crypto.indicators import compute_all
+            from halal_trader.signals.indicators import compute_all
 
             inds = compute_all(klines)
         parts.append(format_indicators_for_prompt(pair, inds))

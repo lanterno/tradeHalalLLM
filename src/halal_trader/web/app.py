@@ -22,9 +22,9 @@ from halal_trader.config import get_settings
 from halal_trader.core.context import DashboardContext, RuntimeView
 from halal_trader.core.event_bus import EventBus
 from halal_trader.core.insights_hub import InsightsHub
-from halal_trader.crypto.analytics import PerformanceAnalytics
 from halal_trader.db.models import init_db
 from halal_trader.db.repository import Repository
+from halal_trader.portfolio.analytics import PerformanceAnalytics
 from halal_trader.web.routes import register_all
 
 logger = logging.getLogger(__name__)

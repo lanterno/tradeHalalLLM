@@ -73,7 +73,7 @@ def _make_analyze_pair_handler(
         indicators = (ctx.indicators_cache or {}).get(symbol)
         if indicators:
             try:
-                from halal_trader.crypto.indicators import format_indicators_for_prompt
+                from halal_trader.signals.indicators import format_indicators_for_prompt
 
                 lines.append(format_indicators_for_prompt(symbol, indicators))
             except Exception:  # noqa: BLE001
@@ -86,7 +86,7 @@ def _make_analyze_pair_handler(
         # Multi-timeframe deepening — only if an analyzer is wired.
         if timeframes is not None:
             try:
-                from halal_trader.crypto.timeframes import (
+                from halal_trader.signals.timeframes import (
                     build_timeframe_text,
                 )
 

@@ -1,4 +1,4 @@
-"""Technical indicators for crypto trading — pure computation, no I/O.
+"""Technical indicators — pure computation over ``Kline`` lists, no I/O.
 
 All functions accept lists of Kline objects and return indicator values.
 Uses numpy for efficient array operations.

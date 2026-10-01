@@ -1,4 +1,4 @@
-"""Tests for :mod:`crypto.indicators` — pure technical-indicator math.
+"""Tests for :mod:`signals.indicators` — pure technical-indicator math.
 
 Every cycle calls `compute_all` to derive the indicator dict that
 feeds risk, regime, ML, and the LLM prompt. A bug here cascades
@@ -9,14 +9,14 @@ from __future__ import annotations
 
 import numpy as np
 
-from halal_trader.crypto.indicators import (
+from halal_trader.domain.models import Kline
+from halal_trader.signals.indicators import (
     _pct_change,
     bollinger_bands,
     compute_all,
     ema,
     rsi,
 )
-from halal_trader.domain.models import Kline
 
 
 def _kline(close: float, *, high: float | None = None, low: float | None = None) -> Kline:

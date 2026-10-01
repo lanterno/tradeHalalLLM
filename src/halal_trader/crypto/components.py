@@ -21,23 +21,23 @@ from halal_trader.config import Settings
 from halal_trader.core.llm import create_llm
 from halal_trader.core.llm.base import BaseLLM
 from halal_trader.core.safeguards import LiveModeChecker, check_live_mode_token
-from halal_trader.crypto.analytics import PerformanceAnalytics
 from halal_trader.crypto.exchange import BinanceClient
 from halal_trader.crypto.executor import CryptoExecutor
 from halal_trader.crypto.monitor import PositionMonitor
 from halal_trader.crypto.portfolio import CryptoPortfolioTracker
 from halal_trader.crypto.regime import RegimeDetector
-from halal_trader.crypto.risk import PortfolioRiskEngine
 from halal_trader.crypto.screener import CryptoHalalScreener
 from halal_trader.crypto.self_improve import TradeSelfReview
 from halal_trader.crypto.strategy import CryptoTradingStrategy
-from halal_trader.crypto.timeframes import TimeframeAnalyzer
 from halal_trader.crypto.websocket import BinanceWSManager
 from halal_trader.db.repository import Repository
 from halal_trader.ml.retrainer import RetrainingScheduler
 from halal_trader.notifications.telegram import AlertSink, TelegramNotifier
+from halal_trader.portfolio.analytics import PerformanceAnalytics
+from halal_trader.portfolio.risk import PortfolioRiskEngine
 from halal_trader.sentiment.events import NewsEvent, NewsEventReactor
 from halal_trader.sentiment.feed import RecentNewsFeed
+from halal_trader.signals.timeframes import TimeframeAnalyzer
 
 logger = logging.getLogger(__name__)
 

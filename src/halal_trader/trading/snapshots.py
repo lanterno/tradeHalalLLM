@@ -16,9 +16,9 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from halal_trader.crypto.indicators import compute_all
 from halal_trader.db.repos import IndicatorSnapshotRepo
 from halal_trader.domain.models import Kline
+from halal_trader.signals.indicators import compute_all
 from halal_trader.trading.bars import bars_to_klines
 
 logger = logging.getLogger(__name__)

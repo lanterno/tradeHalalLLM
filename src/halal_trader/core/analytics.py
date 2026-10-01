@@ -1,11 +1,11 @@
 """Asset-class-aware performance analytics.
 
-Promoted from :mod:`crypto.analytics` so the stock pipeline can consume
+Promoted from :mod:`portfolio.analytics` so the stock pipeline can consume
 the same surface. The math is identical between markets — closed-trade
 P&L, win rate, profit factor, drawdown, streak — the only thing that
 varies is *which* completed-round-trip getter to call.
 
-The crypto-specific class still exists at ``crypto.analytics`` for
+The crypto-specific class still exists at ``portfolio.analytics`` for
 existing callers (cycle, web/app); over time those can adopt this
 module directly.
 """
@@ -14,8 +14,8 @@ from __future__ import annotations
 
 from typing import Any, Literal, Protocol
 
-from halal_trader.crypto.analytics import PerformanceAnalytics, PerformanceStats
 from halal_trader.db.repos import CryptoTradeRepo, TradeRepo
+from halal_trader.portfolio.analytics import PerformanceAnalytics, PerformanceStats
 
 AssetClass = Literal["crypto", "stock"]
 

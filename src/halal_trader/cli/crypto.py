@@ -130,9 +130,9 @@ def crypto_stats(days: int) -> None:
 
     async def _stats() -> None:
         from halal_trader.config import get_settings
-        from halal_trader.crypto.analytics import PerformanceAnalytics
         from halal_trader.db.models import init_db
         from halal_trader.db.repository import Repository
+        from halal_trader.portfolio.analytics import PerformanceAnalytics
 
         settings = get_settings()
         engine = await init_db(settings.database_url)

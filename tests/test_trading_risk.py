@@ -99,7 +99,7 @@ def test_evaluate_stock_risk_drawdown_halt():
     # Second call with a much lower equity should trip the drawdown.
     # The engine state is local to each call (new instance), so we
     # construct one and prime its peak via two calls.
-    from halal_trader.crypto.risk import PortfolioRiskEngine
+    from halal_trader.portfolio.risk import PortfolioRiskEngine
 
     engine = PortfolioRiskEngine(
         base_max_position_pct=0.20,

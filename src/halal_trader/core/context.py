@@ -27,8 +27,8 @@ if TYPE_CHECKING:
     from halal_trader.config import Settings
     from halal_trader.core.event_bus import EventBus
     from halal_trader.core.insights_hub import InsightsHub
-    from halal_trader.crypto.analytics import PerformanceAnalytics
     from halal_trader.db.repository import Repository
+    from halal_trader.portfolio.analytics import PerformanceAnalytics
 
 
 @dataclass

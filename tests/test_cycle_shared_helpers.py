@@ -5,7 +5,7 @@ Three small functions own the per-symbol loops that both cycles run:
 * ``crypto.regime.build_regime_text`` — detector + indicators → text
 * ``ml.anomaly.build_ml_signals_text`` — anomaly + signal classifier
   + optional pre-rendered forecasts → text
-* ``crypto.timeframes.build_timeframe_text`` — analyzer + symbols → text
+* ``signals.timeframes.build_timeframe_text`` — analyzer + symbols → text
 
 These had been duplicated between ``crypto/cycle.py`` and
 ``trading/cycle.py`` until the cross-cycle dedup pass; the cycle-level
@@ -19,8 +19,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from halal_trader.crypto.regime import MarketRegime, build_regime_text
-from halal_trader.crypto.timeframes import build_timeframe_text
 from halal_trader.ml.anomaly import build_ml_signals_text
+from halal_trader.signals.timeframes import build_timeframe_text
 
 # ── build_regime_text ────────────────────────────────────────────
 

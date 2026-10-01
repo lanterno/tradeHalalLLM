@@ -47,14 +47,14 @@ from halal_trader.core.cycle_stages import (
 from halal_trader.core.event_bus import EventBus
 from halal_trader.core.insights_hub import InsightsHub
 from halal_trader.core.tracing import tracer
-from halal_trader.crypto.analytics import PerformanceAnalytics
 from halal_trader.crypto.exchange import BinanceClient
 from halal_trader.crypto.executor import CryptoExecutor
 from halal_trader.crypto.portfolio import CryptoPortfolioTracker
-from halal_trader.crypto.risk import PortfolioRiskEngine
 from halal_trader.crypto.screener import CryptoHalalScreener
 from halal_trader.crypto.strategy import CryptoTradingStrategy
 from halal_trader.crypto.websocket import BinanceWSManager
+from halal_trader.portfolio.analytics import PerformanceAnalytics
+from halal_trader.portfolio.risk import PortfolioRiskEngine
 
 logger = logging.getLogger(__name__)
 

@@ -1,4 +1,4 @@
-"""Tests for `crypto.indicators.format_indicators_for_prompt`.
+"""Tests for `signals.indicators.format_indicators_for_prompt`.
 
 `test_crypto_indicators.py` covers `compute_all` end-to-end and the
 component math (RSI / EMA / Bollinger). The prompt-side renderer
@@ -11,7 +11,7 @@ neutral pair, or vice-versa.
 
 from __future__ import annotations
 
-from halal_trader.crypto.indicators import format_indicators_for_prompt
+from halal_trader.signals.indicators import format_indicators_for_prompt
 
 # ── Error sentinel ─────────────────────────────────────────
 

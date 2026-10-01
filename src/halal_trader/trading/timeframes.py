@@ -1,6 +1,6 @@
 """Stocks multi-timeframe analyzer — Alpaca-backed sibling of crypto's.
 
-Reuses ``crypto.timeframes.TimeframeAnalyzer`` for the alignment and
+Reuses ``signals.timeframes.TimeframeAnalyzer`` for the alignment and
 support/resistance math — the only broker-specific piece is the
 per-timeframe bar fetch, which goes through Alpaca via the existing
 ``Broker`` port. Bars are coerced into ``Kline`` shape via
@@ -18,9 +18,9 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from halal_trader.crypto.timeframes import TimeframeAnalyzer
 from halal_trader.domain.models import Kline
 from halal_trader.domain.ports import Broker
+from halal_trader.signals.timeframes import TimeframeAnalyzer
 from halal_trader.trading.bars import bars_to_klines
 
 logger = logging.getLogger(__name__)

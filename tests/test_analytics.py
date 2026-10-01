@@ -2,7 +2,7 @@
 
 import pytest
 
-from halal_trader.crypto.analytics import PerformanceAnalytics, PerformanceStats
+from halal_trader.portfolio.analytics import PerformanceAnalytics, PerformanceStats
 
 
 def _make_rt(

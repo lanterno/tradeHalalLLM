@@ -11,8 +11,8 @@ import numpy as np
 from halal_trader.core.risk_metrics import conditional_value_at_risk
 from halal_trader.core.sharpe_stats import probabilistic_sharpe_ratio
 from halal_trader.core.sizing import drawdown_throttle
-from halal_trader.crypto.indicators import compute_all
 from halal_trader.domain.models import Kline
+from halal_trader.signals.indicators import compute_all
 
 if TYPE_CHECKING:
     from halal_trader.ml.slippage import SlippageModel
@@ -499,7 +499,6 @@ class LLMBacktestEngine:
             window_size: Number of candles to include in each analysis window.
             cycle_interval: Run LLM every N candles (to avoid excessive API calls).
         """
-        from halal_trader.crypto.indicators import compute_all
         from halal_trader.crypto.prompts import (
             PromptContext,
             StrategyParams,
@@ -507,6 +506,7 @@ class LLMBacktestEngine:
             prompt_cache_key,
         )
         from halal_trader.domain.models import CryptoAccount
+        from halal_trader.signals.indicators import compute_all
 
         executor = SimulatedExecutor(
             initial_balance=self._initial_balance,

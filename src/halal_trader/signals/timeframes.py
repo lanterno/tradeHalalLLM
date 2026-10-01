@@ -6,8 +6,7 @@ import logging
 import time
 from typing import Any
 
-from halal_trader.crypto.exchange import BinanceClient
-from halal_trader.crypto.indicators import compute_all
+from halal_trader.signals.indicators import compute_all
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +31,7 @@ class TimeframeAnalyzer:
     # override this to point at a broker-appropriate set.
     _timeframes: list[tuple[str, int]] = _TIMEFRAMES
 
-    def __init__(self, broker: BinanceClient) -> None:
+    def __init__(self, broker: Any) -> None:
         self._broker = broker
         self._cache: dict[str, tuple[float, dict[str, Any]]] = {}
 

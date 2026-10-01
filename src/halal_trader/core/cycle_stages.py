@@ -135,7 +135,7 @@ class BuildTimeframeStage:
         self._analyzer = analyzer
 
     async def run(self, state: CycleState) -> CycleState:
-        from halal_trader.crypto.timeframes import build_timeframe_text
+        from halal_trader.signals.timeframes import build_timeframe_text
 
         state.timeframe_text = await build_timeframe_text(self._analyzer, state.halal_pairs)
         return state
@@ -149,7 +149,7 @@ class BuildPerformanceStage:
 
     Reads from any analytics impl that exposes
     ``compute_stats(lookback_days=...)`` and ``format_for_prompt(stats)`` —
-    both ``crypto.analytics.PerformanceAnalytics`` and
+    both ``portfolio.analytics.PerformanceAnalytics`` and
     ``core.analytics.CrossAssetAnalytics`` satisfy the shape.
     """
 
@@ -1049,7 +1049,7 @@ class ComputeIndicatorsStage:
     name = "compute_indicators"
 
     async def run(self, state: CycleState) -> CycleState:
-        from halal_trader.crypto.indicators import compute_all
+        from halal_trader.signals.indicators import compute_all
 
         cache: dict[str, dict[str, Any]] = {}
         for symbol, klines in state.klines_by_symbol.items():
