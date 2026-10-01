@@ -28,9 +28,9 @@ from datetime import UTC, datetime
 from typing import Any
 
 from halal_trader.db.repos import TradeRepo
+from halal_trader.domain.ports import Broker
 from halal_trader.domain.status import EntryType
 from halal_trader.market_hours import is_market_open_local
-from halal_trader.mcp.client import AlpacaMCPClient
 from halal_trader.trading.bars import bars_to_klines
 from halal_trader.trading.bars import extract_last_price as _extract_last_price
 
@@ -52,7 +52,7 @@ class StockPositionMonitor:
 
     def __init__(
         self,
-        mcp: AlpacaMCPClient,
+        mcp: Broker,
         repo: TradeRepo,
         *,
         check_interval: float = 60.0,

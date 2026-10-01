@@ -25,6 +25,7 @@ from halal_trader.core.llm import create_llm
 from halal_trader.core.scheduler import BaseTradingBot
 from halal_trader.domain.ports import Broker, ComplianceScreener
 from halal_trader.domain.status import EntryType
+from halal_trader.execution.broker_factory import create_broker
 from halal_trader.halal.cache import HalalScreener
 from halal_trader.halal.zoya import ZoyaClient
 from halal_trader.market_hours import (
@@ -34,7 +35,6 @@ from halal_trader.market_hours import (
     now_eastern,
     today_eastern,
 )
-from halal_trader.mcp.client import AlpacaMCPClient
 from halal_trader.trading.catalysts import StockCatalystFeed
 from halal_trader.trading.cycle import TradingCycleService
 from halal_trader.trading.executor import TradeExecutor
@@ -75,8 +75,8 @@ class TradingBot(BaseTradingBot):
 
     def __init__(self) -> None:
         super().__init__()
-        self._mcp_client = AlpacaMCPClient()
-        self.broker: Broker = self._mcp_client
+        self._broker_client = create_broker(self.settings)
+        self.broker: Broker = self._broker_client
         self.screener: ComplianceScreener | None = None
         self.executor: TradeExecutor | None = None
         self.portfolio: PortfolioTracker | None = None
@@ -146,8 +146,8 @@ class TradingBot(BaseTradingBot):
             else None
         )
 
-        # Broker connection (Alpaca via MCP)
-        await self._mcp_client.connect()
+        # Broker connection (ALPACA_BROKER_ADAPTER: the MCP server, or REST)
+        await self._broker_client.connect()
 
         # LLM
         llm = create_llm(self.settings)
@@ -555,7 +555,7 @@ class TradingBot(BaseTradingBot):
                 await self._stocks_news.close()
             except Exception as exc:  # noqa: BLE001
                 logger.debug("Stock news collector close failed: %s", exc)
-        await self._mcp_client.disconnect()
+        await self._broker_client.disconnect()
         self._release_lock()
         await self._release_trading_lock()
         await super().shutdown()

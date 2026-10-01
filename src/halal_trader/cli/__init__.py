@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import click
 
+from halal_trader.cli import broker as broker_cmd
 from halal_trader.cli import compliance as compliance_cmd
 from halal_trader.cli import dashboard as dashboard_cmd
 from halal_trader.cli import data as data_cmd
@@ -66,6 +67,9 @@ cli.add_command(data_cmd.data)
 
 # ── Broker ledger (the books of truth) ─────────────────────────
 cli.add_command(ledger_cmd.ledger)
+
+# ── Broker adapters, side by side ──────────────────────────────
+cli.add_command(broker_cmd.broker)
 
 # ── Reconciliation ─────────────────────────────────────────────
 # Now a Click group: `reconcile check {market}` + `reconcile fix-orphans`

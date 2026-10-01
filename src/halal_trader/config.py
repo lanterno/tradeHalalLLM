@@ -51,6 +51,10 @@ class AlpacaSettings(BaseSettings):
     # /opt/alpaca-mcp (used automatically when present), else
     # "uvx alpaca-mcp-server@<mcp_server_version>" on a host. Normally empty.
     mcp_server_command: str = Field(default="")
+    # How the bot reaches Alpaca: "mcp" (the frozen alpaca-mcp-server
+    # subprocess) or "rest" (execution/alpaca_broker.py, direct and typed).
+    # Stays "mcp" until `halal-trader broker compare` has agreed for a while.
+    broker_adapter: str = Field(default="mcp", pattern=r"^(mcp|rest)$")
 
 
 # ── Halal Screening ────────────────────────────────────────────
