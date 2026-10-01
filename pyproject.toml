@@ -1,7 +1,7 @@
 [project]
 name = "halal-trader"
 version = "0.2.0"
-description = "LLM-powered halal day-trading bot — stocks (Alpaca) and crypto (Binance)"
+description = "LLM-powered halal stock-trading bot (Alpaca)"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
@@ -21,14 +21,16 @@ dependencies = [
     "rich",
     # OpenAI-compatible client — talks to GLM-5.2 endpoints (OpenRouter/Z.ai)
     "openai",
-    # Crypto trading
-    "python-binance",
+    # Indicator / risk maths
     "numpy",
     # Logging
     "python-json-logger",
     # Timezone data (required on minimal/WSL systems without system tzdata)
     "tzdata",
     "uvicorn>=0.40.0",
+    # uvicorn's WebSocket transport (the dashboard's /ws/cycle stream). It used
+    # to arrive transitively through python-binance; declare it now.
+    "websockets",
     "fastapi>=0.135.1",
     "asyncpg>=0.31.0",
     "psycopg[binary]>=3.3.3",
@@ -51,15 +53,12 @@ ml = [
     # the deterministic quant/ core stays pure numpy.
     "arch>=8.0",
 ]
-sentiment = [
-    "praw",
-]
 dashboard = [
     "fastapi",
     "uvicorn",
 ]
 all = [
-    "halal-trader[ml,sentiment,dashboard]",
+    "halal-trader[ml,dashboard]",
 ]
 dev = [
     "pytest",

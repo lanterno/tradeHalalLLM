@@ -43,7 +43,7 @@ services:
       context: ..
       dockerfile: infra/Dockerfile
       args:
-        EXTRAS: "ml,sentiment"
+        EXTRAS: "ml"
     image: halal-trader:latest
     container_name: trader-migrate
     restart: "no"
