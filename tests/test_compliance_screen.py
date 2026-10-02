@@ -369,10 +369,10 @@ async def test_screen_history_screens_each_quarters_universe_once(engine: AsyncE
     assert again == {}
 
 
-async def test_rescreen_foreign_turns_a_foreign_issuers_past_pass_doubtful(
+async def test_rescreen_passes_turns_a_foreign_issuers_past_pass_doubtful(
     engine: AsyncEngine,
 ) -> None:
-    from halal_trader.compliance.history import rescreen_foreign
+    from halal_trader.compliance.history import rescreen_passes
 
     class Foreign(FakeSec):
         async def foreign_filer(self, cik: int) -> bool:
@@ -388,9 +388,22 @@ async def test_rescreen_foreign_turns_a_foreign_issuers_past_pass_doubtful(
         )
     as_of = date(2026, 7, 1)
     await run_screen(FakeSec(), engine, ["SOFT", "NODEBT"], as_of)  # type: ignore[arg-type]
+    async with engine.begin() as conn:  # as if screened by an older method
+        await conn.execute(text("UPDATE halal_screen_results SET method = 'aaoifi-sec-v3'"))
 
-    assert await rescreen_foreign(Foreign(), engine) == {as_of: 1}  # type: ignore[arg-type]
+    assert await rescreen_passes(Foreign(), engine) == {as_of: 2}  # type: ignore[arg-type]
+    assert await rescreen_passes(Foreign(), engine) == {}  # type: ignore[arg-type]
     async with engine.connect() as conn:
         rows = await conn.execute(text("SELECT symbol, verdict FROM halal_screen_results"))
         verdicts = {r.symbol: r.verdict for r in rows}
     assert verdicts == {"SOFT": "halal", "NODEBT": "doubtful"}
+
+
+def test_a_mis_scaled_share_count_gives_way_to_the_smaller() -> None:
+    from halal_trader.compliance.runner import share_count
+
+    assert share_count(185_534_704_000_000.0, 185_900_000.0) == 185_900_000.0  # Alcoa 2019
+    assert share_count(1_000.0, 1_100.0) == 1_000.0  # ordinary dilution: the cover page
+    assert share_count(None, 1_100.0) == 1_100.0
+    assert share_count(1_000.0, None) == 1_000.0
+    assert share_count(None, None) is None

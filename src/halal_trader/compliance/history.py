@@ -25,7 +25,7 @@ from datetime import date
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from halal_trader.compliance.runner import run_screen
+from halal_trader.compliance.runner import METHOD, run_screen
 from halal_trader.compliance.sec import SecClient
 from halal_trader.data.store import BENCHMARKS
 from halal_trader.data.universe import universe_at
@@ -68,29 +68,26 @@ async def screen_history(
     return out
 
 
-async def rescreen_foreign(sec: SecClient, engine: AsyncEngine) -> dict[date, int]:
-    """Re-screen every stored halal verdict held by a foreign issuer (screen v4).
+async def rescreen_passes(sec: SecClient, engine: AsyncEngine) -> dict[date, int]:
+    """Re-screen every stored halal verdict under the current method.
 
-    Only those can change: v4 adds a doubtful case for foreign issuers and
-    leaves every other verdict as v3 computed it. Returns as_of -> names
-    re-screened.
+    Methods only ever add ways to fail (v4 foreign issuers, v5 mis-scaled
+    share counts), so a stored pass is the only verdict a new method can
+    change. Returns as_of -> names re-screened.
     """
     async with engine.connect() as conn:
         rows = await conn.execute(
             text(
-                "SELECT as_of, symbol, cik FROM halal_screen_results "
-                "WHERE verdict = 'halal' AND cik IS NOT NULL"
-            )
+                "SELECT as_of, array_agg(symbol) AS symbols FROM halal_screen_results "
+                "WHERE verdict = 'halal' AND method <> :m GROUP BY as_of ORDER BY as_of"
+            ),
+            {"m": METHOD},
         )
-        halal = [(r.as_of, r.symbol, int(r.cik)) for r in rows]
-    foreign = {cik for cik in {c for _, _, c in halal} if await sec.foreign_filer(cik)}
-    todo: dict[date, list[str]] = {}
-    for as_of, symbol, cik in halal:
-        if cik in foreign:
-            todo.setdefault(as_of, []).append(symbol)
+        todo = [(r.as_of, list(r.symbols)) for r in rows]
     out: dict[date, int] = {}
-    for as_of, symbols in sorted(todo.items()):
-        await run_screen(sec, engine, symbols, as_of)
+    for as_of, symbols in todo:
+        results = await run_screen(sec, engine, symbols, as_of)
         out[as_of] = len(symbols)
-    logger.info("rescreen foreign: %d issuers, %d screen rows", len(foreign), sum(out.values()))
+        kept = sum(1 for r in results if r.verdict == "halal")
+        logger.info("rescreen %s: %d passes re-screened, %d still halal", as_of, len(symbols), kept)
     return out

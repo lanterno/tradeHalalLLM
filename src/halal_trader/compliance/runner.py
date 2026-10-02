@@ -56,7 +56,8 @@ logger = logging.getLogger(__name__)
 # v2: 36-month average market cap; REITs and royalties face the ratios.
 # v3: every debt-concept family, and fallbacks for shares, cash and revenue.
 # v4: a foreign issuer (20-F/40-F) never passes on ratios: its ADR ratio is unknown.
-METHOD = "aaoifi-sec-v4"
+# v5: a share count the diluted count says is mis-scaled gives way to the smaller.
+METHOD = "aaoifi-sec-v5"
 UNMAPPED = "not an SEC registrant (or ticker not mapped)"
 _MIN_MONTHS = 12
 
@@ -86,6 +87,24 @@ _REVENUE = (
     "RevenueFromContractWithCustomerIncludingAssessedTax",
     "SalesRevenueNet",
 )
+
+
+SHARE_CONFLICT = 3.0  # cover-page and diluted counts further apart than this: a units error
+
+
+def share_count(cover: float | None, diluted: float | None) -> float | None:
+    """The cover-page share count, unless the diluted count says it is mis-scaled.
+
+    Filers sometimes tag shares at the wrong scale (Alcoa once reported 185
+    trillion shares, Woodward 62 billion). A count that large shrinks every
+    ratio towards zero, so when the two sources disagree by more than
+    ``SHARE_CONFLICT`` the smaller wins: the larger ratios fail closed.
+    """
+    if cover is None or diluted is None or diluted <= 0 or cover <= 0:
+        return cover if cover is not None else diluted
+    if max(cover, diluted) / min(cover, diluted) > SHARE_CONFLICT:
+        return min(cover, diluted)
+    return cover
 
 
 def _sum(*values: float | None) -> float | None:
@@ -242,7 +261,7 @@ async def gather(
             Fundamentals(
                 symbol=sym,
                 sic=sic,
-                shares_outstanding=_newest(shares, cik) or _newest(diluted, cik),
+                shares_outstanding=share_count(_newest(shares, cik), _newest(diluted, cik)),
                 price=prices.get(sym),
                 interest_bearing_debt=debt,
                 cash_and_securities=(cash + securities) if cash is not None else None,
