@@ -341,3 +341,131 @@ def _judge(prices: Any, result: Any, *, config: dict[str, Any]) -> None:
         f"{a.active_sharpe:+.2f} against a no-skill hurdle of {a.hurdle_sharpe:.2f}, "
         f"DSR {a.dsr:.2f} ({CRITERION})"
     )
+
+
+@research.command("event-backtest")
+@click.argument("signal", type=click.Choice(["e1b", "e1c", "e3"]))
+@click.option(
+    "--since",
+    type=click.DateTime(["%Y-%m-%d"]),
+    default="2016-06-01",
+    show_default=True,
+    help="First entry on or after this date.",
+)
+def event_backtest_cmd(signal: str, since: Any) -> None:
+    """A pre-registered S2 Phase C event portfolio, recorded and judged vs SPUS."""
+    hold = {"e1b": 60, "e1c": 60, "e3": 63}[signal]
+    slots = 40
+
+    async def _run() -> tuple[Any, Any, Any, int]:
+        from datetime import date as _date
+
+        from halal_trader.config import get_settings
+        from halal_trader.data.universe import universe_at
+        from halal_trader.db.models import init_db
+        from halal_trader.events import signals
+        from halal_trader.events.portfolio import simulate
+        from halal_trader.events.study import cost_bps, load_bars
+        from halal_trader.market_hours import today_eastern
+        from halal_trader.research.pit import pit_schedule
+
+        engine = await init_db(get_settings().database_url)
+        try:
+            schedule = await pit_schedule(
+                engine, start=since.date(), end=today_eastern(), top_n=1000
+            )
+            symbols = sorted(schedule.universe | {"SPY", "SPUS"})
+            bars = await load_bars(engine, symbols)
+            if signal == "e1b":
+                candidates = await signals.e1b(engine)
+            elif signal == "e1c":
+                candidates = await signals.e1c(engine, bars)
+            else:
+                candidates = await signals.e3(engine)
+            ranks: dict[_date, dict[str, int]] = {}
+
+            def cost(symbol: str, day: _date) -> float:
+                return cost_bps(ranks.get(day.replace(day=1), {}).get(symbol))
+
+            for month in sorted({d.replace(day=1) for d in bars.sessions if d >= since.date()}):
+                names = await universe_at(engine, month, top_n=3000)
+                ranks[month] = {s: i for i, s in enumerate(names)}
+            book = simulate(
+                bars,
+                candidates,
+                hold=hold,
+                slots=slots,
+                start=since.date(),
+                eligible_from=schedule.eligible_from,
+                cost_bps=cost,
+            )
+            return book, bars, candidates, len(candidates)
+        finally:
+            await engine.dispose()
+
+    book, bars, candidates, n = asyncio.run(_run())
+    from halal_trader.research.factor_backtest import stats
+
+    s = stats(book.returns)
+    console.print(
+        f"{signal}: {n} candidates, {book.trades} trades, {book.skipped_full} turned away "
+        f"(slots full), {book.skipped_ineligible} ineligible; mean exposure {book.exposure:.0%}; "
+        f"{book.days[0]} -> {book.days[-1]}"
+    )
+    console.print(
+        f"  CAGR {s.cagr:+.2%}  vol {s.volatility:.2%}  Sharpe {s.sharpe or 0:.2f}  "
+        f"maxDD {s.max_drawdown:.2%}"
+    )
+    from halal_trader.research.ledger import BENCHMARK, record_backtest
+
+    spus = bars.close.get(BENCHMARK, {})
+    idx = [i for i, d in enumerate(book.days) if d in spus and i > 0 and book.days[i - 1] in spus]
+    if len(idx) < 60:
+        console.print("[yellow]not recorded: too little SPUS history[/yellow]")
+        return
+    days = [book.days[i] for i in idx]
+    bench = np.array([spus[book.days[i]] / spus[book.days[i - 1]] - 1 for i in idx])
+    rets = book.returns[idx]
+
+    async def _record() -> Any:
+        from halal_trader.config import get_settings
+        from halal_trader.db.models import init_db
+
+        engine = await init_db(get_settings().database_url)
+        try:
+            return await record_backtest(
+                engine,
+                strategy=signal,
+                config={
+                    "strategy": signal,
+                    "kind": "event portfolio",
+                    "slots": slots,
+                    "hold": hold,
+                    "threshold": "trailing-365d 90th percentile"
+                    if signal != "e3"
+                    else ">=2 officers/directors, >=$100k, 30 days, no 10b5-1",
+                    "costs": "7/15/30 bps one way by liquidity",
+                    "since": str(since.date()),
+                },
+                days=days,
+                returns=rets,
+                benchmark=bench,
+                extra={"trades": book.trades, "exposure": book.exposure},
+            )
+        finally:
+            await engine.dispose()
+
+    a = asyncio.run(_record())
+    if a is None:
+        console.print("[yellow]not recorded: degenerate active returns[/yellow]")
+        return
+    color = "green" if a.verdict == "pass" else "red"
+    console.print(
+        f"  from {days[0]}: CAGR {a.cagr:+.2%} vs {BENCHMARK} {a.benchmark_cagr:+.2%}, "
+        f"tracking error {a.tracking_error:.2%}"
+    )
+    console.print(
+        f"  [{color}]ledger: {a.verdict.upper()}[/{color}] trial #{a.trial_id}, "
+        f"{a.n_trials} distinct research trials; active Sharpe {a.active_sharpe:+.2f} "
+        f"vs hurdle {a.hurdle_sharpe:.2f}, DSR {a.dsr:.2f}"
+    )
