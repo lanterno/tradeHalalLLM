@@ -996,3 +996,37 @@ class HalalScreenResult(SQLModel, table=True):
     screened_at: datetime = Field(
         default_factory=lambda: datetime.now(UTC), sa_type=sa.DateTime(timezone=True)
     )
+
+
+class ForwardBook(SQLModel, table=True):
+    """A strategy run forward on paper, with no orders (research/forward_book.py)."""
+
+    __tablename__ = "forward_books"
+
+    name: str = Field(primary_key=True)
+    strategy: str
+    params: dict[str, Any] = Field(sa_column=sa.Column("params", JSONB, nullable=False))
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(UTC), sa_type=sa.DateTime(timezone=True)
+    )
+
+
+class ForwardBookDay(SQLModel, table=True):
+    """One session of a forward book: NAV, return, turnover and end-of-day weights.
+
+    Append-only: a session is written the evening it closes and never
+    recomputed, so the record cannot be revised with hindsight.
+    """
+
+    __tablename__ = "forward_book_days"
+
+    book: str = Field(primary_key=True, foreign_key="forward_books.name")
+    day: date = Field(primary_key=True)
+    nav: float
+    day_return: float
+    turnover: float
+    weights: dict[str, float] = Field(sa_column=sa.Column("weights", JSONB, nullable=False))
+    rebalance_next: bool = False
+    recorded_at: datetime = Field(
+        default_factory=lambda: datetime.now(UTC), sa_type=sa.DateTime(timezone=True)
+    )

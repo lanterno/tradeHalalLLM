@@ -15,6 +15,7 @@ from apscheduler.triggers.cron import CronTrigger
 
 from halal_trader.core import events
 from halal_trader.core.heartbeat import (
+    RESEARCH,
     STOCK_CYCLE,
     STOCK_LEDGER,
     STOCK_MONITOR,
@@ -859,6 +860,32 @@ class TradingBot(BaseTradingBot):
         logger.warning("broker ledger drift on %s: %s", rec.day, "; ".join(lines))
         await self._alerts.notify("ledger.fill_drift", f"{rec.day}: " + "; ".join(lines))
 
+    async def research_daily(self) -> None:
+        """Evening job: top up bars, re-screen weekly, advance the forward books.
+
+        Research only -- nothing here places an order. It runs after the
+        extended session so the day's bars are final, and any failure is
+        alerted and contained.
+        """
+        from halal_trader.research.daily import run_research
+
+        if self._engine is None:
+            return
+        try:
+            run = await run_research(self._engine, self.settings, today=today_eastern())
+        except Exception as exc:  # noqa: BLE001 -- the job must not take the bot down
+            logger.error("research run failed: %r", exc)
+            await self._alerts.notify("research.failed", repr(exc)[:500])
+            return
+        if run.errors:
+            await self._alerts.notify("research.failed", "; ".join(run.errors)[:500])
+        await beat(
+            self._engine,
+            RESEARCH,
+            {"books": run.books, "screened": run.screened, "errors": len(run.errors)},
+        )
+        logger.info("research run: books %s, screened %s", run.books, run.screened)
+
     async def end_of_day(self) -> None:
         """End-of-day job: close all positions, record P&L."""
         logger.info("=== END OF DAY ROUTINE ===")
@@ -1210,6 +1237,15 @@ class TradingBot(BaseTradingBot):
                 self.sync_broker_ledger,
                 CronTrigger(day_of_week="mon-fri", hour=16, minute=30, timezone=MARKET_TZ),
                 id="broker_ledger",
+                replace_existing=True,
+                misfire_grace_time=3600,
+                coalesce=True,
+            )
+            # Research, after the extended session closes at 20:00 ET.
+            self.scheduler.add_job(
+                self.research_daily,
+                CronTrigger(day_of_week="mon-fri", hour=20, minute=30, timezone=MARKET_TZ),
+                id="research_daily",
                 replace_existing=True,
                 misfire_grace_time=3600,
                 coalesce=True,

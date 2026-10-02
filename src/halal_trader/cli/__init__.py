@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import click
 
+from halal_trader.cli import books as books_cmd
 from halal_trader.cli import broker as broker_cmd
 from halal_trader.cli import compliance as compliance_cmd
 from halal_trader.cli import dashboard as dashboard_cmd
@@ -64,6 +65,9 @@ cli.add_command(research_cmd.research)
 
 # ── Research market data ───────────────────────────────────────
 cli.add_command(data_cmd.data)
+
+# ── Paper-forward books (no orders) ────────────────────────────
+cli.add_command(books_cmd.books)
 
 # ── Broker ledger (the books of truth) ─────────────────────────
 cli.add_command(ledger_cmd.ledger)
