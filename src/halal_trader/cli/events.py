@@ -277,3 +277,38 @@ def llm_score_cmd(max_pairs: int) -> None:
             await engine.dispose()
 
     console.print(f"{asyncio.run(_run())} headline/symbol pairs scored")
+
+
+@events.command("llm-eval")
+def llm_eval_cmd() -> None:
+    """LLM vs lexicon scores of post-cutoff news: IC and deciles of net abnormal return."""
+
+    async def _run() -> Any:
+        from halal_trader.config import get_settings
+        from halal_trader.db.models import init_db
+        from halal_trader.events.llm_eval import compare
+
+        engine = await init_db(get_settings().database_url)
+        try:
+            return await compare(engine)
+        finally:
+            await engine.dispose()
+
+    c = asyncio.run(_run())
+    console.print(f"{c.days} (symbol, day) readings of post-cutoff news")
+    for label, result in (
+        ("llm", c.llm),
+        ("lexicon", c.lexicon),
+        ("llm where lexicon neutral", c.llm_where_lexicon_neutral),
+    ):
+        console.print(f"[bold]{label}[/bold] (n={result.n.get('all', 0)})")
+        for h in sorted({h for (_, h) in result.ic}):
+            cells = {r.decile: r for r in result.rows if r.horizon == h}
+            line = f"  {h:>2}d IC {result.ic[('all', h)]:+.3f}"
+            if 10 in cells and 1 in cells:
+                top, bot = cells[10], cells[1]
+                line += (
+                    f"  top decile {top.mean:+.2%} (t {top.t:+.1f})"
+                    f"  bottom decile {bot.mean:+.2%} (t {bot.t:+.1f})"
+                )
+            console.print(line)
