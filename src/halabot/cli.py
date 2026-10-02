@@ -106,6 +106,11 @@ async def _run_shadow(
             consumer="shadow",
             cap_usd=settings.llm.daily_usd_cap,
             enforce=settings.llm.budget_enforce,
+            monthly_cap_usd=spend.monthly_cap_for(
+                "shadow",
+                live_usd=settings.llm.monthly_live_usd,
+                research_usd=settings.llm.monthly_research_usd,
+            ),
         )
     )
     repo = Repository(ht_engine)

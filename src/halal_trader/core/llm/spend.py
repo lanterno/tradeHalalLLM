@@ -14,6 +14,12 @@ Two modes (``LLM_BUDGET_ENFORCE``):
   kill-switch alone would not be (the classifier and the shadow keep
   calling). Exits keep working: the position monitor does not use the LLM.
 
+On top of the daily cap, each consumer belongs to a **monthly pool** with
+its own cap (operator decision 2026-10-02: $25 live for the bot and the
+shadow engine, $15 research, $10 of the $50 key limit as headroom). The
+pool alerts and, in enforce mode, refuses exactly like the daily cap, so
+research can never spend the live bot's budget, nor the reverse.
+
 Nothing here raises into a caller except :class:`BudgetExhausted`, which is
 the point of enforce mode. Metering failures are logged and ignored.
 
@@ -36,6 +42,13 @@ Alert = Callable[[str, str], Awaitable[None]]
 
 _WARN_FRACTION = Decimal("0.8")
 
+# consumer -> monthly pool. A consumer not listed is its own pool with no cap.
+POOLS: dict[str, str] = {"stock": "live", "shadow": "live", "research": "research"}
+
+
+def pool_members(pool: str) -> frozenset[str]:
+    return frozenset(c for c, p in POOLS.items() if p == pool)
+
 
 class BudgetExhausted(RuntimeError):
     """Raised instead of making an LLM call once an enforced cap is reached."""
@@ -50,10 +63,14 @@ class SpendMeter:
         cap_usd: float,
         enforce: bool = False,
         alert: Alert | None = None,
+        monthly_cap_usd: float = 0.0,
     ) -> None:
         self._engine = engine
         self._consumer = consumer
         self._cap = Decimal(str(cap_usd))
+        self._pool = POOLS.get(consumer, consumer)
+        self._pool_members = pool_members(self._pool) or frozenset({consumer})
+        self._monthly_cap = Decimal(str(monthly_cap_usd))
         self._enforce = enforce
         self._alert = alert
         self._alerted: set[tuple[date, str]] = set()
@@ -73,21 +90,42 @@ class SpendMeter:
             ).scalar()
         return Decimal(str(total))
 
+    async def spent_this_month(self) -> Decimal:
+        """Month-to-date spend (UTC) of every consumer in this meter's pool."""
+        today = _today()
+        async with self._engine.connect() as conn:
+            total = (
+                await conn.execute(
+                    text(
+                        "SELECT coalesce(sum(spent_usd), 0) FROM llm_spend "
+                        "WHERE day >= :first AND consumer = ANY(:members)"
+                    ),
+                    {"first": today.replace(day=1), "members": sorted(self._pool_members)},
+                )
+            ).scalar()
+        return Decimal(str(total))
+
     async def check(self) -> None:
-        """Raise BudgetExhausted if enforce mode is on and today's cap is spent."""
-        if not self._enforce or self._cap <= 0:
+        """Raise BudgetExhausted if enforce mode is on and today's or the pool's cap is spent."""
+        if not self._enforce or (self._cap <= 0 and self._monthly_cap <= 0):
             return
         today = _today()
         if self._exhausted_on == today:
-            raise BudgetExhausted(f"LLM daily cap ${self._cap} reached for {today}")
+            raise BudgetExhausted(f"LLM budget reached for {today} ({self._consumer})")
         try:
-            spent = await self.spent_today()
+            daily = await self.spent_today() if self._cap > 0 else None
+            monthly = await self.spent_this_month() if self._monthly_cap > 0 else None
         except Exception as exc:  # noqa: BLE001 -- metering must not block on a DB hiccup
             logger.warning("LLM spend check failed: %r", exc)
             return
-        if spent >= self._cap:
+        if daily is not None and daily >= self._cap:
             self._exhausted_on = today
             raise BudgetExhausted(f"LLM daily cap ${self._cap} reached for {today}")
+        if monthly is not None and monthly >= self._monthly_cap:
+            self._exhausted_on = today
+            raise BudgetExhausted(
+                f"LLM monthly {self._pool} budget ${self._monthly_cap} reached for {today:%Y-%m}"
+            )
 
     async def record(self, cost_usd: Decimal) -> None:
         """Add one call's cost to today's total; alert at 80% and at the cap."""
@@ -109,9 +147,12 @@ class SpendMeter:
                     {"day": today, "consumer": self._consumer, "cost": cost_usd},
                 )
             spent = await self.spent_today()
+            monthly = await self.spent_this_month() if self._monthly_cap > 0 else None
         except Exception as exc:  # noqa: BLE001
             logger.warning("LLM spend not recorded: %r", exc)
             return
+        if monthly is not None:
+            await self._check_monthly(today, monthly)
         if self._cap <= 0:
             return
         if spent >= self._cap:
@@ -134,6 +175,31 @@ class SpendMeter:
                 f"LLM spend ${spent:.2f} is past 80% of the ${self._cap:.2f} daily cap on {today}.",
             )
 
+    async def _check_monthly(self, today: date, spent: Decimal) -> None:
+        month = today.replace(day=1)
+        if spent >= self._monthly_cap:
+            if self._enforce:
+                self._exhausted_on = today
+            await self._alert_once(
+                month,
+                f"llm.budget_exhausted.{self._pool}",
+                f"LLM {self._pool} spend ${spent:.2f} reached its ${self._monthly_cap:.2f} "
+                f"monthly budget ({today:%Y-%m}); "
+                + (
+                    "further calls are refused until tomorrow (UTC), and every day after "
+                    "until the month turns."
+                    if self._enforce
+                    else "observe mode: calls continue."
+                ),
+            )
+        elif spent >= self._monthly_cap * _WARN_FRACTION:
+            await self._alert_once(
+                month,
+                f"llm.budget_warning.{self._pool}",
+                f"LLM {self._pool} spend ${spent:.2f} is past 80% of its "
+                f"${self._monthly_cap:.2f} monthly budget ({today:%Y-%m}).",
+            )
+
     async def _alert_once(self, day: date, kind: str, message: str) -> None:
         if (day, kind) in self._alerted:
             return
@@ -144,6 +210,11 @@ class SpendMeter:
                 await self._alert(kind, message)
             except Exception as exc:  # noqa: BLE001
                 logger.debug("spend alert failed: %r", exc)
+
+
+def monthly_cap_for(consumer: str, *, live_usd: float, research_usd: float) -> float:
+    """The monthly budget of ``consumer``'s pool (0 = none)."""
+    return {"live": live_usd, "research": research_usd}.get(POOLS.get(consumer, ""), 0.0)
 
 
 _meter: SpendMeter | None = None

@@ -170,6 +170,11 @@ class LLMSettings(BaseSettings):
     # UTC day (exits keep working: the position monitor uses no LLM).
     daily_usd_cap: float = Field(default=0.0)
     budget_enforce: bool = Field(default=False)
+    # Monthly pools (core/llm/spend.py), summed per UTC calendar month:
+    # "live" = the stock bot + the shadow engine, "research" = research
+    # scoring. 0 disables a pool's cap. They sit under the key's own limit.
+    monthly_live_usd: float = Field(default=25.0)
+    monthly_research_usd: float = Field(default=15.0)
     glm: GLMSettings = Field(default_factory=GLMSettings)
 
 

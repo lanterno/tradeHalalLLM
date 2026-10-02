@@ -142,6 +142,11 @@ class TradingBot(BaseTradingBot):
                 cap_usd=self.settings.llm.daily_usd_cap,
                 enforce=self.settings.llm.budget_enforce,
                 alert=self._alerts.notify,
+                monthly_cap_usd=spend.monthly_cap_for(
+                    "stock",
+                    live_usd=self.settings.llm.monthly_live_usd,
+                    research_usd=self.settings.llm.monthly_research_usd,
+                ),
             )
             if self._engine is not None
             else None

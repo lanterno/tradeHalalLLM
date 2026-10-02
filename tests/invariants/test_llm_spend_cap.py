@@ -113,3 +113,34 @@ async def test_every_glm_call_is_metered(engine: AsyncEngine) -> None:
     await llm.generate("hello")
 
     assert await meter.spent_today() > 0
+
+
+async def test_monthly_pools_keep_research_and_live_apart(engine: AsyncEngine) -> None:
+    alert = AsyncMock()
+    stock = SpendMeter(engine, consumer="stock", cap_usd=0, monthly_cap_usd=25, enforce=True)
+    shadow = SpendMeter(engine, consumer="shadow", cap_usd=0, monthly_cap_usd=25, enforce=True)
+    research = SpendMeter(
+        engine, consumer="research", cap_usd=0, monthly_cap_usd=15, enforce=True, alert=alert
+    )
+    await stock.record(Decimal("20"))
+    await shadow.record(Decimal("5.5"))  # the live pool is spent between the two of them
+
+    with pytest.raises(BudgetExhausted, match="live"):
+        await stock.check()
+    with pytest.raises(BudgetExhausted, match="live"):
+        await SpendMeter(
+            engine, consumer="shadow", cap_usd=0, monthly_cap_usd=25, enforce=True
+        ).check()
+    await research.check()  # research has its own pool: still allowed
+
+    await research.record(Decimal("12.5"))  # past 80% of 15
+    assert [c.args[0] for c in alert.await_args_list] == ["llm.budget_warning.research"]
+    await research.check()
+
+
+def test_each_consumer_gets_its_pools_budget() -> None:
+    caps = {"live_usd": 25.0, "research_usd": 15.0}
+    assert spend.monthly_cap_for("stock", **caps) == 25.0
+    assert spend.monthly_cap_for("shadow", **caps) == 25.0
+    assert spend.monthly_cap_for("research", **caps) == 15.0
+    assert spend.monthly_cap_for("other", **caps) == 0.0
