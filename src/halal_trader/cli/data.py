@@ -98,3 +98,38 @@ def update_cmd() -> None:
         if n
         else "No bars stored yet: run `data backfill`."
     )
+
+
+@data.command("pit-universe")
+@click.option("--top", default=1000, show_default=True, help="Names in the universe each month.")
+@click.option(
+    "--since",
+    type=click.DateTime(["%Y-%m-%d"]),
+    default="2016-01-01",
+    show_default=True,
+    help="First month of the universe; monthly bars start a year earlier.",
+)
+def pit_universe_cmd(top: int, since: Any) -> None:
+    """Point-in-time universe: monthly bars for every listed and delisted stock,
+    the top names by trailing dollar volume each month, daily bars for all of them.
+
+    Resumable: daily bars continue from each symbol's last stored session.
+    """
+    from halal_trader.data.store import BENCHMARKS, update_bars
+    from halal_trader.data.universe import sync_monthly_bars, universe_history
+    from halal_trader.market_hours import today_eastern
+
+    start = since.date()
+
+    async def work(engine: Any, client: Any) -> tuple[int, int, int, dict[str, int]]:
+        symbols, rows = await sync_monthly_bars(
+            engine, client, since=start.replace(year=start.year - 1)
+        )
+        history = await universe_history(engine, start=start, end=today_eastern(), top_n=top)
+        members = sorted({s for names in history.values() for s in names} | set(BENCHMARKS))
+        stored = await update_bars(engine, client, members, since=start)
+        return symbols, rows, len(members), stored
+
+    symbols, rows, members, stored = _with_store(work)
+    console.print(f"monthly bars: {rows} rows for {symbols} symbols (listed and delisted)")
+    console.print(f"{members} names were ever in the top {top}; daily rows stored: {stored}")

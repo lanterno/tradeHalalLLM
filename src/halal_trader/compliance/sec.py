@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import date
 from typing import Any
@@ -22,6 +23,7 @@ import httpx
 logger = logging.getLogger(__name__)
 
 _MIN_INTERVAL_S = 0.12  # under EDGAR's 10 requests/second
+_FRAME_MEMO = 256  # parsed frames kept per client (~6k filers each)
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,6 +57,10 @@ class SecClient:
         self._headers = {"User-Agent": user_agent, "Accept-Encoding": "gzip, deflate"}
         self._min_interval = min_interval_s
         self._last = 0.0
+        # Per-client memos: a screening history re-reads the same quarter's
+        # frames (5 per screen, 4 shared with the next) and the same SIC codes.
+        self._frames: OrderedDict[tuple[str, str, str, str], dict[int, Fact]] = OrderedDict()
+        self._sics: dict[int, tuple[int | None, str]] = {}
 
     async def aclose(self) -> None:
         if self._owns_client:
@@ -95,12 +101,15 @@ class SecClient:
 
     async def sic(self, cik: int) -> tuple[int | None, str]:
         """(SIC code, description) from the company's submissions record."""
+        if cik in self._sics:
+            return self._sics[cik]
         payload = await self.submissions(cik)
         if not payload:
             return None, ""
         code = payload.get("sic")
         desc = str(payload.get("sicDescription") or "")
-        return (int(str(code)) if code not in (None, "") else None), desc
+        self._sics[cik] = ((int(str(code)) if code not in (None, "") else None), desc)
+        return self._sics[cik]
 
     async def frame(self, taxonomy: str, concept: str, unit: str, period: str) -> dict[int, Fact]:
         """One concept for every filer in one period: CIK -> Fact.
@@ -108,12 +117,18 @@ class SecClient:
         ``period`` is SEC frame notation: "CY2025" (annual duration),
         "CY2025Q4" (quarterly duration) or "CY2025Q4I" (instant).
         """
+        key = (taxonomy, concept, unit, period)
+        if key in self._frames:
+            self._frames.move_to_end(key)
+            return self._frames[key]
         payload = await self._get(
             f"https://data.sec.gov/api/xbrl/frames/{taxonomy}/{concept}/{unit}/{period}.json"
         )
-        if not payload:
-            return {}
-        return {
+        facts = {
             int(row["cik"]): Fact(float(row["val"]), date.fromisoformat(row["end"]), row["accn"])
-            for row in payload.get("data", [])
+            for row in (payload or {}).get("data", [])
         }
+        self._frames[key] = facts
+        if len(self._frames) > _FRAME_MEMO:
+            self._frames.popitem(last=False)
+        return facts

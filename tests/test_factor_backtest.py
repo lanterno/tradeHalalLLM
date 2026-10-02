@@ -92,3 +92,14 @@ def test_a_ten_x_drop_is_a_break_too() -> None:
     prices = Prices(days, ["X"], np.array([[500.0], [4.0], [4.1]]))
     cleaned, breaks = split_reused_tickers(prices)
     assert breaks == [("X", days[1])] and np.isnan(cleaned.close[0, 0])
+
+
+def test_point_in_time_eligibility_changes_the_holdings_on_its_dates() -> None:
+    p = _prices(600, {"A": 0.002, "B": 0.001})
+    switch = p.days[400]
+    schedule = {p.days[0]: {"B"}, switch: {"A"}}
+
+    result = backtest(p, eligible=set(), top_n=1, eligible_from=schedule)
+
+    for day, names in result.holdings.items():
+        assert names == (["A"] if day >= switch else ["B"])

@@ -128,6 +128,17 @@ class AlpacaMarketData:
         )
         return [parse_asset(a) for a in payload]
 
+    async def inactive_assets(self) -> list[Asset]:
+        """US equities Alpaca no longer lists: delisted, merged, or renamed.
+
+        Their prices are still served, which is what lets a backtest include
+        the companies that did not survive.
+        """
+        payload = await self._get(
+            f"{TRADING_URL}/v2/assets", {"status": "inactive", "asset_class": "us_equity"}
+        )
+        return [parse_asset(a) for a in payload]
+
     async def daily_bars(
         self,
         symbols: Iterable[str],
@@ -135,8 +146,13 @@ class AlpacaMarketData:
         start: date,
         end: date | None = None,
         adjustment: Adjustment = "raw",
+        timeframe: str = "1Day",
     ) -> list[DailyBar]:
-        """Daily SIP bars for ``symbols`` from ``start`` through ``end`` (default: now)."""
+        """SIP bars for ``symbols`` from ``start`` through ``end`` (default: now).
+
+        ``timeframe`` is Alpaca's: "1Day", or "1Month" (stamped on the first
+        of the month) for cheap long-horizon liquidity history.
+        """
         end_ts = datetime.now(UTC) - _SIP_EMBARGO
         if end is not None:
             end_ts = min(end_ts, datetime.combine(end, datetime.max.time(), UTC))
@@ -146,7 +162,7 @@ class AlpacaMarketData:
             batch = wanted[i : i + _SYMBOLS_PER_REQUEST]
             params: dict[str, Any] = {
                 "symbols": ",".join(batch),
-                "timeframe": "1Day",
+                "timeframe": timeframe,
                 "start": start.isoformat(),
                 "end": end_ts.isoformat().replace("+00:00", "Z"),
                 "adjustment": adjustment,

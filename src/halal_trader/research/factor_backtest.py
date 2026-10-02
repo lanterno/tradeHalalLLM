@@ -189,10 +189,17 @@ def backtest(
     top_n: int = 30,
     cost_bps: float = 10.0,
     start: date | None = None,
+    eligible_from: dict[date, set[str]] | None = None,
 ) -> BacktestResult:
-    """Monthly-rebalanced top-``top_n`` equal-weight portfolio of ``eligible`` names."""
+    """Monthly-rebalanced top-``top_n`` equal-weight portfolio of ``eligible`` names.
+
+    ``eligible_from`` makes eligibility point in time: each rebalance uses
+    the newest entry dated on or before it (nothing is eligible before the
+    first entry). Without it, ``eligible`` applies to every month.
+    """
     close = prices.close
     allowed = np.array([s in eligible for s in prices.symbols])
+    schedule = sorted(eligible_from.items()) if eligible_from is not None else None
     # Start at the first month-end that can be scored (a year of history):
     # earlier months would sit in cash and dilute every statistic.
     ends = [
@@ -219,6 +226,10 @@ def backtest(
                 weights = weights / total
         if t in ends:
             score = scores_at(close, t)
+            if schedule is not None:
+                current = [names for d, names in schedule if d <= prices.days[t]]
+                now_allowed = current[-1] if current else set()
+                allowed = np.array([s in now_allowed for s in prices.symbols])
             score[~allowed] = np.nan
             ranked = np.argsort(np.where(np.isnan(score), -np.inf, score))[::-1]
             picks = [i for i in ranked[:top_n] if not np.isnan(score[i])]

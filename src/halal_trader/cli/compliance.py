@@ -60,6 +60,42 @@ def screen_cmd(symbols: str) -> None:
             console.print(f"  {r.symbol:6} {r.verdict:9} {reason}")
 
 
+@compliance.command("screen-history")
+@click.option(
+    "--since",
+    type=click.DateTime(["%Y-%m-%d"]),
+    default="2016-01-01",
+    show_default=True,
+    help="First quarter end to screen.",
+)
+@click.option("--top", default=1000, show_default=True, help="Universe size each quarter.")
+def screen_history_cmd(since: Any, top: int) -> None:
+    """Screen every past quarter end's point-in-time universe (resumable)."""
+
+    async def _run() -> dict[Any, int]:
+        from halal_trader.compliance.history import screen_history
+        from halal_trader.compliance.sec import SecClient
+        from halal_trader.config import get_settings
+        from halal_trader.db.models import init_db
+        from halal_trader.market_hours import today_eastern
+
+        settings = get_settings()
+        engine = await init_db(settings.database_url)
+        sec = SecClient(settings.edgar.user_agent)
+        try:
+            return await screen_history(
+                sec, engine, start=since.date(), end=today_eastern(), top_n=top
+            )
+        finally:
+            await sec.aclose()
+            await engine.dispose()
+
+    done = asyncio.run(_run())
+    for as_of, halal in sorted(done.items()):
+        console.print(f"  {as_of}: {halal} halal")
+    console.print(f"{len(done)} quarter(s) screened")
+
+
 @compliance.command("validate")
 def validate_cmd() -> None:
     """Compare the latest screen with SPUS and HLAL holdings (SEC N-PORT)."""

@@ -27,7 +27,14 @@ def research() -> None:
     show_default=True,
     help="First rebalance on or after this date (needs a year of history before it).",
 )
-def factor_backtest_cmd(top: int, cost_bps: float, since: Any) -> None:
+@click.option(
+    "--pit",
+    is_flag=True,
+    help="Point-in-time eligibility: that month's liquid universe x that quarter's screen "
+    "(run `data pit-universe` and `compliance screen-history` first).",
+)
+@click.option("--universe", default=1000, show_default=True, help="With --pit: universe size.")
+def factor_backtest_cmd(top: int, cost_bps: float, since: Any, pit: bool, universe: int) -> None:
     """S1 first look: monthly top-N halal momentum + low-vol vs SPY/SPUS/HLAL."""
     from halal_trader.research.factor_backtest import (
         BIASES,
@@ -38,7 +45,10 @@ def factor_backtest_cmd(top: int, cost_bps: float, since: Any) -> None:
         stats,
     )
 
+    schedule: Any = None
+
     async def _load() -> tuple[Any, set[str]]:
+        nonlocal schedule
         from sqlalchemy import text
 
         from halal_trader.config import get_settings
@@ -47,6 +57,24 @@ def factor_backtest_cmd(top: int, cost_bps: float, since: Any) -> None:
 
         engine = await init_db(get_settings().database_url)
         try:
+            if pit:
+                from halal_trader.market_hours import today_eastern
+                from halal_trader.research.pit import pit_schedule
+
+                schedule = await pit_schedule(
+                    engine, start=since.date(), end=today_eastern(), top_n=universe
+                )
+                if not any(schedule.eligible_from.values()):
+                    raise click.ClickException(
+                        "no point-in-time eligibility: run `data pit-universe` and "
+                        "`compliance screen-history` first"
+                    )
+                prices = await load_prices(
+                    engine,
+                    sorted(schedule.universe | set(BENCHMARKS)),
+                    since=date(since.year - 2, 1, 1),
+                )
+                return prices, set()
             async with engine.connect() as conn:
                 halal = {
                     r.symbol
@@ -68,7 +96,23 @@ def factor_backtest_cmd(top: int, cost_bps: float, since: Any) -> None:
 
     prices, halal = asyncio.run(_load())
     prices, breaks = split_reused_tickers(prices)
-    result = backtest(prices, eligible=halal, top_n=top, cost_bps=cost_bps, start=since.date())
+    pit_from = schedule.eligible_from if schedule is not None else None
+    result = backtest(
+        prices,
+        eligible=halal,
+        top_n=top,
+        cost_bps=cost_bps,
+        start=since.date(),
+        eligible_from=pit_from,
+    )
+    control = backtest(
+        prices,
+        eligible=halal,
+        top_n=1_000_000,
+        cost_bps=cost_bps,
+        start=since.date(),
+        eligible_from=pit_from,
+    )
 
     def line(label: str, s: Any) -> str:
         sharpe = f"{s.sharpe:5.2f}" if s.sharpe is not None else "  n/a"
@@ -78,11 +122,17 @@ def factor_backtest_cmd(top: int, cost_bps: float, since: Any) -> None:
             f"  PSR {psr}  maxDD {s.max_drawdown:7.2%}"
         )
 
+    eligible_label = (
+        f"point-in-time top-{universe} universe x quarterly screen"
+        if schedule is not None
+        else f"{len(halal)} eligible"
+    )
     console.print(
-        f"S1 top-{top} halal momentum+low-vol, {cost_bps:g} bps/side, {len(halal)} eligible; "
+        f"S1 top-{top} halal momentum+low-vol, {cost_bps:g} bps/side, {eligible_label}; "
         f"{result.days[0]} -> {result.days[-1]}, avg turnover {result.avg_turnover:.0%}/rebalance"
     )
     console.print(line("strategy", result.stats))
+    console.print(line("no factor (all)", control.stats))
     for bench in ("SPY", "SPUS", "HLAL"):
         b = benchmark_returns(prices, bench, result.days)
         if b is None:  # shorter history: compare on the benchmark's own window
@@ -113,4 +163,11 @@ def factor_backtest_cmd(top: int, cost_bps: float, since: Any) -> None:
             f"  reused tickers: {len(breaks)} series cut at a 10x one-day move: "
             + ", ".join(f"{s} {d}" for s, d in breaks)
         )
+    if schedule is not None:
+        console.print(
+            "[yellow]Remaining bias:[/yellow] delisted companies cannot be mapped to SEC "
+            "filings, so they are never eligible. Share of the universe unmapped, by year: "
+            + "  ".join(f"{y} {s:.0%}" for y, s in sorted(schedule.unmapped.items()))
+        )
+        return
     console.print("[yellow]Biased upward by:[/yellow] " + "; ".join(BIASES))

@@ -11,8 +11,10 @@ Rules (S1, the only strategy so far):
 * rebalance at the close of the first session of each month, plus the first
   session after the book is created;
 * the target comes from ``scores_at`` on the previous session's closes, over
-  names the newest halal screen *as of that session* holds halal: the screen
-  history is point-in-time, so a later re-screen never rewrites a decision;
+  names in that session's point-in-time liquidity universe (the top 1,000
+  by trailing dollar volume, as `factor-backtest --pit` uses) that the
+  newest halal screen *as of that session* holds halal: the screen history
+  is point in time, so a later re-screen never rewrites a decision;
 * filled at that session's close (a market-on-close order), paying
   ``cost_bps`` per side on turnover;
 * between rebalances the weights drift with prices; a missing bar holds its
@@ -35,6 +37,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from halal_trader.data.store import BENCHMARKS
+from halal_trader.data.universe import universe_at
 from halal_trader.research.factor_backtest import (
     Prices,
     Stats,
@@ -48,6 +51,7 @@ from halal_trader.research.factor_backtest import (
 logger = logging.getLogger(__name__)
 
 STRATEGIES = ("s1-momentum-lowvol",)
+UNIVERSE = 1000  # the point-in-time liquidity universe, as in `factor-backtest --pit`
 _HISTORY = timedelta(days=550)  # 252 + 21 sessions of lookback, with room for holidays
 
 
@@ -185,6 +189,7 @@ async def advance_book(engine: AsyncEngine, name: str, *, through: date) -> list
     """Append every stored session after the book's last row, up to ``through``."""
     params = await _params(engine, name)
     top_n, cost = int(params["top_n"]), float(params["cost_bps"]) / 10_000.0
+    universe_size = int(params.get("universe", UNIVERSE))
     last = await _last_day(engine, name)
     since = (last.day if last else through) - _HISTORY
     prices, _ = split_reused_tickers(
@@ -208,6 +213,9 @@ async def advance_book(engine: AsyncEngine, name: str, *, through: date) -> list
             turnover = 0.0
             if rebalance or day.month != prev_day.month:
                 eligible = await _halal_as_of(engine, prev_day)
+                members = await universe_at(engine, prev_day, top_n=universe_size)
+                if eligible is not None and members:  # no monthly bars yet: no restriction
+                    eligible &= set(members)
                 if eligible is None:
                     logger.warning(
                         "forward book %s: no halal screen by %s; holding", name, prev_day

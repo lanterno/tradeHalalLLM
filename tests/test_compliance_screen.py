@@ -270,3 +270,76 @@ async def test_v3_reads_every_debt_family_and_falls_back_for_shares_cash_revenue
     # 2,000 diluted shares x 100 = 200,000 market cap; revenue found.
     assert by["MULTI"].metrics["market_cap"] == pytest.approx(200_000.0)
     assert by["MULTI"].verdict == "halal"
+
+
+async def test_the_sec_client_memoises_frames_and_sic_codes() -> None:
+    import httpx
+
+    from halal_trader.compliance.sec import SecClient
+
+    urls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        urls.append(str(request.url))
+        if "frames" in str(request.url):
+            if "Missing" in str(request.url):
+                return httpx.Response(404)
+            row = {"cik": 1, "val": 5.0, "end": "2026-06-30", "accn": "a"}
+            return httpx.Response(200, json={"data": [row]})
+        return httpx.Response(200, json={"sic": "3571", "sicDescription": "Computers"})
+
+    sec = SecClient(
+        "test test@example.invalid",
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        min_interval_s=0.0,
+    )
+    for _ in range(3):
+        assert (await sec.frame("us-gaap", "LongTermDebt", "USD", "CY2026Q2I"))[1].val == 5.0
+        assert await sec.frame("us-gaap", "Missing", "USD", "CY2026Q2I") == {}
+        assert await sec.sic(1) == (3571, "Computers")
+
+    assert len(urls) == 3  # one per distinct request, however often asked
+
+
+def test_quarter_ends_within_the_window() -> None:
+    from halal_trader.compliance.history import quarter_ends
+
+    assert quarter_ends(date(2025, 5, 1), date(2026, 3, 31)) == [
+        date(2025, 6, 30),
+        date(2025, 9, 30),
+        date(2025, 12, 31),
+        date(2026, 3, 31),
+    ]
+
+
+async def test_screen_history_screens_each_quarters_universe_once(engine: AsyncEngine) -> None:
+    from halal_trader.compliance.history import screen_history
+
+    async with engine.begin() as conn:
+        for sym in ("SOFT", "BANK"):
+            await conn.execute(
+                text(
+                    "INSERT INTO monthly_bars (symbol, month, close, volume, vwap) "
+                    "SELECT :s, m::date, 100, 1e6, 100 FROM generate_series("
+                    "'2025-01-01'::date, '2026-06-01'::date, '1 month') AS m"
+                ),
+                {"s": sym},
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO daily_bars (symbol, day, adjustment, open, high, low, close, "
+                    "volume, fetched_at) VALUES (:s, '2025-12-30', 'raw', 100, 100, 100, 100, "
+                    "1, now())"
+                ),
+                {"s": sym},
+            )
+
+    first = await screen_history(
+        FakeSec(), engine, start=date(2025, 12, 1), end=date(2026, 3, 31), top_n=10
+    )  # type: ignore[arg-type]
+    again = await screen_history(
+        FakeSec(), engine, start=date(2025, 12, 1), end=date(2026, 3, 31), top_n=10
+    )  # type: ignore[arg-type]
+
+    assert first == {date(2025, 12, 31): 1, date(2026, 3, 31): 1}  # SOFT halal, BANK not
+    assert again == {}

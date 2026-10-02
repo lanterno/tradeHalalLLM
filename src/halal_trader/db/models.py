@@ -1030,3 +1030,16 @@ class ForwardBookDay(SQLModel, table=True):
     recorded_at: datetime = Field(
         default_factory=lambda: datetime.now(UTC), sa_type=sa.DateTime(timezone=True)
     )
+
+
+class MonthlyBar(SQLModel, table=True):
+    """One raw monthly SIP bar per (symbol, month), listed and delisted stocks
+    alike: the input to the point-in-time liquidity universe (data/universe.py)."""
+
+    __tablename__ = "monthly_bars"
+
+    symbol: str = Field(primary_key=True)
+    month: date = Field(primary_key=True)  # first of the month
+    close: float
+    volume: float
+    vwap: float | None = None
