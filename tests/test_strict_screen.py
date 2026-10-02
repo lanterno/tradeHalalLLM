@@ -105,6 +105,39 @@ async def test_holdings_count_from_their_filing_date_and_lapse(engine: AsyncEngi
     assert [v.tickers for v in await views_at(engine, date(2025, 4, 27))] == [frozenset({"OLD"})]
     (view,) = await views_at(engine, date(2025, 4, 28))
     assert view.tickers == frozenset({"NEW"}) and view.names == frozenset({"newco"})
+
+
+@pytest.mark.parametrize(
+    ("nport", "sec"),
+    [
+        ("Cisco Systems Inc/Delaware", "CISCO SYSTEMS, INC."),
+        ("salesforce.com Inc", "Salesforce, Inc."),
+        ("TJX Cos Inc/The", "TJX COMPANIES INC /DE/"),
+        ("Lowe's Cos Inc", "LOWES COMPANIES INC"),
+        ("Estee Lauder Cos Inc/The", "ESTEE LAUDER COMPANIES INC"),
+        ("Coca-Cola Co/The", "COCA COLA CO"),
+    ],
+)
+def test_nport_and_sec_names_of_one_company_match(nport: str, sec: str) -> None:
+    from halal_trader.compliance.index_veto import name_key
+
+    assert name_key(nport) == name_key(sec)
+
+
+async def test_a_missing_ticker_is_recovered_from_the_same_cusip(engine: AsyncEngine) -> None:
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO etf_holdings (etf, filed, period_end, ticker, name, cusip, "
+                "weight_pct) VALUES (:e, :f, '2025-01-31', :t, 'Some Name', :c, 1.0)"
+            ),
+            [
+                {"e": "HLAL", "f": date(2025, 3, 1), "t": "CSCO", "c": "17275R102"},
+                {"e": "SPUS", "f": date(2025, 3, 2), "t": None, "c": "17275R102"},
+            ],
+        )
+    views = {v.etf: v for v in await views_at(engine, date(2025, 4, 1))}
+    assert "CSCO" in views["SPUS"].tickers
     assert await views_at(engine, date(2026, 1, 1)) == []  # older than MAX_AGE: no opinion
 
 

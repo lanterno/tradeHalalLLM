@@ -62,7 +62,8 @@ logger = logging.getLogger(__name__)
 # v6: the 36-month average no longer carries splits made after the screen date.
 # v7: the strict option -- S&P's activity exclusions and receivables test on top
 #     of AAOIFI, and an index Shariah board's exclusion as a veto.
-METHOD = "aaoifi-sec-v7"
+# v8: the veto recognises holdings named in fund-administrator style.
+METHOD = "aaoifi-sec-v8"
 UNMAPPED = "not an SEC registrant (or ticker not mapped)"
 _MIN_MONTHS = 12
 
