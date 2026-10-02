@@ -55,7 +55,8 @@ logger = logging.getLogger(__name__)
 
 # v2: 36-month average market cap; REITs and royalties face the ratios.
 # v3: every debt-concept family, and fallbacks for shares, cash and revenue.
-METHOD = "aaoifi-sec-v3"
+# v4: a foreign issuer (20-F/40-F) never passes on ratios: its ADR ratio is unknown.
+METHOD = "aaoifi-sec-v4"
 UNMAPPED = "not an SEC registrant (or ticker not mapped)"
 _MIN_MONTHS = 12
 
@@ -248,6 +249,7 @@ async def gather(
                 interest_income=interest,
                 revenue=revenue,
                 average_price=averages.get(sym),
+                foreign_filer=await sec.foreign_filer(cik),
             )
         )
     return out, meta

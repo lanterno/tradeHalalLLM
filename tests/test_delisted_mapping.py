@@ -93,6 +93,9 @@ class GoneSec:
     async def sic(self, cik: int) -> tuple[int | None, str]:
         return 3674, "Semiconductors"
 
+    async def foreign_filer(self, cik: int) -> bool:
+        return False
+
     async def frame(self, taxonomy: str, concept: str, unit: str, period: str) -> dict[int, Fact]:
         end = date(2019, 9, 30)
         instant = period.endswith("I")

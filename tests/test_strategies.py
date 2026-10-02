@@ -116,3 +116,19 @@ async def test_sync_annual_prefers_gross_profit_and_falls_back_to_revenue_minus_
 ) -> None:
     assert await sync_annual(AnnualSec(), engine, [2024]) == 3  # type: ignore[arg-type]
     assert await quality_by_year(engine) == {2024: {1: 0.4, 2: 0.1}}  # CIK 3: assets only
+
+
+def test_share_classes_split_the_company_cap_and_t5_holds_one_of_them() -> None:
+    p = _prices(300, {"GOOG": 0.001, "GOOGL": 0.001, "OTHER": 0.0})
+    p.close[:, 1] = p.close[:, 0] * 1.01  # GOOGL a touch richer, same moves
+    p.close[:, 2] = p.close[:, 0]
+    firms = {
+        "GOOG": Firm(7, 2e12, p.days[0]),
+        "GOOGL": Firm(7, 2e12, p.days[0]),  # one share count, reported for both classes
+        "OTHER": Firm(8, 2e12, p.days[0]),
+    }
+    inputs = Inputs(p, {p.days[0]: firms}, {})
+    w = cap_weighted(inputs)(299)
+    assert w[0] + w[1] == pytest.approx(w[2])  # Alphabet counted once, not twice
+    held = three_factor(inputs, top_n=3)(299)
+    assert (held[:2] > 0).sum() == 1

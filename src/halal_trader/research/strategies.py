@@ -65,15 +65,22 @@ class Inputs:
         return i if i >= 0 else None
 
     def caps(self, t: int, firms: Mapping[int, Firm]) -> FloatArray:
+        """Market cap per column. A company listed in several share classes
+        (GOOG, GOOGL) reports one share count for all of them, so each class
+        gets an equal part of the company's cap rather than all of it."""
         close = self.prices.close
         out = np.full(close.shape[1], np.nan)
+        classes: dict[int, int] = {}
+        for f in firms.values():
+            if f.cik is not None:
+                classes[f.cik] = classes.get(f.cik, 0) + 1
         for j, f in firms.items():
             then = self._row_on_or_before(f.screened)
             if f.cap is None or then is None:
                 continue
             ratio = close[t, j] / close[then, j]
             if np.isfinite(ratio) and ratio > 0:
-                out[j] = f.cap * ratio
+                out[j] = f.cap * ratio / (classes.get(f.cik, 1) if f.cik is not None else 1)
         return out
 
     def composite(self, t: int, firms: Mapping[int, Firm]) -> FloatArray:
@@ -117,9 +124,27 @@ def cap_tilt(inputs: Inputs, tilt: float = TILT) -> TargetFn:
     return target
 
 
+def one_class_per_company(score: FloatArray, firms: Mapping[int, Firm]) -> FloatArray:
+    """Keep each company's best-scored share class; the others score NaN."""
+    out = score.copy()
+    best: dict[int, int] = {}
+    for j, f in firms.items():
+        if f.cik is None or np.isnan(out[j]):
+            continue
+        k = best.get(f.cik)
+        if k is None or out[j] > out[k]:
+            if k is not None:
+                out[k] = np.nan
+            best[f.cik] = j
+        else:
+            out[j] = np.nan
+    return out
+
+
 def three_factor(inputs: Inputs, top_n: int = TOP_N) -> TargetFn:
     def target(t: int) -> FloatArray:
-        return equal_top(inputs.composite(t, inputs.firms(t)), top_n)
+        firms = inputs.firms(t)
+        return equal_top(one_class_per_company(inputs.composite(t, firms), firms), top_n)
 
     return target
 

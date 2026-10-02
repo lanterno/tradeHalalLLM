@@ -135,6 +135,29 @@ def map_delisted_cmd() -> None:
     )
 
 
+@compliance.command("rescreen-foreign")
+def rescreen_foreign_cmd() -> None:
+    """Re-screen past halal verdicts held by foreign issuers (20-F/40-F filers)."""
+
+    async def _run() -> dict[Any, int]:
+        from halal_trader.compliance.history import rescreen_foreign
+        from halal_trader.compliance.sec import SecClient
+        from halal_trader.config import get_settings
+        from halal_trader.db.models import init_db
+
+        settings = get_settings()
+        engine = await init_db(settings.database_url)
+        sec = SecClient(settings.edgar.user_agent)
+        try:
+            return await rescreen_foreign(sec, engine)
+        finally:
+            await sec.aclose()
+            await engine.dispose()
+
+    done = asyncio.run(_run())
+    console.print(f"re-screened {sum(done.values())} verdict(s) across {len(done)} screen date(s)")
+
+
 @compliance.command("validate")
 def validate_cmd() -> None:
     """Compare the latest screen with SPUS and HLAL holdings (SEC N-PORT)."""

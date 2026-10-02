@@ -83,6 +83,7 @@ class Fundamentals:
     interest_income: float | None
     revenue: float | None
     average_price: float | None = None  # 36-month mean month-end close
+    foreign_filer: bool = False  # files 20-F/40-F: shares are ordinary shares, not the ADRs
 
 
 @dataclass(frozen=True, slots=True)
@@ -141,6 +142,12 @@ def screen(f: Fundamentals) -> ScreenResult:
             failures.append(f"{name} {value:.1%} >= {limit:.0%}")
     if failures:
         return ScreenResult(f.symbol, "not_halal", failures, metrics)
+    if f.foreign_filer:
+        # Ordinary shares x the ADR's price overstates market cap by the ADR
+        # ratio (25x for NetEase), shrinking both balance-sheet ratios: a
+        # pass here is not evidence. A failure above stands, since the true
+        # ratio is only larger.
+        missing.append("market cap (foreign issuer: ADR ratio unknown)")
     if missing:
         return ScreenResult(
             f.symbol, "doubtful", [f"not computable: {m}" for m in missing], metrics

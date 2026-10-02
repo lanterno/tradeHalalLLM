@@ -66,3 +66,31 @@ async def screen_history(
         out[as_of] = sum(1 for r in results if r.verdict == "halal")
         logger.info("screen history %s: %d of %d halal", as_of, out[as_of], len(results))
     return out
+
+
+async def rescreen_foreign(sec: SecClient, engine: AsyncEngine) -> dict[date, int]:
+    """Re-screen every stored halal verdict held by a foreign issuer (screen v4).
+
+    Only those can change: v4 adds a doubtful case for foreign issuers and
+    leaves every other verdict as v3 computed it. Returns as_of -> names
+    re-screened.
+    """
+    async with engine.connect() as conn:
+        rows = await conn.execute(
+            text(
+                "SELECT as_of, symbol, cik FROM halal_screen_results "
+                "WHERE verdict = 'halal' AND cik IS NOT NULL"
+            )
+        )
+        halal = [(r.as_of, r.symbol, int(r.cik)) for r in rows]
+    foreign = {cik for cik in {c for _, _, c in halal} if await sec.foreign_filer(cik)}
+    todo: dict[date, list[str]] = {}
+    for as_of, symbol, cik in halal:
+        if cik in foreign:
+            todo.setdefault(as_of, []).append(symbol)
+    out: dict[date, int] = {}
+    for as_of, symbols in sorted(todo.items()):
+        await run_screen(sec, engine, symbols, as_of)
+        out[as_of] = len(symbols)
+    logger.info("rescreen foreign: %d issuers, %d screen rows", len(foreign), sum(out.values()))
+    return out

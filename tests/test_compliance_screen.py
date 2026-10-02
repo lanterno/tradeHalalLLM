@@ -103,6 +103,15 @@ def test_unreported_interest_income_counts_as_zero_when_revenue_exists() -> None
     assert screen(_f(interest_income=None)).verdict == "halal"
 
 
+def test_a_foreign_issuer_never_passes_on_ratios_but_still_fails_on_them() -> None:
+    clean = _f(foreign_filer=True)
+    result = screen(clean)
+    assert result.verdict == "doubtful"
+    assert any("foreign issuer" in r for r in result.reasons)
+    # The overstated cap only shrinks the ratios, so a failure is still a failure.
+    assert screen(_f(foreign_filer=True, interest_bearing_debt=40_000.0)).verdict == "not_halal"
+
+
 def test_recent_quarter_instants_are_completed_quarters_newest_first() -> None:
     assert recent_quarter_instants(date(2026, 10, 1), n=3) == [
         "CY2026Q3I",
@@ -124,6 +133,9 @@ class FakeSec:
             2: (6021, "National banks"),
             3: (3571, "Computers"),
         }[cik]
+
+    async def foreign_filer(self, cik: int) -> bool:
+        return False
 
     async def frame(self, taxonomy: str, concept: str, unit: str, period: str) -> dict[int, Fact]:
         end = date(2026, 6, 30)
@@ -286,7 +298,15 @@ async def test_the_sec_client_memoises_frames_and_sic_codes() -> None:
                 return httpx.Response(404)
             row = {"cik": 1, "val": 5.0, "end": "2026-06-30", "accn": "a"}
             return httpx.Response(200, json={"data": [row]})
-        return httpx.Response(200, json={"sic": "3571", "sicDescription": "Computers"})
+        forms = ["20-F", "6-K"] if "CIK0000000002" in str(request.url) else ["10-K", "20-F"]
+        return httpx.Response(
+            200,
+            json={
+                "sic": "3571",
+                "sicDescription": "Computers",
+                "filings": {"recent": {"form": forms}},
+            },
+        )
 
     sec = SecClient(
         "test test@example.invalid",
@@ -299,6 +319,10 @@ async def test_the_sec_client_memoises_frames_and_sic_codes() -> None:
         assert await sec.sic(1) == (3571, "Computers")
 
     assert len(urls) == 3  # one per distinct request, however often asked
+    # The submissions record already read for the SIC code says who files 20-F only.
+    assert await sec.foreign_filer(1) is False  # a 10-K filer, whatever else it filed
+    assert await sec.foreign_filer(2) is True
+    assert len(urls) == 4
 
 
 def test_quarter_ends_within_the_window() -> None:
@@ -343,3 +367,30 @@ async def test_screen_history_screens_each_quarters_universe_once(engine: AsyncE
 
     assert first == {date(2025, 12, 31): 1, date(2026, 3, 31): 1}  # SOFT halal, BANK not
     assert again == {}
+
+
+async def test_rescreen_foreign_turns_a_foreign_issuers_past_pass_doubtful(
+    engine: AsyncEngine,
+) -> None:
+    from halal_trader.compliance.history import rescreen_foreign
+
+    class Foreign(FakeSec):
+        async def foreign_filer(self, cik: int) -> bool:
+            return cik == 3
+
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO daily_bars (symbol, day, adjustment, open, high, low, close, "
+                "volume, fetched_at) VALUES (:s, '2026-06-30', 'raw', 100, 100, 100, 100, 1, now())"
+            ),
+            [{"s": s} for s in ("SOFT", "NODEBT")],
+        )
+    as_of = date(2026, 7, 1)
+    await run_screen(FakeSec(), engine, ["SOFT", "NODEBT"], as_of)  # type: ignore[arg-type]
+
+    assert await rescreen_foreign(Foreign(), engine) == {as_of: 1}  # type: ignore[arg-type]
+    async with engine.connect() as conn:
+        rows = await conn.execute(text("SELECT symbol, verdict FROM halal_screen_results"))
+        verdicts = {r.symbol: r.verdict for r in rows}
+    assert verdicts == {"SOFT": "halal", "NODEBT": "doubtful"}

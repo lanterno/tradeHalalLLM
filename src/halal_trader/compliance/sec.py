@@ -23,7 +23,9 @@ import httpx
 logger = logging.getLogger(__name__)
 
 _MIN_INTERVAL_S = 0.12  # under EDGAR's 10 requests/second
-_FRAME_MEMO = 256  # parsed frames kept per client (~6k filers each)
+_FRAME_MEMO = 256
+_FOREIGN_ANNUAL = {"20-F", "40-F"}
+_DOMESTIC_ANNUAL = {"10-K"}  # parsed frames kept per client (~6k filers each)
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,6 +63,7 @@ class SecClient:
         # frames (5 per screen, 4 shared with the next) and the same SIC codes.
         self._frames: OrderedDict[tuple[str, str, str, str], dict[int, Fact]] = OrderedDict()
         self._sics: dict[int, tuple[int | None, str]] = {}
+        self._foreign: dict[int, bool] = {}
 
     async def aclose(self) -> None:
         if self._owns_client:
@@ -126,7 +129,20 @@ class SecClient:
         code = payload.get("sic")
         desc = str(payload.get("sicDescription") or "")
         self._sics[cik] = ((int(str(code)) if code not in (None, "") else None), desc)
+        forms = set(((payload.get("filings") or {}).get("recent") or {}).get("form") or [])
+        self._foreign[cik] = bool(forms & _FOREIGN_ANNUAL) and not forms & _DOMESTIC_ANNUAL
         return self._sics[cik]
+
+    async def foreign_filer(self, cik: int) -> bool:
+        """True for a foreign private issuer: annual reports on 20-F/40-F, never 10-K.
+
+        Its XBRL share count is ordinary shares, while the US listing is
+        usually an ADR worth several of them, so price x shares overstates
+        its market cap by the ADR ratio.
+        """
+        if cik not in self._foreign:
+            await self.sic(cik)
+        return self._foreign.get(cik, False)
 
     async def frame(self, taxonomy: str, concept: str, unit: str, period: str) -> dict[int, Fact]:
         """One concept for every filer in one period: CIK -> Fact.
