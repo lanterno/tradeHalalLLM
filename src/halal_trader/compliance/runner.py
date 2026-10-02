@@ -21,8 +21,11 @@ Concept choices (each a judgment call, recorded here):
   RevenueFromContractWithCustomerExcludingAssessedTax, else SalesRevenueNet.
   Both from the latest calendar-year frame that has them.
 * price = the latest raw close in daily_bars (run `halal-trader data
-  backfill` first); market cap = dei EntityCommonStockSharesOutstanding x
-  price.
+  backfill` first); average price = the mean of the last 36 month-end
+  closes, split- and dividend-adjusted (needs at least 12). Market cap =
+  dei EntityCommonStockSharesOutstanding x the average price, else x the
+  price. Adjusting for dividends lowers past prices a little, so the
+  average understates market cap and errs strict on every ratio.
 """
 
 from __future__ import annotations
@@ -39,6 +42,9 @@ from halal_trader.compliance.aaoifi import Fundamentals, ScreenResult, screen
 from halal_trader.compliance.sec import Fact, SecClient
 
 logger = logging.getLogger(__name__)
+
+METHOD = "aaoifi-sec-v2"  # v2: 36-month average market cap; REITs and royalties face ratios
+_MIN_MONTHS = 12
 
 _DEBT_TOTAL = "LongTermDebt"
 _DEBT_PARTS = ("LongTermDebtNoncurrent", "LongTermDebtCurrent")
@@ -121,6 +127,23 @@ async def gather(
             {"s": [s.upper() for s in symbols], "as_of": as_of},
         )
         prices = {r.symbol: float(r.close) for r in rows}
+        rows = await conn.execute(
+            text(
+                """
+                WITH month_end AS (
+                    SELECT DISTINCT ON (symbol, date_trunc('month', day)) symbol, close
+                    FROM daily_bars
+                    WHERE adjustment = 'all' AND symbol = ANY(:s)
+                      AND day <= :as_of AND day > :as_of - INTERVAL '36 months'
+                    ORDER BY symbol, date_trunc('month', day), day DESC
+                )
+                SELECT symbol, avg(close) AS avg_close FROM month_end
+                GROUP BY symbol HAVING count(*) >= :min_months
+                """
+            ),
+            {"s": [s.upper() for s in symbols], "as_of": as_of, "min_months": _MIN_MONTHS},
+        )
+        averages = {r.symbol: float(r.avg_close) for r in rows}
 
     out: list[Fundamentals] = []
     meta: dict[str, tuple[int | None, str]] = {}
@@ -169,6 +192,7 @@ async def gather(
                 cash_and_securities=(cash + securities) if cash is not None else None,
                 interest_income=interest,
                 revenue=revenue,
+                average_price=averages.get(sym),
             )
         )
     return out, meta
@@ -214,7 +238,7 @@ async def run_screen(
                             "price": f.price,
                         }
                     ),
-                    "method": "aaoifi-sec-v1",
+                    "method": METHOD,
                 },
             )
     counts = {

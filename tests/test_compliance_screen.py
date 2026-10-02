@@ -53,6 +53,32 @@ def test_real_estate_is_not_excluded_by_activity() -> None:
     assert prohibited_activity(6512) is None  # operators of buildings
 
 
+@pytest.mark.parametrize("sic", [6792, 6794, 6795, 6798])
+def test_reits_and_royalty_owners_face_the_ratios_not_an_activity_ban(sic: int) -> None:
+    assert prohibited_activity(sic) is None
+    assert screen(_f(sic=sic)).verdict == "halal"
+
+
+@pytest.mark.parametrize("sic", [6700, 6719, 6726, 6770, 6793, 6799])
+def test_holding_companies_funds_and_shells_stay_excluded(sic: int) -> None:
+    assert screen(_f(sic=sic)).verdict == "not_halal"
+
+
+def test_a_mortgage_reit_fails_on_interest_income() -> None:
+    """SIC 6798 also files mortgage REITs: their revenue is interest."""
+    r = screen(_f(sic=6798, interest_income=45_000.0, revenue=50_000.0))
+    assert r.verdict == "not_halal" and "interest income" in r.reasons[0]
+
+
+def test_the_average_price_sets_market_cap_when_known() -> None:
+    """A spot rally must not wash a 36%-of-average-cap debt load down below 30%."""
+    spot = screen(_f(interest_bearing_debt=36_000.0, price=150.0))  # 24% of spot cap
+    averaged = screen(_f(interest_bearing_debt=36_000.0, price=150.0, average_price=100.0))
+    assert spot.verdict == "halal"
+    assert averaged.verdict == "not_halal" and averaged.metrics["market_cap"] == 100_000.0
+    assert averaged.metrics["market_cap_basis"] == 36.0
+
+
 @pytest.mark.parametrize(
     ("kw", "fragment"),
     [
@@ -141,3 +167,39 @@ async def test_a_run_screens_and_stores_point_in_time_verdicts(engine: AsyncEngi
         ).all()
     assert [r[0] for r in rows] == ["BANK", "NODEBT", "SOFT", "ZZZZ"]
     assert float(dict((r[0], r[2]) for r in rows)["SOFT"]) == pytest.approx(0.05)
+
+
+async def test_a_run_uses_the_36_month_average_when_there_is_a_year_of_history(
+    engine: AsyncEngine,
+) -> None:
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO daily_bars (symbol, day, adjustment, open, high, low, close, "
+                "volume, fetched_at) VALUES ('SOFT', '2026-09-30', 'raw', 100, 100, 100, 100, "
+                "1, now())"
+            )
+        )
+        # Month-end adjusted closes of 50 for 14 months (plus a mid-month bar
+        # that is not a month end and must not count).
+        for m in range(14):
+            y, mo = divmod(8 - m, 12)
+            await conn.execute(
+                text(
+                    "INSERT INTO daily_bars (symbol, day, adjustment, open, high, low, close, "
+                    "volume, fetched_at) VALUES ('SOFT', :d, 'all', 50, 50, 50, 50, 1, now())"
+                ),
+                {"d": date(2026 + y, mo + 1, 28)},
+            )
+        await conn.execute(
+            text(
+                "INSERT INTO daily_bars (symbol, day, adjustment, open, high, low, close, "
+                "volume, fetched_at) VALUES ('SOFT', '2026-09-10', 'all', 999, 999, 999, 999, "
+                "1, now())"
+            )
+        )
+
+    (r,) = await run_screen(FakeSec(), engine, ["SOFT"], date(2026, 10, 1))  # type: ignore[arg-type]
+
+    assert r.metrics["market_cap"] == pytest.approx(50_000.0)  # 1,000 shares x 50
+    assert r.metrics["debt_ratio"] == pytest.approx(0.10)

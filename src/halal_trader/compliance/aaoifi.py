@@ -10,8 +10,11 @@ Two screens, both must pass (AAOIFI Shariah Standard No. 21):
    exclusion names its reason. A SIC code is a coarse proxy for "primary
    activity"; that is the main reason this screen is validated against
    halal ETF holdings before it may gate trading.
-2. **Financial ratios**, each against market capitalisation (shares
-   outstanding x latest price) or revenue:
+2. **Financial ratios**, each against market capitalisation or revenue.
+   Market cap is shares outstanding x the 36-month average month-end
+   price when that history exists (S&P's Shariah methodology, which SPUS
+   follows: a spot price makes a 30-40% name flip verdict with every
+   swing), else x the latest price:
    * interest-bearing debt < 30% of market cap;
    * cash + interest-bearing securities < 30% of market cap;
    * interest (impermissible) income < 5% of revenue.
@@ -37,7 +40,15 @@ IMPURE_INCOME_LIMIT = 0.05
 PROHIBITED_SIC: tuple[tuple[int, int, str], ...] = (
     (6000, 6299, "conventional banking, credit or securities dealing (riba)"),
     (6300, 6411, "conventional insurance (gharar, riba)"),
-    (6700, 6799, "holding, investment and blank-check companies (financial)"),
+    # 67xx is split: holding companies, funds, trusts and blank-check
+    # shells stay out; real-asset businesses filed there (6792 oil
+    # royalties, 6794 patent lessors, 6795 mineral royalties, 6798 REITs)
+    # face the ratio screens instead. A mortgage REIT shares 6798 but earns
+    # interest, so the impure-income ratio rejects it.
+    (6700, 6791, "holding, investment and blank-check companies (financial)"),
+    (6793, 6793, "commodity traders (financial)"),
+    (6796, 6797, "investment offices (financial)"),
+    (6799, 6799, "investors, not elsewhere classified (financial)"),
     (2082, 2085, "alcoholic beverages"),
     (5181, 5182, "alcohol wholesale"),
     (5921, 5921, "liquor stores"),
@@ -71,6 +82,7 @@ class Fundamentals:
     cash_and_securities: float | None
     interest_income: float | None
     revenue: float | None
+    average_price: float | None = None  # 36-month mean month-end close
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,9 +101,10 @@ def _ratio(num: float | None, den: float | None) -> float | None:
 
 def screen(f: Fundamentals) -> ScreenResult:
     """Apply both screens to one company's fundamentals."""
+    price = f.average_price if f.average_price is not None else f.price
     market_cap = (
-        f.shares_outstanding * f.price
-        if f.shares_outstanding is not None and f.price is not None
+        f.shares_outstanding * price
+        if f.shares_outstanding is not None and price is not None
         else None
     )
     debt_ratio = _ratio(f.interest_bearing_debt, market_cap)
@@ -103,6 +116,7 @@ def screen(f: Fundamentals) -> ScreenResult:
     metrics: dict[str, float | None] = {
         "sic": float(f.sic) if f.sic is not None else None,
         "market_cap": market_cap,
+        "market_cap_basis": 36.0 if f.average_price is not None else 0.0,
         "debt_ratio": debt_ratio,
         "cash_ratio": cash_ratio,
         "impure_income_ratio": impure_ratio,
