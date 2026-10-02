@@ -60,7 +60,9 @@ logger = logging.getLogger(__name__)
 # v4: a foreign issuer (20-F/40-F) never passes on ratios: its ADR ratio is unknown.
 # v5: a share count the diluted count says is mis-scaled gives way to the smaller.
 # v6: the 36-month average no longer carries splits made after the screen date.
-METHOD = "aaoifi-sec-v6"
+# v7: the strict option -- S&P's activity exclusions and receivables test on top
+#     of AAOIFI, and an index Shariah board's exclusion as a veto.
+METHOD = "aaoifi-sec-v7"
 UNMAPPED = "not an SEC registrant (or ticker not mapped)"
 _MIN_MONTHS = 12
 
@@ -74,6 +76,7 @@ _CASH_WIDE = "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents"
 _DILUTED_SHARES = "WeightedAverageNumberOfDilutedSharesOutstanding"
 _DEBT_EXTRA = ("ShortTermBorrowings", "CommercialPaper", "FinanceLeaseLiability")
 _CASH = "CashAndCashEquivalentsAtCarryingValue"
+_RECEIVABLES = "AccountsReceivableNetCurrent"
 _SECURITIES = (
     "ShortTermInvestments",
     "MarketableSecuritiesCurrent",
@@ -160,8 +163,8 @@ async def _mapped_by_name(engine: AsyncEngine) -> dict[str, tuple[int, str]]:
 
 async def gather(
     sec: SecClient, engine: AsyncEngine, symbols: Sequence[str], as_of: date
-) -> tuple[list[Fundamentals], dict[str, tuple[int | None, str]]]:
-    """Fundamentals for each symbol, plus (cik, SIC description) for the record."""
+) -> tuple[list[Fundamentals], dict[str, tuple[int | None, str]], dict[str, str]]:
+    """Fundamentals for each symbol, (cik, SIC description) for the record, and company names."""
     companies = await sec.companies()
     # Tickers SEC no longer lists, matched to their filer by name
     # (compliance/delisted.py); SEC's own current mapping wins.
@@ -181,6 +184,7 @@ async def gather(
             _CASH,
             _CASH_WIDE,
             *_SECURITIES,
+            _RECEIVABLES,
         )
     }
     shares = await _instant(sec, "EntityCommonStockSharesOutstanding", periods, dei=True)
@@ -243,6 +247,7 @@ async def gather(
 
     out: list[Fundamentals] = []
     meta: dict[str, tuple[int | None, str]] = {}
+    titles: dict[str, str] = {}
     for symbol in symbols:
         sym = symbol.upper()
         company = companies.get(sym) or companies.get(sym.replace(".", "-"))
@@ -253,6 +258,7 @@ async def gather(
         cik = company.cik
         sic, sic_desc = await sec.sic(cik)
         meta[sym] = (cik, sic_desc)
+        titles[sym] = company.title
 
         def v(concept: str, cik: int = cik) -> float | None:
             return _newest(frames[concept], cik)
@@ -295,17 +301,20 @@ async def gather(
                 revenue=revenue,
                 average_price=averages.get(sym),
                 foreign_filer=await sec.foreign_filer(cik),
+                receivables=v(_RECEIVABLES),
             )
         )
-    return out, meta
+    return out, meta, titles
 
 
 async def run_screen(
     sec: SecClient, engine: AsyncEngine, symbols: Sequence[str], as_of: date
 ) -> list[ScreenResult]:
     """Screen ``symbols`` as of ``as_of`` and store every verdict with its inputs."""
-    fundamentals, meta = await gather(sec, engine, symbols, as_of)
-    results = [screen(f) for f in fundamentals]
+    from halal_trader.compliance.index_veto import apply_veto, views_at
+
+    fundamentals, meta, titles = await gather(sec, engine, symbols, as_of)
+    results = apply_veto([screen(f) for f in fundamentals], titles, await views_at(engine, as_of))
     async with engine.begin() as conn:
         for f, r in zip(fundamentals, results, strict=True):
             cik, sic_desc = meta.get(r.symbol, (None, ""))

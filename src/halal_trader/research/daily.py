@@ -105,6 +105,10 @@ async def run_research(engine: AsyncEngine, settings: Settings, *, today: date) 
     if age is None or age >= SCREEN_EVERY:
         sec = SecClient(settings.edgar.user_agent)
         try:
+            from halal_trader.compliance.etf_holdings import sync_holdings
+
+            # The index veto reads the halal ETFs' newest filed holdings.
+            await sync_holdings(sec, engine)
             universe = await _members(engine, today) or await _stored_symbols(engine)
             stocks = [s for s in universe if s not in BENCHMARKS]
             run.screened = len(await run_screen(sec, engine, stocks, today))

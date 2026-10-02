@@ -158,6 +158,28 @@ def rescreen_cmd() -> None:
     console.print(f"re-screened {sum(done.values())} verdict(s) across {len(done)} screen date(s)")
 
 
+@compliance.command("etf-history")
+def etf_history_cmd() -> None:
+    """Store every N-PORT holdings filing of SPUS and HLAL (the index veto's input)."""
+
+    async def _run() -> int:
+        from halal_trader.compliance.etf_holdings import sync_holdings
+        from halal_trader.compliance.sec import SecClient
+        from halal_trader.config import get_settings
+        from halal_trader.db.models import init_db
+
+        settings = get_settings()
+        engine = await init_db(settings.database_url)
+        sec = SecClient(settings.edgar.user_agent)
+        try:
+            return await sync_holdings(sec, engine)
+        finally:
+            await sec.aclose()
+            await engine.dispose()
+
+    console.print(f"{asyncio.run(_run())} holdings filing(s) stored")
+
+
 @compliance.command("validate")
 def validate_cmd() -> None:
     """Compare the latest screen with SPUS and HLAL holdings (SEC N-PORT)."""

@@ -17,7 +17,12 @@ Two screens, both must pass (AAOIFI Shariah Standard No. 21):
    swing), else x the latest price:
    * interest-bearing debt < 30% of market cap;
    * cash + interest-bearing securities < 30% of market cap;
-   * interest (impermissible) income < 5% of revenue.
+   * interest (impermissible) income < 5% of revenue;
+   * accounts receivable < 49% of market cap (S&P's fourth ratio).
+
+The operator chose the strict option (2026-10-02): wherever AAOIFI and
+S&P Shariah differ, the stricter rule applies, and an index Shariah
+board's exclusion is a veto (compliance/index_veto.py).
 
 Anything that cannot be computed makes the verdict ``doubtful``, which is
 not halal: the screen fails closed. Metrics are returned with every verdict
@@ -35,6 +40,7 @@ Verdict = Literal["halal", "not_halal", "doubtful"]
 DEBT_LIMIT = 0.30
 CASH_LIMIT = 0.30
 IMPURE_INCOME_LIMIT = 0.05
+RECEIVABLES_LIMIT = 0.49  # S&P Shariah: accounts receivable < 49% of market cap
 
 # (low, high, reason): SIC ranges whose primary activity is impermissible.
 PROHIBITED_SIC: tuple[tuple[int, int, str], ...] = (
@@ -57,6 +63,16 @@ PROHIBITED_SIC: tuple[tuple[int, int, str], ...] = (
     (2011, 2013, "meat packing and processing (pork)"),
     (7011, 7011, "hotels and casinos (gambling, alcohol)"),
     (7993, 7993, "coin-operated amusement and gaming devices"),
+    # The strict option (operator, 2026-10-02): S&P Shariah's activity
+    # exclusions on top of AAOIFI's. Advertising, media and entertainment
+    # are out under S&P; a SIC code cannot see them inside a company filed
+    # as software or retail, which is what the index veto is for.
+    (7310, 7319, "advertising (S&P Shariah: advertising and media)"),
+    (4830, 4841, "radio, television and cable broadcasting (S&P: media)"),
+    (7810, 7833, "motion pictures and theaters (S&P: entertainment)"),
+    (7841, 7841, "video rental and streaming (S&P: entertainment)"),
+    (3652, 3652, "recorded music (S&P: entertainment)"),
+    (7900, 7999, "amusement, recreation and gaming (S&P: entertainment, gambling)"),
 )
 
 
@@ -84,6 +100,7 @@ class Fundamentals:
     revenue: float | None
     average_price: float | None = None  # 36-month mean month-end close
     foreign_filer: bool = False  # files 20-F/40-F: shares are ordinary shares, not the ADRs
+    receivables: float | None = None  # accounts receivable; unreported counts as none
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,6 +127,7 @@ def screen(f: Fundamentals) -> ScreenResult:
     )
     debt_ratio = _ratio(f.interest_bearing_debt, market_cap)
     cash_ratio = _ratio(f.cash_and_securities, market_cap)
+    receivables_ratio = _ratio(f.receivables or 0.0, market_cap)
     # No interest income reported at all is common for operating companies
     # that earn none worth tagging; treat it as zero only when revenue exists.
     impure = f.interest_income if f.interest_income is not None else 0.0
@@ -120,6 +138,7 @@ def screen(f: Fundamentals) -> ScreenResult:
         "market_cap_basis": 36.0 if f.average_price is not None else 0.0,
         "debt_ratio": debt_ratio,
         "cash_ratio": cash_ratio,
+        "receivables_ratio": receivables_ratio,
         "impure_income_ratio": impure_ratio,
     }
 
@@ -135,6 +154,7 @@ def screen(f: Fundamentals) -> ScreenResult:
         ("interest-bearing debt / market cap", debt_ratio, DEBT_LIMIT),
         ("cash and interest-bearing securities / market cap", cash_ratio, CASH_LIMIT),
         ("interest income / revenue", impure_ratio, IMPURE_INCOME_LIMIT),
+        ("accounts receivable / market cap", receivables_ratio, RECEIVABLES_LIMIT),
     ):
         if value is None:
             missing.append(name)

@@ -1044,6 +1044,22 @@ class AnnualFundamentals(SQLModel, table=True):
     assets: float | None = None
 
 
+class EtfHolding(SQLModel, table=True):
+    """One equity holding of a halal index ETF from an N-PORT filing, dated by
+    the filing (when it became public), not only by the period it reports."""
+
+    __tablename__ = "etf_holdings"
+
+    id: int | None = Field(default=None, primary_key=True)
+    etf: str
+    filed: date
+    period_end: date
+    ticker: str | None = None
+    name: str
+    cusip: str
+    weight_pct: float
+
+
 class TickerCik(SQLModel, table=True):
     """A ticker SEC's current ticker file does not list, matched to its filer by
     name (compliance/delisted.py). ``status`` says whether it was: mapped,
