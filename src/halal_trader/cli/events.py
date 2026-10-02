@@ -55,3 +55,53 @@ def report_cmd(threshold: float) -> None:
             f"  {r.scorer:40} {r.horizon:>2}d  n={r.events:<5} IC {r.ic:+.3f}  "
             f">= {threshold:g}: {r.above} events, mean abn {above}; below: {below}"
         )
+
+
+@events.command("backfill")
+@click.argument("what", type=click.Choice(["news", "filings", "insiders", "eps", "all"]))
+@click.option(
+    "--rate",
+    default=100,
+    show_default=True,
+    help="Alpaca requests per minute for news (the live bot shares the key's 200/min).",
+)
+def backfill_cmd(what: str, rate: int) -> None:
+    """Fill the event store's history (resumable; finished units are skipped)."""
+
+    async def _run() -> dict[str, int]:
+        from halal_trader.compliance.sec import SecClient
+        from halal_trader.config import get_settings
+        from halal_trader.data.alpaca_market import AlpacaMarketData
+        from halal_trader.db.models import init_db
+        from halal_trader.events import history
+
+        settings = get_settings()
+        engine = await init_db(settings.database_url)
+        sec = SecClient(settings.edgar.user_agent)
+        out: dict[str, int] = {}
+        try:
+            companies = await history.covered_companies(engine)
+            if what in ("filings", "all"):
+                out["filings"] = await history.backfill_filings(engine, sec, companies)
+            if what in ("insiders", "all"):
+                out["insiders"] = await history.backfill_insiders(engine, sec, companies)
+            if what in ("eps", "all"):
+                out["eps"] = await history.backfill_eps(engine, sec, companies)
+            if what in ("news", "all"):
+                market = AlpacaMarketData(
+                    settings.alpaca.api_key,
+                    settings.alpaca.secret_key,
+                    min_interval_s=60.0 / max(rate, 1),
+                )
+                try:
+                    symbols = await history.covered_symbols(engine)
+                    out["news"] = await history.backfill_news(engine, market, symbols=symbols)
+                finally:
+                    await market.aclose()
+        finally:
+            await sec.aclose()
+            await engine.dispose()
+        return out
+
+    for name, n in asyncio.run(_run()).items():
+        console.print(f"{name}: {n} new")

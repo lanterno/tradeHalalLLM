@@ -1095,6 +1095,35 @@ class EventLabel(SQLModel, table=True):
     labeled_at: datetime = Field(sa_type=sa.DateTime(timezone=True))
 
 
+class BackfillProgress(SQLModel, table=True):
+    """One completed unit (a day, a quarter, a company) of a resumable backfill."""
+
+    __tablename__ = "backfill_progress"
+
+    task: str = Field(primary_key=True)
+    unit: str = Field(primary_key=True)
+    items: int
+    done_at: datetime = Field(sa_type=sa.DateTime(timezone=True))
+
+
+class EpsFact(SQLModel, table=True):
+    """One reported earnings-per-share value from XBRL, with the date it was filed:
+    the input to standardized unexpected earnings, known only from ``filed``."""
+
+    __tablename__ = "eps_facts"
+
+    cik: int = Field(primary_key=True)
+    concept: str = Field(primary_key=True)
+    start: date = Field(primary_key=True)
+    end: date = Field(primary_key=True)
+    accn: str = Field(primary_key=True)
+    val: float
+    form: str
+    fp: str | None = None
+    fy: int | None = None
+    filed: date
+
+
 class EtfHolding(SQLModel, table=True):
     """One equity holding of a halal index ETF from an N-PORT filing, dated by
     the filing (when it became public), not only by the period it reports."""

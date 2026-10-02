@@ -146,26 +146,36 @@ class AlpacaMarketData:
 
     async def news(
         self,
-        symbols: Iterable[str],
+        symbols: Iterable[str] | None,
         *,
         start: datetime,
         end: datetime | None = None,
         max_pages: int = 20,
     ) -> list[NewsArticle]:
-        """Benzinga articles naming any of ``symbols`` published in [start, end], newest first.
+        """Benzinga articles naming any of ``symbols`` (every article when None)
+        published in [start, end], newest first.
 
         Up to ``_SYMBOLS_PER_REQUEST`` symbols per request; an article naming
         several of them is returned once.
         """
-        wanted = sorted({s.upper() for s in symbols})
+        wanted = sorted({s.upper() for s in symbols}) if symbols is not None else []
+        chunks = (
+            [
+                ",".join(wanted[i : i + _SYMBOLS_PER_REQUEST])
+                for i in range(0, len(wanted), _SYMBOLS_PER_REQUEST)
+            ]
+            if symbols is not None
+            else [None]
+        )
         out: dict[int, NewsArticle] = {}
-        for i in range(0, len(wanted), _SYMBOLS_PER_REQUEST):
+        for chunk in chunks:
             params: dict[str, Any] = {
-                "symbols": ",".join(wanted[i : i + _SYMBOLS_PER_REQUEST]),
                 "start": start.astimezone(UTC).isoformat().replace("+00:00", "Z"),
                 "limit": 50,
                 "sort": "desc",
             }
+            if chunk is not None:
+                params["symbols"] = chunk
             if end is not None:
                 params["end"] = end.astimezone(UTC).isoformat().replace("+00:00", "Z")
             for _ in range(max_pages):

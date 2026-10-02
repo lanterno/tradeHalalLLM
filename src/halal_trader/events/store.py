@@ -45,8 +45,11 @@ class EventRecord:
 
 
 class EventRecorder:
-    def __init__(self, engine: AsyncEngine) -> None:
+    def __init__(self, engine: AsyncEngine, *, raise_errors: bool = False) -> None:
         self._engine = engine
+        # Backfills raise (a failed day must not be marked done); the live
+        # reactor never does.
+        self._raise = raise_errors
 
     async def record(self, records: Sequence[EventRecord]) -> int:
         """Store events (first sighting wins) and their scores; returns events written."""
@@ -94,6 +97,8 @@ class EventRecorder:
                             },
                         )
         except Exception as exc:  # noqa: BLE001 -- recording must never block the reactor
+            if self._raise:
+                raise
             logger.warning("event store: %d record(s) dropped: %r", len(records), exc)
             return 0
         return written
