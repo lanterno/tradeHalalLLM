@@ -119,12 +119,18 @@ deployment and are being replaced by database reads.
 Separate from the live path; nothing here trades.
 
 - `data/`: 10 years of daily SIP bars (raw and adjusted) for a liquidity
-  universe plus SPY/QQQ/SPUS/HLAL, from Alpaca's free data plan
-  (`halal-trader data`).
+  universe plus SPY/QQQ/SPUS/HLAL, monthly bars for every listed and
+  delisted stock (the point-in-time universe), and annual SEC
+  fundamentals, all from free sources (`halal-trader data`).
 - `compliance/`: an in-house AAOIFI-style screen from SEC data with a
   point-in-time verdict history, validated against SPUS and HLAL holdings
-  from their N-PORT filings (`halal-trader compliance`). Not yet a gate.
-- `research/`: strategy backtests (`halal-trader research`).
+  from their N-PORT filings (`halal-trader compliance`). Delisted tickers
+  are matched to their filer by name. Not yet a gate.
+- `research/`: point-in-time backtests (eligible = liquid then x halal
+  then) and paper-forward books. Every backtest is a trial in
+  `quant_trials`, judged by the Deflated Sharpe Ratio of its returns over
+  SPUS across all trials (`halal-trader research`, `quant trials --prefix
+  research.`).
 - `quant/`: price-range bands and calibration behind the recommendation.
 
 ## Configuration
