@@ -187,6 +187,107 @@ def factor_backtest_cmd(top: int, cost_bps: float, since: Any, pit: bool, univer
     console.print("[yellow]Biased upward by:[/yellow] " + "; ".join(BIASES))
 
 
+@research.command("pit-backtest")
+@click.argument("strategy", type=click.Choice(["t3-cap", "t4-tilt", "t5-3factor"]))
+@click.option("--cost-bps", default=10.0, show_default=True, help="Cost per side, basis points.")
+@click.option(
+    "--since",
+    type=click.DateTime(["%Y-%m-%d"]),
+    default="2017-01-01",
+    show_default=True,
+    help="First rebalance on or after this date.",
+)
+@click.option("--universe", default=1000, show_default=True, help="Liquidity universe size.")
+def pit_backtest_cmd(strategy: str, cost_bps: float, since: Any, universe: int) -> None:
+    """A pre-registered point-in-time strategy (research/strategies.py), judged vs SPUS."""
+    from halal_trader.research.factor_backtest import (
+        backtest_targets,
+        benchmark_returns,
+        split_reused_tickers,
+        stats,
+    )
+    from halal_trader.research.strategies import STRATEGIES, TILT, TOP_N, Inputs
+
+    async def _load() -> tuple[Any, Any, Any]:
+        from halal_trader.config import get_settings
+        from halal_trader.data.fundamentals import quality_by_year
+        from halal_trader.data.store import BENCHMARKS
+        from halal_trader.db.models import init_db
+        from halal_trader.market_hours import today_eastern
+        from halal_trader.research.factor_backtest import load_prices
+        from halal_trader.research.pit import pit_schedule
+
+        engine = await init_db(get_settings().database_url)
+        try:
+            schedule = await pit_schedule(
+                engine, start=since.date(), end=today_eastern(), top_n=universe
+            )
+            if not any(schedule.eligible_from.values()):
+                raise click.ClickException(
+                    "no point-in-time eligibility: run `data pit-universe` and "
+                    "`compliance screen-history` first"
+                )
+            quality = await quality_by_year(engine)
+            if strategy != "t3-cap" and not quality:
+                raise click.ClickException("no quality data: run `data fundamentals` first")
+            prices = await load_prices(
+                engine,
+                sorted(schedule.universe | set(BENCHMARKS)),
+                since=date(since.year - 2, 1, 1),
+            )
+            return schedule, quality, prices
+        finally:
+            await engine.dispose()
+
+    schedule, quality, prices = asyncio.run(_load())
+    prices, breaks = split_reused_tickers(prices)
+    inputs = Inputs(prices, schedule.firms_from, quality)
+    result = backtest_targets(
+        prices, STRATEGIES[strategy](inputs), cost_bps=cost_bps, start=since.date()
+    )
+    console.print(
+        f"{strategy}, {cost_bps:g} bps/side, point-in-time top-{universe} universe x quarterly "
+        f"screen; {result.days[0]} -> {result.days[-1]}, "
+        f"avg turnover {result.avg_turnover:.0%}/rebalance"
+    )
+    s = result.stats
+    console.print(
+        f"  strategy  CAGR {s.cagr:+7.2%}  vol {s.volatility:6.2%}  "
+        f"Sharpe {s.sharpe or 0:5.2f}  maxDD {s.max_drawdown:7.2%}"
+    )
+    for bench in ("SPY", "SPUS", "HLAL"):
+        b = benchmark_returns(prices, bench, result.days)
+        if b is not None:
+            bs = stats(b)
+            console.print(f"  {bench:8}  CAGR {bs.cagr:+7.2%}  Sharpe {bs.sharpe or 0:5.2f}")
+    console.print(
+        "  by year: " + "  ".join(f"{y} {r:+.1%}" for y, r in sorted(result.yearly.items()))
+    )
+    last = max(result.holdings) if result.holdings else None
+    if last:
+        console.print(
+            f"  {len(result.holdings[last])} held at {last}, largest: "
+            + ", ".join(result.holdings[last][:15])
+        )
+    config: dict[str, Any] = {
+        "strategy": strategy,
+        "rebalance": "monthly",
+        "universe": universe,
+        "cost_bps": cost_bps,
+        "since": str(since.date()),
+        "quality": "gross profit / assets, calendar-year frame, used from May 1 next year",
+    }
+    if strategy == "t4-tilt":
+        config["tilt"] = TILT
+    if strategy == "t5-3factor":
+        config["top"] = TOP_N
+    if strategy != "t3-cap":
+        config["score"] = "z(z(mom 12-1) + z(-vol 63d) + z(quality))"
+    _judge(prices, result, config=config)
+    if breaks:
+        console.print(f"  reused tickers: {len(breaks)} series cut at a 10x one-day move")
+
+
 def _judge(prices: Any, result: Any, *, config: dict[str, Any]) -> None:
     """Record a point-in-time run in the trials ledger and print its verdict."""
     from halal_trader.research.factor_backtest import benchmark_returns
@@ -230,6 +331,10 @@ def _judge(prices: Any, result: Any, *, config: dict[str, Any]) -> None:
         console.print("[yellow]not recorded: degenerate active returns[/yellow]")
         return
     color = "green" if a.verdict == "pass" else "red"
+    console.print(
+        f"  from {days[0]}: strategy CAGR {a.cagr:+.2%} vs {BENCHMARK} {a.benchmark_cagr:+.2%}, "
+        f"tracking error {a.tracking_error:.2%}"
+    )
     console.print(
         f"  [{color}]ledger: {a.verdict.upper()}[/{color}] trial #{a.trial_id}, "
         f"{a.n_trials} distinct research trials; active Sharpe vs {BENCHMARK} "

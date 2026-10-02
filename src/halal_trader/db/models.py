@@ -1032,6 +1032,18 @@ class ForwardBookDay(SQLModel, table=True):
     )
 
 
+class AnnualFundamentals(SQLModel, table=True):
+    """Gross profit and total assets per SEC filer per calendar-year frame: the
+    quality factor's input (data/fundamentals.py)."""
+
+    __tablename__ = "annual_fundamentals"
+
+    cik: int = Field(primary_key=True)
+    year: int = Field(primary_key=True)
+    gross_profit: float | None = None
+    assets: float | None = None
+
+
 class TickerCik(SQLModel, table=True):
     """A ticker SEC's current ticker file does not list, matched to its filer by
     name (compliance/delisted.py). ``status`` says whether it was: mapped,

@@ -133,3 +133,28 @@ def pit_universe_cmd(top: int, since: Any) -> None:
     symbols, rows, members, stored = _with_store(work)
     console.print(f"monthly bars: {rows} rows for {symbols} symbols (listed and delisted)")
     console.print(f"{members} names were ever in the top {top}; daily rows stored: {stored}")
+
+
+@data.command("fundamentals")
+@click.option("--since", default=2014, show_default=True, help="First calendar year.")
+def fundamentals_cmd(since: int) -> None:
+    """Sync annual gross profit and total assets for every SEC filer (the quality input)."""
+
+    async def _run() -> int:
+        from halal_trader.compliance.sec import SecClient
+        from halal_trader.config import get_settings
+        from halal_trader.data.fundamentals import sync_annual, usable_year
+        from halal_trader.db.models import init_db
+        from halal_trader.market_hours import today_eastern
+
+        settings = get_settings()
+        engine = await init_db(settings.database_url)
+        sec = SecClient(settings.edgar.user_agent)
+        try:
+            last = usable_year(today_eastern())
+            return await sync_annual(sec, engine, range(since, last + 1))
+        finally:
+            await sec.aclose()
+            await engine.dispose()
+
+    console.print(f"{asyncio.run(_run())} filer-years stored")

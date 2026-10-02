@@ -56,6 +56,9 @@ class Assessment:
     hurdle_sharpe: float  # annualised expected-max Sharpe of a no-skill search
     dsr: float
     verdict: str  # pass | fail
+    cagr: float
+    benchmark_cagr: float
+    tracking_error: float  # annualised standard deviation of active returns
 
 
 async def _trial_sharpes(engine: AsyncEngine) -> dict[str, float]:
@@ -106,10 +109,14 @@ async def record_backtest(
     growth = float(np.prod(1.0 + np.asarray(returns)))
     bench_growth = float(np.prod(1.0 + np.asarray(benchmark)))
     years = n / _TRADING_DAYS
+    cagr = growth ** (1 / years) - 1
+    bench_cagr = bench_growth ** (1 / years) - 1
+    tracking = float(np.std(active, ddof=1)) * math.sqrt(_TRADING_DAYS)
     metrics = {
         "sessions": n,
-        "cagr": growth ** (1 / years) - 1,
-        "benchmark_cagr": bench_growth ** (1 / years) - 1,
+        "cagr": cagr,
+        "benchmark_cagr": bench_cagr,
+        "tracking_error": tracking,
         "active_sr_period": sr,
         "active_sharpe": sr * math.sqrt(_TRADING_DAYS),
         "skew": skew,
@@ -135,4 +142,7 @@ async def record_backtest(
         hurdle_sharpe=hurdle * math.sqrt(_TRADING_DAYS),
         dsr=dsr,
         verdict=verdict,
+        cagr=cagr,
+        benchmark_cagr=bench_cagr,
+        tracking_error=tracking,
     )

@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import math
 import warnings
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date
 
@@ -131,7 +132,7 @@ def month_ends(days: list[date]) -> list[int]:
     return [i for i in range(len(days)) if i == len(days) - 1 or days[i + 1].month != days[i].month]
 
 
-def _zscore(x: FloatArray) -> FloatArray:
+def zscore(x: FloatArray) -> FloatArray:
     # A spread at float-noise level carries no information; z-scoring it would
     # turn 1e-17 rounding differences into full-strength "signal".
     sd = float(np.nanstd(x))
@@ -139,10 +140,11 @@ def _zscore(x: FloatArray) -> FloatArray:
     return (x - np.nanmean(x)) / sd if sd > 1e-12 * scale else np.zeros_like(x)
 
 
-def scores_at(close: FloatArray, t: int) -> FloatArray:
-    """Composite factor score per symbol at session ``t`` (NaN = not eligible)."""
+def factor_parts(close: FloatArray, t: int) -> tuple[FloatArray, FloatArray, FloatArray]:
+    """(momentum 12-1, annualised 63-session volatility, complete mask) at session ``t``."""
+    n = close.shape[1]
     if t < _MOM_LOOKBACK:
-        return np.full(close.shape[1], np.nan)
+        return np.full(n, np.nan), np.full(n, np.nan), np.zeros(n, dtype=bool)
     p_now = close[t - _MOM_SKIP]
     p_then = close[t - _MOM_LOOKBACK]
     momentum = p_now / p_then - 1.0
@@ -152,10 +154,16 @@ def scores_at(close: FloatArray, t: int) -> FloatArray:
         warnings.simplefilter("ignore", RuntimeWarning)  # all-NaN columns: not eligible anyway
         vol = np.nanstd(daily, axis=0) * math.sqrt(_TRADING_DAYS)
     complete = ~np.isnan(window).any(axis=0) & ~np.isnan(momentum) & ~np.isnan(close[t])
+    return momentum, vol, complete
+
+
+def scores_at(close: FloatArray, t: int) -> FloatArray:
+    """Composite factor score per symbol at session ``t`` (NaN = not eligible)."""
+    momentum, vol, complete = factor_parts(close, t)
     score = np.full(close.shape[1], np.nan)
     if complete.sum() < 2:
         return score
-    score[complete] = _zscore(momentum[complete]) + _zscore(-vol[complete])
+    score[complete] = zscore(momentum[complete]) + zscore(-vol[complete])
     return score
 
 
@@ -182,6 +190,9 @@ def _yearly(days: list[date], returns: FloatArray) -> dict[int, float]:
     return out
 
 
+TargetFn = Callable[[int], FloatArray]
+
+
 def backtest(
     prices: Prices,
     *,
@@ -198,8 +209,45 @@ def backtest(
     first entry). Without it, ``eligible`` applies to every month.
     """
     close = prices.close
-    allowed = np.array([s in eligible for s in prices.symbols])
+    fixed = np.array([s in eligible for s in prices.symbols])
     schedule = sorted(eligible_from.items()) if eligible_from is not None else None
+
+    def target(t: int) -> FloatArray:
+        score = scores_at(close, t)
+        allowed = fixed
+        if schedule is not None:
+            current = [names for d, names in schedule if d <= prices.days[t]]
+            now_allowed = current[-1] if current else set()
+            allowed = np.array([s in now_allowed for s in prices.symbols])
+        score[~allowed] = np.nan
+        return equal_top(score, top_n)
+
+    return backtest_targets(prices, target, cost_bps=cost_bps, start=start)
+
+
+def equal_top(score: FloatArray, top_n: int) -> FloatArray:
+    """Equal weight on the ``top_n`` highest scores (NaN never held)."""
+    ranked = np.argsort(np.where(np.isnan(score), -np.inf, score))[::-1]
+    picks = [i for i in ranked[:top_n] if not np.isnan(score[i])]
+    out = np.zeros(len(score))
+    if picks:
+        out[picks] = 1.0 / len(picks)
+    return out
+
+
+def backtest_targets(
+    prices: Prices,
+    target_at: TargetFn,
+    *,
+    cost_bps: float = 10.0,
+    start: date | None = None,
+) -> BacktestResult:
+    """Hold ``target_at(t)``'s weights from each month-end ``t``, drifting in between.
+
+    Each rebalance pays ``cost_bps`` per side on turnover. Weights must be
+    non-negative and sum to at most 1 (the rest is cash, earning nothing).
+    """
+    close = prices.close
     # Start at the first month-end that can be scored (a year of history):
     # earlier months would sit in cash and dilute every statistic.
     ends = [
@@ -212,35 +260,29 @@ def backtest(
     weights = np.zeros(close.shape[1])  # current (drifting) weights
     turnovers: list[float] = []
     holdings: dict[date, list[str]] = {}
+    rebalances = set(ends)
     first = ends[0] if ends else n_days
     for t in range(first, n_days):
         if t > first:
             prev, now = close[t - 1], close[t]
-            day_ret = np.where(weights > 0, now / prev - 1.0, 0.0)
+            with np.errstate(invalid="ignore", divide="ignore"):
+                day_ret = np.where(weights > 0, now / prev - 1.0, 0.0)
             day_ret = np.nan_to_num(day_ret)  # a missing bar holds its value
             gross = float(weights @ day_ret)
             returns[t] = gross
+            invested = weights.sum()
             weights = weights * (1.0 + day_ret)
-            total = weights.sum()
+            total = weights.sum() + (1.0 - invested)  # cash keeps its value
             if total > 0:
                 weights = weights / total
-        if t in ends:
-            score = scores_at(close, t)
-            if schedule is not None:
-                current = [names for d, names in schedule if d <= prices.days[t]]
-                now_allowed = current[-1] if current else set()
-                allowed = np.array([s in now_allowed for s in prices.symbols])
-            score[~allowed] = np.nan
-            ranked = np.argsort(np.where(np.isnan(score), -np.inf, score))[::-1]
-            picks = [i for i in ranked[:top_n] if not np.isnan(score[i])]
-            target = np.zeros_like(weights)
-            if picks:
-                target[picks] = 1.0 / len(picks)
+        if t in rebalances:
+            target = target_at(t)
             turnover = float(np.abs(target - weights).sum())
             turnovers.append(turnover)
             returns[t] -= turnover * cost_bps / 10_000.0
             weights = target
-            holdings[prices.days[t]] = [prices.symbols[i] for i in picks]
+            order = np.argsort(target)[::-1]
+            holdings[prices.days[t]] = [prices.symbols[i] for i in order if target[i] > 0]
     # From the first rebalance day itself: that day carries the entry cost
     # (and no market return, since the book was empty the day before).
     window = slice(first, n_days)
