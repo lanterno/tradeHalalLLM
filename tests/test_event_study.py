@@ -29,15 +29,16 @@ def test_entry_follows_the_clock() -> None:
     assert entry_point(_utc(28, 21), SESSIONS) == (1, "open")  # 17:00 ET: next open
     assert entry_point(_utc(27, 15), SESSIONS) == (0, "open")  # Sunday: Monday's open
     assert entry_point(_utc(30, 21), SESSIONS) is None
+    assert entry_point(_utc(20, 15), SESSIONS) is None  # before the calendar: no entry
 
 
 def test_outcomes_are_net_abnormal_returns() -> None:
     bars = Bars(
         SESSIONS,
-        open={"X": {SESSIONS[1]: 100.0}, "SPUS": {SESSIONS[1]: 50.0}},
+        open={"X": {SESSIONS[1]: 100.0}, "SPY": {SESSIONS[1]: 50.0}},
         close={
             "X": {SESSIONS[1]: 103.0, SESSIONS[2]: 110.0},
-            "SPUS": {SESSIONS[1]: 50.5, SESSIONS[2]: 51.0},
+            "SPY": {SESSIONS[1]: 50.5, SESSIONS[2]: 51.0},
         },
     )
     # Open entry, 1 session: same day's close. 3% - 1% - 2 x 7 bps.

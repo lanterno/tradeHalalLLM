@@ -9,9 +9,9 @@
 * after 16:00, or on a closed day: the **next** session's open.
 
 **Exit** is the close ``h`` sessions after entry (an open entry on day i
-with h = 1 exits at day i's close). Returns are **abnormal** (minus SPUS
-over the same prices) and **net**: each round trip pays twice the
-one-way cost of its liquidity bucket (half-spread + impact), taken from
+with h = 1 exits at day i's close). Returns are **abnormal** (minus SPY,
+which spans the whole history, over the same prices) and **net**: each
+round trip pays twice the one-way cost of its liquidity bucket (half-spread + impact), taken from
 the symbol's rank in that month's point-in-time universe.
 
 **Summary:** mean net abnormal return per signal decile and horizon,
@@ -36,7 +36,12 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from halal_trader.core.signal_eval import information_coefficient
 
-BENCHMARK = "SPUS"
+# The market an event study measures against, and its calendar. SPY, not
+# SPUS: SPUS starts 2019-12-18, and a calendar taken from its bars once
+# dated every 2016-2019 event to its first session (the harness then
+# "found" -15% for all deciles: the 2020 crash). Strategies are still
+# judged against SPUS in the trials ledger.
+BENCHMARK = "SPY"
 HORIZONS = (1, 5, 20, 60)
 _ET = ZoneInfo("America/New_York")
 _OPEN, _CLOSE = time(9, 30), time(16, 0)
@@ -63,6 +68,10 @@ class Bars:
 def entry_point(published: datetime, sessions: Sequence[date]) -> tuple[int, str] | None:
     """(session index, "open" | "close") of the first price tradable after ``published``."""
     local = published.astimezone(_ET)
+    # Before the calendar starts (beyond a weekend or holiday gap) there is no
+    # price to enter at; the next stored session may be months away.
+    if not sessions or (sessions[0] - local.date()).days > 5:
+        return None
     i = bisect_left(sessions, local.date())
     if i < len(sessions) and sessions[i] == local.date():
         if local.time() < _OPEN:

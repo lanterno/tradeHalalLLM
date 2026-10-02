@@ -188,7 +188,7 @@ def study_cmd(signal: str, start: int, end: int, by: str) -> None:
             await engine.dispose()
 
     result = asyncio.run(_run())
-    console.print(f"{signal} {start}-{end}: net abnormal return vs SPUS by decile (t-stat)")
+    console.print(f"{signal} {start}-{end}: net abnormal return vs SPY by decile (t-stat)")
     groups = sorted({r.group for r in result.rows})
     for group in groups:
         console.print(f"[bold]{group}[/bold] (n={result.n.get(group, 0)})")
