@@ -3,9 +3,11 @@
 Polls a news source and fires an emergency-cycle callback on a
 high-impact headline. Two design points:
 
-1. **Per-symbol polling.** Finnhub's company-news endpoint is keyed
-   on a single ticker, so the reactor polls each watchlist symbol in
-   turn.
+1. **A pluggable news source.** Alpaca's news API (Benzinga) is the
+   default since 2026-10-02 -- one request covers every symbol, and it is
+   the feed event research is backtested on, so the live reactor reads
+   what the backtests read. Finnhub (one request per symbol) is the
+   fallback for the trading watchlist when Alpaca fails.
 
 2. **LLM-scored headlines, not exchange-vote sentiment.** Each new
    headline goes through a :class:`HeadlineClassifier` (default is
@@ -19,19 +21,29 @@ The reactor is event-driven on the entry side per the operator's
 "fast in, slow out" direction (memory: strategy-fast-in-slow-out):
 the slower 15-min cron stays for scheduled scans / risk pruning,
 the reactor wins for time-sensitive moves.
+
+Since 2026-10-02 (docs/EVENT_DRIVEN_ROADMAP.md, Phase 0) the reactor also
+**records** every headline it sees and every score it computes in the
+event store (events/store.py), including an observe-only list of halal
+names it scores but never trades, and it ignores headlines older than
+``max_headline_age_s``, telling the classifier each headline's age.
 """
 
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import time
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Protocol
 
 import httpx
+
+from halal_trader.events.store import EventRecord, EventRecorder, Score
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +52,122 @@ logger = logging.getLogger(__name__)
 # a 10-symbol watchlist).
 _FINNHUB_API_BASE = "https://finnhub.io/api/v1/company-news"
 _HTTP_TIMEOUT_S = 10.0
+_DEFAULT_MAX_HEADLINE_AGE_S = 1800.0
+_OBSERVE_REFRESH_S = 6 * 3600.0
+
+
+def _published_at(item: dict[str, Any]) -> datetime | None:
+    """The item's publication time (UTC): a datetime, or Finnhub's epoch seconds."""
+    raw = item.get("published_at") or item.get("datetime")
+    if isinstance(raw, datetime):
+        return raw.astimezone(UTC)
+    try:
+        return datetime.fromtimestamp(float(raw), UTC) if raw else None
+    except TypeError, ValueError, OverflowError:
+        return None
+
+
+class FinnhubNewsSource:
+    """Finnhub company-news, one request per symbol over the last day."""
+
+    name = "finnhub"
+
+    def __init__(self, api_key: str, *, spacing_s: float = 0.5) -> None:
+        self._api_key = api_key
+        self._spacing = spacing_s
+        self._client: httpx.AsyncClient | None = None
+
+    async def fetch(self, symbols: list[str]) -> list[tuple[str, dict[str, Any]]]:
+        if self._client is None or self._client.is_closed:
+            self._client = httpx.AsyncClient(timeout=_HTTP_TIMEOUT_S)
+        today = datetime.now(UTC).date()
+        out: list[tuple[str, dict[str, Any]]] = []
+        for symbol in symbols:
+            try:
+                # Key in a header: a ?token= query param leaks via httpx error URLs.
+                resp = await self._client.get(
+                    _FINNHUB_API_BASE,
+                    params={
+                        "symbol": symbol,
+                        "from": (today - timedelta(days=1)).isoformat(),
+                        "to": today.isoformat(),
+                    },
+                    headers={"X-Finnhub-Token": self._api_key},
+                )
+                resp.raise_for_status()
+                data = resp.json()
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("Finnhub news fetch failed for %s: %s", symbol, exc)
+                data = []
+            for item in data if isinstance(data, list) else []:
+                out.append((symbol, {**item, "feed": "finnhub"}))
+            # Polite spacing: the free tier allows 60 requests a minute.
+            if self._spacing > 0:
+                await asyncio.sleep(self._spacing)
+        return out
+
+    async def aclose(self) -> None:
+        if self._client is not None and not self._client.is_closed:
+            await self._client.aclose()
+
+
+class AlpacaNewsSource:
+    """Alpaca's news API (Benzinga): every symbol in one or a few requests."""
+
+    name = "alpaca"
+
+    def __init__(self, market: Any, *, lookback_s: float = 2 * 3600.0) -> None:
+        self._market = market  # data.alpaca_market.AlpacaMarketData
+        self._lookback = timedelta(seconds=lookback_s)
+
+    async def fetch(self, symbols: list[str]) -> list[tuple[str, dict[str, Any]]]:
+        wanted = {s.upper() for s in symbols}
+        articles = await self._market.news(
+            sorted(wanted), start=datetime.now(UTC) - self._lookback, max_pages=5
+        )
+        out: list[tuple[str, dict[str, Any]]] = []
+        for a in articles:
+            item = {
+                "id": f"alpaca:{a.id}",
+                "headline": a.headline,
+                "summary": a.summary,
+                "url": a.url or f"alpaca:{a.id}",
+                "source": a.source,
+                "published_at": a.created_at,
+                "feed": "alpaca",
+                "symbols": list(a.symbols),
+            }
+            out.extend((sym, item) for sym in a.symbols if sym in wanted)
+        return out
+
+    async def aclose(self) -> None:
+        await self._market.aclose()
+
+
+class FallbackNewsSource:
+    """The primary source; on failure, the fallback for the trading symbols only."""
+
+    def __init__(self, primary: NewsSource, fallback: NewsSource, fallback_symbols: list[str]):
+        self.name = primary.name
+        self._primary = primary
+        self._fallback = fallback
+        self._fallback_symbols = [s.upper() for s in fallback_symbols]
+
+    async def fetch(self, symbols: list[str]) -> list[tuple[str, dict[str, Any]]]:
+        try:
+            return await self._primary.fetch(symbols)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "%s news failed (%s); falling back for %d trading symbols",
+                self._primary.name,
+                exc,
+                len(self._fallback_symbols),
+            )
+            return await self._fallback.fetch(self._fallback_symbols)
+
+    async def aclose(self) -> None:
+        await self._primary.aclose()
+        await self._fallback.aclose()
 
 
 @dataclass(frozen=True)
@@ -58,6 +186,9 @@ class HeadlineClassification:
     score: float
     tag: str = "other"
     rationale: str = ""
+    # False when no judgement was made (budget cap, breaker, failure): the
+    # 0.0 score then means "not scored", and is never recorded as a score.
+    scored: bool = True
 
 
 class HeadlineClassifier(Protocol):
@@ -65,8 +196,25 @@ class HeadlineClassifier(Protocol):
     GLM-5.2; tests stub with deterministic returns."""
 
     async def classify(
-        self, *, symbol: str, headline: str, summary: str = ""
+        self,
+        *,
+        symbol: str,
+        headline: str,
+        summary: str = "",
+        published_at: datetime | None = None,
     ) -> HeadlineClassification: ...
+
+
+class NewsSource(Protocol):
+    """Where the reactor's headlines come from. Items are Finnhub-shaped
+    dicts (headline, summary, url, source, datetime epoch, id) keyed by the
+    symbol they are about."""
+
+    name: str
+
+    async def fetch(self, symbols: list[str]) -> list[tuple[str, dict[str, Any]]]: ...
+
+    async def aclose(self) -> None: ...
 
 
 @dataclass
@@ -140,8 +288,27 @@ class StockNewsEventReactor:
         per_symbol_notify_cooldown_s: int = _DEFAULT_NOTIFY_COOLDOWN_S,
         state_path: Path | str | None = None,
         halt_check: Callable[[], Awaitable[bool]] | None = None,
+        source: NewsSource | None = None,
+        recorder: EventRecorder | None = None,
+        observe_provider: Callable[[], Awaitable[list[str]]] | None = None,
+        max_headline_age_s: float = _DEFAULT_MAX_HEADLINE_AGE_S,
+        observe_daily_classify_cap: int = 600,
     ) -> None:
         self._api_key = api_key
+        # Default: Finnhub per symbol, as before 2026-10-02 (tests, ad-hoc runs).
+        self._source: NewsSource | None = source or (
+            FinnhubNewsSource(api_key, spacing_s=per_symbol_request_spacing_s) if api_key else None
+        )
+        self._recorder = recorder
+        self._pending: list[EventRecord] = []
+        # Observe-only symbols: scored and recorded, never dispatched.
+        self._observe_provider = observe_provider
+        self._observe: set[str] = set()
+        self._observe_loaded_at = 0.0
+        self._observe_cap = observe_daily_classify_cap
+        self._observe_day = ""
+        self._observe_count = 0
+        self._max_age = timedelta(seconds=max_headline_age_s) if max_headline_age_s > 0 else None
         # Optional kill-switch probe. When engaged, the entry path is already
         # blocked downstream — but classification runs BEFORE that gate, so an
         # ungated reactor burns LLM calls + Finnhub quota scoring catalysts it
@@ -154,7 +321,6 @@ class StockNewsEventReactor:
         self._classifier = classifier
         self._poll_interval = poll_interval_seconds
         self._score_threshold = score_threshold
-        self._spacing = per_symbol_request_spacing_s
         self._notify_cooldown_s = per_symbol_notify_cooldown_s
         # Insertion-ordered dedup (dict preserves order) so eviction is FIFO —
         # drop the OLDEST seen headlines, not arbitrary ones (a set evicts
@@ -169,7 +335,6 @@ class StockNewsEventReactor:
         self._last_notify: dict[str, float] = {}
         self._callbacks: list[EventCallback] = []
         self._running = False
-        self._client: httpx.AsyncClient | None = None
         # Optional cross-restart persistence. None disables it (tests,
         # ad-hoc runs); the scheduler points it at data/reactor_state.json.
         self._state_path = Path(state_path) if state_path else None
@@ -179,7 +344,7 @@ class StockNewsEventReactor:
 
     @property
     def enabled(self) -> bool:
-        return bool(self._api_key) and bool(self._symbols)
+        return self._source is not None and bool(self._symbols)
 
     @property
     def classifier(self) -> HeadlineClassifier:
@@ -195,7 +360,7 @@ class StockNewsEventReactor:
     async def run(self) -> None:
         """Supervisor entry point — runs the poll loop until cancelled."""
         if not self.enabled:
-            logger.info("StockNewsEventReactor disabled — no Finnhub key or empty watchlist")
+            logger.info("StockNewsEventReactor disabled — no news source or empty watchlist")
             return
         self._load_state()
         self._running = True
@@ -213,9 +378,8 @@ class StockNewsEventReactor:
         finally:
             self._running = False
             self._save_state()
-            if self._client is not None and not self._client.is_closed:
-                await self._client.aclose()
-                self._client = None
+            if self._source is not None:
+                await self._source.aclose()
 
     def _load_state(self) -> None:
         """Restore ``_seen`` + ``_last_notify`` from disk so a restart
@@ -339,46 +503,38 @@ class StockNewsEventReactor:
 
             await asyncio.sleep(self._poll_interval)
 
+    async def _refresh_observe(self) -> None:
+        if self._observe_provider is None:
+            return
+        if time.monotonic() - self._observe_loaded_at < _OBSERVE_REFRESH_S and self._observe:
+            return
+        try:
+            names = await self._observe_provider()
+        except Exception as exc:  # noqa: BLE001 -- keep the last list
+            logger.debug("observe list unavailable: %s", exc)
+            return
+        self._observe = {n.upper() for n in names} - set(self._symbols)
+        self._observe_loaded_at = time.monotonic()
+        logger.info("Reactor observe-only list: %d symbols", len(self._observe))
+
     async def _scan_all_symbols(self) -> list[StockNewsEvent]:
-        """Sweep every watchlist symbol, classify, return high-score events."""
-        if self._client is None or self._client.is_closed:
-            self._client = httpx.AsyncClient(timeout=_HTTP_TIMEOUT_S)
-
+        """Fetch every watched symbol's news, classify, record, return dispatchable events."""
+        assert self._source is not None  # run() exits when disabled
+        await self._refresh_observe()
+        try:
+            items = await self._source.fetch([*self._symbols, *sorted(self._observe)])
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("news fetch failed (%s): %s", self._source.name, exc)
+            items = []
         out: list[StockNewsEvent] = []
-        for sym in self._symbols:
-            try:
-                items = await self._fetch_for_symbol(sym)
-            except Exception as exc:  # noqa: BLE001
-                logger.debug("Finnhub news fetch failed for %s: %s", sym, exc)
-                items = []
-            for item in items:
-                event = await self._maybe_emit(sym, item)
-                if event is not None:
-                    out.append(event)
-            # Polite spacing between per-symbol requests to stay
-            # well under the 60 req/min free-tier ceiling.
-            if self._spacing > 0:
-                await asyncio.sleep(self._spacing)
+        for sym, item in items:
+            event = await self._maybe_emit(sym, item)
+            if event is not None:
+                out.append(event)
+        if self._recorder is not None and self._pending:
+            pending, self._pending = self._pending, []
+            await self._recorder.record(pending)
         return out
-
-    async def _fetch_for_symbol(self, symbol: str) -> list[dict[str, Any]]:
-        """Hit Finnhub's company-news endpoint for the last 24h."""
-        from datetime import UTC, datetime, timedelta
-
-        assert self._client is not None  # set by _scan_all_symbols
-        today = datetime.now(UTC).date()
-        params = {
-            "symbol": symbol,
-            "from": (today - timedelta(days=1)).isoformat(),
-            "to": today.isoformat(),
-        }
-        # Key in a header: a ?token= query param leaks via httpx error URLs.
-        resp = await self._client.get(
-            _FINNHUB_API_BASE, params=params, headers={"X-Finnhub-Token": self._api_key}
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        return data if isinstance(data, list) else []
 
     async def _maybe_emit(self, symbol: str, item: dict[str, Any]) -> StockNewsEvent | None:
         """Dedup + classify + threshold-filter a single headline.
@@ -403,11 +559,62 @@ class StockNewsEventReactor:
         if not title:
             return None
         summary = str(item.get("summary") or "")[:500]
+        published = _published_at(item)
+        now = datetime.now(UTC)
+        record = EventRecord(
+            source=str(item.get("feed") or getattr(self._source, "name", "finnhub")),
+            source_id=str(item.get("id") or url),
+            kind="news",
+            symbol=symbol,
+            published_at=published or now,
+            seen_at=now,
+            payload={
+                "headline": title,
+                "summary": summary,
+                "url": url,
+                "publisher": str(item.get("source") or ""),
+                "observe_only": symbol not in self._symbols,
+                "timestamp_known": published is not None,
+            },
+        )
+        # A headline older than the bound is recorded but never scored or
+        # traded: the window reaches back a day, and a stale catalyst is
+        # already in the price (assessment sentiment.md #3). An unknown
+        # publication time is treated as fresh; both feeds always send one.
+        if self._max_age is not None and published is not None and now - published > self._max_age:
+            self._pending.append(record)
+            return None
+        if symbol not in self._symbols:
+            # Observe-only headlines have their own daily allowance so they can
+            # never use up the shared classify cap the trading list depends on.
+            day = now.strftime("%Y-%m-%d")
+            if day != self._observe_day:
+                self._observe_day, self._observe_count = day, 0
+            if self._observe_count >= self._observe_cap:
+                self._pending.append(record)
+                return None
+            self._observe_count += 1
         try:
-            cls = await self._classifier.classify(symbol=symbol, headline=title, summary=summary)
+            cls = await self._classifier.classify(
+                symbol=symbol, headline=title, summary=summary, published_at=published
+            )
         except Exception as exc:  # noqa: BLE001
             logger.warning("classifier failed for %s '%s': %s", symbol, title[:60], exc)
+            self._pending.append(record)
             return None
+        scorer = str(getattr(self._classifier, "scorer_id", type(self._classifier).__name__))
+        self._pending.append(
+            EventRecord(
+                **{
+                    **{f: getattr(record, f) for f in record.__dataclass_fields__},
+                    "score": Score(scorer, cls.score, cls.tag, cls.rationale)
+                    if cls.scored
+                    else None,
+                }
+            )
+        )
+        if symbol not in self._symbols:
+            return None  # observe-only: measured, never traded
 
         if cls.score < self._score_threshold:
             logger.debug(
@@ -423,7 +630,7 @@ class StockNewsEventReactor:
             title=title,
             source=str(item.get("source") or "Finnhub"),
             url=url,
-            published_at=str(item.get("datetime") or ""),
+            published_at=published.isoformat() if published else "",
             classification=cls,
         )
 
@@ -597,20 +804,36 @@ class GPTHeadlineClassifier:
         except Exception as exc:  # noqa: BLE001
             logger.debug("AlertSink notify failed: %s", exc)
 
+    @property
+    def scorer_id(self) -> str:
+        """Names this scorer in the event store: the model and the prompt's hash.
+        A changed prompt is a different scorer, never mixed with the old one."""
+        model = str(getattr(self._llm, "model", "") or "glm")
+        digest = hashlib.sha1(self._SYSTEM_PROMPT.encode()).hexdigest()[:8]
+        return f"llm:{model}:{digest}"
+
     async def classify(
-        self, *, symbol: str, headline: str, summary: str = ""
+        self,
+        *,
+        symbol: str,
+        headline: str,
+        summary: str = "",
+        published_at: datetime | None = None,
     ) -> HeadlineClassification:
         # Guard 1: session-level quota breaker. Short-circuit (no API call)
         # unless the half-open window has elapsed — then fall through to probe.
         if self._quota_exhausted and not self._quota_recovery_due():
             self._total_short_circuits += 1
-            return HeadlineClassification(score=0.0)
+            return HeadlineClassification(score=0.0, scored=False)
         # Guard 2: daily ceiling. No API call.
         if self._daily_cap_reached():
             self._total_short_circuits += 1
-            return HeadlineClassification(score=0.0)
+            return HeadlineClassification(score=0.0, scored=False)
 
         prompt = f"Symbol: {symbol}\nHeadline: {headline}"
+        if published_at is not None:
+            age_min = max(0.0, (datetime.now(UTC) - published_at).total_seconds() / 60)
+            prompt += f"\nPublished: {published_at:%Y-%m-%d %H:%M} UTC ({age_min:.0f} minutes ago)"
         if summary:
             prompt += f"\nSummary: {summary[:500]}"
         # Count the attempt BEFORE the call so a hanging provider can't
@@ -626,7 +849,7 @@ class GPTHeadlineClassifier:
                 await self._trip_quota_breaker(symbol=symbol, headline=headline)
             else:
                 logger.debug("LLM classify failed for %s: %s", symbol, exc)
-            return HeadlineClassification(score=0.0)
+            return HeadlineClassification(score=0.0, scored=False)
         # Success path: roll up per-provider usage from the LLM's
         # ``last_usage`` if the provider populated it (every BaseLLM
         # subclass calls _record_usage on success, so this is reliable

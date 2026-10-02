@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable
+from datetime import datetime
 from typing import Any
 
 from halal_trader.sentiment.stocks_events import HeadlineClassification
@@ -72,19 +73,26 @@ class FinBERTHeadlineClassifier:
             self._load_failed = True
             logger.warning("FinBERT unavailable (%s) — headline classifier returns neutral", exc)
 
+    scorer_id = "finbert"
+
     async def classify(
-        self, *, symbol: str, headline: str, summary: str = ""
+        self,
+        *,
+        symbol: str,
+        headline: str,
+        summary: str = "",
+        published_at: datetime | None = None,
     ) -> HeadlineClassification:
         self._ensure_pipeline()
         if self._pipeline is None:
-            return HeadlineClassification(score=0.0, rationale="finbert unavailable")
+            return HeadlineClassification(score=0.0, rationale="finbert unavailable", scored=False)
         text = headline if not summary else f"{headline}. {summary}"
         try:
             # transformers pipelines are blocking → run off the event loop.
             result = await asyncio.to_thread(self._pipeline, text[:_MAX_CHARS])
         except Exception as exc:  # noqa: BLE001 — inference failure → no fire
             logger.debug("FinBERT classify failed for %s: %s", symbol, exc)
-            return HeadlineClassification(score=0.0)
+            return HeadlineClassification(score=0.0, scored=False)
         label, conf = _parse(result)
         # Bullish momentum-impact only: positive → confidence, else 0.
         score = round(conf, 4) if label == "positive" else 0.0

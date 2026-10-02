@@ -1,4 +1,4 @@
-"""Alpaca market-data client for research: daily bars and the asset list.
+"""Alpaca market-data client: daily and monthly bars, the asset list, and news.
 
 The free data plan serves *historical* consolidated (SIP) bars back to 2016
 -- only the most recent 15 minutes are off limits -- so research can use the
@@ -83,6 +83,29 @@ def parse_asset(raw: dict[str, Any]) -> Asset:
     )
 
 
+@dataclass(frozen=True, slots=True)
+class NewsArticle:
+    id: int
+    headline: str
+    summary: str
+    url: str
+    source: str
+    symbols: tuple[str, ...]
+    created_at: datetime  # UTC
+
+
+def parse_news(raw: dict[str, Any]) -> NewsArticle:
+    return NewsArticle(
+        id=int(raw["id"]),
+        headline=str(raw.get("headline") or ""),
+        summary=str(raw.get("summary") or ""),
+        url=str(raw.get("url") or ""),
+        source=str(raw.get("source") or "benzinga"),
+        symbols=tuple(str(s).upper() for s in raw.get("symbols") or []),
+        created_at=datetime.fromisoformat(str(raw["created_at"]).replace("Z", "+00:00")),
+    )
+
+
 class AlpacaMarketData:
     def __init__(
         self,
@@ -120,6 +143,41 @@ class AlpacaMarketData:
             response.raise_for_status()
             return response.json()
         raise RuntimeError(f"market data request still rate-limited after {_MAX_RETRIES} tries")
+
+    async def news(
+        self,
+        symbols: Iterable[str],
+        *,
+        start: datetime,
+        end: datetime | None = None,
+        max_pages: int = 20,
+    ) -> list[NewsArticle]:
+        """Benzinga articles naming any of ``symbols`` published in [start, end], newest first.
+
+        Up to ``_SYMBOLS_PER_REQUEST`` symbols per request; an article naming
+        several of them is returned once.
+        """
+        wanted = sorted({s.upper() for s in symbols})
+        out: dict[int, NewsArticle] = {}
+        for i in range(0, len(wanted), _SYMBOLS_PER_REQUEST):
+            params: dict[str, Any] = {
+                "symbols": ",".join(wanted[i : i + _SYMBOLS_PER_REQUEST]),
+                "start": start.astimezone(UTC).isoformat().replace("+00:00", "Z"),
+                "limit": 50,
+                "sort": "desc",
+            }
+            if end is not None:
+                params["end"] = end.astimezone(UTC).isoformat().replace("+00:00", "Z")
+            for _ in range(max_pages):
+                payload = await self._get(f"{DATA_URL}/v1beta1/news", params)
+                for raw in payload.get("news") or []:
+                    article = parse_news(raw)
+                    out[article.id] = article
+                token = payload.get("next_page_token")
+                if not token:
+                    break
+                params["page_token"] = token
+        return sorted(out.values(), key=lambda a: a.created_at, reverse=True)
 
     async def assets(self) -> list[Asset]:
         """Every active US equity Alpaca lists (stocks and ETFs)."""

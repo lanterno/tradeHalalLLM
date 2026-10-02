@@ -1044,6 +1044,57 @@ class AnnualFundamentals(SQLModel, table=True):
     assets: float | None = None
 
 
+class Event(SQLModel, table=True):
+    """One market event (a news article, a filing) about one symbol: the event
+    store's append-only row (events/store.py). ``published_at`` is the source's
+    timestamp; ``seen_at`` is when this system first stored it."""
+
+    __tablename__ = "events"
+    __table_args__ = (
+        sa.UniqueConstraint("source", "source_id", "symbol", name="uq_events_source_item"),
+    )
+
+    id: int | None = Field(default=None, sa_column=sa.Column(sa.BigInteger(), primary_key=True))
+    source: str
+    source_id: str
+    kind: str
+    symbol: str
+    published_at: datetime = Field(sa_type=sa.DateTime(timezone=True))
+    seen_at: datetime = Field(sa_type=sa.DateTime(timezone=True))
+    payload: dict | None = Field(default=None, sa_column=sa.Column("payload", JSONB, nullable=True))
+
+
+class EventScore(SQLModel, table=True):
+    """One scorer's judgement of one event; a new prompt or model is a new scorer."""
+
+    __tablename__ = "event_scores"
+    __table_args__ = (
+        sa.UniqueConstraint("event_id", "scorer", name="uq_event_scores_event_scorer"),
+    )
+
+    id: int | None = Field(default=None, sa_column=sa.Column(sa.BigInteger(), primary_key=True))
+    event_id: int = Field(sa_column=sa.Column(sa.BigInteger(), sa.ForeignKey("events.id")))
+    scorer: str
+    score: float
+    tag: str | None = None
+    rationale: str | None = None
+    scored_at: datetime = Field(sa_type=sa.DateTime(timezone=True))
+
+
+class EventLabel(SQLModel, table=True):
+    """An event's realised return over ``horizon`` sessions, raw and versus SPUS."""
+
+    __tablename__ = "event_labels"
+
+    event_id: int = Field(
+        sa_column=sa.Column(sa.BigInteger(), sa.ForeignKey("events.id"), primary_key=True)
+    )
+    horizon: int = Field(primary_key=True)
+    ret: float
+    abn_ret: float
+    labeled_at: datetime = Field(sa_type=sa.DateTime(timezone=True))
+
+
 class EtfHolding(SQLModel, table=True):
     """One equity holding of a halal index ETF from an N-PORT filing, dated by
     the filing (when it became public), not only by the period it reports."""

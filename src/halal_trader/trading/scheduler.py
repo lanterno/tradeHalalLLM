@@ -324,8 +324,15 @@ class TradingBot(BaseTradingBot):
         # monitor then manages the slow-out exit.
         finnhub_cfg = getattr(self.settings, "finnhub", None)
         finnhub_key = getattr(finnhub_cfg, "api_key", "") if finnhub_cfg else ""
-        if finnhub_key:
+        stocks_cfg = self.settings.stocks
+        use_alpaca = stocks_cfg.reactor_news_source == "alpaca" and bool(
+            self.settings.alpaca.api_key and self.settings.alpaca.secret_key
+        )
+        if finnhub_key or use_alpaca:
             from halal_trader.sentiment.stocks_events import (
+                AlpacaNewsSource,
+                FallbackNewsSource,
+                FinnhubNewsSource,
                 GPTHeadlineClassifier,
                 StockNewsEventReactor,
             )
@@ -369,14 +376,50 @@ class TradingBot(BaseTradingBot):
                 # blocked downstream regardless).
                 from halal_trader.core.halt import is_halted
 
+                # News feed: Alpaca (the feed event research is backtested on),
+                # Finnhub for the trading watchlist if Alpaca fails.
+                source: Any
+                if use_alpaca:
+                    from halal_trader.data.alpaca_market import AlpacaMarketData
+
+                    source = AlpacaNewsSource(
+                        AlpacaMarketData(
+                            self.settings.alpaca.api_key, self.settings.alpaca.secret_key
+                        )
+                    )
+                    if finnhub_key:
+                        source = FallbackNewsSource(
+                            source, FinnhubNewsSource(finnhub_key), watchlist
+                        )
+                else:
+                    source = FinnhubNewsSource(finnhub_key)
+                recorder = None
+                observe = None
+                if self._engine is not None:
+                    from halal_trader.events.store import EventRecorder
+
+                    recorder = EventRecorder(self._engine)
+                    if stocks_cfg.reactor_observe_size > 0:
+                        observe = self._observe_symbols
                 self._news_reactor = StockNewsEventReactor(
                     api_key=finnhub_key,
                     symbols=watchlist,
                     classifier=classifier,
                     state_path=self.settings.resolve_data_dir() / "reactor_state.json",
                     halt_check=lambda: is_halted(self._engine),
+                    source=source,
+                    recorder=recorder,
+                    observe_provider=observe,
+                    max_headline_age_s=stocks_cfg.reactor_max_headline_age_s,
+                    observe_daily_classify_cap=stocks_cfg.reactor_observe_daily_classify_cap,
                 )
                 self._news_reactor.on_event(self._on_news_event)
+                logger.info(
+                    "StockNewsEventReactor wired (source=%s, observe=%d, max_age=%.0fs)",
+                    source.name,
+                    stocks_cfg.reactor_observe_size if observe else 0,
+                    stocks_cfg.reactor_max_headline_age_s,
+                )
                 logger.info(
                     "StockNewsEventReactor wired (%d symbols, threshold=%.2f, "
                     "daily_classify_cap=%d, entries=%s, size=%.0f%% of cap, "
@@ -566,6 +609,24 @@ class TradingBot(BaseTradingBot):
         await self._release_trading_lock()
         await super().shutdown()
         logger.info("Trading bot shut down")
+
+    async def _observe_symbols(self) -> list[str]:
+        """The largest halal names of the newest in-house screen: the reactor
+        scores and records their news for research, and never trades them."""
+        from sqlalchemy import text
+
+        if self._engine is None:
+            return []
+        async with self._engine.connect() as conn:
+            rows = await conn.execute(
+                text(
+                    "SELECT symbol FROM halal_screen_results WHERE verdict = 'halal' "
+                    "AND as_of = (SELECT max(as_of) FROM halal_screen_results) "
+                    "ORDER BY (metrics->>'market_cap')::float DESC NULLS LAST LIMIT :n"
+                ),
+                {"n": self.settings.stocks.reactor_observe_size},
+            )
+            return [r.symbol for r in rows]
 
     async def _on_news_event(self, event: Any) -> None:
         """Reactor callback — the "fast in" half of the strategy.
@@ -887,9 +948,19 @@ class TradingBot(BaseTradingBot):
         await beat(
             self._engine,
             RESEARCH,
-            {"books": run.books, "screened": run.screened, "errors": len(run.errors)},
+            {
+                "books": run.books,
+                "screened": run.screened,
+                "event_labels": run.event_labels,
+                "errors": len(run.errors),
+            },
         )
-        logger.info("research run: books %s, screened %s", run.books, run.screened)
+        logger.info(
+            "research run: books %s, screened %s, event labels %s",
+            run.books,
+            run.screened,
+            run.event_labels,
+        )
 
     async def end_of_day(self) -> None:
         """End-of-day job: close all positions, record P&L."""

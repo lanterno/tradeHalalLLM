@@ -31,7 +31,7 @@ class _FakeClassifier:
         self.calls: list[tuple[str, str]] = []
 
     async def classify(
-        self, *, symbol: str, headline: str, summary: str = ""
+        self, *, symbol: str, headline: str, summary: str = "", published_at=None
     ) -> HeadlineClassification:
         self.calls.append((symbol, headline))
         for needle, score in self._scores.items():
@@ -224,7 +224,7 @@ async def test_notify_cooldown_per_symbol_not_global():
     """The cooldown is per-symbol — a NVDA event shouldn't block an
     MSFT event in the same minute."""
     classifier = _FakeClassifier({"good": 0.95})
-    r = _reactor(classifier, notify_cooldown_s=900)
+    r = _reactor(classifier, symbols=("NVDA", "MSFT"), notify_cooldown_s=900)
 
     cb = AsyncMock()
     r.on_event(cb)
@@ -306,7 +306,7 @@ async def test_emit_classifier_exception_returns_none():
     """A misbehaving classifier shouldn't crash the reactor."""
 
     class _BoomClassifier:
-        async def classify(self, *, symbol, headline, summary=""):
+        async def classify(self, *, symbol, headline, summary="", published_at=None):
             raise RuntimeError("boom")
 
     r = _reactor(_BoomClassifier())

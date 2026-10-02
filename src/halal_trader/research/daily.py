@@ -30,6 +30,7 @@ class ResearchRun:
     monthly_rows: int | None = None  # None: monthly bars current, or never synced
     screened: int | None = None  # None: the screen was fresh enough to skip
     books: dict[str, int] = field(default_factory=dict)  # name -> sessions appended
+    event_labels: int | None = None  # labels written for matured events
     errors: list[str] = field(default_factory=list)
 
 
@@ -117,6 +118,14 @@ async def run_research(engine: AsyncEngine, settings: Settings, *, today: date) 
             run.errors.append(f"screen: {exc!r}"[:300])
         finally:
             await sec.aclose()
+
+    try:
+        from halal_trader.events.labels import label_events
+
+        run.event_labels = await label_events(engine)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("research: event labels failed: %r", exc)
+        run.errors.append(f"event labels: {exc!r}"[:300])
 
     for name in await book_names(engine):
         try:

@@ -227,6 +227,20 @@ class StockSettings(BaseSettings):
     # or "finbert" (local ProsusAI/finbert — free, no API dependency, resilient
     # to LLM outages, but sentiment-only vs the LLM's event-typed scoring).
     headline_classifier: str = Field(default="llm")
+    # Where the reactor's news comes from: "alpaca" (Benzinga, the feed event
+    # research is backtested on; one request for every symbol) or "finnhub"
+    # (one request per symbol). With "alpaca", Finnhub (if keyed) is the
+    # fallback for the trading watchlist when Alpaca fails.
+    reactor_news_source: str = Field(default="alpaca", pattern="^(alpaca|finnhub)$")
+    # Headlines older than this are recorded but never scored or traded: the
+    # fetch window reaches back hours, and a stale catalyst is in the price.
+    reactor_max_headline_age_s: float = Field(default=1800.0, ge=0)
+    # Observe-only list (docs/EVENT_DRIVEN_ROADMAP.md, Phase 0): the largest
+    # halal names of the in-house screen, scored and recorded for research,
+    # never traded. 0 disables. Its own daily classify allowance keeps it from
+    # starving the trading watchlist of the shared daily cap.
+    reactor_observe_size: int = Field(default=300, ge=0)
+    reactor_observe_daily_classify_cap: int = Field(default=600, ge=0)
 
     # News-momentum reactor: entry execution (Phase 2B / "fast in").
     # When enabled, a high-confidence scored catalyst places a real

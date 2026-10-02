@@ -15,6 +15,7 @@ from halal_trader.cli import compliance as compliance_cmd
 from halal_trader.cli import dashboard as dashboard_cmd
 from halal_trader.cli import data as data_cmd
 from halal_trader.cli import db as db_cmd
+from halal_trader.cli import events as events_cmd
 from halal_trader.cli import halal as halal_cmd
 from halal_trader.cli import halt as halt_cmd
 from halal_trader.cli import insights as insights_cmd
@@ -62,6 +63,9 @@ cli.add_command(compliance_cmd.compliance)
 
 # ── Strategy research (backtests) ──────────────────────────────
 cli.add_command(research_cmd.research)
+
+# ── Event store (S2: news and filings, scored and labelled) ──────
+cli.add_command(events_cmd.events)
 
 # ── Research market data ───────────────────────────────────────
 cli.add_command(data_cmd.data)
