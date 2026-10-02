@@ -123,3 +123,38 @@ def extract_cmd() -> None:
             await engine.dispose()
 
     console.print(f"{asyncio.run(_run())} earnings fact(s) extracted")
+
+
+@events.command("quality")
+def quality_cmd() -> None:
+    """Coverage by year and source, earnings-timestamp agreement, duplicate rate."""
+
+    async def _run() -> tuple[list[Any], Any, float | None]:
+        from halal_trader.config import get_settings
+        from halal_trader.db.models import init_db
+        from halal_trader.events.quality import coverage, duplicate_share, timing
+
+        engine = await init_db(get_settings().database_url)
+        try:
+            return await coverage(engine), await timing(engine), await duplicate_share(engine)
+        finally:
+            await engine.dispose()
+
+    rows, t, dup = asyncio.run(_run())
+    console.print("year  source      kind           events  companies / universe")
+    for c in rows:
+        share = f"{c.companies / c.universe:.0%}" if c.universe else "  -"
+        console.print(
+            f"{c.year}  {c.source:10}  {c.kind:13} {c.events:8}  {c.companies:5} / "
+            f"{c.universe:<5} {share}"
+        )
+    if t.pairs:
+        console.print(
+            f"earnings timing: {t.pairs} releases seen as both headline and 8-K 2.02; "
+            f"median headline - 8-K {t.median_minutes:+.0f} min, "
+            f"{t.within_hour:.0%} within an hour, headline first in {t.headline_first:.0%}"
+        )
+    else:
+        console.print("earnings timing: no pairs yet (run `events extract`)")
+    if dup is not None:
+        console.print(f"duplicate headlines (same symbol, day, text): {dup:.1%}")
