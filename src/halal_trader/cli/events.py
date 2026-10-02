@@ -158,3 +158,46 @@ def quality_cmd() -> None:
         console.print("earnings timing: no pairs yet (run `events extract`)")
     if dup is not None:
         console.print(f"duplicate headlines (same symbol, day, text): {dup:.1%}")
+
+
+@events.command("study")
+@click.argument("signal", type=click.Choice(["sue"]))
+@click.option("--start", type=int, default=2016, show_default=True, help="First year.")
+@click.option("--end", type=int, default=2019, show_default=True, help="Last year.")
+@click.option("--by", type=click.Choice(["all", "bucket", "year"]), default="bucket")
+def study_cmd(signal: str, start: int, end: int, by: str) -> None:
+    """Event study of a free signal: net abnormal return by signal decile and horizon."""
+
+    async def _run() -> Any:
+        from halal_trader.config import get_settings
+        from halal_trader.db.models import init_db
+        from halal_trader.events.history import covered_companies
+        from halal_trader.events.study import Observation, evaluate, summarise
+        from halal_trader.events.sue import sue_observations
+
+        engine = await init_db(get_settings().database_url)
+        try:
+            raw = await sue_observations(engine, await covered_companies(engine))
+            obs = [
+                Observation(o.symbol, o.announced_at, o.sue)
+                for o in raw
+                if start <= o.announced_at.year <= end
+            ]
+            return summarise(await evaluate(engine, obs), by=None if by == "all" else by)
+        finally:
+            await engine.dispose()
+
+    result = asyncio.run(_run())
+    console.print(f"{signal} {start}-{end}: net abnormal return vs SPUS by decile (t-stat)")
+    groups = sorted({r.group for r in result.rows})
+    for group in groups:
+        console.print(f"[bold]{group}[/bold] (n={result.n.get(group, 0)})")
+        for h in sorted({r.horizon for r in result.rows if r.group == group}):
+            cells = [r for r in result.rows if r.group == group and r.horizon == h]
+            line = "  ".join(f"D{r.decile} {r.mean:+.2%}({r.t:+.1f})" for r in cells)
+            top = next((r for r in cells if r.decile == 10), None)
+            bot = next((r for r in cells if r.decile == 1), None)
+            spread = f"{top.mean - bot.mean:+.2%}" if top and bot else "n/a"
+            console.print(
+                f"  {h:>2}d IC {result.ic.get((group, h), 0):+.3f}  D10-D1 {spread}  | {line}"
+            )
