@@ -164,6 +164,20 @@ def factor_backtest_cmd(top: int, cost_bps: float, since: Any, pit: bool, univer
             + ", ".join(f"{s} {d}" for s, d in breaks)
         )
     if schedule is not None:
+        _judge(
+            prices,
+            result,
+            config={
+                "strategy": "s1",
+                "score": "z(mom 12-1) + z(-vol 63d)",
+                "rebalance": "monthly",
+                "weighting": "equal",
+                "top": top,
+                "universe": universe,
+                "cost_bps": cost_bps,
+                "since": str(since.date()),
+            },
+        )
         console.print(
             "[yellow]Remaining bias:[/yellow] delisted companies cannot be mapped to SEC "
             "filings, so they are never eligible. Share of the universe unmapped, by year: "
@@ -171,3 +185,54 @@ def factor_backtest_cmd(top: int, cost_bps: float, since: Any, pit: bool, univer
         )
         return
     console.print("[yellow]Biased upward by:[/yellow] " + "; ".join(BIASES))
+
+
+def _judge(prices: Any, result: Any, *, config: dict[str, Any]) -> None:
+    """Record a point-in-time run in the trials ledger and print its verdict."""
+    from halal_trader.research.factor_backtest import benchmark_returns
+    from halal_trader.research.ledger import BENCHMARK, CRITERION, record_backtest
+
+    col = prices.symbols.index(BENCHMARK) if BENCHMARK in prices.symbols else None
+    row = {d: i for i, d in enumerate(prices.days)}
+    have = (
+        [i for i, d in enumerate(result.days) if not np.isnan(prices.close[row[d], col])]
+        if col is not None
+        else []
+    )
+    if len(have) < 60:
+        console.print(f"[yellow]not recorded: no {BENCHMARK} history to judge against[/yellow]")
+        return
+    days = result.days[have[0] + 1 :]
+    bench = benchmark_returns(prices, BENCHMARK, days)
+    if bench is None:
+        console.print(f"[yellow]not recorded: gaps in {BENCHMARK} history[/yellow]")
+        return
+
+    async def _run() -> Any:
+        from halal_trader.config import get_settings
+        from halal_trader.db.models import init_db
+
+        engine = await init_db(get_settings().database_url)
+        try:
+            return await record_backtest(
+                engine,
+                strategy=config["strategy"],
+                config=config,
+                days=days,
+                returns=result.returns[have[0] + 1 :],
+                benchmark=bench,
+            )
+        finally:
+            await engine.dispose()
+
+    a = asyncio.run(_run())
+    if a is None:
+        console.print("[yellow]not recorded: degenerate active returns[/yellow]")
+        return
+    color = "green" if a.verdict == "pass" else "red"
+    console.print(
+        f"  [{color}]ledger: {a.verdict.upper()}[/{color}] trial #{a.trial_id}, "
+        f"{a.n_trials} distinct research trials; active Sharpe vs {BENCHMARK} "
+        f"{a.active_sharpe:+.2f} against a no-skill hurdle of {a.hurdle_sharpe:.2f}, "
+        f"DSR {a.dsr:.2f} ({CRITERION})"
+    )
