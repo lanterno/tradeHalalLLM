@@ -1,4 +1,4 @@
-"""The LLM spend cap: one daily total across every process that uses the key.
+"""The LLM spend caps: a daily and a monthly total per pool, across processes.
 
 Every GLM call reports its cost here (core/llm/glm.py) and asks first
 whether it may run. The total lives in the ``llm_spend`` table, one row per
@@ -84,11 +84,21 @@ class SpendMeter:
         return self._cap
 
     async def spent_today(self) -> Decimal:
+        """Today's spend (UTC) of every consumer in this meter's pool.
+
+        Pool-scoped like the monthly budget: research scoring must never
+        use up the live bot's daily cap (on 2026-10-02 a research run took
+        the day's total past the live $3 cap; in enforce mode that would
+        have silenced the bot for the rest of the day).
+        """
         async with self._engine.connect() as conn:
             total = (
                 await conn.execute(
-                    text("SELECT coalesce(sum(spent_usd), 0) FROM llm_spend WHERE day = :day"),
-                    {"day": _today()},
+                    text(
+                        "SELECT coalesce(sum(spent_usd), 0) FROM llm_spend "
+                        "WHERE day = :day AND consumer = ANY(:members)"
+                    ),
+                    {"day": _today(), "members": sorted(self._pool_members)},
                 )
             ).scalar()
         return Decimal(str(total))

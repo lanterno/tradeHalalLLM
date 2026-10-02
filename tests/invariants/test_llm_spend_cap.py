@@ -167,3 +167,11 @@ async def test_a_metered_block_charges_its_own_pool_and_leaves_the_process_meter
 
         rows = dict((await conn.execute(text("SELECT consumer, spent_usd FROM llm_spend"))).all())
     assert rows == {"research": Decimal("0.200000"), "stock": Decimal("0.100000")}
+
+
+async def test_research_spend_does_not_use_up_the_live_daily_cap(engine: AsyncEngine) -> None:
+    research = SpendMeter(engine, consumer="research", cap_usd=0)
+    await research.record(Decimal("6.00"))
+    stock = SpendMeter(engine, consumer="stock", cap_usd=3, enforce=True)
+    await stock.check()  # the live pool has spent nothing today
+    assert await stock.spent_today() == Decimal("0")
