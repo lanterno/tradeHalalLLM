@@ -48,6 +48,7 @@ _OPEN, _CLOSE = time(9, 30), time(16, 0)
 # One-way cost in basis points by liquidity rank in the month's universe:
 # half the typical quoted spread plus 5 bps of impact for a small order.
 COST_BPS = ((300, 7.0), (1000, 15.0), (10**9, 30.0))
+_PLAUSIBLE = (0.1, 10.0)
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,6 +122,12 @@ def outcome(
     b0 = prices.get(BENCHMARK, {}).get(start_day)
     b1 = bars.close.get(BENCHMARK, {}).get(end_day)
     if not (p0 and p1 and b0 and b1):
+        return None
+    if not _PLAUSIBLE[0] < p1 / p0 < _PLAUSIBLE[1]:
+        # A 10x move within a holding window is almost always a reused ticker
+        # or a missed split in small names, and one such row moved a whole
+        # small-cap decile's mean by +38% (2020-2026 SUE study). Dropped, not
+        # winsorised: the return is not a real one.
         return None
     return (p1 / p0 - 1.0) - (b1 / b0 - 1.0) - 2 * one_way_bps / 10_000
 

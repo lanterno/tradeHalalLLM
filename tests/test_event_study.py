@@ -95,3 +95,12 @@ def test_sue_is_the_seasonal_change_over_its_own_volatility() -> None:
     values = sue_values(series)
     last_q, last_sue = values[-1]
     assert last_q.eps == 2.5 and last_sue > 5  # a jump far outside its usual seasonal change
+
+
+def test_an_implausible_move_is_not_an_outcome() -> None:
+    bars = Bars(
+        SESSIONS,
+        open={"X": {SESSIONS[0]: 1.0}, "SPY": {SESSIONS[0]: 50.0}},
+        close={"X": {SESSIONS[1]: 40.0}, "SPY": {SESSIONS[1]: 50.0}},
+    )
+    assert outcome(bars, "X", (0, "open"), 2, 0.0) is None
