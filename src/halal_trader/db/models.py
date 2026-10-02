@@ -1108,6 +1108,22 @@ class EventLabel(SQLModel, table=True):
     labeled_at: datetime = Field(sa_type=sa.DateTime(timezone=True))
 
 
+class MinuteBar(SQLModel, table=True):
+    """One raw SIP minute bar (regular session) around an event: the intraday
+    entry study's prices and, later, the slippage model's arrival prices."""
+
+    __tablename__ = "minute_bars"
+
+    symbol: str = Field(primary_key=True)
+    ts: datetime = Field(primary_key=True, sa_type=sa.DateTime(timezone=True))
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float
+    vwap: float | None = None
+
+
 class BackfillProgress(SQLModel, table=True):
     """One completed unit (a day, a quarter, a company) of a resumable backfill."""
 

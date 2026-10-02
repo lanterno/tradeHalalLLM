@@ -189,6 +189,31 @@ class AlpacaMarketData:
                 params["page_token"] = token
         return sorted(out.values(), key=lambda a: a.created_at, reverse=True)
 
+    async def minute_bars(
+        self, symbol: str, *, start: datetime, end: datetime
+    ) -> list[dict[str, Any]]:
+        """Raw SIP minute bars of one symbol in [start, end], as Alpaca returns them."""
+        out: list[dict[str, Any]] = []
+        params: dict[str, Any] = {
+            "symbols": symbol,
+            "timeframe": "1Min",
+            "start": start.astimezone(UTC).isoformat().replace("+00:00", "Z"),
+            "end": min(end, datetime.now(UTC) - _SIP_EMBARGO)
+            .astimezone(UTC)
+            .isoformat()
+            .replace("+00:00", "Z"),
+            "feed": "sip",
+            "adjustment": "raw",
+            "limit": _PAGE_LIMIT,
+        }
+        while True:
+            payload = await self._get(f"{DATA_URL}/v2/stocks/bars", params)
+            out += (payload.get("bars") or {}).get(symbol) or []
+            token = payload.get("next_page_token")
+            if not token:
+                return out
+            params["page_token"] = token
+
     async def assets(self) -> list[Asset]:
         """Every active US equity Alpaca lists (stocks and ETFs)."""
         payload = await self._get(

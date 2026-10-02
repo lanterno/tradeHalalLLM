@@ -312,3 +312,31 @@ def llm_eval_cmd() -> None:
                     f"  bottom decile {bot.mean:+.2%} (t {bot.t:+.1f})"
                 )
             console.print(line)
+
+
+@events.command("intraday")
+@click.option("--rate", default=80, show_default=True, help="Alpaca requests per minute.")
+def intraday_cmd(rate: int) -> None:
+    """The pre-registered "fast in" test: minute-bar entries 60 s after in-session headlines."""
+
+    async def _run() -> list[Any]:
+        from halal_trader.config import get_settings
+        from halal_trader.data.alpaca_market import AlpacaMarketData
+        from halal_trader.db.models import init_db
+        from halal_trader.events.intraday import first_in_session, run, selection, summarise
+
+        settings = get_settings()
+        engine = await init_db(settings.database_url)
+        market = AlpacaMarketData(
+            settings.alpaca.api_key, settings.alpaca.secret_key, min_interval_s=60.0 / rate
+        )
+        try:
+            chosen = selection(await first_in_session(engine))
+            console.print(f"{len(chosen)} in-session headlines to study")
+            return summarise(await run(engine, market, chosen))
+        finally:
+            await market.aclose()
+            await engine.dispose()
+
+    for b in asyncio.run(_run()):
+        console.print(f"  {b.label:20} {b.horizon:9} n={b.n:<5} mean {b.mean:+.2%}  t {b.t:+.1f}")
