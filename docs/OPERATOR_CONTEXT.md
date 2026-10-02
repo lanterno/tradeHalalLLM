@@ -62,12 +62,27 @@ churn kills this bot.
   at it.
 - **Size into conviction**: a fully-confirmed signal (high news score + strong
   price + volume) may size larger than a scheduled-cycle entry.
-- Intraday only (must close by EOD), but **within the day, hold as long as the
-  trend works** — not day-trading in the fast-out sense.
+- ~~Intraday only (must close by EOD)~~ **Superseded 2026-10-02 for event
+  trades:** event-driven positions (the reactor, and S2 when it lands) hold
+  for **days to weeks**, as long as the trend works. The research on event
+  drift points there, and a live account is a cash account, where quick
+  round trips on unsettled funds draw broker violations. The scheduled LLM
+  day-trader keeps its intraday flatten as the control strategy.
 - **The single failure mode to design against**: selling a winner because the
   next 1-min candle is red. Exits require a *structural* break (e.g. close below
   VWAP/20-EMA for N consecutive candles, or drawdown >X% from post-entry high) —
   never any pullback.
+
+## Operator decisions of 2026-10-02
+
+- **Halal screen: the strict option.** The in-house screen applies the
+  stricter of AAOIFI and S&P Shariah on every axis (business activities,
+  ratios), and treats an index Shariah board's exclusion as a veto. False
+  exclusions are acceptable; false passes are not.
+- **LLM budget ($50/month OpenRouter key limit):** $25 live (day-trader,
+  reactor, shadow), $15 research, $10 headroom.
+- **News:** live news moves to Alpaca (Benzinga), the feed the research
+  is backtested on; Finnhub stays as a fallback.
 
 ## LLM provider: GLM-5.2 (and don't undo it)
 
