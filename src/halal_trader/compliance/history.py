@@ -68,18 +68,17 @@ async def screen_history(
     return out
 
 
-async def rescreen_passes(sec: SecClient, engine: AsyncEngine) -> dict[date, int]:
-    """Re-screen every stored halal verdict under the current method.
+async def rescreen_stale(sec: SecClient, engine: AsyncEngine) -> dict[date, int]:
+    """Re-screen every stored verdict made under an older method.
 
-    Methods only ever add ways to fail (v4 foreign issuers, v5 mis-scaled
-    share counts), so a stored pass is the only verdict a new method can
-    change. Returns as_of -> names re-screened.
+    Returns as_of -> names re-screened. Resumable: a re-screened row carries
+    the current method and is skipped next time.
     """
     async with engine.connect() as conn:
         rows = await conn.execute(
             text(
                 "SELECT as_of, array_agg(symbol) AS symbols FROM halal_screen_results "
-                "WHERE verdict = 'halal' AND method <> :m GROUP BY as_of ORDER BY as_of"
+                "WHERE method <> :m GROUP BY as_of ORDER BY as_of"
             ),
             {"m": METHOD},
         )
@@ -88,6 +87,6 @@ async def rescreen_passes(sec: SecClient, engine: AsyncEngine) -> dict[date, int
     for as_of, symbols in todo:
         results = await run_screen(sec, engine, symbols, as_of)
         out[as_of] = len(symbols)
-        kept = sum(1 for r in results if r.verdict == "halal")
-        logger.info("rescreen %s: %d passes re-screened, %d still halal", as_of, len(symbols), kept)
+        halal = sum(1 for r in results if r.verdict == "halal")
+        logger.info("rescreen %s: %d re-screened, %d halal", as_of, len(symbols), halal)
     return out

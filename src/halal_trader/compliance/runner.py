@@ -33,9 +33,11 @@ Concept choices (each a judgment call, recorded here):
   diluted weighted-average shares: multi-class filers (GOOG, META) report
   dei shares per class only, which the frames API leaves out. Average
   price = the mean of the last 36 month-end closes, split- and
-  dividend-adjusted (needs at least 12). Market cap = shares x the average
-  price, else x the price. Adjusting for dividends lowers past prices a
-  little, so the average understates market cap and errs strict.
+  dividend-adjusted (needs at least 12) and then put back on the share
+  basis of ``as_of`` (adjusted closes also carry every later split).
+  Market cap = shares x the average price, else x the price. Adjusting
+  for dividends within the window lowers past prices a little, so the
+  average understates market cap and errs strict.
 """
 
 from __future__ import annotations
@@ -57,7 +59,8 @@ logger = logging.getLogger(__name__)
 # v3: every debt-concept family, and fallbacks for shares, cash and revenue.
 # v4: a foreign issuer (20-F/40-F) never passes on ratios: its ADR ratio is unknown.
 # v5: a share count the diluted count says is mis-scaled gives way to the smaller.
-METHOD = "aaoifi-sec-v5"
+# v6: the 36-month average no longer carries splits made after the screen date.
+METHOD = "aaoifi-sec-v6"
 UNMAPPED = "not an SEC registrant (or ticker not mapped)"
 _MIN_MONTHS = 12
 
@@ -189,14 +192,15 @@ async def gather(
         rows = await conn.execute(
             text(
                 """
-                SELECT DISTINCT ON (symbol) symbol, close FROM daily_bars
+                SELECT DISTINCT ON (symbol) symbol, day, close FROM daily_bars
                 WHERE adjustment = 'raw' AND symbol = ANY(:s) AND day <= :as_of
                 ORDER BY symbol, day DESC
                 """
             ),
             {"s": [s.upper() for s in symbols], "as_of": as_of},
         )
-        prices = {r.symbol: float(r.close) for r in rows}
+        priced = {r.symbol: (r.day, float(r.close)) for r in rows}
+        prices = {sym: close for sym, (_, close) in priced.items()}
         rows = await conn.execute(
             text(
                 """
@@ -213,7 +217,29 @@ async def gather(
             ),
             {"s": [s.upper() for s in symbols], "as_of": as_of, "min_months": _MIN_MONTHS},
         )
-        averages = {r.symbol: float(r.avg_close) for r in rows}
+        adjusted_averages = {r.symbol: float(r.avg_close) for r in rows}
+        rows = await conn.execute(
+            text(
+                "SELECT symbol, close FROM daily_bars WHERE adjustment = 'all' AND (symbol, day) "
+                "IN (SELECT unnest(CAST(:s AS TEXT[])), unnest(CAST(:d AS DATE[])))"
+            ),
+            {
+                "s": [sym for sym in adjusted_averages if sym in priced],
+                "d": [priced[sym][0] for sym in adjusted_averages if sym in priced],
+            },
+        )
+        adjusted_now = {r.symbol: float(r.close) for r in rows}  # same session as the raw price
+    # Adjusted closes carry every split and dividend up to the day the bars
+    # were fetched, including those after ``as_of``, which the share count
+    # filed at ``as_of`` knows nothing of. Raw / adjusted on ``as_of`` is
+    # exactly that later adjustment; dividing it back out puts the average
+    # on the share basis of ``as_of`` (without it, AMZN's 2019 average was
+    # its price after the 2022 20:1 split, and its market cap 20x too small).
+    averages = {
+        sym: avg * prices[sym] / adjusted_now[sym]
+        for sym, avg in adjusted_averages.items()
+        if sym in prices and adjusted_now.get(sym)
+    }
 
     out: list[Fundamentals] = []
     meta: dict[str, tuple[int | None, str]] = {}

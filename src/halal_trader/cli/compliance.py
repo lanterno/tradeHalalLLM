@@ -135,12 +135,12 @@ def map_delisted_cmd() -> None:
     )
 
 
-@compliance.command("rescreen-passes")
-def rescreen_passes_cmd() -> None:
-    """Re-screen past halal verdicts made under an older screening method."""
+@compliance.command("rescreen")
+def rescreen_cmd() -> None:
+    """Re-screen every stored verdict made under an older screening method (resumable)."""
 
     async def _run() -> dict[Any, int]:
-        from halal_trader.compliance.history import rescreen_passes
+        from halal_trader.compliance.history import rescreen_stale
         from halal_trader.compliance.sec import SecClient
         from halal_trader.config import get_settings
         from halal_trader.db.models import init_db
@@ -149,7 +149,7 @@ def rescreen_passes_cmd() -> None:
         engine = await init_db(settings.database_url)
         sec = SecClient(settings.edgar.user_agent)
         try:
-            return await rescreen_passes(sec, engine)
+            return await rescreen_stale(sec, engine)
         finally:
             await sec.aclose()
             await engine.dispose()

@@ -188,9 +188,10 @@ async def test_a_run_uses_the_36_month_average_when_there_is_a_year_of_history(
         await conn.execute(
             text(
                 "INSERT INTO daily_bars (symbol, day, adjustment, open, high, low, close, "
-                "volume, fetched_at) VALUES ('SOFT', '2026-09-30', 'raw', 100, 100, 100, 100, "
+                "volume, fetched_at) VALUES ('SOFT', '2026-09-30', :a, 100, 100, 100, 100, "
                 "1, now())"
-            )
+            ),
+            [{"a": "raw"}, {"a": "all"}],  # nothing adjusted after the screen date
         )
         # Month-end adjusted closes of 50 for 14 months (plus a mid-month bar
         # that is not a month end and must not count).
@@ -213,8 +214,32 @@ async def test_a_run_uses_the_36_month_average_when_there_is_a_year_of_history(
 
     (r,) = await run_screen(FakeSec(), engine, ["SOFT"], date(2026, 10, 1))  # type: ignore[arg-type]
 
-    assert r.metrics["market_cap"] == pytest.approx(50_000.0)  # 1,000 shares x 50
-    assert r.metrics["debt_ratio"] == pytest.approx(0.10)
+    # September's month end is the 09-30 close of 100; 13 earlier month ends of 50.
+    assert r.metrics["market_cap"] == pytest.approx(1_000 * (13 * 50 + 100) / 14)
+
+
+async def test_a_split_after_the_screen_date_does_not_shrink_the_average(
+    engine: AsyncEngine,
+) -> None:
+    # A 4:1 split after 2019-06-30: adjusted closes are a quarter of the raw
+    # ones, while the share count filed then is the pre-split one.
+    async with engine.begin() as conn:
+        rows = [("2019-06-28", "raw", 100.0), ("2019-06-28", "all", 25.0)]
+        rows += [
+            (date(2019 - (m > 5), (5 - m) % 12 + 1, 27).isoformat(), "all", 25.0) for m in range(14)
+        ]
+        await conn.execute(
+            text(
+                "INSERT INTO daily_bars (symbol, day, adjustment, open, high, low, close, "
+                "volume, fetched_at) VALUES ('SOFT', :d, :a, :c, :c, :c, :c, 1, now()) "
+                "ON CONFLICT DO NOTHING"
+            ),
+            [{"d": date.fromisoformat(d), "a": a, "c": c} for d, a, c in rows],
+        )
+
+    (r,) = await run_screen(FakeSec(), engine, ["SOFT"], date(2019, 6, 30))  # type: ignore[arg-type]
+
+    assert r.metrics["market_cap"] == pytest.approx(100_000.0)  # 1,000 pre-split shares x 100
 
 
 class FilerShapes(FakeSec):
@@ -369,10 +394,10 @@ async def test_screen_history_screens_each_quarters_universe_once(engine: AsyncE
     assert again == {}
 
 
-async def test_rescreen_passes_turns_a_foreign_issuers_past_pass_doubtful(
+async def test_rescreen_redoes_rows_from_an_older_method_once(
     engine: AsyncEngine,
 ) -> None:
-    from halal_trader.compliance.history import rescreen_passes
+    from halal_trader.compliance.history import rescreen_stale
 
     class Foreign(FakeSec):
         async def foreign_filer(self, cik: int) -> bool:
@@ -391,8 +416,8 @@ async def test_rescreen_passes_turns_a_foreign_issuers_past_pass_doubtful(
     async with engine.begin() as conn:  # as if screened by an older method
         await conn.execute(text("UPDATE halal_screen_results SET method = 'aaoifi-sec-v3'"))
 
-    assert await rescreen_passes(Foreign(), engine) == {as_of: 2}  # type: ignore[arg-type]
-    assert await rescreen_passes(Foreign(), engine) == {}  # type: ignore[arg-type]
+    assert await rescreen_stale(Foreign(), engine) == {as_of: 2}  # type: ignore[arg-type]
+    assert await rescreen_stale(Foreign(), engine) == {}  # type: ignore[arg-type]  # resumable
     async with engine.connect() as conn:
         rows = await conn.execute(text("SELECT symbol, verdict FROM halal_screen_results"))
         verdicts = {r.symbol: r.verdict for r in rows}
