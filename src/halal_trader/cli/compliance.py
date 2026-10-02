@@ -96,6 +96,45 @@ def screen_history_cmd(since: Any, top: int) -> None:
     console.print(f"{len(done)} quarter(s) screened")
 
 
+@compliance.command("map-delisted")
+def map_delisted_cmd() -> None:
+    """Match tickers SEC no longer lists to their filer by name, then re-screen them."""
+
+    async def _run() -> tuple[list[Any], dict[Any, int]]:
+        from halal_trader.compliance.delisted import map_unmapped, rescreen_mapped
+        from halal_trader.compliance.sec import SecClient
+        from halal_trader.config import get_settings
+        from halal_trader.data.alpaca_market import AlpacaMarketData
+        from halal_trader.db.models import init_db
+        from halal_trader.market_hours import today_eastern
+
+        settings = get_settings()
+        engine = await init_db(settings.database_url)
+        sec = SecClient(settings.edgar.user_agent)
+        market = AlpacaMarketData(settings.alpaca.api_key, settings.alpaca.secret_key)
+        try:
+            assets = [*await market.assets(), *await market.inactive_assets()]
+            matches = await map_unmapped(sec, engine, assets, today=today_eastern())
+            return matches, await rescreen_mapped(sec, engine)
+        finally:
+            await market.aclose()
+            await sec.aclose()
+            await engine.dispose()
+
+    matches, rescreened = asyncio.run(_run())
+    by_status: dict[str, int] = {}
+    for m in matches:
+        by_status[m.status] = by_status.get(m.status, 0) + 1
+    console.print(
+        f"{len(matches)} unmapped ticker(s): "
+        + ", ".join(f"{n} {s}" for s, n in sorted(by_status.items()))
+    )
+    console.print(
+        f"re-screened {len(rescreened)} quarter(s); newly halal per quarter: "
+        + " ".join(f"{d}:{n}" for d, n in sorted(rescreened.items()))
+    )
+
+
 @compliance.command("validate")
 def validate_cmd() -> None:
     """Compare the latest screen with SPUS and HLAL holdings (SEC N-PORT)."""

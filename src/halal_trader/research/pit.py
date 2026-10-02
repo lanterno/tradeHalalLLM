@@ -6,8 +6,9 @@ before it (compliance/history.py). Neither knows anything after the date.
 
 What remains biased is measured, not assumed away: a company that has
 since delisted cannot be mapped to its SEC filings, so it is never
-eligible. ``unmapped`` reports, per year, the share of the universe that
-was in that position.
+eligible. ``unmapped`` reports, per year, the share of the universe's
+companies in that position (ETFs and funds, which are never companies,
+are left out of both sides; compliance/delisted.py recovers what it can).
 """
 
 from __future__ import annotations
@@ -18,16 +19,15 @@ from datetime import date
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from halal_trader.compliance.runner import UNMAPPED
 from halal_trader.data.universe import month_starts, universe_at
-
-UNMAPPED = "not an SEC registrant (or ticker not mapped)"
 
 
 @dataclass(frozen=True, slots=True)
 class PitSchedule:
     eligible_from: dict[date, set[str]]
     universe: set[str]  # every name ever in the universe, for loading prices
-    unmapped: dict[int, float]  # year -> mean share of the universe with no SEC mapping
+    unmapped: dict[int, float]  # year -> mean share of the universe's companies with no CIK
 
 
 async def _screens(engine: AsyncEngine) -> dict[date, tuple[set[str], set[str]]]:
@@ -47,7 +47,10 @@ async def _screens(engine: AsyncEngine) -> dict[date, tuple[set[str], set[str]]]
 
 
 async def pit_schedule(engine: AsyncEngine, *, start: date, end: date, top_n: int) -> PitSchedule:
+    from halal_trader.compliance.delisted import fund_symbols
+
     screens = await _screens(engine)
+    funds = await fund_symbols(engine)
     dates = sorted(screens)
     eligible_from: dict[date, set[str]] = {}
     universe: set[str] = set()
@@ -61,7 +64,9 @@ async def pit_schedule(engine: AsyncEngine, *, start: date, end: date, top_n: in
             continue
         halal, unmapped = screens[known[-1]]
         eligible_from[month] = members & halal
-        shares.setdefault(month.year, []).append(len(members & unmapped) / len(members))
+        companies = members - funds
+        if companies:
+            shares.setdefault(month.year, []).append(len(companies & unmapped) / len(companies))
     return PitSchedule(
         eligible_from=eligible_from,
         universe=universe,

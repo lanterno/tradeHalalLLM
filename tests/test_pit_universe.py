@@ -96,3 +96,30 @@ async def test_pit_schedule_joins_that_months_universe_with_the_last_screen_befo
     assert sched.eligible_from[date(2026, 3, 1)] == {"A"}  # the March 31 screen is in the future
     assert sched.universe == {"A", "B", "GONE"}
     assert sched.unmapped == {2026: 1 / 3}
+
+
+async def test_the_unmapped_share_counts_companies_not_funds(engine: AsyncEngine) -> None:
+    from halal_trader.compliance.delisted import Match, store_matches
+    from halal_trader.research.pit import UNMAPPED, pit_schedule
+
+    year = month_starts(date(2025, 1, 1), date(2026, 2, 1))
+    for sym in ("A", "ETF", "GONE"):
+        await _months(engine, sym, year, 100.0, 1e6)
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO halal_screen_results (as_of, symbol, sic_description, verdict, "
+                "reasons, metrics, method, screened_at) VALUES ('2025-12-31', :s, :d, :v, "
+                "'[]', '{}', 'test', now())"
+            ),
+            [
+                {"s": "A", "v": "halal", "d": ""},
+                {"s": "ETF", "v": "doubtful", "d": UNMAPPED},
+                {"s": "GONE", "v": "doubtful", "d": UNMAPPED},
+            ],
+        )
+    await store_matches(engine, [Match("ETF", "fund", asset_name="Some ETF")])
+
+    sched = await pit_schedule(engine, start=date(2026, 1, 1), end=date(2026, 2, 1), top_n=10)
+
+    assert sched.unmapped == {2026: 1 / 2}  # GONE of {A, GONE}; the fund is no company

@@ -49,13 +49,14 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from halal_trader.compliance.aaoifi import Fundamentals, ScreenResult, screen
-from halal_trader.compliance.sec import Fact, SecClient
+from halal_trader.compliance.sec import Company, Fact, SecClient
 
 logger = logging.getLogger(__name__)
 
 # v2: 36-month average market cap; REITs and royalties face the ratios.
 # v3: every debt-concept family, and fallbacks for shares, cash and revenue.
 METHOD = "aaoifi-sec-v3"
+UNMAPPED = "not an SEC registrant (or ticker not mapped)"
 _MIN_MONTHS = 12
 
 _DEBT_TOTAL = "LongTermDebt"
@@ -128,11 +129,21 @@ async def _annual(sec: SecClient, concept: str, as_of: date) -> list[dict[int, F
     ]
 
 
+async def _mapped_by_name(engine: AsyncEngine) -> dict[str, tuple[int, str]]:
+    from halal_trader.compliance.delisted import mapped_ciks
+
+    return await mapped_ciks(engine)
+
+
 async def gather(
     sec: SecClient, engine: AsyncEngine, symbols: Sequence[str], as_of: date
 ) -> tuple[list[Fundamentals], dict[str, tuple[int | None, str]]]:
     """Fundamentals for each symbol, plus (cik, SIC description) for the record."""
     companies = await sec.companies()
+    # Tickers SEC no longer lists, matched to their filer by name
+    # (compliance/delisted.py); SEC's own current mapping wins.
+    for sym, (cik, title) in (await _mapped_by_name(engine)).items():
+        companies.setdefault(sym, Company(cik, sym, title))
     periods = recent_quarter_instants(as_of)
     frames = {
         c: await _instant(sec, c, periods)
@@ -191,7 +202,7 @@ async def gather(
         company = companies.get(sym) or companies.get(sym.replace(".", "-"))
         if company is None:
             out.append(Fundamentals(sym, None, None, prices.get(sym), None, None, None, None))
-            meta[sym] = (None, "not an SEC registrant (or ticker not mapped)")
+            meta[sym] = (None, UNMAPPED)
             continue
         cik = company.cik
         sic, sic_desc = await sec.sic(cik)

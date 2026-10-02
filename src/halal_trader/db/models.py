@@ -1032,6 +1032,23 @@ class ForwardBookDay(SQLModel, table=True):
     )
 
 
+class TickerCik(SQLModel, table=True):
+    """A ticker SEC's current ticker file does not list, matched to its filer by
+    name (compliance/delisted.py). ``status`` says whether it was: mapped,
+    fund (an ETF or fund, never a company), no_name, ambiguous, no_match."""
+
+    __tablename__ = "ticker_ciks"
+
+    symbol: str = Field(primary_key=True)
+    status: str
+    cik: int | None = None
+    asset_name: str | None = None
+    filer_name: str | None = None
+    matched_at: datetime = Field(
+        default_factory=lambda: datetime.now(UTC), sa_type=sa.DateTime(timezone=True)
+    )
+
+
 class MonthlyBar(SQLModel, table=True):
     """One raw monthly SIP bar per (symbol, month), listed and delisted stocks
     alike: the input to the point-in-time liquidity universe (data/universe.py)."""

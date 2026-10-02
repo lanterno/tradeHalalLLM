@@ -99,6 +99,23 @@ class SecClient:
             out[ticker] = Company(int(row["cik_str"]), ticker, str(row["title"]))
         return out
 
+    async def filers(self, period: str) -> dict[int, str]:
+        """CIK -> current entity name of every filer reporting total assets at ``period``."""
+        payload = await self._get(
+            f"https://data.sec.gov/api/xbrl/frames/us-gaap/Assets/USD/{period}.json"
+        )
+        return {int(r["cik"]): str(r["entityName"]) for r in (payload or {}).get("data", [])}
+
+    async def historical_names(self) -> list[tuple[str, int]]:
+        """(name, CIK) for every name any EDGAR entity has filed under, former names included."""
+        body = await self.text("https://www.sec.gov/Archives/edgar/cik-lookup-data.txt")
+        out: list[tuple[str, int]] = []
+        for line in (body or "").splitlines():
+            name, _, rest = line.rstrip(":").rpartition(":")
+            if name and rest.isdigit():
+                out.append((name, int(rest)))
+        return out
+
     async def sic(self, cik: int) -> tuple[int | None, str]:
         """(SIC code, description) from the company's submissions record."""
         if cik in self._sics:
