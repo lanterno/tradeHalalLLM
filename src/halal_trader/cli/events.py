@@ -201,3 +201,79 @@ def study_cmd(signal: str, start: int, end: int, by: str) -> None:
             console.print(
                 f"  {h:>2}d IC {result.ic.get((group, h), 0):+.3f}  D10-D1 {spread}  | {line}"
             )
+
+
+def _research_meter(engine: Any, settings: Any) -> None:
+    """Meter research LLM calls into their own monthly pool (core/llm/spend.py)."""
+    from halal_trader.core.llm import spend
+
+    spend.install(
+        spend.SpendMeter(
+            engine,
+            consumer="research",
+            cap_usd=0.0,
+            enforce=True,
+            monthly_cap_usd=spend.monthly_cap_for(
+                "research",
+                live_usd=settings.llm.monthly_live_usd,
+                research_usd=settings.llm.monthly_research_usd,
+            ),
+        )
+    )
+
+
+@events.command("cutoff-probe")
+@click.option("--start", type=click.DateTime(["%Y-%m-%d"]), default="2024-01-01")
+@click.option("--end", type=click.DateTime(["%Y-%m-%d"]), default="2026-09-30")
+@click.option("--per-month", default=10, show_default=True)
+def cutoff_probe_cmd(start: Any, end: Any, per_month: int) -> None:
+    """Find the LLM's training cutoff: its recall of reported EPS, by filing month."""
+
+    async def _run() -> list[Any]:
+        from halal_trader.config import get_settings
+        from halal_trader.core.llm import create_classifier_llm
+        from halal_trader.db.models import init_db
+        from halal_trader.events.llm_cutoff import probes, run
+
+        settings = get_settings()
+        engine = await init_db(settings.database_url)
+        try:
+            _research_meter(engine, settings)
+            items = await probes(engine, start=start.date(), end=end.date(), per_month=per_month)
+            return await run(create_classifier_llm(settings), items)
+        finally:
+            await engine.dispose()
+
+    for m in asyncio.run(_run()):
+        bar = "#" * m.correct
+        console.print(
+            f"  {m.month:%Y-%m}  asked {m.asked:2}  answered {m.answered:2}  "
+            f"correct {m.correct:2}  {bar}"
+        )
+
+
+@events.command("llm-score")
+@click.option("--max-pairs", default=200_000, show_default=True, help="Stop after this many.")
+def llm_score_cmd(max_pairs: int) -> None:
+    """Score post-cutoff company headlines with the LLM, in batches (research budget)."""
+
+    async def _run() -> int:
+        from halal_trader.config import get_settings
+        from halal_trader.core.llm import create_classifier_llm
+        from halal_trader.db.models import init_db
+        from halal_trader.events.llm_score import score_all
+
+        settings = get_settings()
+        engine = await init_db(settings.database_url)
+        try:
+            _research_meter(engine, settings)
+            return await score_all(
+                create_classifier_llm(settings),
+                engine,
+                model=settings.llm.model,
+                max_pairs=max_pairs,
+            )
+        finally:
+            await engine.dispose()
+
+    console.print(f"{asyncio.run(_run())} headline/symbol pairs scored")
