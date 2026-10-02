@@ -203,3 +203,70 @@ async def test_a_run_uses_the_36_month_average_when_there_is_a_year_of_history(
 
     assert r.metrics["market_cap"] == pytest.approx(50_000.0)  # 1,000 shares x 50
     assert r.metrics["debt_ratio"] == pytest.approx(0.10)
+
+
+class FilerShapes(FakeSec):
+    """Real filing shapes that v2 misread.
+
+    CIK 10 (like CVX): debt only as LongTermDebtAndCapitalLeaseObligations-
+    IncludingCurrentMaturities, cash only including restricted cash.
+    CIK 11 (like XOM): noncurrent debt with leases + DebtCurrent.
+    CIK 12 (like GOOG): no dei shares (multi-class), diluted shares only;
+    revenue under the Including-assessed-tax concept.
+    """
+
+    async def companies(self) -> dict[str, Company]:
+        return {s: Company(c, s, s) for s, c in (("OIL", 10), ("OIL2", 11), ("MULTI", 12))}
+
+    async def sic(self, cik: int) -> tuple[int | None, str]:
+        return (2911, "Petroleum refining") if cik in (10, 11) else (7370, "Services")
+
+    async def frame(self, taxonomy: str, concept: str, unit: str, period: str) -> dict[int, Fact]:
+        end = date(2026, 6, 30)
+        instant = period.endswith("I")
+        table: dict[str, dict[int, float]] = {
+            "EntityCommonStockSharesOutstanding": {10: 1_000.0, 11: 1_000.0} if instant else {},
+            "WeightedAverageNumberOfDilutedSharesOutstanding": ({} if instant else {12: 2_000.0}),
+            "LongTermDebtAndCapitalLeaseObligationsIncludingCurrentMaturities": (
+                {10: 37_000.0} if instant else {}
+            ),
+            "LongTermDebtAndCapitalLeaseObligations": {11: 33_000.0} if instant else {},
+            "DebtCurrent": {11: 14_000.0} if instant else {},
+            "ShortTermBorrowings": {10: 400.0} if instant else {},
+            "CashAndCashEquivalentsAtCarryingValue": {11: 1_000.0, 12: 1_000.0} if instant else {},
+            "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents": (
+                {10: 2_000.0} if instant else {}
+            ),
+            "Revenues": {10: 50_000.0, 11: 50_000.0} if not instant else {},
+            "RevenueFromContractWithCustomerIncludingAssessedTax": (
+                {12: 50_000.0} if not instant else {}
+            ),
+        }
+        return {c: Fact(v, end, "a") for c, v in table.get(concept, {}).items()}
+
+
+async def test_v3_reads_every_debt_family_and_falls_back_for_shares_cash_revenue(
+    engine: AsyncEngine,
+) -> None:
+    async with engine.begin() as conn:
+        for sym in ("OIL", "OIL2", "MULTI"):
+            await conn.execute(
+                text(
+                    "INSERT INTO daily_bars (symbol, day, adjustment, open, high, low, close, "
+                    "volume, fetched_at) VALUES (:s, '2026-09-30', 'raw', 100, 100, 100, 100, "
+                    "1, now())"
+                ),
+                {"s": sym},
+            )
+
+    results = await run_screen(FilerShapes(), engine, ["OIL", "OIL2", "MULTI"], date(2026, 10, 1))  # type: ignore[arg-type]
+    by = {r.symbol: r for r in results}
+
+    # 37,000 + 400 of debt on a 100,000 market cap: 37.4%, not v2's 0.4%.
+    assert by["OIL"].metrics["debt_ratio"] == pytest.approx(0.374)
+    assert by["OIL"].verdict == "not_halal"
+    assert by["OIL"].metrics["cash_ratio"] == pytest.approx(0.02)  # restricted-inclusive cash
+    assert by["OIL2"].metrics["debt_ratio"] == pytest.approx(0.47)  # 33,000 + 14,000
+    # 2,000 diluted shares x 100 = 200,000 market cap; revenue found.
+    assert by["MULTI"].metrics["market_cap"] == pytest.approx(200_000.0)
+    assert by["MULTI"].verdict == "halal"

@@ -7,25 +7,35 @@ said on a given day instead of using today's verdicts on yesterday's data.
 
 Concept choices (each a judgment call, recorded here):
 
-* interest-bearing debt = the larger of LongTermDebt and
-  (LongTermDebtNoncurrent + LongTermDebtCurrent), plus ShortTermBorrowings,
-  CommercialPaper and FinanceLeaseLiability. Operating leases are excluded
-  (not interest-bearing borrowing). A company that files XBRL but tags none
-  of these is treated as debt-free: such companies often tag nothing.
+* interest-bearing debt = the largest of the long-term totals companies
+  actually file (LongTermDebt; LongTermDebtNoncurrent + LongTermDebtCurrent;
+  LongTermDebtAndCapitalLeaseObligationsIncludingCurrentMaturities;
+  LongTermDebtAndCapitalLeaseObligations + its Current part; the noncurrent
+  figure + DebtCurrent), plus ShortTermBorrowings, CommercialPaper and
+  FinanceLeaseLiability. Filers pick one family: CVX files only the
+  IncludingCurrentMaturities total, and before v3 its $37B of debt read as
+  its $0.4B of short-term borrowings. Overlaps between families can count
+  some debt twice; taking the largest errs strict, never lenient.
+  Operating leases are excluded (not interest-bearing borrowing). A company
+  that files XBRL but tags none of these is treated as debt-free.
 * cash and interest-bearing securities = CashAndCashEquivalentsAtCarryingValue
-  plus the largest of ShortTermInvestments, MarketableSecuritiesCurrent and
+  (else CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents, which
+  is larger, so strict) plus the largest of ShortTermInvestments, MarketableSecuritiesCurrent and
   AvailableForSaleSecuritiesDebtSecuritiesCurrent (companies often tag the
   same holding under more than one, so they are not summed).
 * interest income = InvestmentIncomeInterest, else InterestIncomeOther, else
   InvestmentIncomeInterestAndDividend; revenue = Revenues, else
-  RevenueFromContractWithCustomerExcludingAssessedTax, else SalesRevenueNet.
+  RevenueFromContractWithCustomerExcludingAssessedTax, else the Including
+  variant, else SalesRevenueNet.
   Both from the latest calendar-year frame that has them.
 * price = the latest raw close in daily_bars (run `halal-trader data
-  backfill` first); average price = the mean of the last 36 month-end
-  closes, split- and dividend-adjusted (needs at least 12). Market cap =
-  dei EntityCommonStockSharesOutstanding x the average price, else x the
-  price. Adjusting for dividends lowers past prices a little, so the
-  average understates market cap and errs strict on every ratio.
+  backfill` first). Shares = dei EntityCommonStockSharesOutstanding, else
+  diluted weighted-average shares: multi-class filers (GOOG, META) report
+  dei shares per class only, which the frames API leaves out. Average
+  price = the mean of the last 36 month-end closes, split- and
+  dividend-adjusted (needs at least 12). Market cap = shares x the average
+  price, else x the price. Adjusting for dividends lowers past prices a
+  little, so the average understates market cap and errs strict.
 """
 
 from __future__ import annotations
@@ -43,11 +53,19 @@ from halal_trader.compliance.sec import Fact, SecClient
 
 logger = logging.getLogger(__name__)
 
-METHOD = "aaoifi-sec-v2"  # v2: 36-month average market cap; REITs and royalties face ratios
+# v2: 36-month average market cap; REITs and royalties face the ratios.
+# v3: every debt-concept family, and fallbacks for shares, cash and revenue.
+METHOD = "aaoifi-sec-v3"
 _MIN_MONTHS = 12
 
 _DEBT_TOTAL = "LongTermDebt"
 _DEBT_PARTS = ("LongTermDebtNoncurrent", "LongTermDebtCurrent")
+_DEBT_WITH_LEASES_TOTAL = "LongTermDebtAndCapitalLeaseObligationsIncludingCurrentMaturities"
+_DEBT_WITH_LEASES = "LongTermDebtAndCapitalLeaseObligations"
+_DEBT_WITH_LEASES_CURRENT = "LongTermDebtAndCapitalLeaseObligationsCurrent"
+_DEBT_CURRENT = "DebtCurrent"
+_CASH_WIDE = "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents"
+_DILUTED_SHARES = "WeightedAverageNumberOfDilutedSharesOutstanding"
 _DEBT_EXTRA = ("ShortTermBorrowings", "CommercialPaper", "FinanceLeaseLiability")
 _CASH = "CashAndCashEquivalentsAtCarryingValue"
 _SECURITIES = (
@@ -63,8 +81,15 @@ _INTEREST = (
 _REVENUE = (
     "Revenues",
     "RevenueFromContractWithCustomerExcludingAssessedTax",
+    "RevenueFromContractWithCustomerIncludingAssessedTax",
     "SalesRevenueNet",
 )
+
+
+def _sum(*values: float | None) -> float | None:
+    """Sum of the values present; None if none is."""
+    present = [x for x in values if x is not None]
+    return sum(present) if present else None
 
 
 def recent_quarter_instants(as_of: date, n: int = 5) -> list[str]:
@@ -111,9 +136,23 @@ async def gather(
     periods = recent_quarter_instants(as_of)
     frames = {
         c: await _instant(sec, c, periods)
-        for c in (_DEBT_TOTAL, *_DEBT_PARTS, *_DEBT_EXTRA, _CASH, *_SECURITIES)
+        for c in (
+            _DEBT_TOTAL,
+            *_DEBT_PARTS,
+            _DEBT_WITH_LEASES_TOTAL,
+            _DEBT_WITH_LEASES,
+            _DEBT_WITH_LEASES_CURRENT,
+            _DEBT_CURRENT,
+            *_DEBT_EXTRA,
+            _CASH,
+            _CASH_WIDE,
+            *_SECURITIES,
+        )
     }
     shares = await _instant(sec, "EntityCommonStockSharesOutstanding", periods, dei=True)
+    diluted = [
+        await sec.frame("us-gaap", _DILUTED_SHARES, "shares", p.removesuffix("I")) for p in periods
+    ]
     annual = {c: await _annual(sec, c, as_of) for c in (*_INTEREST, *_REVENUE)}
     async with engine.connect() as conn:
         rows = await conn.execute(
@@ -161,14 +200,19 @@ async def gather(
         def v(concept: str, cik: int = cik) -> float | None:
             return _newest(frames[concept], cik)
 
-        total = v(_DEBT_TOTAL)
-        parts = [v(p) for p in _DEBT_PARTS]
-        parts_sum = (
-            sum(p for p in parts if p is not None) if any(p is not None for p in parts) else None
+        noncurrent = v(_DEBT_PARTS[0])
+        candidates = (
+            v(_DEBT_TOTAL),
+            _sum(noncurrent, v(_DEBT_PARTS[1])),
+            v(_DEBT_WITH_LEASES_TOTAL),
+            _sum(v(_DEBT_WITH_LEASES), v(_DEBT_WITH_LEASES_CURRENT)),
+            _sum(noncurrent if noncurrent is not None else v(_DEBT_WITH_LEASES), v(_DEBT_CURRENT)),
         )
         extras = [v(e) for e in _DEBT_EXTRA]
-        core = max((x for x in (total, parts_sum) if x is not None), default=None)
+        core = max((x for x in candidates if x is not None), default=None)
         cash = v(_CASH)
+        if cash is None:
+            cash = v(_CASH_WIDE)
         securities = max((x for x in (v(s) for s in _SECURITIES) if x is not None), default=0.0)
         files_xbrl = cash is not None or _newest(shares, cik) is not None
         debt: float | None
@@ -186,7 +230,7 @@ async def gather(
             Fundamentals(
                 symbol=sym,
                 sic=sic,
-                shares_outstanding=_newest(shares, cik),
+                shares_outstanding=_newest(shares, cik) or _newest(diluted, cik),
                 price=prices.get(sym),
                 interest_bearing_debt=debt,
                 cash_and_securities=(cash + securities) if cash is not None else None,
