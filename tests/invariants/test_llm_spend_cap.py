@@ -144,3 +144,26 @@ def test_each_consumer_gets_its_pools_budget() -> None:
     assert spend.monthly_cap_for("shadow", **caps) == 25.0
     assert spend.monthly_cap_for("research", **caps) == 15.0
     assert spend.monthly_cap_for("other", **caps) == 0.0
+
+
+async def test_a_metered_block_charges_its_own_pool_and_leaves_the_process_meter(
+    engine: AsyncEngine,
+) -> None:
+    import asyncio
+
+    stock = SpendMeter(engine, consumer="stock", cap_usd=0)
+    research = SpendMeter(engine, consumer="research", cap_usd=0)
+    spend.install(stock)
+
+    async def call() -> None:
+        await spend.after_call(Decimal("0.10"))
+
+    with spend.metered(research):
+        await asyncio.gather(call(), call())  # tasks started inside inherit it
+    await call()  # outside: the process meter again
+
+    async with engine.connect() as conn:
+        from sqlalchemy import text
+
+        rows = dict((await conn.execute(text("SELECT consumer, spent_usd FROM llm_spend"))).all())
+    assert rows == {"research": Decimal("0.200000"), "stock": Decimal("0.100000")}

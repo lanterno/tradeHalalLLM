@@ -31,6 +31,7 @@ class ResearchRun:
     screened: int | None = None  # None: the screen was fresh enough to skip
     books: dict[str, int] = field(default_factory=dict)  # name -> sessions appended
     event_labels: int | None = None  # labels written for matured events
+    event_refresh: dict[str, int] = field(default_factory=dict)  # step -> rows added
     errors: list[str] = field(default_factory=list)
 
 
@@ -118,6 +119,16 @@ async def run_research(engine: AsyncEngine, settings: Settings, *, today: date) 
             run.errors.append(f"screen: {exc!r}"[:300])
         finally:
             await sec.aclose()
+
+    try:
+        from halal_trader.events.daily import refresh_events
+
+        refreshed = await refresh_events(engine, settings, today=today)
+        run.event_refresh = refreshed.counts
+        run.errors += refreshed.errors
+    except Exception as exc:  # noqa: BLE001
+        logger.error("research: event refresh failed: %r", exc)
+        run.errors.append(f"event refresh: {exc!r}"[:300])
 
     try:
         from halal_trader.events.labels import label_events

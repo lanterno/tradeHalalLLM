@@ -204,22 +204,10 @@ def study_cmd(signal: str, start: int, end: int, by: str) -> None:
 
 
 def _research_meter(engine: Any, settings: Any) -> None:
-    """Meter research LLM calls into their own monthly pool (core/llm/spend.py)."""
+    """Meter this CLI process's LLM calls into the research pool (core/llm/spend.py)."""
     from halal_trader.core.llm import spend
 
-    spend.install(
-        spend.SpendMeter(
-            engine,
-            consumer="research",
-            cap_usd=0.0,
-            enforce=True,
-            monthly_cap_usd=spend.monthly_cap_for(
-                "research",
-                live_usd=settings.llm.monthly_live_usd,
-                research_usd=settings.llm.monthly_research_usd,
-            ),
-        )
-    )
+    spend.install(spend.research_meter(engine, settings))
 
 
 @events.command("cutoff-probe")

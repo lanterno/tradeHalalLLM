@@ -29,9 +29,12 @@ Replaces core/llm/budget.py's LLMBudget, which was never constructed.
 from __future__ import annotations
 
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import UTC, date, datetime
 from decimal import Decimal
+from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -212,12 +215,32 @@ class SpendMeter:
                 logger.debug("spend alert failed: %r", exc)
 
 
+def research_meter(engine: AsyncEngine, settings: Any) -> SpendMeter:
+    """The research pool's meter: enforced, capped by the monthly research budget."""
+    return SpendMeter(
+        engine,
+        consumer="research",
+        cap_usd=0.0,
+        enforce=True,
+        monthly_cap_usd=monthly_cap_for(
+            "research",
+            live_usd=settings.llm.monthly_live_usd,
+            research_usd=settings.llm.monthly_research_usd,
+        ),
+    )
+
+
 def monthly_cap_for(consumer: str, *, live_usd: float, research_usd: float) -> float:
     """The monthly budget of ``consumer``'s pool (0 = none)."""
     return {"live": live_usd, "research": research_usd}.get(POOLS.get(consumer, ""), 0.0)
 
 
 _meter: SpendMeter | None = None
+# A meter for one stretch of work inside a process that has its own (the
+# bot's evening research run scores headlines under "research", while the
+# bot's calls stay under "stock"). Context-local: tasks started inside
+# inherit it, nothing outside sees it.
+_override: ContextVar[SpendMeter | None] = ContextVar("llm_spend_override", default=None)
 
 
 def install(meter: SpendMeter | None) -> None:
@@ -226,14 +249,30 @@ def install(meter: SpendMeter | None) -> None:
     _meter = meter
 
 
+@contextmanager
+def metered(meter: SpendMeter) -> Iterator[None]:
+    """Charge every LLM call made inside this block (and its tasks) to ``meter``."""
+    token = _override.set(meter)
+    try:
+        yield
+    finally:
+        _override.reset(token)
+
+
+def _current() -> SpendMeter | None:
+    return _override.get() or _meter
+
+
 async def before_call() -> None:
-    if _meter is not None:
-        await _meter.check()
+    meter = _current()
+    if meter is not None:
+        await meter.check()
 
 
 async def after_call(cost_usd: Decimal) -> None:
-    if _meter is not None:
-        await _meter.record(cost_usd)
+    meter = _current()
+    if meter is not None:
+        await meter.record(cost_usd)
 
 
 def _today() -> date:

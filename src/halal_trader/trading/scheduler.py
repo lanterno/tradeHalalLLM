@@ -952,6 +952,7 @@ class TradingBot(BaseTradingBot):
                 "books": run.books,
                 "screened": run.screened,
                 "event_labels": run.event_labels,
+                "event_refresh": run.event_refresh,
                 "errors": len(run.errors),
             },
         )

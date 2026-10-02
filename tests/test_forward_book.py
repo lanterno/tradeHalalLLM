@@ -11,6 +11,18 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from halal_trader.research.forward_book import advance_book, create_book, report
 
 
+@pytest.fixture(autouse=True)
+def _no_event_refresh(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The evening run's event-store refresh reaches SEC and Alpaca; these tests
+    are about bars, screens and books (events/daily.py has its own)."""
+    from halal_trader.events import daily
+
+    async def nothing(*args: object, **kwargs: object) -> daily.EventRefresh:
+        return daily.EventRefresh()
+
+    monkeypatch.setattr(daily, "refresh_events", nothing)
+
+
 def _sessions(n: int) -> list[date]:
     out, d = [], date(2025, 1, 1)
     while len(out) < n:
