@@ -344,7 +344,7 @@ def _judge(prices: Any, result: Any, *, config: dict[str, Any]) -> None:
 
 
 @research.command("event-backtest")
-@click.argument("signal", type=click.Choice(["e1b", "e1c", "e3"]))
+@click.argument("signal", type=click.Choice(["e1a", "e1b", "e1c", "e1-combo", "e3"]))
 @click.option(
     "--since",
     type=click.DateTime(["%Y-%m-%d"]),
@@ -354,7 +354,7 @@ def _judge(prices: Any, result: Any, *, config: dict[str, Any]) -> None:
 )
 def event_backtest_cmd(signal: str, since: Any) -> None:
     """A pre-registered S2 Phase C event portfolio, recorded and judged vs SPUS."""
-    hold = {"e1b": 60, "e1c": 60, "e3": 63}[signal]
+    hold = {"e1a": 60, "e1b": 60, "e1c": 60, "e1-combo": 60, "e3": 63}[signal]
     slots = 40
 
     async def _run() -> tuple[Any, Any, Any, int]:
@@ -376,7 +376,11 @@ def event_backtest_cmd(signal: str, since: Any) -> None:
             )
             symbols = sorted(schedule.universe | {"SPY", "SPUS"})
             bars = await load_bars(engine, symbols)
-            if signal == "e1b":
+            if signal == "e1a":
+                candidates = await signals.e1a(engine)
+            elif signal == "e1-combo":
+                candidates = await signals.e1_combo(engine, bars)
+            elif signal == "e1b":
                 candidates = await signals.e1b(engine)
             elif signal == "e1c":
                 candidates = await signals.e1c(engine, bars)

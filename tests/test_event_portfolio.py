@@ -113,3 +113,25 @@ def test_insider_clusters_need_two_insiders_and_100k_within_30_days() -> None:
     ]
     (c,) = clusters(buys)
     assert c.symbol == "A" and c.published_at == t + timedelta(days=10) and c.score == 110_000.0
+
+
+def test_combo_averages_a_releases_percentiles_and_waits_for_the_latest() -> None:
+    from halal_trader.events.signals import combine
+
+    t = datetime(2024, 5, 1, 20, tzinfo=UTC)
+    sue = {("A", t): 0.9, ("B", t): 0.2}
+    headline = {("A", t - timedelta(minutes=5)): 0.7}
+    ear = {("A", t + timedelta(days=1)): 0.5, ("Z", t): 0.99}
+    (row,) = combine(sue, headline, ear)  # B has one reading only: not combined
+    when, symbol, value = row
+    assert symbol == "A" and value == pytest.approx(0.7) and when == t + timedelta(days=1)
+
+
+def test_trailing_rank_is_a_past_only_percentile() -> None:
+    from halal_trader.events.signals import trailing_rank
+
+    t0 = datetime(2024, 1, 1, tzinfo=UTC)
+    rows = [(t0 + timedelta(hours=i), "X", float(i)) for i in range(300)]
+    ranks = trailing_rank(rows)
+    assert ranks[("X", t0 + timedelta(hours=299))] == 1.0  # above everything before it
+    assert ("X", t0) not in ranks  # no history yet

@@ -33,14 +33,14 @@ def above_trailing_percentile(
     seen in the preceding year (strictly before each row)."""
     rows = sorted(scored)
     times = [r[0] for r in rows]
+    values = np.array([r[2] for r in rows])
     out = []
-    for i, (t, symbol, value) in enumerate(rows):
+    for t, symbol, value in rows:
         lo = bisect_left(times, t - TRAILING)
         hi = bisect_left(times, t)
-        window = [r[2] for r in rows[lo:hi]]
-        if len(window) < _MIN_WINDOW:
+        if hi - lo < _MIN_WINDOW:
             continue
-        if value >= float(np.percentile(window, percentile)):
+        if value >= float(np.percentile(values[lo:hi], percentile)):
             out.append(Candidate(symbol, t, value))
     return out
 
@@ -153,3 +153,96 @@ async def e3(engine: AsyncEngine) -> list[Candidate]:
                 buys.append((r.published_at, r.symbol, owner, float(value)))
                 break  # one insider per transaction row
     return clusters(buys)
+
+
+# ── E1a: consensus surprise from headlines ─────────────────────
+
+
+async def consensus_surprises(engine: AsyncEngine) -> list[tuple[datetime, str, float]]:
+    """(headline time, symbol, EPS surprise vs estimate): the first headline per
+    company and fiscal period, since a release is repeated across headlines."""
+    from halal_trader.events.earnings_parse import EXTRACTOR
+
+    async with engine.connect() as conn:
+        rows = await conn.execute(
+            text(
+                "SELECT DISTINCT ON (e.symbol, f.fields->>'period', "
+                "date_trunc('quarter', e.published_at)) "
+                "e.symbol, e.published_at, (f.fields->>'eps_surprise')::float AS s "
+                "FROM event_facts f JOIN events e ON e.id = f.event_id "
+                "WHERE f.extractor = :x AND f.kind = 'result' "
+                "AND f.fields->>'eps_surprise' IS NOT NULL "
+                "ORDER BY e.symbol, f.fields->>'period', "
+                "date_trunc('quarter', e.published_at), e.published_at"
+            ),
+            {"x": EXTRACTOR},
+        )
+        return [(r.published_at, r.symbol, float(r.s)) for r in rows]
+
+
+async def e1a(engine: AsyncEngine) -> list[Candidate]:
+    return above_trailing_percentile(await consensus_surprises(engine))
+
+
+# ── E1-combo ───────────────────────────────────────────────────
+
+COMBO_MATCH = timedelta(days=3)
+
+
+def trailing_rank(rows: Sequence[tuple[datetime, str, float]]) -> dict[tuple[str, datetime], float]:
+    """Each value's percentile (0..1) among the values of the preceding year."""
+    ordered = sorted(rows)
+    times = [r[0] for r in ordered]
+    values = np.array([r[2] for r in ordered])
+    out = {}
+    for t, symbol, value in ordered:
+        lo, hi = bisect_left(times, t - TRAILING), bisect_left(times, t)
+        if hi - lo >= _MIN_WINDOW:
+            out[(symbol, t)] = float((values[lo:hi] < value).mean())
+    return out
+
+
+def combine(
+    *signals: dict[tuple[str, datetime], float], match: timedelta = COMBO_MATCH
+) -> list[tuple[datetime, str, float]]:
+    """Average the percentiles of one release's readings (at least two of them),
+    timed at the latest reading, matched within ``match`` of the first signal's."""
+    first, *others = signals
+    indexed: list[dict[str, list[tuple[datetime, float]]]] = []
+    for other in others:
+        by_symbol: dict[str, list[tuple[datetime, float]]] = defaultdict(list)
+        for (sym, ot), r in other.items():
+            by_symbol[sym].append((ot, r))
+        indexed.append(by_symbol)
+    out = []
+    for (symbol, t), rank in first.items():
+        ranks, latest = [rank], t
+        for by_symbol in indexed:
+            near = [
+                (abs(ot - t), ot, r) for ot, r in by_symbol.get(symbol, []) if abs(ot - t) <= match
+            ]
+            if near:
+                _, ot, r = min(near)
+                ranks.append(r)
+                latest = max(latest, ot)
+        if len(ranks) >= 2:
+            out.append((latest, symbol, sum(ranks) / len(ranks)))
+    return out
+
+
+async def e1_combo(engine: AsyncEngine, bars: Bars) -> list[Candidate]:
+    from halal_trader.events.history import covered_companies
+    from halal_trader.events.sue import sue_observations
+
+    sue = [
+        (o.announced_at, o.symbol, o.sue)
+        for o in await sue_observations(engine, await covered_companies(engine))
+    ]
+    ear = announcement_returns(await _releases(engine), bars)
+    return above_trailing_percentile(
+        combine(
+            trailing_rank(sue),
+            trailing_rank(await consensus_surprises(engine)),
+            trailing_rank(ear),
+        )
+    )
