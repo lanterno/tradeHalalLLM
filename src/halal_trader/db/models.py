@@ -1081,6 +1081,19 @@ class EventScore(SQLModel, table=True):
     scored_at: datetime = Field(sa_type=sa.DateTime(timezone=True))
 
 
+class EventFact(SQLModel, table=True):
+    """A structured fact an extractor read from an event (e.g. EPS vs consensus).
+    Several per event are possible (a result and its guidance)."""
+
+    __tablename__ = "event_facts"
+
+    id: int | None = Field(default=None, sa_column=sa.Column(sa.BigInteger(), primary_key=True))
+    event_id: int = Field(sa_column=sa.Column(sa.BigInteger(), sa.ForeignKey("events.id")))
+    extractor: str
+    kind: str
+    fields: dict = Field(sa_column=sa.Column("fields", JSONB, nullable=False))
+
+
 class EventLabel(SQLModel, table=True):
     """An event's realised return over ``horizon`` sessions, raw and versus SPUS."""
 

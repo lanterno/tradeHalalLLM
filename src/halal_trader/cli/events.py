@@ -105,3 +105,21 @@ def backfill_cmd(what: str, rate: int) -> None:
 
     for name, n in asyncio.run(_run()).items():
         console.print(f"{name}: {n} new")
+
+
+@events.command("extract")
+def extract_cmd() -> None:
+    """Read earnings results and guidance vs consensus out of stored headlines."""
+
+    async def _run() -> int:
+        from halal_trader.config import get_settings
+        from halal_trader.db.models import init_db
+        from halal_trader.events.earnings_parse import extract_all
+
+        engine = await init_db(get_settings().database_url)
+        try:
+            return await extract_all(engine)
+        finally:
+            await engine.dispose()
+
+    console.print(f"{asyncio.run(_run())} earnings fact(s) extracted")
