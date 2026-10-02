@@ -144,3 +144,80 @@ async def test_extraction_stores_facts_once_and_marks_the_rest(engine) -> None:
     async with engine.connect() as conn:
         kinds = sorted(r.kind for r in await conn.execute(text("SELECT kind FROM event_facts")))
     assert kinds == ["none", "result"]
+
+
+@pytest.mark.parametrize(
+    ("headline", "eps", "estimate", "sales_estimate"),
+    [
+        (
+            "Helen of Troy Reports Q1 Adj. EPS $1.27 vs $1.12 Est., Sales $347.938M vs $356M Est.",
+            1.27,
+            1.12,
+            356e6,
+        ),
+        ("Target Q2 EPS $1.23 vs $1.12 est, Revenue $16.17B vs $16.18B est", 1.23, 1.12, 16.18e9),
+        (
+            "American Water Works Reports Q4 Ajd. EPS $0.69 vs $0.66 Est., "
+            "Sales $821M vs $843.36M Est.",
+            0.69,
+            0.66,
+            843.36e6,
+        ),
+        (
+            "Dolby Laboratories Q2 GAAP EPS $0.70 vs $0.52 Estimate, Adj. EPS $1.04",
+            0.70,
+            0.52,
+            None,
+        ),
+    ],
+)
+def test_older_vs_estimate_formats(headline, eps, estimate, sales_estimate) -> None:
+    (r,) = parse_headline(headline)
+    assert r.fields["eps"] == eps and r.fields["eps_estimate"] == estimate
+    if sales_estimate is not None:
+        assert r.fields["sales_estimate"] == pytest.approx(sales_estimate)
+
+
+def test_inline_means_a_zero_surprise_and_non_comparable_is_skipped() -> None:
+    (r,) = parse_headline(
+        "Williams Companies Q1 EPS $0.22, Inline, Sales $2.054B Miss $2.28B Estimate"
+    )
+    assert r.fields["eps_surprise"] == 0.0
+    assert parse_headline("ManpowerGroup Q3 EPS $2.42 May Not Compare To $1.93 Estimate") == []
+
+
+@pytest.mark.parametrize(
+    ("headline", "period", "eps", "estimate"),
+    [
+        (
+            "Oceaneering International Q4 2023 Adj EPS $0.19 Misses $0.25 Estimate, "
+            "Sales $654.63M Beat $627.44M Estimate",
+            "Q42023",
+            0.19,
+            0.25,
+        ),
+        (
+            "Dolby Laboratories Q4 Adj $0.65 Beats $0.53 Estimate, "
+            "Sales $290.56M Beat $290.20M Estimate",
+            "Q4",
+            0.65,
+            0.53,
+        ),
+        (
+            "Wolfspeed Q1 2024 Adj. EPS $(0.53) Beats $(0.67) Estimate, Revenue $197.4M Misses "
+            "$207.64M Estimate",
+            "Q12024",
+            -0.53,
+            -0.67,
+        ),
+    ],
+)
+def test_newer_formats(headline: str, period: str, eps: float, estimate: float) -> None:
+    (r,) = parse_headline(headline)
+    assert r.fields["period"] == period
+    assert r.fields["eps"] == eps and r.fields["eps_estimate"] == estimate
+    assert r.fields.get("sales_estimate") is not None
+
+
+def test_a_sales_only_headline_is_not_an_eps_result() -> None:
+    assert parse_headline("Bullish Q2 Sales $92.600M Beat $87.810M Estimate") == []

@@ -25,19 +25,24 @@ from dataclasses import dataclass, field
 from typing import Any
 
 _NUM = r"\(?-?\$?\(?-?[\d,]*\.?\d+\)?[KMB]?"
-_PERIOD = r"(?P<period>Q[1-4]|H[12]|FY\s?\d{2,4}|FY)"
-_BASIS = r"(?P<basis>Adj\.?|Adjusted|GAAP|Core|Non-GAAP|Operating)?\s?"
+_PERIOD = r"(?P<period>(?:Q[1-4]|H[12])(?:\s+(?:FY\s?)?\d{2,4})?|FY\s?\d{2,4}|FY)"
+_BASIS = r"(?P<basis>Adj\.?|Ajd\.?|Adjusted|GAAP|Core|Non-GAAP|Operating)?\s?"
 
 _RESULT = re.compile(
-    rf"\b{_PERIOD}\s+{_BASIS}EPS\s+(?P<eps>{_NUM})\s+"
-    rf"(?P<verdict>Beats|Misses|Meets|In-Line With|Inline With|Up From|Down From)\s+"
-    rf"(?P<ref>{_NUM})\s+(?P<ref_kind>Estimate|YoY)",
+    rf"\b{_PERIOD}\s+{_BASIS}(?:EPS\s+)?(?P<eps>{_NUM})\s+"
+    rf"(?P<verdict>Beats|Misses|Meets|In-Line With|Inline With|Up From|Down From|vs\.?)\s+"
+    rf"(?P<ref>{_NUM})\s+(?P<ref_kind>Estimate|Est\b\.?|YoY)",
+    re.IGNORECASE,
+)
+# "Q3 EPS $0.22, Inline": the estimate equalled, stated without its number.
+_INLINE = re.compile(
+    rf"\b{_PERIOD}\s+{_BASIS}EPS\s+(?P<eps>{_NUM}),?\s+(?:In-?Line|Inline)\b",
     re.IGNORECASE,
 )
 _SALES = re.compile(
     rf"\b(?:Sales|Revenue)\s+(?P<sales>{_NUM})\s+"
-    rf"(?P<verdict>Beat|Miss|Meet|Inline|In-Line|Up From|Down From)\s+"
-    rf"(?P<ref>{_NUM})\s+(?P<ref_kind>Estimate|YoY)",
+    rf"(?P<verdict>Beats?|Miss(?:es)?|Meets?|Inline|In-Line|Up From|Down From|vs\.?)\s+"
+    rf"(?P<ref>{_NUM})\s+(?P<ref_kind>Estimate|Est\b\.?|YoY)",
     re.IGNORECASE,
 )
 _GUIDE_RANGE = re.compile(
@@ -82,12 +87,15 @@ def parse_headline(headline: str) -> list[EarningsFacts]:
     """Every result or guidance statement in one headline (segments split on ';')."""
     out: list[EarningsFacts] = []
     for segment in headline.split(";"):
-        if (m := _RESULT.search(segment)) is not None:
+        # Guidance first: "Sees Q4 Adj EPS $0.20 vs $0.26 Est" is a forecast,
+        # though its tail reads like a result. Results carry no action verb.
+        g = _GUIDE_RANGE.search(segment)
+        if g is None and (m := _RESULT.search(segment)) is not None:
             eps, ref = money(m["eps"]), money(m["ref"])
-            estimated = m["ref_kind"].lower() == "estimate"
+            estimated = m["ref_kind"].lower().startswith("est")
             facts: dict[str, object] = {
                 "period": m["period"].replace(" ", "").upper(),
-                "basis": (m["basis"] or "GAAP").rstrip(".").lower(),
+                "basis": (m["basis"] or "GAAP").rstrip(".").lower().replace("ajd", "adj"),
                 "eps": eps,
                 "eps_estimate": ref if estimated else None,
                 "eps_surprise": _surprise(eps, ref) if estimated else None,
@@ -95,7 +103,7 @@ def parse_headline(headline: str) -> list[EarningsFacts]:
             }
             if (s := _SALES.search(segment, m.end())) is not None:
                 sales, sref = money(s["sales"]), money(s["ref"])
-                sest = s["ref_kind"].lower() == "estimate"
+                sest = s["ref_kind"].lower().startswith("est")
                 facts |= {
                     "sales": sales,
                     "sales_estimate": sref if sest else None,
@@ -104,7 +112,23 @@ def parse_headline(headline: str) -> list[EarningsFacts]:
                 }
             out.append(EarningsFacts("result", facts))
             continue
-        if (g := _GUIDE_RANGE.search(segment)) is not None:
+        if (m := _INLINE.search(segment)) is not None:
+            eps = money(m["eps"])
+            out.append(
+                EarningsFacts(
+                    "result",
+                    {
+                        "period": m["period"].replace(" ", "").upper(),
+                        "basis": (m["basis"] or "GAAP").rstrip(".").lower(),
+                        "eps": eps,
+                        "eps_estimate": eps,
+                        "eps_surprise": 0.0,
+                        "eps_verdict": "inline",
+                    },
+                )
+            )
+            continue
+        if g is not None:
             low, high, est = money(g["low"]), money(g["high"] or g["low"]), money(g["est"])
             mid = (low + high) / 2 if low is not None and high is not None else None
             period = g["period"]
@@ -132,7 +156,11 @@ def parse_headline(headline: str) -> list[EarningsFacts]:
     return out
 
 
-EXTRACTOR = "benzinga-earnings-v1"
+# v2: the 2016-2019 formats ("EPS $1.27 vs $1.12 Est.", "EPS $0.22, Inline",
+# "Ajd. EPS"), found validating the parser on the full history.
+# v3: a year after the quarter ("Q4 2023 Adj EPS"), "Adj $0.65 Beats", "Revenue
+# ... Misses" -- the commonest 2023-2026 misses.
+EXTRACTOR = "benzinga-earnings-v3"
 
 
 async def extract_all(engine: Any, *, batch: int = 5000) -> int:
