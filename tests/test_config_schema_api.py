@@ -9,7 +9,9 @@ from halal_trader.web import app as web_app
 
 
 @pytest.fixture
-def client(tmp_path, monkeypatch):
+def client(database_url, tmp_path, monkeypatch):
+    # database_url points the app's lifespan at a disposable test database;
+    # without it the app fell back to the default URL, the operator's own.
     monkeypatch.setenv("LOG_DIR", str(tmp_path / "logs"))
     app = web_app.create_app()
 
