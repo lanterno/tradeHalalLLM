@@ -33,6 +33,7 @@ class ResearchRun:
     event_labels: int | None = None  # labels written for matured events
     event_refresh: dict[str, int] = field(default_factory=dict)  # step -> rows added
     purification: dict[str, int] = field(default_factory=dict)  # account -> accruals added
+    zakat: dict[str, float] = field(default_factory=dict)  # account -> amount due, on a hawl
     errors: list[str] = field(default_factory=list)
 
 
@@ -150,7 +151,46 @@ async def run_research(engine: AsyncEngine, settings: Settings, *, today: date) 
     except Exception as exc:  # noqa: BLE001
         logger.error("research: purification failed: %r", exc)
         run.errors.append(f"purification: {exc!r}"[:300])
+
+    try:
+        run.zakat = await _zakat(engine, settings, today)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("research: zakat failed: %r", exc)
+        run.errors.append(f"zakat: {exc!r}"[:300])
     return run
+
+
+async def _zakat(engine: AsyncEngine, settings: Settings, today: date) -> dict[str, float]:
+    """On (or after) the hawl, record each account's zakat by both methods, once.
+
+    The run is weekday-only and 1 Ramadan can fall on a weekend, so a hawl
+    that has passed without an assessment is recorded on the next run, still
+    valued at the hawl day's close. Returns account -> amount due, empty on
+    every other day.
+    """
+    from halal_trader.compliance import zakat as z
+    from halal_trader.research.forward_book import book_names
+
+    if not settings.zakat.hawl_hijri:
+        return {}
+    start, hawl = z.hawl_period(z.parse_hawl(settings.zakat.hawl_hijri), today)
+    if (today - hawl).days > 14:  # only the hawl just passed; older ones are history
+        return {}
+    async with engine.connect() as conn:
+        done = {
+            r.account
+            for r in await conn.execute(
+                text("SELECT account FROM zakat_assessments WHERE hawl_date = :h"), {"h": hawl}
+            )
+        }
+    out: dict[str, float] = {}
+    for account in ["paper", *(f"book:{b}" for b in await book_names(engine))]:
+        if account in done:
+            continue
+        assessment = await z.assess(engine, account, period_start=start, hawl_date=hawl)
+        await z.record(engine, assessment)
+        out[account] = assessment.amount
+    return out
 
 
 async def _purify(engine: AsyncEngine, settings: Settings, today: date) -> dict[str, int]:

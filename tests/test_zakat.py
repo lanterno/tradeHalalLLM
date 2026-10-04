@@ -79,3 +79,21 @@ async def test_assessing_the_paper_account_from_its_fills_closes_and_dividends(
     async with engine.connect() as conn:
         rows = (await conn.execute(text("SELECT chosen, amount FROM zakat_assessments"))).all()
     assert len(rows) == 1 and rows[0].chosen == "trade goods"
+
+
+async def test_the_evening_run_records_a_passed_hawl_once_and_catches_up_a_weekend(
+    engine: AsyncEngine,
+) -> None:
+    from types import SimpleNamespace
+
+    from halal_trader.research.daily import _zakat
+
+    settings = SimpleNamespace(zakat=SimpleNamespace(hawl_hijri="09-01"))
+    # 1 Ramadan 1448 is Monday 2027-02-08; a run on the 10th still records it.
+    assert await _zakat(engine, settings, date(2027, 2, 7)) == {}  # before the hawl
+    first = await _zakat(engine, settings, date(2027, 2, 10))
+    assert set(first) == {"paper"}
+    assert await _zakat(engine, settings, date(2027, 2, 11)) == {}  # already recorded
+    assert await _zakat(engine, settings, date(2027, 6, 1)) == {}  # long past: history
+    unset = SimpleNamespace(zakat=SimpleNamespace(hawl_hijri=""))
+    assert await _zakat(engine, unset, date(2027, 2, 10)) == {}

@@ -945,6 +945,14 @@ class TradingBot(BaseTradingBot):
             return
         if run.errors:
             await self._alerts.notify("research.failed", "; ".join(run.errors)[:500])
+        if run.zakat:
+            await self._alerts.notify(
+                "zakat.due",
+                "Zakat assessed for this year's hawl (both of Dar al-Ifta's methods, the "
+                "higher taken): "
+                + ", ".join(f"{account} ${amount:,.2f}" for account, amount in run.zakat.items())
+                + ". Details: halal-trader zakat assess.",
+            )
         await beat(
             self._engine,
             RESEARCH,

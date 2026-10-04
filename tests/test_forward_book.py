@@ -28,6 +28,7 @@ def _no_event_refresh(monkeypatch: pytest.MonkeyPatch) -> None:
         return {}
 
     monkeypatch.setattr(research_daily, "_purify", no_purification)
+    monkeypatch.setattr(research_daily, "_zakat", no_purification)
 
 
 def _sessions(n: int) -> list[date]:
