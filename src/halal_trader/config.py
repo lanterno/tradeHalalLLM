@@ -169,6 +169,9 @@ class CoreSettings(BaseSettings):
     enabled: bool = Field(default=False)
     alpaca_api_key: str = Field(default="")
     alpaca_secret_key: str = Field(default="")
+    # Which Alpaca environment the core's keys belong to. True (paper) until the
+    # operator deliberately switches it; live money needs the plan's G1 sign-off.
+    paper: bool = Field(default=True)
     top_n: int = Field(default=100, ge=10, le=500)
 
 

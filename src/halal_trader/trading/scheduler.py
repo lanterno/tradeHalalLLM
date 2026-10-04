@@ -985,7 +985,7 @@ class TradingBot(BaseTradingBot):
             core.enabled and core.alpaca_api_key and core.alpaca_secret_key
         ):
             return
-        broker = AlpacaRestBroker(core.alpaca_api_key, core.alpaca_secret_key, paper=True)
+        broker = AlpacaRestBroker(core.alpaca_api_key, core.alpaca_secret_key, paper=core.paper)
         try:
             if not (await broker.get_clock()).is_open:
                 return

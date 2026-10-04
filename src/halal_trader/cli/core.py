@@ -26,7 +26,7 @@ async def _run(execute: bool, monthly: bool | None) -> tuple[Any, list[Any]]:
     if execute and not core.enabled:
         raise click.ClickException("CORE_ENABLED is false: preview with `halal-trader core plan`")
     engine = await init_db(settings.database_url)
-    broker = AlpacaRestBroker(core.alpaca_api_key, core.alpaca_secret_key, paper=True)
+    broker = AlpacaRestBroker(core.alpaca_api_key, core.alpaca_secret_key, paper=core.paper)
     today = today_eastern()
     try:
         is_monthly = (await ce.monthly_due(engine, today)) if monthly is None else monthly
@@ -40,10 +40,13 @@ async def _run(execute: bool, monthly: bool | None) -> tuple[Any, list[Any]]:
 
 
 def _show(p: Any) -> None:
+    from halal_trader.config import get_settings
+
     kind = "monthly rebalance" if p.monthly else "forced sales only"
+    where = "paper account" if get_settings().core.paper else "[bold red]LIVE account[/bold red]"
     console.print(
-        f"[bold]core[/bold] {kind}; equity ${p.equity:,.2f}, cash ${p.cash:,.2f}, "
-        f"screen {p.screen_as_of}"
+        f"[bold]core[/bold] on its {where}: {kind}; equity ${p.equity:,.2f}, "
+        f"cash ${p.cash:,.2f}, screen {p.screen_as_of}"
     )
     if p.halted:
         console.print(f"  [red]halted:[/red] {p.halted}")
