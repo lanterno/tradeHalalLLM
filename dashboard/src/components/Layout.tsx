@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 import {
   LayoutDashboard,
@@ -13,6 +14,8 @@ import {
   Microscope,
   Star,
   Telescope,
+  Menu,
+  X,
 } from "lucide-react";
 import { cn } from "../lib/utils";
 import { useHealth } from "../hooks/useSystem";
@@ -33,15 +36,64 @@ const NAV_ITEMS = [
   { to: "/system", icon: Settings, label: "System" },
 ] as const;
 
+function StatusDot({ isLive }: { isLive: boolean }) {
+  return (
+    <span
+      className={cn(
+        "h-2 w-2 rounded-full",
+        isLive ? "bg-accent animate-pulse" : "bg-muted",
+      )}
+    />
+  );
+}
+
 export function Layout() {
   const { data: health } = useHealth();
   const isLive = health?.status === "running";
   const location = useLocation();
+  // Phones: the sidebar is a drawer behind a top bar. It is open only on the
+  // page it was opened on, so any navigation (a link, the back button) closes it.
+  const [openOn, setOpenOn] = useState<string | null>(null);
+  const menuOpen = openOn === location.pathname;
+  const setMenuOpen = (open: boolean) => setOpenOn(open ? location.pathname : null);
 
   return (
-    <div className="flex h-screen overflow-hidden">
-      {/* Sidebar */}
-      <aside className="w-56 shrink-0 flex flex-col border-r border-border bg-surface">
+    <div className="flex h-dvh flex-col overflow-hidden md:flex-row">
+      {/* Top bar (phones only) */}
+      <header className="flex shrink-0 items-center justify-between border-b border-border bg-surface px-4 py-3 md:hidden">
+        <div className="flex items-center gap-2">
+          <Activity className="h-5 w-5 text-accent" />
+          <span className="font-bold tracking-tight text-white">Halal Trader</span>
+          <StatusDot isLive={isLive} />
+        </div>
+        <button
+          type="button"
+          aria-label={menuOpen ? "Close menu" : "Open menu"}
+          aria-expanded={menuOpen}
+          onClick={() => setMenuOpen(!menuOpen)}
+          className="rounded-lg p-2 text-muted hover:bg-surface-hover hover:text-white"
+        >
+          {menuOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
+        </button>
+      </header>
+
+      {/* Backdrop behind the open drawer (phones only) */}
+      {menuOpen && (
+        <div
+          className="fixed inset-0 z-30 bg-black/60 md:hidden"
+          onClick={() => setMenuOpen(false)}
+          aria-hidden="true"
+        />
+      )}
+
+      {/* Sidebar: a fixed column from md up, a slide-in drawer below */}
+      <aside
+        className={cn(
+          "fixed inset-y-0 left-0 z-40 flex w-64 flex-col border-r border-border bg-surface transition-transform duration-200",
+          "md:static md:z-auto md:w-56 md:shrink-0 md:translate-x-0",
+          menuOpen ? "translate-x-0" : "-translate-x-full",
+        )}
+      >
         {/* Brand */}
         <div className="flex items-center gap-2.5 px-5 py-5">
           <Activity className="h-6 w-6 text-accent" />
@@ -51,7 +103,7 @@ export function Layout() {
         </div>
 
         {/* Nav */}
-        <nav className="flex-1 flex flex-col gap-0.5 px-3 py-2">
+        <nav className="flex flex-1 flex-col gap-0.5 overflow-y-auto px-3 py-2">
           {NAV_ITEMS.map(({ to, icon: Icon, label, ...rest }) => (
             <NavLink
               key={to}
@@ -59,7 +111,7 @@ export function Layout() {
               end={"end" in rest}
               className={({ isActive }) =>
                 cn(
-                  "flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
+                  "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors md:py-2",
                   isActive
                     ? "bg-accent/10 text-accent"
                     : "text-muted hover:text-white hover:bg-surface-hover",
@@ -75,12 +127,7 @@ export function Layout() {
         {/* Status */}
         <div className="border-t border-border px-5 py-4">
           <div className="flex items-center gap-2 text-xs">
-            <span
-              className={cn(
-                "h-2 w-2 rounded-full",
-                isLive ? "bg-accent animate-pulse" : "bg-muted",
-              )}
-            />
+            <StatusDot isLive={isLive} />
             <span className={isLive ? "text-accent" : "text-muted"}>
               {isLive ? "Bot Running" : "Offline"}
             </span>
@@ -94,7 +141,7 @@ export function Layout() {
       {/* Main content — an ErrorBoundary keyed by path so one crashed page
           shows a recoverable error (sidebar survives) and navigating away
           resets it. */}
-      <main className="flex-1 overflow-y-auto">
+      <main className="min-w-0 flex-1 overflow-y-auto">
         <ErrorBoundary key={location.pathname}>
           <Outlet />
         </ErrorBoundary>

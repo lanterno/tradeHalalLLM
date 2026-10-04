@@ -17,7 +17,7 @@ export default function Halal() {
   const { data, isLoading, isError, error, refetch } = useHalalCompliance();
 
   return (
-    <div className="space-y-6 p-6">
+    <div className="space-y-6 p-4 sm:p-6">
       <div>
         <h1 className="text-2xl font-bold text-white">Halal Compliance</h1>
         <p className="mt-1 text-xs text-muted">

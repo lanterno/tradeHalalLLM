@@ -22,7 +22,7 @@ export default function Insights() {
   } = usePurification();
 
   return (
-    <div className="space-y-6 p-6">
+    <div className="space-y-6 p-4 sm:p-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-white">Insights</h1>
         <p className="text-xs text-muted">Auto-refresh every 5 min</p>

@@ -41,7 +41,7 @@ export default function Observability() {
   const llm = useLlmMetrics(llmWindow);
 
   return (
-    <div className="space-y-6 p-6">
+    <div className="space-y-6 p-4 sm:p-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-white">Observability</h1>
         <p className="text-xs text-muted">
@@ -84,7 +84,7 @@ export default function Observability() {
               <StatCard label="p99" value={formatMs(cycles.data?.p99_ms)} />
             </div>
 
-            <div className="mt-3 grid grid-cols-2 gap-4">
+            <div className="mt-3 grid grid-cols-1 gap-4 sm:grid-cols-2">
               <StatCard
                 label="Failed"
                 value={

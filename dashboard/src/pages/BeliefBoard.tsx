@@ -37,7 +37,7 @@ export default function BeliefBoard() {
   const decisions = useShadowDecisions(30);
 
   return (
-    <div className="space-y-6 p-6">
+    <div className="space-y-6 p-4 sm:p-6">
       <div>
         <h1 className="text-2xl font-bold text-white">Belief Board</h1>
         <p className="text-sm text-muted">
@@ -47,17 +47,17 @@ export default function BeliefBoard() {
       </div>
 
       {board.isError && (
-        <div className="rounded-xl border border-border bg-surface p-6">
+        <div className="rounded-xl border border-border bg-surface p-4 sm:p-6">
           <ErrorState compact error={board.error} onRetry={board.refetch} />
         </div>
       )}
       {board.isLoading && (
-        <div className="rounded-xl border border-border bg-surface p-6 text-muted">
+        <div className="rounded-xl border border-border bg-surface p-4 sm:p-6 text-muted">
           Loading beliefs…
         </div>
       )}
       {board.data && !board.data.available && (
-        <div className="rounded-xl border border-border bg-surface p-6 text-muted">
+        <div className="rounded-xl border border-border bg-surface p-4 sm:p-6 text-muted">
           No active beliefs yet — the shadow engine builds them while its
           daemon runs.
         </div>

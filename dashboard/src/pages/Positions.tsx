@@ -35,13 +35,13 @@ export default function Positions() {
 
   if (isError)
     return (
-      <div className="p-6">
+      <div className="p-4 sm:p-6">
         <ErrorState error={error} onRetry={refetch} />
       </div>
     );
 
   return (
-    <div className="space-y-6 p-6">
+    <div className="space-y-6 p-4 sm:p-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-white">Open Positions</h1>
         <span className="text-xs text-muted">Marked at entry (REST snapshot)</span>
@@ -68,7 +68,7 @@ export default function Positions() {
         />
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-3">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         {/* Positions table */}
         <div className="lg:col-span-2 rounded-xl border border-border bg-surface p-4">
           {isLoading ? (

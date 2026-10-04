@@ -34,13 +34,13 @@ export default function Analytics() {
 
   if (isError)
     return (
-      <div className="p-6">
+      <div className="p-4 sm:p-6">
         <ErrorState error={error} onRetry={refetch} />
       </div>
     );
 
   return (
-    <div className="space-y-6 p-6">
+    <div className="space-y-6 p-4 sm:p-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-white">Analytics</h1>
         <div className="flex gap-1 rounded-lg border border-border bg-surface p-0.5">
@@ -153,7 +153,7 @@ export default function Analytics() {
           </div>
 
           {/* Charts */}
-          <div className="grid gap-6 lg:grid-cols-2">
+          <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
             <div className="rounded-xl border border-border bg-surface p-4">
               <h3 className="mb-4 text-sm font-medium uppercase tracking-wider text-muted">
                 Daily P&L
@@ -176,7 +176,7 @@ export default function Analytics() {
             </div>
           </div>
 
-          <div className="grid gap-6 lg:grid-cols-2">
+          <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
             <div className="rounded-xl border border-border bg-surface p-4">
               <h3 className="mb-4 text-sm font-medium uppercase tracking-wider text-muted">
                 Exit Reasons

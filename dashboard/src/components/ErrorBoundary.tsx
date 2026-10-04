@@ -32,7 +32,7 @@ export class ErrorBoundary extends Component<Props, State> {
   render(): ReactNode {
     if (this.state.error) {
       return (
-        <div className="p-6">
+        <div className="p-4 sm:p-6">
           <ErrorState error={this.state.error} onRetry={this.reset} />
         </div>
       );

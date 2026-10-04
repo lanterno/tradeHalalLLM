@@ -67,7 +67,7 @@ export function BeliefCard({ belief }: { belief: Belief }) {
         <p className="mt-3 text-sm text-gray-300">{belief.thesis}</p>
       )}
 
-      <div className="mt-3 grid grid-cols-4 gap-2">
+      <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
         {level("support", belief.support)}
         {level("resistance", belief.resistance)}
         {level("stop", belief.stop)}
