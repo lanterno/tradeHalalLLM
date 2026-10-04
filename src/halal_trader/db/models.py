@@ -1173,6 +1173,45 @@ class ZakatAssessment(SQLModel, table=True):
     computed_at: datetime = Field(sa_type=sa.DateTime(timezone=True))
 
 
+class CoreOrder(SQLModel, table=True):
+    """One order of the core portfolio (portfolio/core_executor.py), filled or
+    refused, with the screen verdict it relied on: the receipt for every fill."""
+
+    __tablename__ = "core_orders"
+
+    id: int | None = Field(default=None, primary_key=True)
+    submitted_at: datetime = Field(sa_type=sa.DateTime(timezone=True))
+    symbol: str
+    side: str
+    qty: float
+    est_price: float
+    notional: float
+    reason: str
+    screen_as_of: date | None = None
+    status: str
+    broker_order_id: str | None = None
+    response: dict | None = Field(
+        default=None, sa_column=sa.Column("response", JSONB, nullable=True)
+    )
+
+
+class CoreRun(SQLModel, table=True):
+    """One run of the core executor: monthly or forced-sales-only, executed or a plan."""
+
+    __tablename__ = "core_runs"
+
+    id: int | None = Field(default=None, primary_key=True)
+    run_on: date
+    monthly: bool
+    executed: bool
+    equity: float
+    cash: float
+    orders: int
+    halted: str | None = None
+    screen_as_of: date | None = None
+    recorded_at: datetime = Field(sa_type=sa.DateTime(timezone=True))
+
+
 class MinuteBar(SQLModel, table=True):
     """One raw SIP minute bar (regular session) around an event: the intraday
     entry study's prices and, later, the slippage model's arrival prices."""

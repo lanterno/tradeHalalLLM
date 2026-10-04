@@ -12,6 +12,7 @@ import click
 from halal_trader.cli import books as books_cmd
 from halal_trader.cli import broker as broker_cmd
 from halal_trader.cli import compliance as compliance_cmd
+from halal_trader.cli import core as core_cmd
 from halal_trader.cli import dashboard as dashboard_cmd
 from halal_trader.cli import data as data_cmd
 from halal_trader.cli import db as db_cmd
@@ -68,6 +69,9 @@ cli.add_command(research_cmd.research)
 
 # ── Event store (S2: news and filings, scored and labelled) ──────
 cli.add_command(events_cmd.events)
+
+# ── The strict-halal core portfolio's own account ─────────────────
+cli.add_command(core_cmd.core)
 
 # ── Purification of impermissible income, and zakat ─────────────
 cli.add_command(purify_cmd.purify)

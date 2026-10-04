@@ -971,6 +971,51 @@ class TradingBot(BaseTradingBot):
             run.event_labels,
         )
 
+    async def core_trade(self) -> None:
+        """Trade the strict-halal core portfolio on its own account (portfolio/core_executor.py).
+
+        Monthly rebalance on the first run of a month, forced sales otherwise;
+        skipped on a closed market and when the core's keys are missing.
+        """
+        from halal_trader.execution.alpaca_broker import AlpacaRestBroker
+        from halal_trader.portfolio import core_executor as ce
+
+        core = self.settings.core
+        if self._engine is None or not (
+            core.enabled and core.alpaca_api_key and core.alpaca_secret_key
+        ):
+            return
+        broker = AlpacaRestBroker(core.alpaca_api_key, core.alpaca_secret_key, paper=True)
+        try:
+            if not (await broker.get_clock()).is_open:
+                return
+            today = today_eastern()
+            monthly = await ce.monthly_due(self._engine, today)
+            plan = await ce.plan(
+                self._engine, broker, today=today, monthly=monthly, top_n=core.top_n
+            )
+            results = await ce.execute(self._engine, broker, plan, today=today)
+            await ce.record_run(self._engine, plan, today=today, executed=True)
+        except Exception as exc:  # noqa: BLE001 -- the job must not take the bot down
+            logger.error("core trade failed: %r", exc)
+            await self._alerts.notify("core.failed", repr(exc)[:500])
+            return
+        finally:
+            await broker.disconnect()
+        refused = [r for r in results if r["st"] != "submitted"]
+        if plan.halted or refused:
+            await self._alerts.notify(
+                "core.attention",
+                (f"halted: {plan.halted}. " if plan.halted else "")
+                + (f"{len(refused)} order(s) refused." if refused else ""),
+            )
+        logger.info(
+            "core trade: %s, %d order(s), %d refused",
+            "monthly" if monthly else "forced-only",
+            len(results),
+            len(refused),
+        )
+
     async def end_of_day(self) -> None:
         """End-of-day job: close all positions, record P&L."""
         logger.info("=== END OF DAY ROUTINE ===")
@@ -1335,6 +1380,16 @@ class TradingBot(BaseTradingBot):
                 misfire_grace_time=3600,
                 coalesce=True,
             )
+            if self.settings.core.enabled:
+                # The strict-halal core, on its own account, late in the session.
+                self.scheduler.add_job(
+                    self.core_trade,
+                    CronTrigger(day_of_week="mon-fri", hour=15, minute=40, timezone=MARKET_TZ),
+                    id="core_trade",
+                    replace_existing=True,
+                    misfire_grace_time=600,
+                    coalesce=True,
+                )
             self.scheduler.add_job(
                 self._early_close_eod,
                 CronTrigger(day_of_week="mon-fri", hour=12, minute=50, timezone=MARKET_TZ),

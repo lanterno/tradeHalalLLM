@@ -161,6 +161,17 @@ class GLMSettings(BaseSettings):
     require_parameters: bool = Field(default=True)
 
 
+class CoreSettings(BaseSettings):
+    model_config = SettingsConfigDict(**_BASE_CONFIG, env_prefix="CORE_")
+    # The strict-halal core portfolio (portfolio/core_executor.py) trades on its
+    # own Alpaca paper account: the day-trader flattens its account every day.
+    # Nothing is ordered unless enabled AND both keys are set.
+    enabled: bool = Field(default=False)
+    alpaca_api_key: str = Field(default="")
+    alpaca_secret_key: str = Field(default="")
+    top_n: int = Field(default=100, ge=10, le=500)
+
+
 class ZakatSettings(BaseSettings):
     model_config = SettingsConfigDict(**_BASE_CONFIG, env_prefix="ZAKAT_")
     # The Hijri day the operator's zakat year ends, "MM-DD" (e.g. "09-01" for
@@ -388,6 +399,7 @@ class Settings(BaseSettings):
     web: WebSettings = Field(default_factory=WebSettings)
     llm: LLMSettings = Field(default_factory=LLMSettings)
     zakat: ZakatSettings = Field(default_factory=ZakatSettings)
+    core: CoreSettings = Field(default_factory=CoreSettings)
     stocks: StockSettings = Field(default_factory=StockSettings)
     telegram: TelegramSettings = Field(default_factory=TelegramSettings)
     slack: SlackSettings = Field(default_factory=SlackSettings)
