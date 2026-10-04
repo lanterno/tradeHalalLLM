@@ -13,9 +13,11 @@ Inputs:
   (Zoya / IdealRatings publish this; default 0 if unknown so a missing
   value never *under*-tags the obligation).
 
-Output: a :class:`PurificationEntry` capturing the obligation, ready to
-be persisted (DB table TBD in 3.6b) and surfaced to the operator for
-manual donation.
+Output: a :class:`PurificationEntry` capturing the obligation, for the
+admin calculator. The persisted dividend ledger is
+``compliance/purification.py`` (``purification_accruals``): it reads the
+haram share from the in-house screen's impure-income ratio at each
+ex-date and the holdings from the broker ledger.
 """
 
 from __future__ import annotations

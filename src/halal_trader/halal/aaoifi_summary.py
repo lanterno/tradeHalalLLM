@@ -35,7 +35,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from sqlalchemy import and_, func
-from sqlmodel import select
+from sqlmodel import col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from halal_trader.db.models import (
@@ -249,6 +249,7 @@ async def _sum_purification_accrued(session: AsyncSession, since: datetime) -> f
             )
         )
     ).one()
+    ledger = await _accruals(session, since, paid_only=False)
     cap = (
         await session.exec(
             select(
@@ -256,7 +257,24 @@ async def _sum_purification_accrued(session: AsyncSession, since: datetime) -> f
             ).where(RoundTripPurificationRow.timestamp >= since)
         )
     ).one()
-    return float(div or 0.0) + float(cap or 0.0)
+    return float(div or 0.0) + ledger + float(cap or 0.0)
+
+
+async def _accruals(session: AsyncSession, since: datetime, *, paid_only: bool) -> float:
+    """The real account's dividend purification (compliance/purification.py), by payment
+    date. Forward books are notional and stay out of the summary."""
+    from halal_trader.db.models import PurificationAccrual
+
+    when = func.coalesce(PurificationAccrual.payable_date, PurificationAccrual.ex_date)
+    conditions = [PurificationAccrual.account == "paper", when >= since.date()]
+    if paid_only:
+        conditions.append(col(PurificationAccrual.paid_at).is_not(None))
+    total = (
+        await session.exec(
+            select(func.coalesce(func.sum(PurificationAccrual.amount), 0.0)).where(*conditions)
+        )
+    ).one()
+    return float(total or 0.0)
 
 
 async def _sum_purification_disbursed(session: AsyncSession, since: datetime) -> float:
@@ -272,6 +290,7 @@ async def _sum_purification_disbursed(session: AsyncSession, since: datetime) ->
             )
         )
     ).one()
+    ledger = await _accruals(session, since, paid_only=True)
     cap = (
         await session.exec(
             select(
@@ -284,4 +303,4 @@ async def _sum_purification_disbursed(session: AsyncSession, since: datetime) ->
             )
         )
     ).one()
-    return float(div or 0.0) + float(cap or 0.0)
+    return float(div or 0.0) + ledger + float(cap or 0.0)

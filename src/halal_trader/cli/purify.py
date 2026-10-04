@@ -96,3 +96,29 @@ def report_cmd(account: str, year: int | None) -> None:
         "  The ratio counts interest income only: impermissible business revenue inside a "
         "passing company is not in SEC data, so treat this as the minimum."
     )
+
+
+@purify.command("paid")
+@click.option(
+    "--through",
+    type=click.DateTime(["%Y-%m-%d"]),
+    required=True,
+    help="Covers every unpaid accrual payable on or before this date.",
+)
+@click.option("--to", "paid_to", required=True, help="The charity, as you want it recorded.")
+@click.option("--account", default="paper", show_default=True)
+def paid_cmd(through: Any, paid_to: str, account: str) -> None:
+    """Record that you have given the outstanding purification away."""
+
+    async def _run() -> float:
+        from halal_trader.compliance.purification import mark_paid
+        from halal_trader.config import get_settings
+        from halal_trader.db.models import init_db
+
+        engine = await init_db(get_settings().database_url)
+        try:
+            return await mark_paid(engine, account, through=through.date(), paid_to=paid_to)
+        finally:
+            await engine.dispose()
+
+    console.print(f"marked ${asyncio.run(_run()):.2f} paid to {paid_to}")

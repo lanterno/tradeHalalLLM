@@ -453,7 +453,11 @@ class WebAction(SQLModel, table=True):
 
 
 class PurificationEntry(SQLModel, table=True):
-    """Persistent record of a dividend's haram-portion purification obligation.
+    """Legacy: persistent record of a dividend's haram-portion purification obligation.
+
+    Never written by anything; ``purification_accruals`` (compliance/purification.py)
+    is the dividend ledger since 2026-10-04. Still summed by the compliance summary
+    so no row entered by hand could be lost.
 
     One row per received dividend. ``paid_at`` stays NULL until the
     operator records the donation; ``outstanding_total`` queries filter
@@ -1140,6 +1144,8 @@ class PurificationAccrual(SQLModel, table=True):
     amount: float
     method: str
     accrued_at: datetime = Field(sa_type=sa.DateTime(timezone=True))
+    paid_at: datetime | None = Field(default=None, sa_type=sa.DateTime(timezone=True))
+    paid_to: str | None = None  # the charity, as the operator records it
 
 
 class MinuteBar(SQLModel, table=True):

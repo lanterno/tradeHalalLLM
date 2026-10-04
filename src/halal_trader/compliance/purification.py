@@ -299,3 +299,20 @@ async def report(engine: AsyncEngine, account: str, year: int) -> list[Purificat
         return [
             PurificationLine(r.symbol, float(r.d), float(r.a), int(r.n), int(r.u)) for r in rows
         ]
+
+
+async def mark_paid(engine: AsyncEngine, account: str, *, through: date, paid_to: str) -> float:
+    """Record a donation covering every unpaid accrual payable on or before ``through``.
+
+    Returns the amount marked paid. Accruals are never edited otherwise.
+    """
+    async with engine.begin() as conn:
+        result = await conn.execute(
+            text(
+                "UPDATE purification_accruals SET paid_at = now(), paid_to = :to "
+                "WHERE account = :acc AND paid_at IS NULL "
+                "AND coalesce(payable_date, ex_date) <= :t RETURNING amount"
+            ),
+            {"acc": account, "t": through, "to": paid_to},
+        )
+        return float(sum(r.amount for r in result))
