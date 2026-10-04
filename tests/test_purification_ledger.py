@@ -161,3 +161,17 @@ async def test_unpaid_accruals_can_be_recomputed_and_paid_ones_never_change(
     assert await clear_unpaid(engine) == 1
     (redone,) = await accrue_paper(engine, through=date(2026, 9, 30))
     assert redone.dividend_id == "d2" and redone.ratio == 0.013
+
+
+async def test_an_unpaid_obligation_stays_outstanding_after_its_quarter(
+    engine: AsyncEngine,
+) -> None:
+    from halal_trader.halal.aaoifi_summary import compute_aaoifi_summary
+
+    await _fill(engine, 1, "MSFT", "buy", 24, "2026-07-20 15:00:00-04:00")
+    await _screen(engine, "MSFT", date(2026, 6, 30), 0.02)
+    await _dividend(engine, "d1", "MSFT", date(2026, 8, 20), 0.91)  # paid in Q3
+    (a,) = await accrue_paper(engine, through=date(2026, 10, 1))
+    summary = await compute_aaoifi_summary(engine)  # run in a later quarter
+    assert summary.purification_outstanding_usd == pytest.approx(a.amount)
+    assert summary.status == "attention"

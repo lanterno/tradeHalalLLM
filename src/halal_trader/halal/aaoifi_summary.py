@@ -85,9 +85,15 @@ class AAOIFISummary:
     # capital-gains (RoundTripPurificationRow) sides.
     purification_accrued_usd: float
     purification_disbursed_usd: float
+    # Everything accrued and not yet given away, whenever it accrued. Accrued
+    # and disbursed above are quarter-to-date; outstanding must not be, or an
+    # unpaid obligation would vanish from the tile when the quarter turns.
+    purification_unpaid_usd: float | None = None
 
     @property
     def purification_outstanding_usd(self) -> float:
+        if self.purification_unpaid_usd is not None:
+            return max(0.0, self.purification_unpaid_usd)
         return max(0.0, self.purification_accrued_usd - self.purification_disbursed_usd)
 
     @property
@@ -161,6 +167,10 @@ async def compute_aaoifi_summary(
         # ── Purification (accrued + disbursed) ────────────────
         accrued = await _sum_purification_accrued(session, quarter)
         disbursed = await _sum_purification_disbursed(session, quarter)
+        ever = datetime(2000, 1, 1, tzinfo=UTC)
+        unpaid = await _sum_purification_accrued(session, ever) - await _sum_purification_disbursed(
+            session, ever
+        )
 
     return AAOIFISummary(
         quarter_start=quarter,
@@ -175,6 +185,7 @@ async def compute_aaoifi_summary(
         non_halal_fills_quarter=non_halal_fills,
         purification_accrued_usd=accrued,
         purification_disbursed_usd=disbursed,
+        purification_unpaid_usd=unpaid,
     )
 
 
