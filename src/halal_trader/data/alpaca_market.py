@@ -214,6 +214,29 @@ class AlpacaMarketData:
                 return out
             params["page_token"] = token
 
+    async def cash_dividends(
+        self, symbols: Iterable[str], *, start: date, end: date
+    ) -> list[dict[str, Any]]:
+        """Cash dividends (ex-date in [start, end]) from Alpaca's corporate actions."""
+        wanted = sorted({s.upper() for s in symbols})
+        out: list[dict[str, Any]] = []
+        for i in range(0, len(wanted), _SYMBOLS_PER_REQUEST):
+            params: dict[str, Any] = {
+                "symbols": ",".join(wanted[i : i + _SYMBOLS_PER_REQUEST]),
+                "types": "cash_dividend",
+                "start": start.isoformat(),
+                "end": end.isoformat(),
+                "limit": 1000,
+            }
+            while True:
+                payload = await self._get(f"{DATA_URL}/v1/corporate-actions", params)
+                out += (payload.get("corporate_actions") or {}).get("cash_dividends") or []
+                token = payload.get("next_page_token")
+                if not token:
+                    break
+                params["page_token"] = token
+        return out
+
     async def assets(self) -> list[Asset]:
         """Every active US equity Alpaca lists (stocks and ETFs)."""
         payload = await self._get(

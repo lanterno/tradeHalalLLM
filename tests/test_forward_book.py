@@ -22,6 +22,13 @@ def _no_event_refresh(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(daily, "refresh_events", nothing)
 
+    from halal_trader.research import daily as research_daily
+
+    async def no_purification(*args: object, **kwargs: object) -> dict[str, int]:
+        return {}
+
+    monkeypatch.setattr(research_daily, "_purify", no_purification)
+
 
 def _sessions(n: int) -> list[date]:
     out, d = [], date(2025, 1, 1)

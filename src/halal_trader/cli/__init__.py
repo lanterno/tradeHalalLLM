@@ -21,6 +21,7 @@ from halal_trader.cli import halt as halt_cmd
 from halal_trader.cli import insights as insights_cmd
 from halal_trader.cli import ledger as ledger_cmd
 from halal_trader.cli import llm_decisions as llm_decisions_cmd
+from halal_trader.cli import purify as purify_cmd
 from halal_trader.cli import quant as quant_cmd
 from halal_trader.cli import recommend as recommend_cmd
 from halal_trader.cli import reconcile as reconcile_cmd
@@ -66,6 +67,9 @@ cli.add_command(research_cmd.research)
 
 # ── Event store (S2: news and filings, scored and labelled) ──────
 cli.add_command(events_cmd.events)
+
+# ── Purification of impermissible income ─────────────────────────
+cli.add_command(purify_cmd.purify)
 
 # ── Research market data ───────────────────────────────────────
 cli.add_command(data_cmd.data)

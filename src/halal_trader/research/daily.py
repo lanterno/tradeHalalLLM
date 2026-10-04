@@ -32,6 +32,7 @@ class ResearchRun:
     books: dict[str, int] = field(default_factory=dict)  # name -> sessions appended
     event_labels: int | None = None  # labels written for matured events
     event_refresh: dict[str, int] = field(default_factory=dict)  # step -> rows added
+    purification: dict[str, int] = field(default_factory=dict)  # account -> accruals added
     errors: list[str] = field(default_factory=list)
 
 
@@ -144,4 +145,33 @@ async def run_research(engine: AsyncEngine, settings: Settings, *, today: date) 
         except Exception as exc:  # noqa: BLE001
             logger.error("research: forward book %s failed: %r", name, exc)
             run.errors.append(f"book {name}: {exc!r}"[:300])
+    try:
+        run.purification = await _purify(engine, settings, today)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("research: purification failed: %r", exc)
+        run.errors.append(f"purification: {exc!r}"[:300])
     return run
+
+
+async def _purify(engine: AsyncEngine, settings: Settings, today: date) -> dict[str, int]:
+    """New dividends of anything held in the last 400 days, then accrue every account."""
+    from halal_trader.compliance.purification import (
+        accrue_book,
+        accrue_paper,
+        held_symbols,
+        sync_dividends,
+    )
+    from halal_trader.research.forward_book import book_names
+
+    since = today - timedelta(days=400)
+    market = AlpacaMarketData(settings.alpaca.api_key, settings.alpaca.secret_key)
+    try:
+        await sync_dividends(
+            engine, market, await held_symbols(engine, since), start=since, end=today
+        )
+    finally:
+        await market.aclose()
+    out = {"paper": len(await accrue_paper(engine, through=today))}
+    for book in await book_names(engine):
+        out[f"book:{book}"] = len(await accrue_book(engine, book, through=today))
+    return out

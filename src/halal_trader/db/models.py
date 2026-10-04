@@ -1108,6 +1108,40 @@ class EventLabel(SQLModel, table=True):
     labeled_at: datetime = Field(sa_type=sa.DateTime(timezone=True))
 
 
+class Dividend(SQLModel, table=True):
+    """A cash dividend from Alpaca's corporate actions: rate per share, by ex-date."""
+
+    __tablename__ = "dividends"
+
+    source_id: str = Field(primary_key=True)
+    symbol: str
+    ex_date: date
+    payable_date: date | None = None
+    record_date: date | None = None
+    rate: float
+    special: bool = False
+
+
+class PurificationAccrual(SQLModel, table=True):
+    """The share of one dividend owed to charity: dividend x the payer's impure-income
+    ratio from the screen in force at the ex-date (compliance/purification.py)."""
+
+    __tablename__ = "purification_accruals"
+
+    account: str = Field(primary_key=True)  # "paper", or "book:<name>" (per notional)
+    dividend_id: str = Field(primary_key=True)
+    symbol: str
+    ex_date: date
+    payable_date: date | None = None
+    shares: float
+    dividend: float
+    impure_ratio: float
+    screen_as_of: date | None = None
+    amount: float
+    method: str
+    accrued_at: datetime = Field(sa_type=sa.DateTime(timezone=True))
+
+
 class MinuteBar(SQLModel, table=True):
     """One raw SIP minute bar (regular session) around an event: the intraday
     entry study's prices and, later, the slippage model's arrival prices."""
