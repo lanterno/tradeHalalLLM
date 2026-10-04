@@ -1148,6 +1148,31 @@ class PurificationAccrual(SQLModel, table=True):
     paid_to: str | None = None  # the charity, as the operator records it
 
 
+class ZakatAssessment(SQLModel, table=True):
+    """One account's zakat for one hawl, by both of Dar al-Ifta's methods (trade
+    goods: 2.5% of market value; income: 2.5% of dividends net of purification),
+    the higher chosen (compliance/zakat.py)."""
+
+    __tablename__ = "zakat_assessments"
+
+    account: str = Field(primary_key=True)
+    hawl_date: date = Field(primary_key=True)
+    hawl_hijri: str
+    period_start: date
+    market_value: float
+    trade_goods_zakat: float
+    dividends: float
+    purified: float
+    income_zakat: float
+    chosen: str
+    amount: float
+    holdings: dict | None = Field(
+        default=None, sa_column=sa.Column("holdings", JSONB, nullable=True)
+    )
+    source: str
+    computed_at: datetime = Field(sa_type=sa.DateTime(timezone=True))
+
+
 class MinuteBar(SQLModel, table=True):
     """One raw SIP minute bar (regular session) around an event: the intraday
     entry study's prices and, later, the slippage model's arrival prices."""

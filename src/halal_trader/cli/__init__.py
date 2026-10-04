@@ -28,6 +28,7 @@ from halal_trader.cli import reconcile as reconcile_cmd
 from halal_trader.cli import research as research_cmd
 from halal_trader.cli import stocks as stocks_cmd
 from halal_trader.cli import watchdog as watchdog_cmd
+from halal_trader.cli import zakat as zakat_cmd
 
 
 @click.group()
@@ -68,8 +69,9 @@ cli.add_command(research_cmd.research)
 # ── Event store (S2: news and filings, scored and labelled) ──────
 cli.add_command(events_cmd.events)
 
-# ── Purification of impermissible income ─────────────────────────
+# ── Purification of impermissible income, and zakat ─────────────
 cli.add_command(purify_cmd.purify)
+cli.add_command(zakat_cmd.zakat)
 
 # ── Research market data ───────────────────────────────────────
 cli.add_command(data_cmd.data)

@@ -161,6 +161,13 @@ class GLMSettings(BaseSettings):
     require_parameters: bool = Field(default=True)
 
 
+class ZakatSettings(BaseSettings):
+    model_config = SettingsConfigDict(**_BASE_CONFIG, env_prefix="ZAKAT_")
+    # The Hijri day the operator's zakat year ends, "MM-DD" (e.g. "09-01" for
+    # 1 Ramadan). Empty: `halal-trader zakat assess` needs --as-of.
+    hawl_hijri: str = Field(default="")
+
+
 class LLMSettings(BaseSettings):
     model_config = SettingsConfigDict(**_BASE_CONFIG, env_prefix="LLM_")
     model: str = Field(default="z-ai/glm-5.2")
@@ -380,6 +387,7 @@ class Settings(BaseSettings):
     halal: HalalSettings = Field(default_factory=HalalSettings)
     web: WebSettings = Field(default_factory=WebSettings)
     llm: LLMSettings = Field(default_factory=LLMSettings)
+    zakat: ZakatSettings = Field(default_factory=ZakatSettings)
     stocks: StockSettings = Field(default_factory=StockSettings)
     telegram: TelegramSettings = Field(default_factory=TelegramSettings)
     slack: SlackSettings = Field(default_factory=SlackSettings)
