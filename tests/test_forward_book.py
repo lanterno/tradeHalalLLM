@@ -232,3 +232,45 @@ async def test_a_failed_bar_update_still_advances_books_and_skips_a_fresh_screen
     assert run.books == {"s1": 1}
     assert run.screened is None
     assert len(run.errors) == 1 and "alpaca down" in run.errors[0]
+
+
+async def _cap_screen(engine: AsyncEngine, as_of: date, caps: dict[str, float]) -> None:
+    """A screen with prices and share counts: price 100, shares = cap / 100."""
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO halal_screen_results (as_of, symbol, sic_description, verdict, "
+                "reasons, metrics, method, screened_at) VALUES (:a, :s, '', :v, '[]', "
+                "CAST(:m AS JSONB), 'test', now()) ON CONFLICT (as_of, symbol) DO UPDATE "
+                "SET verdict = EXCLUDED.verdict, metrics = EXCLUDED.metrics"
+            ),
+            [
+                {
+                    "a": as_of,
+                    "s": s,
+                    "v": "halal" if s in caps else "not_halal",
+                    "m": '{"price": 100, "shares_outstanding": %f}' % (caps.get(s, 1e6) / 100),
+                }
+                for s in ("UP", "MID", "FLAT")
+            ],
+        )
+
+
+async def test_the_core_book_holds_cap_weights_trades_monthly_and_sells_a_failed_name_at_once(
+    engine: AsyncEngine,
+) -> None:
+    k = _mid_month_index()
+    await _seed(engine, k + 2)
+    await _cap_screen(engine, DAYS[k - 5], {"UP": 3e9, "MID": 1e9})
+    await create_book(engine, "core", strategy="core-strict-cap", top_n=100, cost_bps=5.0)
+    await advance_book(engine, "core", through=DAYS[k - 1])  # genesis
+    first = await advance_book(engine, "core", through=DAYS[k])  # the forced first rebalance
+    w = first[-1].weights
+    assert set(w) == {"UP", "MID"} and w["UP"] / w["MID"] == pytest.approx(3.0, rel=0.05)
+
+    quiet = await advance_book(engine, "core", through=DAYS[k + 1])  # mid-month, no change
+    assert quiet[-1].turnover == 0.0
+
+    await _cap_screen(engine, DAYS[k + 1], {"UP": 3e9})  # MID now fails the screen
+    sold = await advance_book(engine, "core", through=DAYS[k + 2])
+    assert set(sold[-1].weights) == {"UP"} and sold[-1].turnover > 0

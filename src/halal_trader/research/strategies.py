@@ -19,7 +19,7 @@ data/fundamentals.py). A name with no quality figure scores 0 there.
 from __future__ import annotations
 
 from bisect import bisect_right
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import date
 
 import numpy as np
@@ -150,3 +150,40 @@ def three_factor(inputs: Inputs, top_n: int = TOP_N) -> TargetFn:
 
 
 STRATEGIES = {"t3-cap": cap_weighted, "t4-tilt": cap_tilt, "t5-3factor": three_factor}
+
+
+def core_strict(inputs: Inputs, top_n: int = 100) -> TargetFn:
+    """The core portfolio's targets (portfolio/strict_core.py): cap weights of the
+    largest ``top_n`` eligible names, share classes splitting a company's cap."""
+    from halal_trader.portfolio.strict_core import targets
+
+    symbols = inputs.prices.symbols
+
+    def target(t: int) -> FloatArray:
+        firms = inputs.firms(t)
+        caps = inputs.caps(t, firms)  # already split across share classes
+        chosen = targets({symbols[j]: float(caps[j]) for j in firms if np.isfinite(caps[j])}, top_n)
+        out = np.zeros(len(symbols))
+        for s, w in chosen.items():
+            out[symbols.index(s)] = w
+        return out
+
+    return target
+
+
+def core_banding(symbols: list[str]) -> Callable[[FloatArray, FloatArray], FloatArray]:
+    """The core's trading rule as a backtest adjustment: out-of-band names to target,
+    names that left the target (no longer eligible or no longer top-N) sold. (The
+    forward book keeps a dropped-out name under 0.2% weight; immaterial here.)"""
+    from halal_trader.portfolio.strict_core import rebalance
+
+    def adjust(target: FloatArray, current: FloatArray) -> FloatArray:
+        goal = {symbols[i]: float(w) for i, w in enumerate(target) if w > 0}
+        now = {symbols[i]: float(w) for i, w in enumerate(current) if w > 0}
+        new = rebalance(now, goal, set(goal))
+        out = np.zeros(len(symbols))
+        for s, w in new.items():
+            out[symbols.index(s)] = w
+        return out
+
+    return adjust

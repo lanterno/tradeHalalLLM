@@ -241,8 +241,12 @@ def backtest_targets(
     *,
     cost_bps: float = 10.0,
     start: date | None = None,
+    adjust: Callable[[FloatArray, FloatArray], FloatArray] | None = None,
 ) -> BacktestResult:
     """Hold ``target_at(t)``'s weights from each month-end ``t``, drifting in between.
+
+    ``adjust(target, current)`` may turn the target into the weights actually
+    held (e.g. trading only names outside a band); by default the target is held.
 
     Each rebalance pays ``cost_bps`` per side on turnover. Weights must be
     non-negative and sum to at most 1 (the rest is cash, earning nothing).
@@ -277,6 +281,8 @@ def backtest_targets(
                 weights = weights / total
         if t in rebalances:
             target = target_at(t)
+            if adjust is not None:
+                target = adjust(target, weights)
             turnover = float(np.abs(target - weights).sum())
             turnovers.append(turnover)
             returns[t] -= turnover * cost_bps / 10_000.0

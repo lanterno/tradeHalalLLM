@@ -473,3 +473,71 @@ def event_backtest_cmd(signal: str, since: Any) -> None:
         f"{a.n_trials} distinct research trials; active Sharpe {a.active_sharpe:+.2f} "
         f"vs hurdle {a.hurdle_sharpe:.2f}, DSR {a.dsr:.2f}"
     )
+
+
+@research.command("core-backtest")
+@click.option("--top", default=100, show_default=True, help="Largest names held.")
+@click.option("--cost-bps", default=5.0, show_default=True)
+@click.option("--since", type=click.DateTime(["%Y-%m-%d"]), default="2017-01-01", show_default=True)
+def core_backtest_cmd(top: int, cost_bps: float, since: Any) -> None:
+    """The core portfolio's rule, point in time: tracking and cost against SPUS.
+
+    A description, not a trial: the core claims no edge, so it is not recorded.
+    """
+    from halal_trader.research.factor_backtest import (
+        backtest_targets,
+        benchmark_returns,
+        split_reused_tickers,
+        stats,
+    )
+    from halal_trader.research.strategies import Inputs, core_banding, core_strict
+
+    async def _load() -> tuple[Any, Any]:
+        from halal_trader.config import get_settings
+        from halal_trader.data.store import BENCHMARKS
+        from halal_trader.db.models import init_db
+        from halal_trader.market_hours import today_eastern
+        from halal_trader.research.factor_backtest import load_prices
+        from halal_trader.research.pit import pit_schedule
+
+        engine = await init_db(get_settings().database_url)
+        try:
+            schedule = await pit_schedule(
+                engine, start=since.date(), end=today_eastern(), top_n=1000
+            )
+            prices = await load_prices(
+                engine,
+                sorted(schedule.universe | set(BENCHMARKS)),
+                since=date(since.year - 2, 1, 1),
+            )
+            return schedule, prices
+        finally:
+            await engine.dispose()
+
+    schedule, prices = asyncio.run(_load())
+    prices, _ = split_reused_tickers(prices)
+    inputs = Inputs(prices, schedule.firms_from, {})
+    for label, adjust in (
+        ("monthly to target", None),
+        ("banded (the core rule)", core_banding(prices.symbols)),
+    ):
+        r = backtest_targets(
+            prices, core_strict(inputs, top), cost_bps=cost_bps, start=since.date(), adjust=adjust
+        )
+        spus_col = prices.symbols.index("SPUS")
+        have = [
+            i
+            for i, d in enumerate(r.days)
+            if not np.isnan(prices.close[prices.days.index(d), spus_col])
+        ]
+        days = r.days[have[0] + 1 :]
+        b = benchmark_returns(prices, "SPUS", days)
+        mine = r.returns[have[0] + 1 :]
+        s, sb = stats(mine), stats(b) if b is not None else None
+        te = float(np.std(mine - b, ddof=1) * np.sqrt(252)) if b is not None else float("nan")
+        console.print(
+            f"[bold]{label}[/bold], top {top}, {cost_bps:g} bps: "
+            f"since {days[0]} CAGR {s.cagr:+.2%} "
+            f"vs SPUS {sb.cagr if sb else float('nan'):+.2%}, tracking error {te:.2%}, "
+            f"avg turnover {r.avg_turnover:.1%}/month, maxDD {s.max_drawdown:.1%}"
+        )

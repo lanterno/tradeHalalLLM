@@ -50,7 +50,7 @@ from halal_trader.research.factor_backtest import (
 
 logger = logging.getLogger(__name__)
 
-STRATEGIES = ("s1-momentum-lowvol",)
+STRATEGIES = ("s1-momentum-lowvol", "core-strict-cap")
 UNIVERSE = 1000  # the point-in-time liquidity universe, as in `factor-backtest --pit`
 _HISTORY = timedelta(days=550)  # 252 + 21 sessions of lookback, with room for holidays
 
@@ -86,13 +86,14 @@ async def create_book(
 ) -> None:
     if strategy not in STRATEGIES:
         raise ValueError(f"unknown strategy {strategy!r}; known: {', '.join(STRATEGIES)}")
+    params = {"top_n": top_n, "cost_bps": cost_bps, "strategy": strategy}
     async with engine.begin() as conn:
         await conn.execute(
             text(
                 "INSERT INTO forward_books (name, strategy, params, created_at) "
                 "VALUES (:n, :s, CAST(:p AS JSONB), now())"
             ),
-            {"n": name, "s": strategy, "p": json.dumps({"top_n": top_n, "cost_bps": cost_bps})},
+            {"n": name, "s": strategy, "p": json.dumps(params)},
         )
 
 
@@ -105,12 +106,63 @@ async def _params(engine: AsyncEngine, name: str) -> dict[str, Any]:
     async with engine.connect() as conn:
         row = (
             await conn.execute(
-                text("SELECT params FROM forward_books WHERE name = :n"), {"n": name}
+                text("SELECT strategy, params FROM forward_books WHERE name = :n"), {"n": name}
             )
         ).first()
     if row is None:
         raise KeyError(f"no forward book named {name!r}")
-    return dict(row.params)
+    return {**dict(row.params), "strategy": row.strategy}
+
+
+async def _screen_caps(
+    engine: AsyncEngine, day: date
+) -> tuple[date, dict[str, tuple[float, int | None]]] | None:
+    """(screen date, symbol -> (market cap on that date, CIK)) for the halal names of
+    the newest screen on or before ``day``: price x shares as the screen read them."""
+    async with engine.connect() as conn:
+        as_of = (
+            await conn.execute(
+                text("SELECT max(as_of) FROM halal_screen_results WHERE as_of <= :d"), {"d": day}
+            )
+        ).scalar()
+        if as_of is None:
+            return None
+        rows = await conn.execute(
+            text(
+                "SELECT symbol, cik, (metrics->>'price')::float AS p, "
+                "(metrics->>'shares_outstanding')::float AS sh FROM halal_screen_results "
+                "WHERE as_of = :a AND verdict = 'halal'"
+            ),
+            {"a": as_of},
+        )
+        return as_of, {r.symbol: (r.p * r.sh, r.cik) for r in rows if r.p and r.sh}
+
+
+def _core_target(
+    prices: Prices,
+    t: int,
+    screened: date,
+    caps: dict[str, tuple[float, int | None]],
+    eligible: set[str],
+    top_n: int,
+) -> dict[str, float]:
+    """Cap weights of the largest ``top_n`` eligible names, caps rolled from the
+    screen date to session ``t`` by price (adjusted closes: splits cancel out)."""
+    from halal_trader.portfolio.strict_core import split_share_classes, targets
+
+    index = {s: i for i, s in enumerate(prices.symbols)}
+    then = max((i for i, d in enumerate(prices.days) if d <= screened), default=None)
+    rolled: dict[str, float] = {}
+    for symbol, (cap, _) in caps.items():
+        j = index.get(symbol)
+        if symbol not in eligible or j is None or then is None:
+            continue
+        p0, p1 = prices.close[then, j], prices.close[t, j]
+        if np.isnan(p0) or np.isnan(p1) or p0 <= 0:
+            continue
+        rolled[symbol] = cap * float(p1 / p0)
+    ciks = {s: caps[s][1] for s in rolled}
+    return targets(split_share_classes(rolled, ciks), top_n)
 
 
 async def _last_day(engine: AsyncEngine, name: str) -> BookDay | None:
@@ -185,6 +237,42 @@ def _drift(weights: dict[str, float], prices: Prices, t: int) -> tuple[dict[str,
     return {s: w / total for s, w in grown.items()} if total > 0 else {}, gross
 
 
+async def _core_step(
+    engine: AsyncEngine,
+    prices: Prices,
+    t: int,
+    weights: dict[str, float],
+    rebalance: bool,
+    top_n: int,
+    universe_size: int,
+) -> tuple[dict[str, float], float]:
+    """One session of the core: forced sales any day, banded rebalance monthly."""
+    from halal_trader.portfolio.strict_core import rebalance as banded
+    from halal_trader.portfolio.strict_core import turnover as traded
+
+    day, prev_day = prices.days[t], prices.days[t - 1]
+    eligible = await _halal_as_of(engine, prev_day)
+    if eligible is None:
+        return weights, 0.0
+    members = await universe_at(engine, prev_day, top_n=universe_size)
+    if members:
+        eligible &= set(members)
+    eligible -= set(BENCHMARKS)
+    failed = set(weights) - eligible
+    if not (rebalance or failed or day.month != prev_day.month):
+        return weights, 0.0
+    if rebalance or day.month != prev_day.month:
+        screen = await _screen_caps(engine, prev_day)
+        if screen is None:
+            return weights, 0.0
+        target = _core_target(prices, t - 1, screen[0], screen[1], eligible, top_n)
+    else:
+        # A mid-month forced sale: the failed names go, the rest are held as they are.
+        target = {s: w for s, w in weights.items() if s in eligible}
+    new = banded(weights, target, eligible)
+    return new, traded(weights, new)
+
+
 async def advance_book(engine: AsyncEngine, name: str, *, through: date) -> list[BookDay]:
     """Append every stored session after the book's last row, up to ``through``."""
     params = await _params(engine, name)
@@ -211,7 +299,12 @@ async def advance_book(engine: AsyncEngine, name: str, *, through: date) -> list
             day, prev_day = prices.days[t], prices.days[t - 1]
             weights, gross = _drift(weights, prices, t)
             turnover = 0.0
-            if rebalance or day.month != prev_day.month:
+            if params.get("strategy") == "core-strict-cap":
+                weights, turnover = await _core_step(
+                    engine, prices, t, weights, rebalance, top_n, universe_size
+                )
+                rebalance = False
+            elif rebalance or day.month != prev_day.month:
                 eligible = await _halal_as_of(engine, prev_day)
                 members = await universe_at(engine, prev_day, top_n=universe_size)
                 if eligible is not None and members:  # no monthly bars yet: no restriction
