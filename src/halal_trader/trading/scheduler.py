@@ -1414,6 +1414,15 @@ class TradingBot(BaseTradingBot):
             )
 
             self.scheduler.start()
+            # One line naming every job and its next run, so a job that should be
+            # there (core_trade with CORE_ENABLED) can be checked from the logs.
+            logger.info(
+                "Scheduled jobs: %s",
+                ", ".join(
+                    f"{job.id} @ {job.next_run_time:%a %H:%M %Z}" if job.next_run_time else job.id
+                    for job in self.scheduler.get_jobs()
+                ),
+            )
             logger.info(
                 "Trading bot started — interval: %d min, target: %.1f%%, loss limit: %.1f%%",
                 interval,
