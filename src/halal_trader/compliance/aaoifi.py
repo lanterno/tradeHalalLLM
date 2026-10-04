@@ -17,7 +17,8 @@ Two screens, both must pass (AAOIFI Shariah Standard No. 21):
    swing), else x the latest price:
    * interest-bearing debt < 30% of market cap;
    * cash + interest-bearing securities < 30% of market cap;
-   * interest (impermissible) income < 5% of revenue;
+   * interest (impermissible) income < 5% of revenue (when not reported,
+     estimated as cash and securities x 5%);
    * accounts receivable < 49% of market cap (S&P's fourth ratio).
 
 The operator chose the strict option (2026-10-02): wherever AAOIFI and
@@ -41,6 +42,10 @@ DEBT_LIMIT = 0.30
 CASH_LIMIT = 0.30
 IMPURE_INCOME_LIMIT = 0.05
 RECEIVABLES_LIMIT = 0.49  # S&P Shariah: accounts receivable < 49% of market cap
+# Yield assumed on cash and interest-bearing securities when a company does
+# not report its interest income: at or above US bill yields in most years
+# since 2016, so the estimate errs high.
+ESTIMATED_YIELD = 0.05
 
 # (low, high, reason): SIC ranges whose primary activity is impermissible.
 PROHIBITED_SIC: tuple[tuple[int, int, str], ...] = (
@@ -128,9 +133,17 @@ def screen(f: Fundamentals) -> ScreenResult:
     debt_ratio = _ratio(f.interest_bearing_debt, market_cap)
     cash_ratio = _ratio(f.cash_and_securities, market_cap)
     receivables_ratio = _ratio(f.receivables or 0.0, market_cap)
-    # No interest income reported at all is common for operating companies
-    # that earn none worth tagging; treat it as zero only when revenue exists.
-    impure = f.interest_income if f.interest_income is not None else 0.0
+    # Unreported interest income is not zero: Microsoft has not tagged it under
+    # a standard concept since 2013, nor Apple since 2023 (they use their own
+    # elements, which frames do not carry). It is then estimated as the cash and
+    # interest-bearing securities times ESTIMATED_YIELD, so a missing figure can
+    # only make the test, and purification, stricter.
+    estimated = f.interest_income is None
+    impure = (
+        f.interest_income
+        if f.interest_income is not None
+        else (f.cash_and_securities or 0.0) * ESTIMATED_YIELD
+    )
     impure_ratio = _ratio(impure, f.revenue) if f.revenue else None
     metrics: dict[str, float | None] = {
         "sic": float(f.sic) if f.sic is not None else None,
@@ -140,6 +153,7 @@ def screen(f: Fundamentals) -> ScreenResult:
         "cash_ratio": cash_ratio,
         "receivables_ratio": receivables_ratio,
         "impure_income_ratio": impure_ratio,
+        "impure_income_estimated": 1.0 if estimated else 0.0,
     }
 
     activity = prohibited_activity(f.sic)

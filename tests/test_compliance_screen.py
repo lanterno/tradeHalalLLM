@@ -99,8 +99,18 @@ def test_anything_not_computable_is_doubtful_not_halal(kw: dict) -> None:
     assert screen(_f(**kw)).verdict == "doubtful"  # fail closed
 
 
-def test_unreported_interest_income_counts_as_zero_when_revenue_exists() -> None:
-    assert screen(_f(interest_income=None)).verdict == "halal"
+def test_unreported_interest_income_is_estimated_from_cash_not_taken_as_zero() -> None:
+    # 20,000 of cash and securities x 5% = 1,000 of estimated interest on
+    # 50,000 of revenue: 2%, under the 5% limit.
+    r = screen(_f(interest_income=None))
+    assert r.verdict == "halal"
+    assert r.metrics["impure_income_ratio"] == pytest.approx(0.02)
+    assert r.metrics["impure_income_estimated"] == 1.0
+    # Cash-rich and revenue-poor: the estimate alone fails it (Microsoft and
+    # Apple stopped tagging interest income; absence is not zero).
+    assert screen(_f(interest_income=None, revenue=10_000.0)).verdict == "not_halal"
+    # A reported figure wins over the estimate.
+    assert screen(_f(interest_income=0.0)).metrics["impure_income_estimated"] == 0.0
 
 
 def test_a_foreign_issuer_never_passes_on_ratios_but_still_fails_on_them() -> None:

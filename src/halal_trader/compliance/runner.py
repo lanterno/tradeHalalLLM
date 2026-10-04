@@ -63,7 +63,8 @@ logger = logging.getLogger(__name__)
 # v7: the strict option -- S&P's activity exclusions and receivables test on top
 #     of AAOIFI, and an index Shariah board's exclusion as a veto.
 # v8: the veto recognises holdings named in fund-administrator style.
-METHOD = "aaoifi-sec-v8"
+# v9: unreported interest income is estimated (cash and securities x 5%), not zero.
+METHOD = "aaoifi-sec-v9"
 UNMAPPED = "not an SEC registrant (or ticker not mapped)"
 _MIN_MONTHS = 12
 

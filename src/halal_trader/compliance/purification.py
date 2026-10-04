@@ -316,3 +316,15 @@ async def mark_paid(engine: AsyncEngine, account: str, *, through: date, paid_to
             {"acc": account, "t": through, "to": paid_to},
         )
         return float(sum(r.amount for r in result))
+
+
+async def clear_unpaid(engine: AsyncEngine) -> int:
+    """Drop every accrual not yet paid, so it is recomputed under the current screen.
+
+    The correction path when the screen's ratios change (v9 stopped reading an
+    unreported interest income as zero). Paid accruals are settled history and
+    stay exactly as they were.
+    """
+    async with engine.begin() as conn:
+        result = await conn.execute(text("DELETE FROM purification_accruals WHERE paid_at IS NULL"))
+        return result.rowcount or 0

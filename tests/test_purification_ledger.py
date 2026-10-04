@@ -140,3 +140,24 @@ async def test_a_donation_settles_the_ledger_and_the_compliance_summary_sees_bot
     assert await mark_paid(engine, "paper", through=date(2026, 9, 30), paid_to="x") == 0.0
     async with AsyncSession(engine) as session:
         assert await _sum_purification_disbursed(session, since) == pytest.approx(a.amount)
+
+
+async def test_unpaid_accruals_can_be_recomputed_and_paid_ones_never_change(
+    engine: AsyncEngine,
+) -> None:
+    from halal_trader.compliance.purification import clear_unpaid, mark_paid
+
+    await _fill(engine, 1, "MSFT", "buy", 24, "2026-07-20 15:00:00-04:00")
+    await _screen(engine, "MSFT", date(2026, 6, 30), 0.0)
+    await _dividend(engine, "d1", "MSFT", date(2026, 8, 20), 0.91)
+    await _dividend(engine, "d2", "MSFT", date(2026, 9, 10), 0.91)
+    await accrue_paper(engine, through=date(2026, 8, 31))
+    await mark_paid(engine, "paper", through=date(2026, 8, 31), paid_to="x")  # d1 settled
+    await accrue_paper(engine, through=date(2026, 9, 30))
+    async with engine.begin() as conn:  # the screen is corrected after the fact
+        await conn.execute(
+            text("UPDATE halal_screen_results SET metrics = '{\"impure_income_ratio\": 0.013}'")
+        )
+    assert await clear_unpaid(engine) == 1
+    (redone,) = await accrue_paper(engine, through=date(2026, 9, 30))
+    assert redone.dividend_id == "d2" and redone.ratio == 0.013

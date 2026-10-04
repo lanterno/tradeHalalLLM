@@ -18,13 +18,19 @@ def purify() -> None:
 
 @purify.command("sync")
 @click.option("--days", default=400, show_default=True, help="Dividend history to fetch.")
-def sync_cmd(days: int) -> None:
+@click.option(
+    "--recompute-unpaid",
+    is_flag=True,
+    help="Recompute every unpaid accrual under the current screen (paid ones never change).",
+)
+def sync_cmd(days: int, recompute_unpaid: bool) -> None:
     """Fetch dividends of everything held, then accrue the paper account and every book."""
 
     async def _run() -> tuple[int, dict[str, int]]:
         from halal_trader.compliance.purification import (
             accrue_book,
             accrue_paper,
+            clear_unpaid,
             held_symbols,
             sync_dividends,
         )
@@ -43,6 +49,8 @@ def sync_cmd(days: int) -> None:
             n = await sync_dividends(
                 engine, market, symbols, start=today - timedelta(days=days), end=today
             )
+            if recompute_unpaid:
+                await clear_unpaid(engine)
             accrued = {"paper": len(await accrue_paper(engine, through=today))}
             for book in await book_names(engine):
                 accrued[f"book:{book}"] = len(await accrue_book(engine, book, through=today))
