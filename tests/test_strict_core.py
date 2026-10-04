@@ -48,3 +48,9 @@ def test_a_new_name_enters_and_holdings_inside_their_band_make_room_pro_rata() -
     assert rebalance({"A": 1.0}, {"A": 0.8, "B": 0.2}, {"A", "B"}) == pytest.approx(
         {"A": 1 / 1.2, "B": 0.2 / 1.2}
     )
+
+
+def test_a_small_new_name_enters_even_below_the_band_floor() -> None:
+    target = {"BIG": 0.999, "TINY": 0.001}  # TINY's target is under the 0.2% floor
+    new = rebalance({}, target, {"BIG", "TINY"})
+    assert new == pytest.approx(target)

@@ -5,11 +5,12 @@ later, by execution, so the record and the orders follow one rule:
 
 * **targets:** the largest ``TOP_N`` eligible names by market cap, weighted
   by cap; a company's share classes split its cap;
-* **trades:** a holding the screen no longer passes goes to zero; a name
-  whose weight has drifted outside its band (``BAND`` of its target, at
-  least ``BAND_FLOOR``) goes back to target; everything else is left alone,
-  and the result is renormalised. Doing nothing inside the band is what
-  keeps turnover, and so cost, near an index fund's.
+* **trades:** a holding the screen no longer passes goes to zero; a new name
+  enters at its target; a holding whose weight has drifted outside its band
+  (``BAND`` of its target, at least ``BAND_FLOOR``) goes back to target;
+  everything else is left alone, and the result is renormalised. Doing
+  nothing inside the band is what keeps turnover, and so cost, near an
+  index fund's.
 """
 
 from __future__ import annotations
@@ -61,7 +62,13 @@ def rebalance(
         if symbol not in eligible:
             continue  # the screen no longer passes it: sold
         now, goal = current.get(symbol, 0.0), target.get(symbol, 0.0)
-        new[symbol] = goal if outside_band(now, goal, band) else now
+        if now == 0.0 and goal > 0.0:
+            # Entering always trades. The band's floor exists to skip tiny
+            # adjustments; applied to an entry it kept every name with a target
+            # under 0.2% out for good (the first plan bought 64 of the top 100).
+            new[symbol] = goal
+        else:
+            new[symbol] = goal if outside_band(now, goal, band) else now
     new = {s: w for s, w in new.items() if w > 0}
     total = sum(new.values())
     return {s: w / total for s, w in new.items()} if total > 0 else {}
