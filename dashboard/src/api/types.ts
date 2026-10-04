@@ -334,3 +334,50 @@ export interface ShadowDecision {
   payload: Record<string, unknown>;
   correlation_id: string | null;
 }
+
+export interface ZakatAssessment {
+  period_start: string;
+  hawl_date: string;
+  market_value: number;
+  trade_goods_zakat: number;
+  dividends: number;
+  purified: number;
+  income_zakat: number;
+  chosen: "trade goods" | "income";
+  amount: number;
+}
+
+export interface ZakatStatus {
+  configured: boolean;
+  source: string;
+  hawl_hijri?: string;
+  last_hawl?: string;
+  next_hawl?: string;
+  next_hawl_hijri?: string;
+  days_to_next?: number;
+  if_due_today?: ZakatAssessment;
+  last_recorded?: {
+    hawl_date: string;
+    hawl_hijri: string;
+    market_value: number;
+    trade_goods_zakat: number;
+    income_zakat: number;
+    chosen: string;
+    amount: number;
+  } | null;
+}
+
+export interface PurificationLine {
+  symbol: string;
+  dividends: number;
+  amount: number;
+  payments: number;
+  assumed: number;
+}
+
+export interface PurificationYear {
+  year: number;
+  lines: PurificationLine[];
+  dividends: number;
+  amount: number;
+}

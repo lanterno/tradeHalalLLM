@@ -1,5 +1,6 @@
 import { useHalalCompliance } from "../hooks/useHalal";
 import { StatCard } from "../components/StatCard";
+import { ZakatPanel } from "../components/ZakatPanel";
 import { ErrorState } from "../components/ErrorState";
 import { formatUsd } from "../lib/utils";
 import { CheckCircle2, AlertTriangle, XCircle } from "lucide-react";
@@ -21,7 +22,7 @@ export default function Halal() {
       <div>
         <h1 className="text-2xl font-bold text-white">Halal Compliance</h1>
         <p className="mt-1 text-xs text-muted">
-          AAOIFI screening + purification summary. Long-only, no
+          AAOIFI screening, purification and zakat. Long-only, no
           interest/leverage/derivatives — non-negotiable.
         </p>
       </div>
@@ -121,6 +122,8 @@ export default function Halal() {
               />
             </div>
           </section>
+
+          <ZakatPanel />
         </>
       )}
     </div>
