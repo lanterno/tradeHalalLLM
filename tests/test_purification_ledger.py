@@ -174,4 +174,42 @@ async def test_an_unpaid_obligation_stays_outstanding_after_its_quarter(
     (a,) = await accrue_paper(engine, through=date(2026, 10, 1))
     summary = await compute_aaoifi_summary(engine)  # run in a later quarter
     assert summary.purification_outstanding_usd == pytest.approx(a.amount)
-    assert summary.status == "attention"
+    # Paper accounts rehearse: the amount shows, but it is not money owed.
+    assert summary.status == "compliant"
+
+
+async def test_a_live_accounts_unpaid_purification_needs_attention(
+    engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from halal_trader import config
+    from halal_trader.halal.aaoifi_summary import compute_aaoifi_summary
+
+    monkeypatch.setenv("ALPACA_PAPER_TRADE", "false")
+    monkeypatch.setattr(config, "_settings", None)
+    await _fill(engine, 1, "MSFT", "buy", 24, "2026-07-20 15:00:00-04:00")
+    await _screen(engine, "MSFT", date(2026, 6, 30), 0.02)
+    await _dividend(engine, "d1", "MSFT", date(2026, 8, 20), 0.91)
+    await accrue_paper(engine, through=date(2026, 10, 1))
+    assert (await compute_aaoifi_summary(engine)).status == "attention"
+    config._settings = None
+
+
+async def test_each_account_sees_only_its_own_fills(engine: AsyncEngine) -> None:
+    from halal_trader.compliance.purification import accrue_account, paper_positions
+
+    await _fill(engine, 1, "MSFT", "buy", 24, "2026-07-20 15:00:00-04:00")  # day-trader
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO broker_activities (id, activity_type, transaction_time, symbol, side, "
+                "qty, price, raw, account) VALUES ('c1', 'FILL', :t, 'MSFT', 'buy', 3.5, 400, "
+                "'{}', 'core')"
+            ),
+            {"t": datetime.fromisoformat("2026-07-21 15:40:00-04:00")},
+        )
+    assert await paper_positions(engine, date(2026, 8, 1)) == {"MSFT": 24.0}
+    assert await paper_positions(engine, date(2026, 8, 1), "core") == {"MSFT": 3.5}
+    await _screen(engine, "MSFT", date(2026, 6, 30), 0.02)
+    await _dividend(engine, "d1", "MSFT", date(2026, 8, 20), 1.0)
+    (core,) = await accrue_account(engine, "core", through=date(2026, 10, 1))
+    assert core.account == "core" and core.shares == 3.5

@@ -89,13 +89,26 @@ class Performance:
     worst_day: float
 
 
-async def sync_broker_ledger(engine: AsyncEngine, client: AlpacaRestClient) -> SyncResult:
-    """Pull new activities and recent equity from Alpaca into the ledger tables."""
+async def sync_broker_ledger(
+    engine: AsyncEngine, client: AlpacaRestClient, *, account: str = "paper"
+) -> SyncResult:
+    """Pull new activities and recent equity of one account into the ledger tables.
+
+    ``account`` names it: "paper" for the day-trader's, "core" for the core
+    portfolio's. Every reader filters on it, so the two never mix.
+    """
     async with engine.connect() as conn:
         newest = (
-            await conn.execute(text("SELECT max(transaction_time) FROM broker_activities"))
+            await conn.execute(
+                text("SELECT max(transaction_time) FROM broker_activities WHERE account = :a"),
+                {"a": account},
+            )
         ).scalar()
-        last_equity_day = (await conn.execute(text("SELECT max(day) FROM broker_equity"))).scalar()
+        last_equity_day = (
+            await conn.execute(
+                text("SELECT max(day) FROM broker_equity WHERE account = :a"), {"a": account}
+            )
+        ).scalar()
 
     activities = await client.activities(after=newest - _OVERLAP if newest else None)
     new = 0
@@ -105,9 +118,9 @@ async def sync_broker_ledger(engine: AsyncEngine, client: AlpacaRestClient) -> S
                 text(
                     """
                     INSERT INTO broker_activities (id, activity_type, transaction_time, symbol,
-                        side, qty, price, net_amount, order_id, raw)
+                        side, qty, price, net_amount, order_id, raw, account)
                     VALUES (:id, :activity_type, :transaction_time, :symbol, :side, :qty,
-                        :price, :net_amount, :order_id, CAST(:raw AS JSONB))
+                        :price, :net_amount, :order_id, CAST(:raw AS JSONB), :account)
                     ON CONFLICT (id) DO NOTHING
                     """
                 ),
@@ -122,6 +135,7 @@ async def sync_broker_ledger(engine: AsyncEngine, client: AlpacaRestClient) -> S
                     "net_amount": a.net_amount,
                     "order_id": a.order_id,
                     "raw": json.dumps(a.raw),
+                    "account": account,
                 },
             )
             new += result.rowcount or 0
@@ -131,7 +145,10 @@ async def sync_broker_ledger(engine: AsyncEngine, client: AlpacaRestClient) -> S
     else:
         async with engine.connect() as conn:
             first = (
-                await conn.execute(text("SELECT min(transaction_time) FROM broker_activities"))
+                await conn.execute(
+                    text("SELECT min(transaction_time) FROM broker_activities WHERE account = :a"),
+                    {"a": account},
+                )
             ).scalar()
         start = first.date() if first else date.today() - timedelta(days=365)
     points = await client.equity_history(start=start)
@@ -140,15 +157,22 @@ async def sync_broker_ledger(engine: AsyncEngine, client: AlpacaRestClient) -> S
             await conn.execute(
                 text(
                     """
-                    INSERT INTO broker_equity (day, equity, profit_loss, profit_loss_pct, synced_at)
-                    VALUES (:day, :equity, :pl, :plp, now())
-                    ON CONFLICT (day) DO UPDATE SET equity = EXCLUDED.equity,
+                    INSERT INTO broker_equity (account, day, equity, profit_loss,
+                        profit_loss_pct, synced_at)
+                    VALUES (:account, :day, :equity, :pl, :plp, now())
+                    ON CONFLICT (account, day) DO UPDATE SET equity = EXCLUDED.equity,
                         profit_loss = EXCLUDED.profit_loss,
                         profit_loss_pct = EXCLUDED.profit_loss_pct,
                         synced_at = EXCLUDED.synced_at
                     """
                 ),
-                {"day": p.day, "equity": p.equity, "pl": p.profit_loss, "plp": p.profit_loss_pct},
+                {
+                    "account": account,
+                    "day": p.day,
+                    "equity": p.equity,
+                    "pl": p.profit_loss,
+                    "plp": p.profit_loss_pct,
+                },
             )
     logger.info(
         "broker ledger synced: %d activities fetched (%d new), %d equity days",
@@ -168,7 +192,7 @@ async def reconcile_fills(engine: AsyncEngine, day: date) -> FillReconciliation:
             text(
                 """
                 SELECT symbol, side, qty FROM broker_activities
-                WHERE activity_type = 'FILL'
+                WHERE activity_type = 'FILL' AND account = 'paper'
                   AND (transaction_time AT TIME ZONE 'America/New_York')::date = :day
                 """
             ),
@@ -200,7 +224,11 @@ async def reconcile_fills(engine: AsyncEngine, day: date) -> FillReconciliation:
 
 
 async def performance(
-    engine: AsyncEngine, *, start: date | None = None, end: date | None = None
+    engine: AsyncEngine,
+    *,
+    start: date | None = None,
+    end: date | None = None,
+    account: str = "paper",
 ) -> Performance | None:
     """Account performance from broker equity alone. None with fewer than 2 days."""
     async with engine.connect() as conn:
@@ -209,12 +237,13 @@ async def performance(
                 text(
                     """
                     SELECT day, equity, profit_loss_pct FROM broker_equity
-                    WHERE (CAST(:start AS DATE) IS NULL OR day >= :start)
+                    WHERE account = :account
+                      AND (CAST(:start AS DATE) IS NULL OR day >= :start)
                       AND (CAST(:end AS DATE) IS NULL OR day <= :end)
                     ORDER BY day
                     """
                 ),
-                {"start": start, "end": end},
+                {"start": start, "end": end, "account": account},
             )
         ).all()
     if len(rows) < 2:

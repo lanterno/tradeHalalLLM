@@ -762,6 +762,8 @@ class BrokerActivity(SQLModel, table=True):
     net_amount: float | None = None
     order_id: str | None = None
     raw: dict[str, Any] = Field(sa_column=sa.Column("raw", JSONB, nullable=False))
+    # Which Alpaca account: "paper" (the day-trader's) or "core".
+    account: str = Field(default="paper", sa_column_kwargs={"server_default": "paper"})
 
 
 class BrokerEquity(SQLModel, table=True):
@@ -774,6 +776,9 @@ class BrokerEquity(SQLModel, table=True):
 
     __tablename__ = "broker_equity"
 
+    account: str = Field(
+        default="paper", primary_key=True, sa_column_kwargs={"server_default": "paper"}
+    )
     day: date = Field(primary_key=True)
     equity: float
     profit_loss: float

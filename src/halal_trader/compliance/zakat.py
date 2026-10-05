@@ -111,9 +111,11 @@ async def _holdings(engine: AsyncEngine, account: str, day: date) -> dict[str, f
 
     from halal_trader.compliance.purification import BOOK_NOTIONAL, paper_positions
 
-    if account == "paper":
+    if not account.startswith("book:"):  # a broker account: "paper", "core"
         out = {}
-        for symbol, shares in (await paper_positions(engine, day + timedelta(days=1))).items():
+        for symbol, shares in (
+            await paper_positions(engine, day + timedelta(days=1), account)
+        ).items():
             close = await _close_on_or_before(engine, symbol, day)
             if close:
                 out[symbol] = shares * close

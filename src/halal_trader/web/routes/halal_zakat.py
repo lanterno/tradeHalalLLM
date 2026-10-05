@@ -47,17 +47,34 @@ def register(app: FastAPI) -> None:
         last_start, last_hawl = z.hawl_period(hawl, today)
         # The next hawl: the one on or before a day a lunar year ahead.
         _, next_hawl = z.hawl_period(hawl, date.fromordinal(last_hawl.toordinal() + 360))
-        now = await z.assess(ctx.engine, "paper", period_start=last_hawl, hawl_date=today)
-        async with ctx.engine.connect() as conn:
-            row = (
-                await conn.execute(
-                    text(
-                        "SELECT hawl_date, hawl_hijri, market_value, trade_goods_zakat, dividends, "
-                        "purified, income_zakat, chosen, amount FROM zakat_assessments "
-                        "WHERE account = 'paper' ORDER BY hawl_date DESC LIMIT 1"
+        accounts = []
+        for account, label in (("core", "Core portfolio"), ("paper", "Day-trader")):
+            now = await z.assess(ctx.engine, account, period_start=last_hawl, hawl_date=today)
+            async with ctx.engine.connect() as conn:
+                row = (
+                    await conn.execute(
+                        text(
+                            "SELECT hawl_date, hawl_hijri, amount, chosen FROM zakat_assessments "
+                            "WHERE account = :a ORDER BY hawl_date DESC LIMIT 1"
+                        ),
+                        {"a": account},
                     )
-                )
-            ).first()
+                ).first()
+            accounts.append(
+                {
+                    "account": account,
+                    "label": label,
+                    "if_due_today": _assessment_json(now),
+                    "last_recorded": None
+                    if row is None
+                    else {
+                        "hawl_date": row.hawl_date.isoformat(),
+                        "hawl_hijri": row.hawl_hijri,
+                        "amount": row.amount,
+                        "chosen": row.chosen,
+                    },
+                }
+            )
         return JSONResponse(
             {
                 "configured": True,
@@ -67,18 +84,7 @@ def register(app: FastAPI) -> None:
                 "next_hawl": next_hawl.isoformat(),
                 "next_hawl_hijri": z.hijri_label(next_hawl),
                 "days_to_next": (next_hawl - today).days,
-                "if_due_today": _assessment_json(now),
-                "last_recorded": None
-                if row is None
-                else {
-                    "hawl_date": row.hawl_date.isoformat(),
-                    "hawl_hijri": row.hawl_hijri,
-                    "market_value": row.market_value,
-                    "trade_goods_zakat": row.trade_goods_zakat,
-                    "income_zakat": row.income_zakat,
-                    "chosen": row.chosen,
-                    "amount": row.amount,
-                },
+                "accounts": accounts,
             }
         )
 
@@ -89,21 +95,26 @@ def register(app: FastAPI) -> None:
         from halal_trader.compliance.purification import report
 
         y = year or date.today().year
-        lines = await report(ctx.engine, "paper", y)
+        lines = [
+            (account, line)
+            for account in ("core", "paper")
+            for line in await report(ctx.engine, account, y)
+        ]
         return JSONResponse(
             {
                 "year": y,
                 "lines": [
                     {
+                        "account": account,
                         "symbol": line.symbol,
                         "dividends": round(line.dividends, 2),
                         "amount": round(line.amount, 2),
                         "payments": line.payments,
                         "assumed": line.assumed,
                     }
-                    for line in lines
+                    for account, line in lines
                 ],
-                "dividends": round(sum(x.dividends for x in lines), 2),
-                "amount": round(sum(x.amount for x in lines), 2),
+                "dividends": round(sum(x.dividends for _, x in lines), 2),
+                "amount": round(sum(x.amount for _, x in lines), 2),
             }
         )

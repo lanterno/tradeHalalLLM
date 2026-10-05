@@ -184,7 +184,7 @@ async def _zakat(engine: AsyncEngine, settings: Settings, today: date) -> dict[s
             )
         }
     out: dict[str, float] = {}
-    for account in ["paper", *(f"book:{b}" for b in await book_names(engine))]:
+    for account in ["paper", "core", *(f"book:{b}" for b in await book_names(engine))]:
         if account in done:
             continue
         assessment = await z.assess(engine, account, period_start=start, hawl_date=hawl)
@@ -196,6 +196,7 @@ async def _zakat(engine: AsyncEngine, settings: Settings, today: date) -> dict[s
 async def _purify(engine: AsyncEngine, settings: Settings, today: date) -> dict[str, int]:
     """New dividends of anything held in the last 400 days, then accrue every account."""
     from halal_trader.compliance.purification import (
+        accrue_account,
         accrue_book,
         accrue_paper,
         held_symbols,
@@ -212,6 +213,7 @@ async def _purify(engine: AsyncEngine, settings: Settings, today: date) -> dict[
     finally:
         await market.aclose()
     out = {"paper": len(await accrue_paper(engine, through=today))}
+    out["core"] = len(await accrue_account(engine, "core", through=today))
     for book in await book_names(engine):
         out[f"book:{book}"] = len(await accrue_book(engine, book, through=today))
     return out

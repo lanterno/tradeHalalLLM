@@ -26,10 +26,12 @@ def test_zakat_shows_the_next_hawl_and_both_methods_if_due_today(client) -> None
     assert body["configured"] is True and body["hawl_hijri"] == "09-01"
     assert body["next_hawl_hijri"].endswith("-09-01 AH")
     assert 0 < body["days_to_next"] <= 355
-    today = body["if_due_today"]
-    assert {"trade_goods_zakat", "income_zakat", "chosen", "amount"} <= set(today)
-    assert today["amount"] == max(today["trade_goods_zakat"], today["income_zakat"])
-    assert body["last_recorded"] is None
+    assert [a["account"] for a in body["accounts"]] == ["core", "paper"]
+    for account in body["accounts"]:
+        today = account["if_due_today"]
+        assert {"trade_goods_zakat", "income_zakat", "chosen", "amount"} <= set(today)
+        assert today["amount"] == max(today["trade_goods_zakat"], today["income_zakat"])
+        assert account["last_recorded"] is None
 
 
 def test_purification_lists_the_year_per_holding(client) -> None:

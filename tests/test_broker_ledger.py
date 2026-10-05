@@ -240,7 +240,8 @@ def _bot(engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch, fake: FakeAlpaca 
     bot = TradingBot.__new__(TradingBot)
     bot._engine = engine
     bot.settings = SimpleNamespace(
-        alpaca=SimpleNamespace(api_key="k", secret_key="s", paper_trade=True)
+        alpaca=SimpleNamespace(api_key="k", secret_key="s", paper_trade=True),
+        core=SimpleNamespace(alpaca_api_key="", alpaca_secret_key="", paper=True),
     )
     bot._alerts = SimpleNamespace(notify=AsyncMock())
     return bot

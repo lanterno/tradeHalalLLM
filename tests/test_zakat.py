@@ -92,7 +92,7 @@ async def test_the_evening_run_records_a_passed_hawl_once_and_catches_up_a_weeke
     # 1 Ramadan 1448 is Monday 2027-02-08; a run on the 10th still records it.
     assert await _zakat(engine, settings, date(2027, 2, 7)) == {}  # before the hawl
     first = await _zakat(engine, settings, date(2027, 2, 10))
-    assert set(first) == {"paper"}
+    assert set(first) == {"paper", "core"}  # both broker accounts
     assert await _zakat(engine, settings, date(2027, 2, 11)) == {}  # already recorded
     assert await _zakat(engine, settings, date(2027, 6, 1)) == {}  # long past: history
     unset = SimpleNamespace(zakat=SimpleNamespace(hawl_hijri=""))

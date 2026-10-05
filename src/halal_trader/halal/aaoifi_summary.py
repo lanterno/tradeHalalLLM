@@ -89,6 +89,9 @@ class AAOIFISummary:
     # and disbursed above are quarter-to-date; outstanding must not be, or an
     # unpaid obligation would vanish from the tile when the quarter turns.
     purification_unpaid_usd: float | None = None
+    # The part owed by accounts trading real money. Paper accounts accrue
+    # purification as a rehearsal: shown, but not a reason for "attention".
+    purification_unpaid_live_usd: float | None = None
 
     @property
     def purification_outstanding_usd(self) -> float:
@@ -113,7 +116,12 @@ class AAOIFISummary:
         """
         if self.non_halal_fills_quarter > 0:
             return "violation"
-        if self.purification_outstanding_usd > 0.01:
+        owed = (
+            self.purification_unpaid_live_usd
+            if self.purification_unpaid_live_usd is not None
+            else self.purification_outstanding_usd
+        )
+        if owed > 0.01:
             return "attention"
         return "compliant"
 
@@ -171,6 +179,10 @@ async def compute_aaoifi_summary(
         unpaid = await _sum_purification_accrued(session, ever) - await _sum_purification_disbursed(
             session, ever
         )
+        live = _live_accounts()
+        unpaid_live = await _accruals(
+            session, ever, paid_only=False, accounts=live
+        ) - await _accruals(session, ever, paid_only=True, accounts=live)
 
     return AAOIFISummary(
         quarter_start=quarter,
@@ -186,6 +198,7 @@ async def compute_aaoifi_summary(
         purification_accrued_usd=accrued,
         purification_disbursed_usd=disbursed,
         purification_unpaid_usd=unpaid,
+        purification_unpaid_live_usd=unpaid_live,
     )
 
 
@@ -271,13 +284,33 @@ async def _sum_purification_accrued(session: AsyncSession, since: datetime) -> f
     return float(div or 0.0) + ledger + float(cap or 0.0)
 
 
-async def _accruals(session: AsyncSession, since: datetime, *, paid_only: bool) -> float:
-    """The real account's dividend purification (compliance/purification.py), by payment
-    date. Forward books are notional and stay out of the summary."""
+def _live_accounts() -> list[str]:
+    """The broker accounts trading real money (none while both are paper)."""
+    from halal_trader.config import get_settings
+
+    settings = get_settings()
+    live = [] if settings.alpaca.paper_trade else ["paper"]
+    if not settings.core.paper:
+        live.append("core")
+    return live
+
+
+async def _accruals(
+    session: AsyncSession,
+    since: datetime,
+    *,
+    paid_only: bool,
+    accounts: list[str] | None = None,
+) -> float:
+    """The broker accounts' dividend purification (compliance/purification.py), by
+    payment date. Forward books are notional and stay out of the summary."""
     from halal_trader.db.models import PurificationAccrual
 
+    names = ["paper", "core"] if accounts is None else accounts
+    if not names:
+        return 0.0
     when = func.coalesce(PurificationAccrual.payable_date, PurificationAccrual.ex_date)
-    conditions = [PurificationAccrual.account == "paper", when >= since.date()]
+    conditions = [col(PurificationAccrual.account).in_(names), when >= since.date()]
     if paid_only:
         conditions.append(col(PurificationAccrual.paid_at).is_not(None))
     total = (

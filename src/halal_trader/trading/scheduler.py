@@ -908,6 +908,15 @@ class TradingBot(BaseTradingBot):
             return
         try:
             await sync_broker_ledger(self._engine, client)
+            core = self.settings.core
+            if core.alpaca_api_key and core.alpaca_secret_key:
+                core_client = AlpacaRestClient(
+                    core.alpaca_api_key, core.alpaca_secret_key, paper=core.paper
+                )
+                try:
+                    await sync_broker_ledger(self._engine, core_client, account="core")
+                finally:
+                    await core_client.aclose()
             rec = await reconcile_fills(self._engine, today_eastern())
         except Exception as exc:  # noqa: BLE001 -- the job must not take the bot down
             logger.error("broker ledger sync failed: %r", exc)

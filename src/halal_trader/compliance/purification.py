@@ -87,18 +87,20 @@ async def impure_ratio(
     return max(float(row.r), 0.0), row.as_of, True
 
 
-async def paper_positions(engine: AsyncEngine, before: date) -> dict[str, float]:
-    """Shares held at the close of the last session before ``before`` (New York),
-    rebuilt from the broker ledger's fills (flat when the ledger began)."""
+async def paper_positions(
+    engine: AsyncEngine, before: date, account: str = "paper"
+) -> dict[str, float]:
+    """Shares ``account`` held at the close of the last session before ``before``
+    (New York), rebuilt from the broker ledger's fills (flat when the ledger began)."""
     async with engine.connect() as conn:
         rows = await conn.execute(
             text(
                 "SELECT symbol, sum(CASE WHEN side = 'buy' THEN qty ELSE -qty END) AS q "
-                "FROM broker_activities WHERE activity_type = 'FILL' "
+                "FROM broker_activities WHERE activity_type = 'FILL' AND account = :a "
                 "AND (transaction_time AT TIME ZONE 'America/New_York')::date < :d "
                 "GROUP BY symbol"
             ),
-            {"d": before},
+            {"d": before, "a": account},
         )
         return {r.symbol: float(r.q) for r in rows if r.q and float(r.q) > 1e-9}
 
@@ -168,17 +170,17 @@ async def _store(engine: AsyncEngine, accruals: list[Accrual]) -> None:
         )
 
 
-async def accrue_paper(engine: AsyncEngine, *, through: date) -> list[Accrual]:
-    """Accrue every stored dividend the paper account held at its ex-date."""
+async def accrue_account(engine: AsyncEngine, account: str, *, through: date) -> list[Accrual]:
+    """Accrue every stored dividend a broker account ("paper", "core") held at its ex-date."""
     out = []
-    for d in await _pending(engine, "paper", through):
-        shares = (await paper_positions(engine, d.ex_date)).get(d.symbol, 0.0)
+    for d in await _pending(engine, account, through):
+        shares = (await paper_positions(engine, d.ex_date, account)).get(d.symbol, 0.0)
         if shares <= 0:
             continue
         ratio, as_of, known = await impure_ratio(engine, d.symbol, d.ex_date)
         out.append(
             Accrual(
-                "paper",
+                account,
                 d.source_id,
                 d.symbol,
                 d.ex_date,
@@ -192,6 +194,11 @@ async def accrue_paper(engine: AsyncEngine, *, through: date) -> list[Accrual]:
         )
     await _store(engine, out)
     return out
+
+
+async def accrue_paper(engine: AsyncEngine, *, through: date) -> list[Accrual]:
+    """The day-trader's account (the ledger's original, "paper")."""
+    return await accrue_account(engine, "paper", through=through)
 
 
 async def accrue_book(

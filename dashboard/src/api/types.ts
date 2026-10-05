@@ -355,19 +355,23 @@ export interface ZakatStatus {
   next_hawl?: string;
   next_hawl_hijri?: string;
   days_to_next?: number;
-  if_due_today?: ZakatAssessment;
-  last_recorded?: {
+  accounts?: ZakatAccount[];
+}
+
+export interface ZakatAccount {
+  account: string;
+  label: string;
+  if_due_today: ZakatAssessment;
+  last_recorded: {
     hawl_date: string;
     hawl_hijri: string;
-    market_value: number;
-    trade_goods_zakat: number;
-    income_zakat: number;
-    chosen: string;
     amount: number;
+    chosen: string;
   } | null;
 }
 
 export interface PurificationLine {
+  account: string;
   symbol: string;
   dividends: number;
   amount: number;

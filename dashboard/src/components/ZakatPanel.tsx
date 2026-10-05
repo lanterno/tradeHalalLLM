@@ -39,7 +39,6 @@ export function ZakatPanel() {
   const zakat = useZakat();
   const purification = usePurification();
   const z = zakat.data;
-  const now = z?.if_due_today;
 
   return (
     <>
@@ -60,37 +59,43 @@ export function ZakatPanel() {
               </p>
               <p className="text-xs text-muted">in {z.days_to_next} days</p>
             </div>
-            {now && (
-              <>
-                <p className="text-xs uppercase tracking-wider text-muted">
-                  If it were due today (since {z.last_hawl})
+            <p className="text-xs uppercase tracking-wider text-muted">
+              If it were due today (since {z.last_hawl})
+            </p>
+            {(z.accounts ?? []).map((a) => (
+              <div key={a.account} className="space-y-2">
+                <p className="text-sm font-medium text-white">
+                  {a.label}{" "}
+                  <span className="text-xs font-normal text-muted">
+                    · market value {formatUsd(a.if_due_today.market_value)}
+                  </span>
                 </p>
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                   <Method
                     name="Trade goods"
-                    basis={`2.5% of market value ${formatUsd(now.market_value)}`}
-                    amount={now.trade_goods_zakat}
-                    higher={now.chosen === "trade goods"}
+                    basis={`2.5% of market value ${formatUsd(a.if_due_today.market_value)}`}
+                    amount={a.if_due_today.trade_goods_zakat}
+                    higher={a.if_due_today.chosen === "trade goods"}
                   />
                   <Method
                     name="Income"
-                    basis={`2.5% of dividends ${formatUsd(now.dividends)} less purified ${formatUsd(now.purified)}`}
-                    amount={now.income_zakat}
-                    higher={now.chosen === "income"}
+                    basis={`2.5% of dividends ${formatUsd(a.if_due_today.dividends)} less purified ${formatUsd(a.if_due_today.purified)}`}
+                    amount={a.if_due_today.income_zakat}
+                    higher={a.if_due_today.chosen === "income"}
                   />
                 </div>
-              </>
-            )}
-            {z.last_recorded && (
-              <p className="text-xs text-muted">
-                Last recorded: {z.last_recorded.hawl_date} ({z.last_recorded.hawl_hijri}) —{" "}
-                <span className="text-white">{formatUsd(z.last_recorded.amount)}</span> by{" "}
-                {z.last_recorded.chosen}
-              </p>
-            )}
+                {a.last_recorded && (
+                  <p className="text-xs text-muted">
+                    Last recorded: {a.last_recorded.hawl_date} ({a.last_recorded.hawl_hijri}) —{" "}
+                    <span className="text-white">{formatUsd(a.last_recorded.amount)}</span> by{" "}
+                    {a.last_recorded.chosen}
+                  </p>
+                )}
+              </div>
+            ))}
             <p className="text-[11px] leading-relaxed text-muted">
-              {z.source}. Paper account. The nisab test and cash held depend on your
-              whole wealth and are not included.
+              {z.source}. Both accounts are paper for now. The nisab test and cash
+              held depend on your whole wealth and are not included.
             </p>
           </div>
         )}
@@ -110,8 +115,16 @@ export function ZakatPanel() {
           <div className="rounded-xl border border-border bg-surface p-4">
             <ul className="divide-y divide-border">
               {purification.data.lines.map((line) => (
-                <li key={line.symbol} className="flex items-center justify-between gap-3 py-2 text-sm">
-                  <span className="font-medium text-white">{line.symbol}</span>
+                <li
+                  key={`${line.account}-${line.symbol}`}
+                  className="flex items-center justify-between gap-3 py-2 text-sm"
+                >
+                  <span className="font-medium text-white">
+                    {line.symbol}{" "}
+                    <span className="text-[10px] font-normal uppercase text-muted">
+                      {line.account === "core" ? "core" : "day-trader"}
+                    </span>
+                  </span>
                   <span className="text-right text-muted">
                     {formatUsd(line.dividends)} dividends ·{" "}
                     <span className="text-warning">{formatUsd(line.amount)}</span> to purify
