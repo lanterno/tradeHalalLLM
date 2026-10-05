@@ -23,7 +23,7 @@ import { useHealth } from "../hooks/useSystem";
 import { ErrorBoundary } from "./ErrorBoundary";
 
 const NAV_ITEMS = [
-  { to: "/", icon: LayoutDashboard, label: "Dashboard", end: true },
+  { to: "/", icon: LayoutDashboard, label: "Home", end: true },
   { to: "/core", icon: PieChart, label: "Core portfolio" },
   { to: "/recommendation", icon: Star, label: "Stock of the Day" },
   { to: "/beliefs", icon: Telescope, label: "Belief Board" },

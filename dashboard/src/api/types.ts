@@ -460,3 +460,80 @@ export interface CoreStatus {
   orders: CoreOrder[];
   runs: CoreRun[];
 }
+
+export interface HomeAccount {
+  account: string;
+  label: string;
+  status: "active" | "paused" | "disabled";
+  paper: boolean;
+  equity: number;
+  cash: number | null;
+  invested: number | null;
+  change: number | null;
+  change_pct: number | null;
+  positions: number;
+  symbols: string[];
+  as_of: string;
+  source: "live" | "ledger" | "run";
+}
+
+export interface HomeBenchmark {
+  symbol: string;
+  price: number;
+  change_pct: number | null;
+  as_of: string;
+  live: boolean;
+}
+
+export interface HomeStatus {
+  now: string;
+  today: string;
+  today_hijri: string;
+  market: {
+    session: Record<string, string>;
+    holidays: string[];
+    early_closes: string[];
+    next_holiday: { date: string; name: string } | null;
+    next_early_close: string | null;
+    trading_days_month: number;
+    trading_days_left: number;
+    benchmarks: HomeBenchmark[];
+  };
+  accounts: HomeAccount[];
+  total: {
+    equity: number;
+    change: number | null;
+    change_pct: number | null;
+    series: { date: string; equity: number }[];
+    change_30d_pct: number | null;
+  };
+  set_aside: {
+    purification_unpaid: number;
+    zakat: { amount: number; chosen: string; next_hawl: string; next_hawl_hijri: string } | null;
+  };
+  portfolio: {
+    holdings: {
+      symbol: string;
+      name: string | null;
+      value: number;
+      weight: number;
+      change_today: number | null;
+    }[];
+    count: number;
+    top_weight: number | null;
+    sectors: { sector: string; weight: number }[];
+    screen: { as_of: string | null; halal: number; screened: number; failing: string[] };
+  };
+  upcoming: { at: string; label: string; detail: string }[];
+  gate: {
+    ready: boolean;
+    days: number;
+    min_days: number;
+    monthly_runs: number;
+    tracking_error: number | null;
+    max_tracking_error: number;
+    gap: number | null;
+    max_gap: number;
+    clean: boolean;
+  };
+}
