@@ -954,6 +954,14 @@ class TradingBot(BaseTradingBot):
             return
         if run.errors:
             await self._alerts.notify("research.failed", "; ".join(run.errors)[:500])
+        if run.core_ready_now:
+            await self._alerts.notify(
+                "core.ready",
+                "The core portfolio passed its live-money gate (20+ trading days on paper, a "
+                "monthly rebalance, tracking its forward book, no refusals). To go live: put the "
+                "live account's keys in CORE_ALPACA_API_KEY/SECRET and set CORE_PAPER=false. "
+                "Details: halal-trader core readiness.",
+            )
         if run.zakat:
             await self._alerts.notify(
                 "zakat.due",
@@ -1007,6 +1015,18 @@ class TradingBot(BaseTradingBot):
             replace_existing=True,
             misfire_grace_time=900,
         )
+
+    async def weekly_digest(self) -> None:
+        """Send the week's summary to Telegram (notifications/digest.py)."""
+        from halal_trader.notifications.digest import build
+
+        if self._engine is None:
+            return
+        try:
+            message = await build(self._engine, self.settings, today=today_eastern())
+            await self._notifier.send(message)
+        except Exception as exc:  # noqa: BLE001 -- a digest must never take the bot down
+            logger.error("weekly digest failed: %r", exc)
 
     async def account_watch(self) -> list[str]:
         """Check every configured Alpaca account answers its keys; alert on any that don't.
@@ -1455,6 +1475,16 @@ class TradingBot(BaseTradingBot):
                 id="early_close_eod",
                 replace_existing=True,
                 misfire_grace_time=1800,
+                coalesce=True,
+            )
+
+            # One summary message every Friday evening (notifications/digest.py).
+            self.scheduler.add_job(
+                self.weekly_digest,
+                CronTrigger(day_of_week="fri", hour=17, minute=15, timezone=MARKET_TZ),
+                id="weekly_digest",
+                replace_existing=True,
+                misfire_grace_time=3600,
                 coalesce=True,
             )
 

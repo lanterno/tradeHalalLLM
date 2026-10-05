@@ -88,3 +88,59 @@ def run_cmd(monthly: bool | None) -> None:
         f"  {sum(1 for r in results if r['st'] == 'submitted')} submitted, "
         f"{sum(1 for r in results if r['st'] != 'submitted')} refused"
     )
+
+
+@core.command("readiness")
+def readiness_cmd() -> None:
+    """Has the core earned real money? Its live-money gate, criterion by criterion."""
+
+    async def _run() -> Any:
+        from halal_trader.config import get_settings
+        from halal_trader.db.models import init_db
+        from halal_trader.market_hours import today_eastern
+        from halal_trader.portfolio.readiness import check
+
+        engine = await init_db(get_settings().database_url)
+        try:
+            return await check(engine, today=today_eastern())
+        finally:
+            await engine.dispose()
+
+    r = asyncio.run(_run())
+    te = f"{r.tracking_error:.2%}" if r.tracking_error is not None else "n/a"
+    gap = f"{r.gap:+.2%}" if r.gap is not None else "n/a"
+    console.print(
+        f"core readiness: {'[green]READY[/green]' if r.ready else '[yellow]not yet[/yellow]'} — "
+        f"{r.days} days, {r.monthly_runs} monthly run(s), tracking error {te}, gap {gap}, "
+        f"{r.refused} refused, {r.halted} halted"
+    )
+    for failure in r.failures:
+        console.print(f"  - {failure}")
+
+
+@core.command("digest")
+@click.option("--send", is_flag=True, help="Send it to Telegram as well as printing it.")
+def digest_cmd(send: bool) -> None:
+    """The weekly digest, now (it is sent automatically every Friday 17:15 New York)."""
+
+    async def _run() -> str:
+        from halal_trader.config import get_settings
+        from halal_trader.db.models import init_db
+        from halal_trader.market_hours import today_eastern
+        from halal_trader.notifications.digest import build
+
+        settings = get_settings()
+        engine = await init_db(settings.database_url)
+        try:
+            message = await build(engine, settings, today=today_eastern())
+            if send:
+                from halal_trader.notifications.telegram import TelegramNotifier
+
+                notifier = TelegramNotifier(settings.telegram.bot_token, settings.telegram.chat_id)
+                await notifier.send(message)
+                await notifier.close()
+            return message
+        finally:
+            await engine.dispose()
+
+    console.print(asyncio.run(_run()), markup=False)

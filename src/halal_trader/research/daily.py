@@ -34,6 +34,7 @@ class ResearchRun:
     event_refresh: dict[str, int] = field(default_factory=dict)  # step -> rows added
     purification: dict[str, int] = field(default_factory=dict)  # account -> accruals added
     zakat: dict[str, float] = field(default_factory=dict)  # account -> amount due, on a hawl
+    core_ready_now: bool = False  # the core passed its live-money gate for the first time
     errors: list[str] = field(default_factory=list)
 
 
@@ -153,6 +154,12 @@ async def run_research(engine: AsyncEngine, settings: Settings, *, today: date) 
         run.errors.append(f"purification: {exc!r}"[:300])
 
     try:
+        run.core_ready_now = await _core_readiness(engine, today)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("research: core readiness failed: %r", exc)
+        run.errors.append(f"core readiness: {exc!r}"[:300])
+
+    try:
         run.zakat = await _zakat(engine, settings, today)
     except Exception as exc:  # noqa: BLE001
         logger.error("research: zakat failed: %r", exc)
@@ -217,3 +224,29 @@ async def _purify(engine: AsyncEngine, settings: Settings, today: date) -> dict[
     for book in await book_names(engine):
         out[f"book:{book}"] = len(await accrue_book(engine, book, through=today))
     return out
+
+
+async def _core_readiness(engine: AsyncEngine, today: date) -> bool:
+    """Check the core's live-money gate; True only the first evening it passes.
+
+    The verdict is kept in the ``core.readiness`` heartbeat, so the alert
+    fires on the transition, not every evening after.
+    """
+    from halal_trader.core.heartbeat import beat, read_beats
+    from halal_trader.portfolio.readiness import check
+
+    result = await check(engine, today=today)
+    previous = (await read_beats(engine)).get("core.readiness")
+    was_ready = bool(previous and (previous.detail or {}).get("ready"))
+    await beat(
+        engine,
+        "core.readiness",
+        {
+            "ready": result.ready,
+            "days": result.days,
+            "tracking_error": result.tracking_error,
+            "gap": result.gap,
+            "failures": result.failures,
+        },
+    )
+    return result.ready and not was_ready

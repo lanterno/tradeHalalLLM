@@ -84,6 +84,28 @@ churn kills this bot.
 - **News:** live news moves to Alpaca (Benzinga), the feed the research
   is backtested on; Finnhub stays as a fallback.
 
+## Decisions taken under the operator's delegation (2026-10-04)
+
+The operator asked the agent to take the open decisions itself and to
+automate as much as possible. Recorded here so they can be revisited:
+
+- **LLM budget enforced** (`LLM_BUDGET_ENFORCE=true`): a week of observe mode
+  peaked at $0.58/day for the live pool against its $3 daily cap; pools are
+  $25 live / $15 research per month.
+- **The LLM day-trader is retired** (`DAY_TRADER_ENABLED=false`), not halted:
+  +2.5%/yr vs SPUS 18.6%. Its exits and the EOD flatten still run. The
+  kill-switch stays for emergencies and stops every strategy, the core included.
+- **The core's live-money gate** (portfolio/readiness.py, checked every
+  evening): >= 20 trading days on paper including an executed monthly
+  rebalance, tracking error vs its forward book < 3%/yr, cumulative gap < 1
+  point, no refused order or halted run in that window. A `core.ready` alert
+  asks for the live keys; the switch itself (live keys + `CORE_PAPER=false`)
+  is the operator's step.
+- **Paper purification is a rehearsal**: shown, but the compliance status
+  only turns to "attention" for an account trading real money.
+- **No key rotation needed**: the only tokens in old local logs are retired
+  ones; the current Finnhub and FRED keys never reached a log.
+
 ## LLM provider: GLM-5.2 (and don't undo it)
 
 Sole provider since the 2026-07-01 cutover (commit `d42c5aa`) — OpenAI /
