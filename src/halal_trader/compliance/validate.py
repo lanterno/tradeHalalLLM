@@ -14,6 +14,7 @@ Two directions, read differently:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,3 +62,32 @@ def compare(
             key=lambda v: -(v.market_cap or 0.0),
         ),
     )
+
+
+async def weekly_check(engine: Any, today: Any) -> Validation:
+    """The newest screen against the halal ETFs' newest filed holdings (stored, not fetched).
+
+    Run after each weekly screen. Under the strict option the screen may reject
+    what an ETF holds, but it should never pass a large company that neither
+    ETF holds: ``large_halal_not_in_etfs`` non-empty is a regression to report.
+    """
+    from sqlalchemy import text
+
+    from halal_trader.compliance.index_veto import views_at
+
+    views = await views_at(engine, today)
+    tickers = set().union(*(v.tickers for v in views)) if views else set()
+    async with engine.connect() as conn:
+        rows = await conn.execute(
+            text(
+                "SELECT symbol, verdict, reasons, metrics->>'market_cap' AS mc "
+                "FROM halal_screen_results "
+                "WHERE as_of = (SELECT max(as_of) FROM halal_screen_results WHERE as_of <= :d)"
+            ),
+            {"d": today},
+        )
+        verdicts = {
+            r.symbol: Verdict(r.symbol, r.verdict, list(r.reasons), float(r.mc) if r.mc else None)
+            for r in rows
+        }
+    return compare(verdicts, tickers)

@@ -84,6 +84,14 @@ async def build(engine: AsyncEngine, settings: Any, *, today: date) -> str:
         )
         lines.append(f"Live-money gate: {status}")
 
+    validation = beats.get("screen.validation", {})
+    if validation:
+        lines.append(
+            f"Screen vs SPUS/HLAL: agree on {validation.get('agreement', 0):.0%} of their "
+            f"{validation.get('etf_names')} names; large passes neither holds: "
+            f"{len(validation.get('large_passes_no_etf_holds') or [])}"
+        )
+
     from halal_trader.halal.aaoifi_summary import compute_aaoifi_summary
 
     summary = await compute_aaoifi_summary(engine)

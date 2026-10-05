@@ -117,6 +117,7 @@ async def run_research(engine: AsyncEngine, settings: Settings, *, today: date) 
             universe = await _members(engine, today) or await _stored_symbols(engine)
             stocks = [s for s in universe if s not in BENCHMARKS]
             run.screened = len(await run_screen(sec, engine, stocks, today))
+            run.errors += await _validate_screen(engine, today)
         except Exception as exc:  # noqa: BLE001
             logger.error("research: halal screen failed: %r", exc)
             run.errors.append(f"screen: {exc!r}"[:300])
@@ -286,3 +287,26 @@ async def _backup_health(engine: AsyncEngine) -> list[str]:
     if drill is not None and (now - drill.beat_at).days > RESTORE_DRILL_MAX_AGE_D:
         problems.append(f"backup: last restore drill {drill.beat_at:%Y-%m-%d}, over 40 days ago")
     return problems
+
+
+async def _validate_screen(engine: AsyncEngine, today: date) -> list[str]:
+    """After a weekly screen: agreement with SPUS/HLAL, kept for the digest; a large
+    pass neither ETF holds is reported (under the strict option it should not happen)."""
+    from halal_trader.compliance.validate import weekly_check
+    from halal_trader.core.heartbeat import beat
+
+    v = await weekly_check(engine, today)
+    suspects = [x.symbol for x in v.large_halal_not_in_etfs]
+    await beat(
+        engine,
+        "screen.validation",
+        {
+            "agreement": round(v.agreement, 3),
+            "etf_names": v.screened_etf_names,
+            "rejected_etf_names": len(v.etf_held_we_reject),
+            "large_passes_no_etf_holds": suspects,
+        },
+    )
+    if suspects:
+        return [f"screen: passes large names no halal ETF holds: {', '.join(suspects[:8])}"]
+    return []
