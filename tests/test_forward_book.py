@@ -30,6 +30,11 @@ def _no_event_refresh(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(research_daily, "_purify", no_purification)
     monkeypatch.setattr(research_daily, "_zakat", no_purification)
 
+    async def no_problems(*args: object, **kwargs: object) -> list[str]:
+        return []
+
+    monkeypatch.setattr(research_daily, "_backup_health", no_problems)
+
 
 def _sessions(n: int) -> list[date]:
     out, d = [], date(2025, 1, 1)

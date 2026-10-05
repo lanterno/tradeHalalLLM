@@ -154,6 +154,11 @@ async def run_research(engine: AsyncEngine, settings: Settings, *, today: date) 
         run.errors.append(f"purification: {exc!r}"[:300])
 
     try:
+        run.errors += await _backup_health(engine)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("research: backup check failed: %r", exc)
+
+    try:
         run.core_ready_now = await _core_readiness(engine, today)
     except Exception as exc:  # noqa: BLE001
         logger.error("research: core readiness failed: %r", exc)
@@ -250,3 +255,34 @@ async def _core_readiness(engine: AsyncEngine, today: date) -> bool:
         },
     )
     return result.ready and not was_ready
+
+
+BACKUP_MAX_AGE_H = 36
+RESTORE_DRILL_MAX_AGE_D = 40
+
+
+async def _backup_health(engine: AsyncEngine) -> list[str]:
+    """Problems with the nightly backup or the monthly restore drill (empty when fine).
+
+    Both write a heartbeat (trader justfile, home-backup); a missing or stale one
+    is reported through the evening run's alert, so a backup that stopped is
+    noticed within a day rather than when it is needed.
+    """
+    from datetime import UTC, datetime
+
+    from halal_trader.core.heartbeat import read_beats
+
+    beats = await read_beats(engine)
+    now = datetime.now(UTC)
+    problems = []
+    nightly = beats.get("backup.nightly")
+    if nightly is None or (now - nightly.beat_at).total_seconds() > BACKUP_MAX_AGE_H * 3600:
+        problems.append(
+            "backup: no nightly dump in the last 36 h"
+            if nightly
+            else "backup: no nightly dump recorded yet"
+        )
+    drill = beats.get("backup.restore_drill")
+    if drill is not None and (now - drill.beat_at).days > RESTORE_DRILL_MAX_AGE_D:
+        problems.append(f"backup: last restore drill {drill.beat_at:%Y-%m-%d}, over 40 days ago")
+    return problems

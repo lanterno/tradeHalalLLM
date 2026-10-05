@@ -115,6 +115,27 @@ async def build(engine: AsyncEngine, settings: Any, *, today: date) -> str:
         f"${spend.get('research', 0.0):.2f} of ${settings.llm.monthly_research_usd:.0f}"
     )
 
+    nightly, drill = beats.get("backup.nightly"), beats.get("backup.restore_drill")
+    async with engine.connect() as conn:
+        when = {
+            r.component: r.beat_at
+            for r in await conn.execute(
+                text(
+                    "SELECT component, beat_at FROM heartbeats "
+                    "WHERE component IN ('backup.nightly', 'backup.restore_drill')"
+                )
+            )
+        }
+    if nightly is not None:
+        lines.append(
+            f"Backup: {when['backup.nightly']:%a %d %b} ({nightly.get('dump_mb')} MB); "
+            + (
+                f"last restore drill {when['backup.restore_drill']:%d %b}"
+                if drill is not None
+                else "no restore drill yet"
+            )
+        )
+
     research = beats.get("research.daily", {})
     if research:
         refresh = ", ".join(f"{k} {v}" for k, v in (research.get("event_refresh") or {}).items())

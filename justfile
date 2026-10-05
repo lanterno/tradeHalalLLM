@@ -236,12 +236,48 @@ home-logs:
     {{home_compose}} logs --tail=100 --no-color
 
 # pg_dump the database into <dest>/halal_trader.dump (restore: just db-restore <file>).
-# The research store (daily_bars, market_assets) is re-derivable from Alpaca with
-# `halal-trader data backfill`, so its rows are left out; its schema is kept.
+# Rows that can be rebuilt from free sources are left out (their schema is kept):
+#   daily_bars, market_assets, monthly_bars, minute_bars -> `halal-trader data backfill`,
+#     `data pit-universe`, `events intraday`
+#   events, event_facts, event_labels                    -> `events backfill all`,
+#     `events extract`, the evening run's labelling
+#   eps_facts, annual_fundamentals, etf_holdings         -> `events backfill eps`,
+#     `data fundamentals`, `compliance etf-history`
+# event_scores goes with events (it references them). What cannot be rebuilt --
+# the live reactor's headlines with the time it saw them, and every score
+# (the post-cutoff LLM evidence) -- is exported to live_events.jsonl.gz, keyed by
+# (source, source_id, symbol), which a rebuilt event store shares.
+# Every dump is checked with pg_restore --list; on the 1st of each month it is
+# also fully restored into a scratch database (restore-drill). Outcomes land in
+# the heartbeats table (backup.nightly, backup.restore_drill) for the digest.
 home-backup dest:
-    docker exec halal-trader-pg pg_dump -U trader -d halal_trader -Fc --exclude-table-data=daily_bars --exclude-table-data=market_assets -f /tmp/home-backup.dump
+    #!/usr/bin/env bash
+    set -euo pipefail
+    pg() { docker exec halal-trader-pg psql -U trader -d halal_trader -tAq "$@"; }
+    excluded=""
+    for t in daily_bars market_assets monthly_bars minute_bars events event_facts event_labels event_scores eps_facts annual_fundamentals etf_holdings; do
+        excluded="$excluded --exclude-table-data=$t"
+    done
+    docker exec halal-trader-pg pg_dump -U trader -d halal_trader -Fc $excluded -f /tmp/home-backup.dump
+    docker exec halal-trader-pg pg_restore --list /tmp/home-backup.dump > /dev/null
     docker cp halal-trader-pg:/tmp/home-backup.dump "{{dest}}/halal_trader.dump"
     docker exec halal-trader-pg rm -f /tmp/home-backup.dump
+    pg -c "SELECT row_to_json(t) FROM (
+             SELECT e.source, e.source_id, e.symbol, e.kind, e.published_at, e.seen_at, e.payload,
+                    coalesce(json_agg(json_build_object('scorer', s.scorer, 'score', s.score,
+                        'tag', s.tag, 'rationale', s.rationale, 'scored_at', s.scored_at))
+                        FILTER (WHERE s.id IS NOT NULL), '[]') AS scores
+             FROM events e LEFT JOIN event_scores s ON s.event_id = e.id
+             WHERE e.payload->>'backfill' IS NULL OR s.id IS NOT NULL
+             GROUP BY e.id) t" | gzip > "{{dest}}/live_events.jsonl.gz"
+    size=$(du -m "{{dest}}/halal_trader.dump" | cut -f1)
+    live=$(du -k "{{dest}}/live_events.jsonl.gz" | cut -f1)
+    pg -c "INSERT INTO heartbeats (component, beat_at, detail) VALUES ('backup.nightly', now(), '{\"dump_mb\": $size, \"live_events_kb\": $live}') ON CONFLICT (component) DO UPDATE SET beat_at = EXCLUDED.beat_at, detail = EXCLUDED.detail"
+    echo "halal_trader.dump: ${size} MB, live_events.jsonl.gz: ${live} kB"
+    if [ "$(date -u +%d)" = "01" ]; then
+        just restore-drill "{{dest}}/halal_trader.dump"
+        pg -c "INSERT INTO heartbeats (component, beat_at, detail) VALUES ('backup.restore_drill', now(), '{\"ok\": true}') ON CONFLICT (component) DO UPDATE SET beat_at = EXCLUDED.beat_at, detail = EXCLUDED.detail"
+    fi
 
 # Restore a home-backup dump into a scratch database, compare it with the live
 # one table by table, then drop it. Never touches halal_trader itself.
@@ -258,7 +294,7 @@ restore-drill file:
     echo "restored in $(( $(date +%s) - start ))s"
     printf '%-22s %12s %12s\n' table restored live
     status=0
-    for t in alembic_version trades daily_pnl llm_decisions halal_cache broker_activities broker_equity heartbeats hb_outcome hb_belief_state; do
+    for t in alembic_version trades daily_pnl llm_decisions halal_cache broker_activities broker_equity heartbeats hb_outcome hb_belief_state core_orders core_runs purification_accruals zakat_assessments quant_trials forward_book_days halal_screen_results llm_spend; do
         r=$(pg -d restore_drill -c "SELECT count(*) FROM $t" 2>/dev/null || echo missing)
         l=$(pg -d halal_trader -c "SELECT count(*) FROM $t" 2>/dev/null || echo missing)
         printf '%-22s %12s %12s\n' "$t" "$r" "$l"
