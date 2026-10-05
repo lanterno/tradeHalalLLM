@@ -172,6 +172,17 @@ class AlpacaRestBroker:
             for p in raw
         ]
 
+    async def account_payload(self) -> dict[str, Any]:
+        """``/v2/account`` as Alpaca returns it (``last_equity`` included)."""
+        return dict(await self._request("GET", self._trading("/v2/account")))
+
+    async def positions_payload(self) -> list[dict[str, Any]]:
+        """``/v2/positions`` as Alpaca returns it (``change_today``, ``lastday_price``...)."""
+        raw = await self._request("GET", self._trading("/v2/positions"))
+        if not isinstance(raw, list):
+            raise BrokerError(200, f"positions: expected a list, got {type(raw).__name__}")
+        return [dict(p) for p in raw]
+
     # ── market data (REST shapes, as the MCP server passed through) ──
 
     async def get_stock_snapshot(self, symbols: str) -> Any:

@@ -7,6 +7,7 @@ import logging
 import os
 import signal
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -1029,6 +1030,39 @@ class TradingBot(BaseTradingBot):
         except Exception as exc:  # noqa: BLE001 -- a digest must never take the bot down
             logger.error("weekly digest failed: %r", exc)
 
+    async def market_snapshot(self) -> None:
+        """Each minute of the session: both accounts' values and the benchmarks'
+        prices, for the dashboard's home page (portfolio/snapshots.py).
+
+        Read-only. Each account is taken on its own, so one refusing does not
+        blank the other; failures are logged, not alerted (account_watch
+        already alerts on access, and a missed minute heals itself).
+        """
+        from halal_trader.execution.alpaca_broker import AlpacaRestBroker
+        from halal_trader.portfolio import snapshots
+
+        if self._engine is None:
+            return
+        alpaca, core = self.settings.alpaca, self.settings.core
+        accounts = [("paper", alpaca.api_key, alpaca.secret_key, alpaca.paper_trade)]
+        if core.alpaca_api_key and core.alpaca_secret_key:
+            accounts.append(("core", core.alpaca_api_key, core.alpaca_secret_key, core.paper))
+        taken = []
+        for i, (name, key, secret, paper) in enumerate(accounts):
+            if not (key and secret):
+                continue
+            broker = AlpacaRestBroker(key, secret, paper=paper)
+            try:
+                await snapshots.snapshot_account(self._engine, name, broker)
+                if i == 0:
+                    await snapshots.snapshot_quotes(self._engine, broker)
+                taken.append(name)
+            except Exception as exc:  # noqa: BLE001 -- a missed minute heals itself
+                logger.warning("market snapshot of %s failed: %r", name, exc)
+            finally:
+                await broker.disconnect()
+        await beat(self._engine, "market.snapshot", {"accounts": taken})
+
     async def account_watch(self) -> list[str]:
         """Check every configured Alpaca account answers its keys; alert on any that don't.
 
@@ -1135,7 +1169,6 @@ class TradingBot(BaseTradingBot):
             # Enrich with market tag + date + LLM cost/calls so the
             # richer Telegram summary fields fire.
             summary["market"] = "stocks"
-            from datetime import UTC, datetime
 
             summary["date"] = datetime.now(UTC).date().isoformat()
             if self._engine is not None:
@@ -1492,6 +1525,20 @@ class TradingBot(BaseTradingBot):
             # Both Alpaca accounts' keys still work: a revoked key otherwise
             # leaves a "healthy" bot that cannot trade (2026-10-04: regenerating
             # keys on the day-trader's account locked it out, unnoticed).
+            # The home page's live figures: every minute from the pre-market
+            # to an hour after the close, and once at start so a page opened
+            # at the weekend still has the last values.
+            self.scheduler.add_job(
+                self.market_snapshot,
+                CronTrigger(day_of_week="mon-fri", hour="9-16", minute="*", timezone=MARKET_TZ),
+                id="market_snapshot",
+                replace_existing=True,
+                misfire_grace_time=50,
+                coalesce=True,
+                max_instances=1,
+                next_run_time=datetime.now(UTC),
+            )
+
             self.scheduler.add_job(
                 self.account_watch,
                 CronTrigger(minute="5,35", timezone=MARKET_TZ),

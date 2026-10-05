@@ -1306,3 +1306,30 @@ class MonthlyBar(SQLModel, table=True):
     close: float
     volume: float
     vwap: float | None = None
+
+
+class AccountSnapshot(SQLModel, table=True):
+    """The newest value of one broker account (portfolio/snapshots.py): equity,
+    cash, the previous close's equity and its positions. Overwritten each minute."""
+
+    __tablename__ = "account_snapshots"
+
+    account: str = Field(primary_key=True)
+    taken_at: datetime = Field(sa_type=sa.DateTime(timezone=True))
+    equity: float
+    cash: float
+    last_equity: float | None = None
+    positions: list = Field(
+        default_factory=list, sa_column=sa.Column("positions", JSONB, nullable=False)
+    )
+
+
+class Quote(SQLModel, table=True):
+    """The newest price of a symbol and its previous close (portfolio/snapshots.py)."""
+
+    __tablename__ = "quotes"
+
+    symbol: str = Field(primary_key=True)
+    taken_at: datetime = Field(sa_type=sa.DateTime(timezone=True))
+    price: float
+    prev_close: float | None = None
