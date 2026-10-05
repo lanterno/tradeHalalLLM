@@ -34,6 +34,22 @@ function shortDay(iso: string): string {
   });
 }
 
+function benchmarkNote(benchmarks: HomeStatus["market"]["benchmarks"], open: boolean): string {
+  const first = benchmarks[0];
+  if (!first) return "";
+  if (open && first.live) return "Live, refreshed every minute · change vs the previous close";
+  if (!first.as_of.includes("T")) return `Close of ${shortDay(first.as_of)}`;
+  const at = new Date(first.as_of);
+  const time = at.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "America/New_York" });
+  const day = at.toLocaleDateString("en-US", {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    timeZone: "America/New_York",
+  });
+  return `Last price ${day}, ${time} ET · change vs the previous close`;
+}
+
 export function MarketPanel({ market }: { market: HomeStatus["market"] }) {
   const now = useNow(1000);
   const [tz, setTz] = useState<"et" | "local">("et");
@@ -140,9 +156,7 @@ export function MarketPanel({ market }: { market: HomeStatus["market"] }) {
             ))}
           </div>
           <p className="mt-1.5 text-xs text-muted">
-            {market.benchmarks.some((b) => b.live)
-              ? "Live, refreshed every minute"
-              : `Last close${market.benchmarks[0] ? `, ${shortDay(market.benchmarks[0].as_of.slice(0, 10))}` : ""}`}
+            {benchmarkNote(market.benchmarks, clock.state === "open")}
           </p>
           <div className="mt-3 grid gap-1.5 text-xs">
             {market.next_holiday && (

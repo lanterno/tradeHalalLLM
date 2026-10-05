@@ -1,4 +1,4 @@
-import { Area, AreaChart, ResponsiveContainer } from "recharts";
+import { Area, AreaChart, ResponsiveContainer, YAxis } from "recharts";
 import type { HomeAccount, HomeStatus } from "../../api/types";
 import { CHART } from "../../lib/charts";
 import { cn, formatUsd } from "../../lib/utils";
@@ -103,6 +103,7 @@ export function MoneyPanel({ data }: { data: HomeStatus }) {
                       <stop offset="100%" stopColor={CHART.accent} stopOpacity={0} />
                     </linearGradient>
                   </defs>
+                  <YAxis hide domain={["dataMin", "dataMax"]} />
                   <Area
                     type="monotone"
                     dataKey="equity"
