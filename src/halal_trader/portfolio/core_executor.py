@@ -14,8 +14,9 @@ Safety, in order of precedence:
   hold halal is refused. The screen must be fresh (``MAX_SCREEN_AGE``): a
   stale or missing screen means no orders at all, not orders on old data.
 * **Cash only, long only.** Sells go first; buys are scaled to the cash on
-  hand plus the sells' proceeds, less a buffer. Nothing is ever sold beyond
-  the quantity held.
+  hand plus the sells' proceeds, less a buffer and less any purification
+  the account still owes (that money is not the portfolio's to invest).
+  Nothing is ever sold beyond the quantity held.
 * **Small trades are skipped** (under ``MIN_TRADE``), so bands do their job.
 
 Orders are fractional market orders, placed late in the session. Each one,
@@ -122,6 +123,20 @@ def _prices(snapshot: Any) -> dict[str, float]:
     return out
 
 
+async def unpaid_purification(engine: AsyncEngine, account: str) -> float:
+    async with engine.connect() as conn:
+        total = (
+            await conn.execute(
+                text(
+                    "SELECT coalesce(sum(amount), 0) FROM purification_accruals "
+                    "WHERE account = :a AND paid_at IS NULL"
+                ),
+                {"a": account},
+            )
+        ).scalar()
+    return float(total or 0.0)
+
+
 async def plan(
     engine: AsyncEngine, broker: Any, *, today: date, monthly: bool, top_n: int = TOP_N
 ) -> Plan:
@@ -184,7 +199,12 @@ async def plan(
         elif delta > 0:
             buys.append(PlannedOrder(symbol, "buy", delta / price, price, "rebalance"))
 
-    budget = account.cash + sum(o.notional for o in sells) - CASH_BUFFER * equity
+    # Purification owed by this account is not the portfolio's to invest: it
+    # stays as cash until it is given away (purify paid).
+    reserved = await unpaid_purification(engine, "core")
+    if reserved > 0:
+        result.notes.append(f"${reserved:,.2f} held back for purification")
+    budget = account.cash + sum(o.notional for o in sells) - CASH_BUFFER * equity - reserved
     wanted = sum(o.notional for o in buys)
     if wanted > budget > 0:
         scale = budget / wanted

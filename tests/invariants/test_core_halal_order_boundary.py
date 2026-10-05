@@ -168,3 +168,20 @@ async def test_the_kill_switch_stops_the_core_too(engine: AsyncEngine, monkeypat
     )
     await bot.core_trade()
     assert built == []  # never even reached the broker
+
+
+async def test_unpaid_purification_is_held_back_from_buys(engine: AsyncEngine) -> None:
+    await _screen(engine, TODAY - timedelta(days=3), {"AAA": ("halal", 10, 1e9)})
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO purification_accruals (account, dividend_id, symbol, ex_date, shares, "
+                "dividend, impure_ratio, amount, method, accrued_at) VALUES "
+                "('core', 'd1', 'AAA', '2026-09-01', 10, 100, 0.02, 2.0, 'm', now())"
+            )
+        )
+    broker = FakeBroker(cash=1_000, positions=[], prices={"AAA": 10})
+    p = await ce.plan(engine, broker, today=TODAY, monthly=True)
+    spend = sum(o.notional for o in p.orders)
+    assert spend == pytest.approx(1_000 - ce.CASH_BUFFER * 1_000 - 2.0)
+    assert any("purification" in n for n in p.notes)
