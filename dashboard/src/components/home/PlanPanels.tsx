@@ -4,15 +4,19 @@ import { useNow } from "../../hooks/useNow";
 import { formatIn } from "../../lib/marketClock";
 import { cn } from "../../lib/utils";
 
+const NY = "America/New_York";
+
+/** The day and time of an instant in New York, which every job is scheduled in. */
 function when(iso: string, now: Date): string {
   const at = new Date(iso);
-  const sameDay = at.toDateString() === now.toDateString();
-  const day = sameDay
-    ? "Today"
-    : at.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
+  const nyDate = (d: Date) => d.toLocaleDateString("en-CA", { timeZone: NY });
+  const day =
+    nyDate(at) === nyDate(now)
+      ? "Today"
+      : at.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", timeZone: NY });
   // Midnight items (the hawl) are a date, not a time.
-  const ny = at.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "America/New_York" });
-  return ny === "00:00" ? day : `${day} ${ny}`;
+  const time = at.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: NY });
+  return time === "00:00" ? day : `${day} ${time}`;
 }
 
 export function UpcomingPanel({ items }: { items: HomeStatus["upcoming"] }) {
