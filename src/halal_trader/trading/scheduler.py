@@ -976,6 +976,7 @@ class TradingBot(BaseTradingBot):
             {
                 "books": run.books,
                 "screened": run.screened,
+                "rescreen_for": run.rescreen_for,
                 "event_labels": run.event_labels,
                 "event_refresh": run.event_refresh,
                 "errors": len(run.errors),

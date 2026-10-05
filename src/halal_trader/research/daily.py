@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, time, timedelta
+from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -29,6 +30,7 @@ class ResearchRun:
     bars_stored: dict[str, int] = field(default_factory=dict)
     monthly_rows: int | None = None  # None: monthly bars current, or never synced
     screened: int | None = None  # None: the screen was fresh enough to skip
+    rescreen_for: list[str] = field(default_factory=list)  # core holdings that just reported
     books: dict[str, int] = field(default_factory=dict)  # name -> sessions appended
     event_labels: int | None = None  # labels written for matured events
     event_refresh: dict[str, int] = field(default_factory=dict)  # step -> rows added
@@ -107,7 +109,23 @@ async def run_research(engine: AsyncEngine, settings: Settings, *, today: date) 
         run.errors.append(f"bars: {exc!r}"[:300])
 
     age = await _screen_age(engine, today)
-    if age is None or age >= SCREEN_EVERY:
+    reported: list[str] = []
+    if age is not None and timedelta(days=1) <= age < SCREEN_EVERY:
+        # A core holding's new 10-Q/10-K can change its ratios: screen again
+        # now rather than at the end of the week, so a failing holding is
+        # sold days sooner.
+        sec = SecClient(settings.edgar.user_agent)
+        try:
+            reported = await _holdings_reported(engine, sec, today - age)
+        except Exception as exc:  # noqa: BLE001
+            logger.error("research: holdings filings check failed: %r", exc)
+            run.errors.append(f"holdings filings: {exc!r}"[:300])
+        finally:
+            await sec.aclose()
+        if reported:
+            logger.info("research: re-screening early, new reports from %s", reported)
+            run.rescreen_for = reported
+    if age is None or age >= SCREEN_EVERY or reported:
         sec = SecClient(settings.edgar.user_agent)
         try:
             from halal_trader.compliance.etf_holdings import sync_holdings
@@ -310,3 +328,50 @@ async def _validate_screen(engine: AsyncEngine, today: date) -> list[str]:
     if suspects:
         return [f"screen: passes large names no halal ETF holds: {', '.join(suspects[:8])}"]
     return []
+
+
+async def _core_holdings(engine: AsyncEngine) -> set[str]:
+    """What the core holds or is about to: the core book's newest weights and the
+    core account's orders of the last two months."""
+    async with engine.connect() as conn:
+        weights = (
+            await conn.execute(
+                text(
+                    "SELECT weights FROM forward_book_days WHERE book = 'core' "
+                    "ORDER BY day DESC LIMIT 1"
+                )
+            )
+        ).scalar()
+        ordered = {
+            r.symbol
+            for r in await conn.execute(
+                text("SELECT DISTINCT symbol FROM core_orders WHERE submitted_at >= :d"),
+                {"d": datetime.now(UTC) - timedelta(days=62)},
+            )
+        }
+    return set(dict(weights or {})) | ordered
+
+
+async def _holdings_reported(engine: AsyncEngine, sec: Any, screened: date) -> list[str]:
+    """Core holdings with a 10-Q or 10-K filed on or after the newest screen's date.
+
+    Their submissions are fetched fresh (about a hundred requests): the
+    weekly filings refresh is too slow to act on.
+    """
+    from halal_trader.events.daily import refresh_filings
+    from halal_trader.events.history import covered_companies
+
+    held = await _core_holdings(engine)
+    if not held:
+        return []
+    companies = {c: s for c, s in (await covered_companies(engine)).items() if s in held}
+    await refresh_filings(engine, sec, companies)
+    async with engine.connect() as conn:
+        rows = await conn.execute(
+            text(
+                "SELECT DISTINCT symbol FROM events WHERE kind IN ('10-q', '10-k') "
+                "AND symbol = ANY(:s) AND published_at >= :d ORDER BY symbol"
+            ),
+            {"s": sorted(held), "d": datetime.combine(screened, time(), UTC)},
+        )
+        return [r.symbol for r in rows]
