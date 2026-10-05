@@ -971,6 +971,34 @@ class TradingBot(BaseTradingBot):
             run.event_labels,
         )
 
+    def _schedule_cycles(self, interval: int) -> None:
+        """The day-trader's cycles: every ``interval`` minutes 10:00-15:45, plus 9:30/9:45."""
+        self.scheduler.add_job(
+            self.trading_cycle,
+            CronTrigger(
+                day_of_week="mon-fri",
+                hour="10-15",
+                minute=f"*/{interval}",
+                timezone=MARKET_TZ,
+            ),
+            id="trading_cycle",
+            replace_existing=True,
+            misfire_grace_time=900,
+        )
+        # Cover the first 30 minutes after market open (9:30, 9:45)
+        self.scheduler.add_job(
+            self.trading_cycle,
+            CronTrigger(
+                day_of_week="mon-fri",
+                hour=9,
+                minute="30,45",
+                timezone=MARKET_TZ,
+            ),
+            id="trading_cycle_open",
+            replace_existing=True,
+            misfire_grace_time=900,
+        )
+
     async def core_trade(self) -> None:
         """Trade the strict-halal core portfolio on its own account (portfolio/core_executor.py).
 
@@ -984,6 +1012,12 @@ class TradingBot(BaseTradingBot):
         if self._engine is None or not (
             core.enabled and core.alpaca_api_key and core.alpaca_secret_key
         ):
+            return
+        from halal_trader.core.halt import is_halted
+
+        # Kill-switch first, as for every strategy: an emergency stop stops the core too.
+        if await is_halted(self._engine):
+            logger.info("core trade skipped: kill-switch engaged")
             return
         broker = AlpacaRestBroker(core.alpaca_api_key, core.alpaca_secret_key, paper=core.paper)
         try:
@@ -1322,31 +1356,10 @@ class TradingBot(BaseTradingBot):
             # The cycle's run_cycle() performs its own is_market_open_local() check,
             # so holidays and early-close days are handled even though cron fires.
             # Use hour 10-15 for the bulk, plus a separate job for the 9:30-9:45 window.
-            self.scheduler.add_job(
-                self.trading_cycle,
-                CronTrigger(
-                    day_of_week="mon-fri",
-                    hour="10-15",
-                    minute=f"*/{interval}",
-                    timezone=MARKET_TZ,
-                ),
-                id="trading_cycle",
-                replace_existing=True,
-                misfire_grace_time=900,
-            )
-            # Cover the first 30 minutes after market open (9:30, 9:45)
-            self.scheduler.add_job(
-                self.trading_cycle,
-                CronTrigger(
-                    day_of_week="mon-fri",
-                    hour=9,
-                    minute="30,45",
-                    timezone=MARKET_TZ,
-                ),
-                id="trading_cycle_open",
-                replace_existing=True,
-                misfire_grace_time=900,
-            )
+            if not self.settings.stocks.day_trader_enabled:
+                logger.info("Day-trader retired (DAY_TRADER_ENABLED=false): no cycles")
+            else:
+                self._schedule_cycles(interval)
 
             # Schedule end-of-day at 3:50 PM ET (before regular 4:00 close).
             # On early-close days (1:00 PM close), the trading cycle's local

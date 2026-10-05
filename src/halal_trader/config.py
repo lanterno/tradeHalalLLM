@@ -269,6 +269,11 @@ class StockSettings(BaseSettings):
     # logging/notifying. Enabled by default on paper; flip to False to
     # return the reactor to observation-only.
     reactor_entries_enabled: bool = Field(default=True)
+    # The LLM day-trader's 15-minute cycles. False retires the strategy without
+    # the kill-switch (which stops every strategy, the core included): no cycle
+    # is scheduled, while the position monitor still manages open positions'
+    # exits and the end-of-day flatten still runs.
+    day_trader_enabled: bool = Field(default=True)
     # Reactor entries are reactive / higher-variance than scheduled
     # cycle entries, so they're sized at a FRACTION of the normal
     # per-position cap (0.5 = half of ``max_position_pct``) to cap

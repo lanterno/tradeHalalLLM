@@ -144,3 +144,27 @@ async def test_monthly_is_due_until_an_executed_monthly_run_is_recorded(
     await ce.record_run(engine, p, today=TODAY, executed=True)
     assert not await ce.monthly_due(engine, TODAY)
     assert await ce.monthly_due(engine, date(2026, 11, 2))
+
+
+async def test_the_kill_switch_stops_the_core_too(engine: AsyncEngine, monkeypatch) -> None:
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from halal_trader.core import halt as halt_mod
+    from halal_trader.trading.scheduler import TradingBot
+
+    monkeypatch.setattr(halt_mod, "is_halted", AsyncMock(return_value=True))
+    bot = TradingBot.__new__(TradingBot)
+    bot._engine = engine
+    bot.settings = SimpleNamespace(
+        core=SimpleNamespace(
+            enabled=True, alpaca_api_key="k", alpaca_secret_key="s", paper=True, top_n=100
+        )
+    )
+    built = []
+    monkeypatch.setattr(
+        "halal_trader.execution.alpaca_broker.AlpacaRestBroker",
+        lambda *a, **k: built.append(1),
+    )
+    await bot.core_trade()
+    assert built == []  # never even reached the broker
