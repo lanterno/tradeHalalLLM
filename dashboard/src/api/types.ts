@@ -385,3 +385,59 @@ export interface PurificationYear {
   dividends: number;
   amount: number;
 }
+
+export interface CoreHolding {
+  symbol: string;
+  shares: number | null;
+  value: number | null;
+  weight: number | null;
+  target: number | null;
+  drift: number | null;
+}
+
+export interface CoreOrder {
+  at: string;
+  symbol: string;
+  side: string;
+  qty: number | null;
+  price: number | null;
+  notional: number | null;
+  reason: string;
+  screen_as_of: string | null;
+  status: string;
+}
+
+export interface CoreRun {
+  run_on: string;
+  monthly: boolean;
+  executed: boolean;
+  equity: number | null;
+  cash: number | null;
+  orders: number;
+  halted: string | null;
+  screen_as_of: string | null;
+}
+
+export interface CoreStatus {
+  enabled: boolean;
+  paper: boolean;
+  equity: number | null;
+  equity_day: string | null;
+  holdings: CoreHolding[];
+  series: { date: string; account: number | null; book: number | null }[];
+  readiness: {
+    ready: boolean;
+    days: number;
+    min_days: number;
+    monthly_runs: number;
+    tracking_error: number | null;
+    max_tracking_error: number;
+    gap: number | null;
+    max_gap: number;
+    refused: number;
+    halted: number;
+    failures: string[];
+  };
+  orders: CoreOrder[];
+  runs: CoreRun[];
+}
