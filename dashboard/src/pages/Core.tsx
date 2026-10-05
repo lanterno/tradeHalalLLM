@@ -142,8 +142,20 @@ export default function Core() {
           <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
             <StatCard
               label="Equity"
-              value={data.equity === null ? "—" : formatUsd(data.equity)}
-              sub={data.equity_day ? `as of ${data.equity_day}` : "no snapshot yet"}
+              value={
+                data.equity !== null
+                  ? formatUsd(data.equity)
+                  : data.runs[0]?.equity != null
+                    ? formatUsd(data.runs[0].equity)
+                    : "—"
+              }
+              sub={
+                data.equity_day
+                  ? `as of ${data.equity_day}`
+                  : data.runs[0]
+                    ? `at the ${data.runs[0].run_on} run`
+                    : "no snapshot yet"
+              }
             />
             <StatCard
               label="Mode"
@@ -157,12 +169,14 @@ export default function Core() {
             <StatCard label="Holdings" value={held.length} sub={`${data.holdings.length} targeted`} />
             <StatCard
               label="Last run"
-              value={data.runs[0]?.run_on ?? "—"}
+              value={data.runs[0] ? formatDate(`${data.runs[0].run_on}T12:00:00`) : "—"}
               sub={
                 data.runs[0]
                   ? data.runs[0].halted
                     ? `halted: ${data.runs[0].halted}`
-                    : `${data.runs[0].orders} order(s)${data.runs[0].monthly ? ", monthly" : ""}`
+                    : `${data.runs[0].orders} order(s)${data.runs[0].monthly ? ", monthly" : ""}${
+                        data.runs[0].executed ? "" : " · plan only"
+                      }`
                   : "none yet"
               }
             />
