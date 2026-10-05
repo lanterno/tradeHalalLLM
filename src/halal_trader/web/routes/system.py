@@ -37,7 +37,14 @@ async def _bot_liveness(ctx: DashboardContext) -> tuple[bool, dict[str, Any] | N
     }
     # Cycles are due once the session has run long enough for one to finish
     # (the first runs at 09:30 ET; allow until 10:00 before judging).
-    cycles_due = is_market_open_local() and now_eastern().time() >= time(10, 0)
+    # A retired day-trader (DAY_TRADER_ENABLED=false) runs no cycles, so none is due.
+    from halal_trader.config import get_settings
+
+    cycles_due = (
+        get_settings().stocks.day_trader_enabled
+        and is_market_open_local()
+        and now_eastern().time() >= time(10, 0)
+    )
     alive, reason = bot_liveness(beats, now=now, cycles_due=cycles_due)
     components["_verdict"] = {"alive": alive, "reason": reason, "cycles_due": cycles_due}
     return alive, components

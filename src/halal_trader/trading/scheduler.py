@@ -999,6 +999,43 @@ class TradingBot(BaseTradingBot):
             misfire_grace_time=900,
         )
 
+    async def account_watch(self) -> list[str]:
+        """Check every configured Alpaca account answers its keys; alert on any that don't.
+
+        Returns the failures (for tests). Transport hiccups are retried by the
+        broker; a refusal (401/403) is reported at once, since it never heals.
+        """
+        from halal_trader.execution.alpaca_broker import AlpacaRestBroker
+
+        accounts = [
+            ("day-trader", self.settings.alpaca.api_key, self.settings.alpaca.secret_key, True)
+        ]
+        core = self.settings.core
+        if core.alpaca_api_key and core.alpaca_secret_key:
+            accounts.append(("core", core.alpaca_api_key, core.alpaca_secret_key, core.paper))
+        failures = []
+        for name, key, secret, paper in accounts:
+            if not (key and secret):
+                continue
+            broker = AlpacaRestBroker(key, secret, paper=paper)
+            try:
+                account = await broker.get_account_info()
+                if account.status.upper() != "ACTIVE":
+                    failures.append(f"{name}: account status {account.status}")
+            except Exception as exc:  # noqa: BLE001 -- the point is to report it
+                failures.append(f"{name}: {exc!r}"[:200])
+            finally:
+                await broker.disconnect()
+        if failures:
+            logger.error("account watch: %s", "; ".join(failures))
+            await self._alerts.notify(
+                "broker.access_failed",
+                "Alpaca account check failed -- "
+                + "; ".join(failures)
+                + ". Regenerated keys revoke the old ones: update .env and recreate the bot.",
+            )
+        return failures
+
     async def core_trade(self) -> None:
         """Trade the strict-halal core portfolio on its own account (portfolio/core_executor.py).
 
@@ -1409,6 +1446,18 @@ class TradingBot(BaseTradingBot):
                 id="early_close_eod",
                 replace_existing=True,
                 misfire_grace_time=1800,
+                coalesce=True,
+            )
+
+            # Both Alpaca accounts' keys still work: a revoked key otherwise
+            # leaves a "healthy" bot that cannot trade (2026-10-04: regenerating
+            # keys on the day-trader's account locked it out, unnoticed).
+            self.scheduler.add_job(
+                self.account_watch,
+                CronTrigger(minute="5,35", timezone=MARKET_TZ),
+                id="account_watch",
+                replace_existing=True,
+                misfire_grace_time=900,
                 coalesce=True,
             )
 
