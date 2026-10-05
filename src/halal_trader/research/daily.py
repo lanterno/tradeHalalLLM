@@ -184,6 +184,12 @@ async def run_research(engine: AsyncEngine, settings: Settings, *, today: date) 
         run.errors.append(f"core readiness: {exc!r}"[:300])
 
     try:
+        run.errors += await _execution_quality(engine, today)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("research: execution quality failed: %r", exc)
+        run.errors.append(f"execution quality: {exc!r}"[:300])
+
+    try:
         run.zakat = await _zakat(engine, settings, today)
     except Exception as exc:  # noqa: BLE001
         logger.error("research: zakat failed: %r", exc)
@@ -375,3 +381,24 @@ async def _holdings_reported(engine: AsyncEngine, sec: Any, screened: date) -> l
             {"s": sorted(held), "d": datetime.combine(screened, time(), UTC)},
         )
         return [r.symbol for r in rows]
+
+
+async def _execution_quality(engine: AsyncEngine, today: date) -> list[str]:
+    """The core's fills of the last 30 days against arrival and the close, kept in
+    the ``core.execution`` heartbeat for the Core page and the digest. An order
+    from today still unfilled after the close is reported: a market order that
+    did not fill is a position the account does not hold and its book does."""
+    from halal_trader.core.heartbeat import beat
+    from halal_trader.portfolio.execution_quality import report
+
+    recent = await report(engine, today - timedelta(days=30), today)
+    if not recent.orders:
+        return []
+    await beat(engine, "core.execution", recent.summary())
+    todays = await report(engine, today)
+    unfilled = [o.symbol for o in todays.orders if o.status == "unfilled"]
+    if unfilled:
+        return [
+            f"core: {len(unfilled)} order(s) unfilled after the close: {', '.join(unfilled[:8])}"
+        ]
+    return []

@@ -90,4 +90,6 @@ def test_core_page_shows_holdings_against_targets_and_the_gate(client) -> None:
     assert body["series"][-1] == {"date": "2026-10-06", "account": 101.0, "book": 102.0}
     assert body["readiness"]["ready"] is False and body["readiness"]["min_days"] == 20
     assert [o["symbol"] for o in body["orders"]] == ["MSFT"]
+    assert body["orders"][0]["fill_status"] == "unfilled"  # the seeded fill has no order id
+    assert body["execution"]["orders"] == 1
     assert "alpaca_api_key" not in str(body)

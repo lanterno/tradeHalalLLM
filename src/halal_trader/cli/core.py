@@ -118,6 +118,55 @@ def readiness_cmd() -> None:
         console.print(f"  - {failure}")
 
 
+@core.command("slippage")
+@click.option("--days", default=30, show_default=True, help="How far back, in calendar days.")
+def slippage_cmd(days: int) -> None:
+    """How the core's orders filled: against the arrival price and against the close."""
+
+    async def _run() -> Any:
+        from datetime import timedelta
+
+        from halal_trader.config import get_settings
+        from halal_trader.db.models import init_db
+        from halal_trader.market_hours import today_eastern
+        from halal_trader.portfolio.execution_quality import report
+
+        engine = await init_db(get_settings().database_url)
+        try:
+            today = today_eastern()
+            return await report(engine, today - timedelta(days=days), today)
+        finally:
+            await engine.dispose()
+
+    r = asyncio.run(_run())
+    if not r.orders:
+        console.print(f"no core orders since {r.start}")
+        return
+
+    def bps(x: float | None) -> str:
+        return "n/a" if x is None else f"{x:+.1f} bps"
+
+    console.print(
+        f"core execution {r.start} to {r.end}: {len(r.orders)} orders, {r.count('filled')} filled, "
+        f"{r.count('partial')} partial, {r.count('unfilled')} unfilled; "
+        f"${r.filled_notional:,.2f} traded"
+    )
+    console.print(
+        f"  vs arrival {bps(r.vs_arrival_bps)} · vs close {bps(r.vs_close_bps)} "
+        f"(the book assumes +5.0 bps)"
+        + (
+            f" · ${r.cost_vs_close_usd:,.2f} against trading at the close"
+            if r.cost_vs_close_usd is not None
+            else ""
+        )
+    )
+    for o in r.worst():
+        console.print(
+            f"  {o.side} {o.symbol}: {bps(o.vs_arrival_bps)} vs arrival, "
+            f"{bps(o.vs_close_bps)} vs close"
+        )
+
+
 @core.command("digest")
 @click.option("--send", is_flag=True, help="Send it to Telegram as well as printing it.")
 def digest_cmd(send: bool) -> None:

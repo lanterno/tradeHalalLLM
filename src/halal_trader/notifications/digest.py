@@ -84,6 +84,15 @@ async def build(engine: AsyncEngine, settings: Any, *, today: date) -> str:
         )
         lines.append(f"Live-money gate: {status}")
 
+    execution = beats.get("core.execution", {})
+    if execution:
+        lines.append(
+            f"Core fills (30 days): {execution.get('orders')} orders, "
+            f"{execution.get('unfilled')} unfilled; vs arrival "
+            f"{execution.get('vs_arrival_bps')} bps, vs close {execution.get('vs_close_bps')} bps "
+            f"(book assumes {execution.get('book_cost_bps')})"
+        )
+
     validation = beats.get("screen.validation", {})
     if validation:
         lines.append(

@@ -405,6 +405,24 @@ export interface CoreOrder {
   reason: string;
   screen_as_of: string | null;
   status: string;
+  fill_price: number | null;
+  fill_status: string | null;
+  vs_arrival_bps: number | null;
+}
+
+export interface CoreExecution {
+  start: string;
+  end: string;
+  orders: number;
+  filled: number;
+  partial: number;
+  unfilled: number;
+  filled_notional: number;
+  vs_arrival_bps: number | null;
+  vs_close_bps: number | null;
+  book_cost_bps: number;
+  cost_vs_close_usd: number | null;
+  worst: { symbol: string; side: string; vs_arrival_bps: number | null }[];
 }
 
 export interface CoreRun {
@@ -438,6 +456,7 @@ export interface CoreStatus {
     halted: number;
     failures: string[];
   };
+  execution: CoreExecution | null;
   orders: CoreOrder[];
   runs: CoreRun[];
 }

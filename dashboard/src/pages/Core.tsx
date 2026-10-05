@@ -117,6 +117,54 @@ function TrackingChart({ series }: { series: CoreStatus["series"] }) {
 }
 
 const pct = (v: number | null) => (v === null ? "—" : formatPct(v));
+const bps = (v: number | null) => (v === null ? "—" : `${v > 0 ? "+" : ""}${v.toFixed(1)} bps`);
+
+function Execution({ e }: { e: NonNullable<CoreStatus["execution"]> }) {
+  const closeCls =
+    e.vs_close_bps === null
+      ? "text-white"
+      : e.vs_close_bps <= e.book_cost_bps
+        ? "text-accent"
+        : "text-warning";
+  return (
+    <div className="rounded-xl border border-border bg-surface p-4">
+      <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+        <div>
+          <p className="text-xs uppercase tracking-wider text-muted">Filled</p>
+          <p className="mt-1 text-xl font-bold text-white">
+            {e.filled} / {e.orders}
+          </p>
+          <p className="text-xs text-muted">
+            {e.partial} partial · {e.unfilled} unfilled
+          </p>
+        </div>
+        <div>
+          <p className="text-xs uppercase tracking-wider text-muted">Traded</p>
+          <p className="mt-1 text-xl font-bold text-white">{formatUsd(e.filled_notional)}</p>
+          <p className="text-xs text-muted">since {e.start}</p>
+        </div>
+        <div>
+          <p className="text-xs uppercase tracking-wider text-muted">Vs arrival</p>
+          <p className="mt-1 text-xl font-bold text-white">{bps(e.vs_arrival_bps)}</p>
+          <p className="text-xs text-muted">vs the price the plan used</p>
+        </div>
+        <div>
+          <p className="text-xs uppercase tracking-wider text-muted">Vs close</p>
+          <p className={cn("mt-1 text-xl font-bold", closeCls)}>{bps(e.vs_close_bps)}</p>
+          <p className="text-xs text-muted">
+            {e.vs_close_bps === null
+              ? "after the evening run"
+              : `the book assumes +${e.book_cost_bps} bps`}
+          </p>
+        </div>
+      </div>
+      <p className="mt-3 text-[11px] leading-relaxed text-muted">
+        Positive is a cost: a buy filled above the reference price, or a sell below it. Weighted
+        by filled value.
+      </p>
+    </div>
+  );
+}
 
 export default function Core() {
   const { data, isLoading, isError, error, refetch } = useCore();
@@ -240,6 +288,12 @@ export default function Core() {
             )}
           </Section>
 
+          {data.execution && (
+            <Section title="Execution quality (30 days)">
+              <Execution e={data.execution} />
+            </Section>
+          )}
+
           <Section title="Recent orders">
             {data.orders.length === 0 ? (
               <p className="text-sm text-muted">No orders yet.</p>
@@ -251,6 +305,8 @@ export default function Core() {
                       <th className="px-4 py-2">When</th>
                       <th className="px-4 py-2">Order</th>
                       <th className="px-4 py-2 text-right">Notional</th>
+                      <th className="px-4 py-2 text-right">Fill</th>
+                      <th className="px-4 py-2 text-right">Slippage</th>
                       <th className="px-4 py-2">Reason</th>
                       <th className="px-4 py-2">Status</th>
                     </tr>
@@ -268,6 +324,21 @@ export default function Core() {
                         <td className="px-4 py-2 text-right">
                           {o.notional === null ? "—" : formatUsd(o.notional)}
                         </td>
+                        <td className="px-4 py-2 text-right">
+                          {o.fill_price === null ? (
+                            <span className="text-muted">{o.fill_status ?? "—"}</span>
+                          ) : (
+                            formatUsd(o.fill_price)
+                          )}
+                        </td>
+                        <td
+                          className={cn(
+                            "px-4 py-2 text-right",
+                            (o.vs_arrival_bps ?? 0) > 25 ? "text-warning" : "text-muted",
+                          )}
+                        >
+                          {bps(o.vs_arrival_bps)}
+                        </td>
                         <td className="px-4 py-2 text-muted">{o.reason}</td>
                         <td
                           className={cn(
@@ -275,7 +346,7 @@ export default function Core() {
                             o.status === "submitted" ? "text-muted" : "text-warning",
                           )}
                         >
-                          {o.status}
+                          {o.fill_status ?? o.status}
                         </td>
                       </tr>
                     ))}

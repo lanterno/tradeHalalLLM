@@ -23,6 +23,16 @@ def _f(x: Any, digits: int = 2) -> float | None:
     return None if x is None else round(float(x), digits)
 
 
+def _fill(o: Any) -> dict[str, Any]:
+    if o is None:
+        return {"fill_price": None, "fill_status": None, "vs_arrival_bps": None}
+    return {
+        "fill_price": _f(o.fill_price, 4),
+        "fill_status": o.status,
+        "vs_arrival_bps": _f(o.vs_arrival_bps, 1),
+    }
+
+
 def register(app: FastAPI) -> None:
     @app.get("/api/core")
     async def api_core(ctx: DashboardContext = Depends(get_ctx)) -> JSONResponse:
@@ -121,6 +131,10 @@ def register(app: FastAPI) -> None:
                     }
                 )
 
+        from halal_trader.portfolio.execution_quality import report as fills
+
+        executed = await fills(engine, today - timedelta(days=30), today)
+        fill_of = {(o.submitted_at, o.symbol): o for o in executed.orders}
         ready = await gate.check(engine, today=today)
         return JSONResponse(
             {
@@ -143,6 +157,7 @@ def register(app: FastAPI) -> None:
                     "halted": ready.halted,
                     "failures": ready.failures,
                 },
+                "execution": executed.summary() if executed.orders else None,
                 "orders": [
                     {
                         "at": o.submitted_at.isoformat(),
@@ -154,6 +169,7 @@ def register(app: FastAPI) -> None:
                         "reason": o.reason,
                         "screen_as_of": o.screen_as_of.isoformat() if o.screen_as_of else None,
                         "status": o.status,
+                        **_fill(fill_of.get((o.submitted_at, o.symbol))),
                     }
                     for o in orders
                 ],
