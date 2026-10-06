@@ -213,3 +213,92 @@ async def test_each_account_sees_only_its_own_fills(engine: AsyncEngine) -> None
     await _dividend(engine, "d1", "MSFT", date(2026, 8, 20), 1.0)
     (core,) = await accrue_account(engine, "core", through=date(2026, 10, 1))
     assert core.account == "core" and core.shares == 3.5
+
+
+async def _core_fill(engine, i: str, side: str, qty: float, when: str) -> None:
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO broker_activities (id, activity_type, transaction_time, symbol, side, "
+                "qty, price, raw, account) VALUES (:i, 'FILL', :t, 'NVDA', :side, :q, 100, '{}', "
+                "'core')"
+            ),
+            {"i": i, "t": datetime.fromisoformat(when), "side": side, "q": qty},
+        )
+
+
+async def _snapshot(engine, taken: str, qty: float, *, ledger_synced: str) -> None:
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO account_snapshots (account, taken_at, equity, cash, positions) "
+                "VALUES ('core', :t, 1, 0, CAST(:p AS JSONB))"
+            ),
+            {"t": datetime.fromisoformat(taken), "p": f'[{{"symbol": "NVDA", "qty": {qty}}}]'},
+        )
+        await conn.execute(
+            text(
+                "INSERT INTO heartbeats (component, beat_at, detail) "
+                "VALUES ('stock.ledger', :t, '{}')"
+            ),
+            {"t": datetime.fromisoformat(ledger_synced)},
+        )
+
+
+async def test_a_split_is_counted_as_the_broker_counts_it(engine: AsyncEngine) -> None:
+    """Fills alone know 10 shares bought; a 4-for-1 split made them 40. The
+    broker's snapshot, moved back across later fills, says 40 at the ex-date."""
+    from halal_trader.compliance.purification import held_shares, paper_positions
+
+    await _core_fill(engine, "n1", "buy", 10, "2026-06-01 15:40:00-04:00")
+    # after the split: 40 held; then 5 more bought after the dividend's ex-date
+    await _core_fill(engine, "n2", "buy", 5, "2026-08-25 15:40:00-04:00")
+    await _snapshot(
+        engine, "2026-09-01 16:59:00-04:00", 45, ledger_synced="2026-09-01 16:30:00-04:00"
+    )
+    before = date(2026, 8, 20)
+    assert await paper_positions(engine, before, "core") == {"NVDA": 10.0}
+    # The ledger last synced before the snapshot: its fills may be missing.
+    assert await held_shares(engine, before, "core") == {"NVDA": 10.0}
+    async with engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE heartbeats SET beat_at = :t WHERE component = 'stock.ledger'"),
+            {"t": datetime.fromisoformat("2026-09-02 16:30:00-04:00")},
+        )
+    assert await held_shares(engine, before, "core") == {"NVDA": 40.0}
+
+    from halal_trader.compliance.purification import accrue_account
+
+    await _screen(engine, "NVDA", date(2026, 6, 30), 0.01)
+    await _dividend(engine, "dn", "NVDA", before, 0.01)
+    (a,) = await accrue_account(engine, "core", through=date(2026, 10, 1))
+    assert a.shares == 40.0
+
+
+async def test_a_snapshot_beside_a_fill_is_not_trusted(engine: AsyncEngine) -> None:
+    from halal_trader.compliance.purification import held_shares
+
+    await _core_fill(engine, "n1", "buy", 10, "2026-08-25 15:40:00-04:00")
+    # taken a few seconds around the fill: which came first cannot be told
+    await _snapshot(
+        engine, "2026-08-25 15:40:30-04:00", 99, ledger_synced="2026-08-25 16:30:00-04:00"
+    )
+    assert await held_shares(engine, date(2026, 8, 26), "core") == {"NVDA": 10.0}
+
+
+async def test_zakat_values_the_brokers_shares(engine: AsyncEngine) -> None:
+    from halal_trader.compliance.zakat import assess
+
+    await _core_fill(engine, "n1", "buy", 10, "2026-06-01 15:40:00-04:00")
+    await _snapshot(
+        engine, "2026-09-01 16:59:00-04:00", 40, ledger_synced="2026-09-02 16:30:00-04:00"
+    )
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO daily_bars (symbol, day, adjustment, open, high, low, close, volume, "
+                "fetched_at) VALUES ('NVDA', '2026-09-01', 'raw', 1, 1, 1, 25, 1, now())"
+            )
+        )
+    a = await assess(engine, "core", period_start=date(2025, 9, 1), hawl_date=date(2026, 9, 1))
+    assert a.market_value == 40 * 25

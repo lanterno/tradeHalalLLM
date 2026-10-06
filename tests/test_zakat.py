@@ -88,7 +88,9 @@ async def test_the_evening_run_records_a_passed_hawl_once_and_catches_up_a_weeke
 
     from halal_trader.research.daily import _zakat
 
-    settings = SimpleNamespace(zakat=SimpleNamespace(hawl_hijri="09-01"))
+    settings = SimpleNamespace(
+        zakat=SimpleNamespace(hawl_hijri="09-01"), core=SimpleNamespace(paper=True)
+    )
     # 1 Ramadan 1448 is Monday 2027-02-08; a run on the 10th still records it.
     assert await _zakat(engine, settings, date(2027, 2, 7)) == {}  # before the hawl
     first = await _zakat(engine, settings, date(2027, 2, 10))

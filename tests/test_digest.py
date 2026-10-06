@@ -14,6 +14,7 @@ async def test_the_digest_covers_each_section_even_with_no_history(engine: Async
     settings = SimpleNamespace(
         zakat=SimpleNamespace(hawl_hijri="09-01"),
         llm=SimpleNamespace(monthly_live_usd=25.0, monthly_research_usd=15.0),
+        core=SimpleNamespace(paper=True),
     )
     message = await build(engine, settings, today=date(2026, 10, 9))
     assert message.startswith("<b>Halal Trader")

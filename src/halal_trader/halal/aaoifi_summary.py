@@ -48,6 +48,7 @@ from halal_trader.db.models import (
     RoundTripPurificationRow,
     Trade,
 )
+from halal_trader.portfolio.core_account import CORE_ACCOUNTS, CORE_LIVE
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncEngine
@@ -294,7 +295,7 @@ def _live_accounts() -> list[str]:
     settings = get_settings()
     live = [] if settings.alpaca.paper_trade else ["paper"]
     if not settings.core.paper:
-        live.append("core")
+        live.append(CORE_LIVE)  # the live core is recorded apart (portfolio/core_account.py)
     return live
 
 
@@ -309,7 +310,7 @@ async def _accruals(
     payment date. Forward books are notional and stay out of the summary."""
     from halal_trader.db.models import PurificationAccrual
 
-    names = ["paper", "core"] if accounts is None else accounts
+    names = ["paper", *CORE_ACCOUNTS] if accounts is None else accounts
     if not names:
         return 0.0
     when = func.coalesce(PurificationAccrual.payable_date, PurificationAccrual.ex_date)

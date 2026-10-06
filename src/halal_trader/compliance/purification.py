@@ -7,10 +7,13 @@ given away (AAOIFI Shariah Standard No. 21, the dividend method):
     amount = shares held x dividend per share x impure-income ratio
 
 * **shares held** at the close before the ex-date (the holder of record
-  since T+1 settlement). For the paper account they are rebuilt from the
-  broker ledger's fills (Alpaca's paper accounts credit no dividends; a
-  live account's DIV activities would be used directly). For a forward
-  book they are the book's weight x NAV x a notional amount / the close.
+  since T+1 settlement). For a broker account they come from the broker's
+  position snapshot moved to that close by the fills in between, so a
+  split or spin-off is counted as the broker counts it; from the fills
+  alone where no snapshot can be used (:func:`held_shares`). Alpaca's paper
+  accounts credit no dividends, so the shares, not DIV activities, are the
+  basis. For a forward book they are the book's weight x NAV x a notional
+  amount / the close.
 * **impure-income ratio** from the screen in force at the ex-date
   (interest income / revenue). Where the screen has none, 5% -- the most
   a passing company may have -- so an unknown errs towards giving more.
@@ -27,11 +30,13 @@ from __future__ import annotations
 import logging
 from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
+
+from halal_trader.market_hours import MARKET_TZ
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +110,76 @@ async def paper_positions(
         return {r.symbol: float(r.q) for r in rows if r.q and float(r.q) > 1e-9}
 
 
+SNAPSHOT_FILL_MARGIN = timedelta(minutes=2)
+
+
+async def held_shares(engine: AsyncEngine, before: date, account: str) -> dict[str, float]:
+    """Shares ``account`` held at the close of the last session before ``before``.
+
+    The broker's own position snapshot (``account_snapshots``, the newest one)
+    is the count of record: it carries splits, spin-offs and anything else
+    that changes a holding without a fill. It is moved to that close by the
+    fills between the two moments, in whichever direction. Rebuilding from
+    fills alone (:func:`paper_positions`) counts a 2-for-1 split as half the
+    shares, and is the fallback when there is no usable snapshot: none taken,
+    the ledger not yet synced past it (its fills would be missing), or a fill
+    within ``SNAPSHOT_FILL_MARGIN`` of it (the two clocks cannot order them).
+    """
+    from halal_trader.core.heartbeat import STOCK_LEDGER
+
+    async with engine.connect() as conn:
+        snap = (
+            await conn.execute(
+                text("SELECT taken_at, positions FROM account_snapshots WHERE account = :a"),
+                {"a": account},
+            )
+        ).first()
+        synced = (
+            await conn.execute(
+                text("SELECT beat_at FROM heartbeats WHERE component = :c"), {"c": STOCK_LEDGER}
+            )
+        ).scalar()
+        if snap is None or synced is None or synced < snap.taken_at:
+            return await paper_positions(engine, before, account)
+        near = (
+            await conn.execute(
+                text(
+                    "SELECT count(*) FROM broker_activities WHERE account = :a "
+                    "AND activity_type = 'FILL' AND transaction_time BETWEEN :lo AND :hi"
+                ),
+                {
+                    "a": account,
+                    "lo": snap.taken_at - SNAPSHOT_FILL_MARGIN,
+                    "hi": snap.taken_at + SNAPSHOT_FILL_MARGIN,
+                },
+            )
+        ).scalar()
+        if near:
+            return await paper_positions(engine, before, account)
+        # The close before ``before``: every fill dated (New York) before it.
+        cutoff = datetime.combine(before, time(), MARKET_TZ)
+        lo, hi, sign = (
+            (cutoff, snap.taken_at, -1.0)
+            if snap.taken_at >= cutoff
+            else (snap.taken_at, cutoff, 1.0)
+        )
+        moves = await conn.execute(
+            text(
+                "SELECT symbol, sum(CASE WHEN side = 'buy' THEN qty ELSE -qty END) AS q "
+                "FROM broker_activities WHERE account = :a AND activity_type = 'FILL' "
+                "AND transaction_time >= :lo AND transaction_time < :hi GROUP BY symbol"
+            ),
+            {"a": account, "lo": lo, "hi": hi},
+        )
+        shares: dict[str, float] = {}
+        for p in snap.positions or []:
+            if p.get("qty") is not None:
+                shares[str(p["symbol"])] = float(p["qty"])
+        for r in moves:
+            shares[r.symbol] = shares.get(r.symbol, 0.0) + sign * float(r.q or 0.0)
+    return {s: q for s, q in shares.items() if q > 1e-9}
+
+
 @dataclass(frozen=True, slots=True)
 class Accrual:
     account: str
@@ -171,10 +246,11 @@ async def _store(engine: AsyncEngine, accruals: list[Accrual]) -> None:
 
 
 async def accrue_account(engine: AsyncEngine, account: str, *, through: date) -> list[Accrual]:
-    """Accrue every stored dividend a broker account ("paper", "core") held at its ex-date."""
+    """Accrue every stored dividend a broker account ("paper", "core", "core-live")
+    held at its ex-date, counting the shares from the broker's snapshot where it can."""
     out = []
     for d in await _pending(engine, account, through):
-        shares = (await paper_positions(engine, d.ex_date, account)).get(d.symbol, 0.0)
+        shares = (await held_shares(engine, d.ex_date, account)).get(d.symbol, 0.0)
         if shares <= 0:
             continue
         ratio, as_of, known = await impure_ratio(engine, d.symbol, d.ex_date)

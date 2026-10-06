@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from halal_trader.config import Settings
 from halal_trader.data.alpaca_market import AlpacaMarketData
 from halal_trader.data.store import BENCHMARKS
+from halal_trader.portfolio.core_account import CORE_PAPER, core_account
 
 logger = logging.getLogger(__name__)
 
@@ -184,7 +185,7 @@ async def run_research(engine: AsyncEngine, settings: Settings, *, today: date) 
         run.errors.append(f"core readiness: {exc!r}"[:300])
 
     try:
-        run.errors += await _execution_quality(engine, today)
+        run.errors += await _execution_quality(engine, today, core_account(settings.core.paper))
     except Exception as exc:  # noqa: BLE001
         logger.error("research: execution quality failed: %r", exc)
         run.errors.append(f"execution quality: {exc!r}"[:300])
@@ -195,6 +196,12 @@ async def run_research(engine: AsyncEngine, settings: Settings, *, today: date) 
         logger.error("research: zakat failed: %r", exc)
         run.errors.append(f"zakat: {exc!r}"[:300])
     return run
+
+
+def _core_ledgers(settings: Settings) -> list[str]:
+    """The core's accounts to purify and assess: paper always (its history
+    stays), live as well once the keys are live's (portfolio/core_account.py)."""
+    return list(dict.fromkeys([CORE_PAPER, core_account(settings.core.paper)]))
 
 
 async def _zakat(engine: AsyncEngine, settings: Settings, today: date) -> dict[str, float]:
@@ -221,7 +228,11 @@ async def _zakat(engine: AsyncEngine, settings: Settings, today: date) -> dict[s
             )
         }
     out: dict[str, float] = {}
-    for account in ["paper", "core", *(f"book:{b}" for b in await book_names(engine))]:
+    for account in [
+        "paper",
+        *_core_ledgers(settings),
+        *(f"book:{b}" for b in await book_names(engine)),
+    ]:
         if account in done:
             continue
         assessment = await z.assess(engine, account, period_start=start, hawl_date=hawl)
@@ -250,7 +261,8 @@ async def _purify(engine: AsyncEngine, settings: Settings, today: date) -> dict[
     finally:
         await market.aclose()
     out = {"paper": len(await accrue_paper(engine, through=today))}
-    out["core"] = len(await accrue_account(engine, "core", through=today))
+    for account in _core_ledgers(settings):
+        out[account] = len(await accrue_account(engine, account, through=today))
     for book in await book_names(engine):
         out[f"book:{book}"] = len(await accrue_book(engine, book, through=today))
     return out
@@ -384,7 +396,9 @@ async def _holdings_reported(engine: AsyncEngine, sec: Any, screened: date) -> l
         return [r.symbol for r in rows]
 
 
-async def _execution_quality(engine: AsyncEngine, today: date) -> list[str]:
+async def _execution_quality(
+    engine: AsyncEngine, today: date, account: str = CORE_PAPER
+) -> list[str]:
     """The core's fills of the last 30 days against arrival and the close, kept in
     the ``core.execution`` heartbeat for the Core page and the digest. An order
     from today still unfilled after the close is reported: a market order that
@@ -392,11 +406,11 @@ async def _execution_quality(engine: AsyncEngine, today: date) -> list[str]:
     from halal_trader.core.heartbeat import beat
     from halal_trader.portfolio.execution_quality import report
 
-    recent = await report(engine, today - timedelta(days=30), today)
+    recent = await report(engine, today - timedelta(days=30), today, account=account)
     if not recent.orders:
         return []
     await beat(engine, "core.execution", recent.summary())
-    todays = await report(engine, today)
+    todays = await report(engine, today, account=account)
     unfilled = [o.symbol for o in todays.orders if o.status == "unfilled"]
     if unfilled:
         return [

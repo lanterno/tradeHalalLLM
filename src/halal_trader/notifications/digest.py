@@ -35,18 +35,21 @@ async def build(engine: AsyncEngine, settings: Any, *, today: date) -> str:
     week = today - timedelta(days=7)
     lines = [f"<b>Halal Trader — week to {today:%a %d %b %Y}</b>"]
 
+    from halal_trader.portfolio.core_account import core_account
+
+    account = core_account(settings.core.paper)
     core = await _first_last(
         engine,
-        "SELECT day, equity FROM broker_equity WHERE account = 'core' AND day >= :d ORDER BY day",
-        {"d": week},
+        "SELECT day, equity FROM broker_equity WHERE account = :a AND day >= :d ORDER BY day",
+        {"d": week, "a": account},
     )
     async with engine.connect() as conn:
         core_now = (
             await conn.execute(
                 text(
-                    "SELECT equity FROM broker_equity WHERE account = 'core' "
-                    "ORDER BY day DESC LIMIT 1"
-                )
+                    "SELECT equity FROM broker_equity WHERE account = :a ORDER BY day DESC LIMIT 1"
+                ),
+                {"a": account},
             )
         ).scalar()
     spus = await _first_last(

@@ -10,8 +10,8 @@
 
 Signed so that positive is a cost: a buy filled above the reference, or a
 sell filled below it. Averages are weighted by filled notional. Fills come
-from the broker ledger (``broker_activities``, account 'core'), joined to
-the order by Alpaca's order id.
+from the broker ledger (``broker_activities``, the order's own account),
+joined to the order by Alpaca's order id.
 """
 
 from __future__ import annotations
@@ -23,6 +23,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from halal_trader.market_hours import MARKET_TZ
+from halal_trader.portfolio.core_account import CORE_PAPER
 
 BOOK_COST_BPS = 5.0  # what the forward book charges per side
 
@@ -132,8 +133,11 @@ def _bounds(start: date, end: date) -> tuple[datetime, datetime]:
     return lo, hi
 
 
-async def report(engine: AsyncEngine, start: date, end: date | None = None) -> Report:
-    """Every submitted core order in [start, end] (New York dates) with its fills."""
+async def report(
+    engine: AsyncEngine, start: date, end: date | None = None, *, account: str = CORE_PAPER
+) -> Report:
+    """Every submitted order of the core ``account`` in [start, end] (New York
+    dates) with its fills."""
     end = end or start
     lo, hi = _bounds(start, end)
     async with engine.connect() as conn:
@@ -146,12 +150,13 @@ async def report(engine: AsyncEngine, start: date, end: date | None = None) -> R
                 " AND b.adjustment = 'raw' "
                 " AND b.day = (o.submitted_at AT TIME ZONE 'America/New_York')::date) AS close "
                 "FROM core_orders o LEFT JOIN broker_activities f "
-                "ON f.account = 'core' AND f.activity_type = 'FILL' "
+                "ON f.account = o.account AND f.activity_type = 'FILL' "
                 "AND f.order_id = o.broker_order_id "
-                "WHERE o.status = 'submitted' AND o.submitted_at >= :lo AND o.submitted_at < :hi "
+                "WHERE o.account = :a AND o.status = 'submitted' "
+                "AND o.submitted_at >= :lo AND o.submitted_at < :hi "
                 "GROUP BY o.id ORDER BY o.submitted_at"
             ),
-            {"lo": lo, "hi": hi},
+            {"lo": lo, "hi": hi, "a": account},
         )
         orders = [
             OrderFill(
