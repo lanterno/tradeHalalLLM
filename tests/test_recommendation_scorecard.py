@@ -623,3 +623,43 @@ async def test_whatif_equity_curve_empty():
     wc = await whatif_equity_curve(repo)
     assert wc["available"] is False
     assert wc["points"] == []
+
+
+def _pick(rid: int, symbol: str, day: str, fwd5: float, conviction: float) -> dict[str, Any]:
+    return {
+        "id": rid,
+        "symbol": symbol,
+        "date": day,
+        "fwd_return_5d": fwd5,
+        "benchmark_return_5d": 1.0,
+        "conviction": conviction,
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_day_generated_twice_is_scored_once():
+    # 07-01 was generated twice; the newer row is that day's pick.
+    repo = _FakeRepo(
+        [
+            _pick(1, "AMAT", "2026-07-01", -10.0, 0.85),
+            _pick(2, "AMAT", "2026-07-01", -10.0, 0.72),
+            _pick(3, "AAPL", "2026-07-02", 4.0, 0.72),
+        ]
+    )
+    sc = await compute_scorecard(repo)
+    assert sc["n_total"] == 2 and sc["n_scored"] == 2 and sc["n_duplicates"] == 1
+    assert sc["avg_fwd_5d"] == pytest.approx(-3.0)  # (-10 + 4) / 2, not (-10 - 10 + 4) / 3
+    assert sc["conviction_mode"] == {"value": 0.72, "n": 2, "of": 2}
+    assert sc["verdict"] == "negative"  # lags SPUS on average
+    wc = await whatif_equity_curve(repo, start=100.0)
+    assert wc["n"] == 2
+    assert wc["final_equity"] == pytest.approx(100 * 0.9 * 1.04, abs=0.01)
+
+
+def test_the_verdict_is_negative_whenever_the_record_argues_against_the_pick():
+    from halal_trader.recommendation.scorecard import verdict
+
+    assert verdict(sufficient=False, conviction_ic=None, avg_excess_5d=-3.3) == "negative"
+    assert verdict(sufficient=True, conviction_ic=-0.57, avg_excess_5d=0.5) == "negative"
+    assert verdict(sufficient=False, conviction_ic=None, avg_excess_5d=1.0) == "unproven"
+    assert verdict(sufficient=True, conviction_ic=0.1, avg_excess_5d=1.0) == "positive"
