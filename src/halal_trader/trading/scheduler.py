@@ -192,7 +192,7 @@ class TradingBot(BaseTradingBot):
             reactor_trailing_stop_distance_pct=(
                 self.settings.stocks.reactor_trailing_stop_distance_pct
             ),
-            reactor_hold_overnight=self.settings.stocks.reactor_hold_overnight,
+            reactor_hold_overnight=self.reactor_holds_overnight(),
             screener=self.screener,
         )
         self.portfolio = PortfolioTracker(
@@ -1029,6 +1029,16 @@ class TradingBot(BaseTradingBot):
             await self._notifier.send(message)
         except Exception as exc:  # noqa: BLE001 -- a digest must never take the bot down
             logger.error("weekly digest failed: %r", exc)
+
+    def reactor_holds_overnight(self) -> bool:
+        """Is a reactor entry spared the 15:50 flatten (its slow exit)?
+
+        Only while the day-trader runs to manage that exit. Retired, a held
+        entry would stay forever (MSFT from 20 Jul to 6 Oct 2026), so the
+        flatten takes everything.
+        """
+        stocks = self.settings.stocks
+        return bool(stocks.reactor_hold_overnight and stocks.day_trader_enabled)
 
     async def market_snapshot(self) -> None:
         """Each minute of the session: both accounts' values and the benchmarks'

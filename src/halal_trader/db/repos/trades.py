@@ -16,6 +16,7 @@ from sqlmodel import col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from halal_trader.db.models import Trade
+from halal_trader.domain.status import TradeStatus
 from halal_trader.market_hours import (
     today_eastern,
     trading_day_end_utc,
@@ -23,6 +24,9 @@ from halal_trader.market_hours import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Statuses of an order that never held a share, so is never a position.
+NEVER_FILLED = (TradeStatus.REJECTED.value, TradeStatus.CANCELED.value)
 
 
 class TradeRepoImpl:
@@ -99,7 +103,13 @@ class TradeRepoImpl:
         """Stock trades with status != 'closed' and an SL/TP set."""
         async with AsyncSession(self._engine) as session:
             statement = (
-                select(Trade).where(col(Trade.closed_at).is_(None)).where(Trade.side == "buy")
+                select(Trade)
+                .where(col(Trade.closed_at).is_(None))
+                .where(Trade.side == "buy")
+                # An order the broker refused or that expired never held a
+                # share: it is not a position (three rejected buys from July
+                # showed as open on the Positions page).
+                .where(col(Trade.status).not_in(NEVER_FILLED))
             )
             results = await session.exec(statement)
             return list(results.all())
