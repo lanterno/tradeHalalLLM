@@ -1,9 +1,9 @@
-"""A core holding's new 10-Q/10-K brings the weekly screen forward."""
+"""A core holding's new report brings the weekly screen forward."""
 
 from __future__ import annotations
 
 import json
-from datetime import date
+from datetime import UTC, date, datetime
 from typing import Any
 
 from sqlalchemy import text
@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from halal_trader.research.daily import _holdings_reported
 
 SCREENED = date(2026, 10, 2)
+SCREENED_AT = datetime(2026, 10, 3, 0, 30, tzinfo=UTC)  # the evening run of 10-02
 
 
 class FakeSec:
@@ -73,11 +74,29 @@ async def test_only_holdings_reporting_since_the_screen_count(engine: AsyncEngin
         }
     )
 
-    assert await _holdings_reported(engine, sec, SCREENED) == ["HELD"]
+    assert await _holdings_reported(engine, sec, SCREENED_AT) == ["HELD"]
     assert sorted(sec.asked) == [1, 2]  # only the holdings are fetched
 
 
 async def test_nothing_held_asks_sec_nothing(engine: AsyncEngine) -> None:
     sec = FakeSec({})
-    assert await _holdings_reported(engine, sec, SCREENED) == []
+    assert await _holdings_reported(engine, sec, SCREENED_AT) == []
     assert sec.asked == []
+
+
+async def test_amended_and_foreign_reports_count_too(engine: AsyncEngine) -> None:
+    await _seed(engine)
+    sec = FakeSec({1: [("10-Q/A", "2026-10-04")], 2: [("20-F", "2026-10-05")]})
+
+    assert await _holdings_reported(engine, sec, SCREENED_AT) == ["HELD", "OLDQ"]
+
+
+async def test_a_report_the_screen_already_read_does_not_bring_the_next_one_forward(
+    engine: AsyncEngine,
+) -> None:
+    """Accepted at 16:05 UTC on the screen's own day, before the evening run: the
+    screen read it. A date-based window re-triggered on it the next evening."""
+    await _seed(engine)
+    sec = FakeSec({1: [("10-Q", "2026-10-02")], 2: [("6-K", "2026-10-03")]})
+
+    assert await _holdings_reported(engine, sec, SCREENED_AT) == ["OLDQ"]

@@ -3,17 +3,25 @@
 The screen keeps each filer's SIC description ("Services-Prepackaged
 Software"), which is precise and unreadable on a phone. This folds the
 roughly 300 descriptions seen in the universe into about fifteen sectors a
-person would name. Order matters: the first rule whose keyword appears
-wins, so specific rules ("semiconductor") sit above broad ones
-("electronic"). Display only; nothing trades on it.
+person would name. Order matters: the first rule with a keyword at the
+start of a word wins, so specific rules ("semiconductor") sit above broad
+ones ("electronic"). A "(No ...)" clause is ignored: it says what the code
+excludes. Display only; nothing trades on it.
 """
 
 from __future__ import annotations
+
+import re
 
 OTHER = "Other"
 
 # fmt: off
 _RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    # Electrical-equipment makers (GE Vernova, Emerson's peers) would read as
+    # computer hardware through "electronic" below.
+    ("Industrials", (
+        "electronic & other electrical",
+    )),
     ("Retail", (
         "retail", "eating", "catalog", "mail-order", "wholesale",
     )),
@@ -27,11 +35,12 @@ _RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("Computer hardware", (
         "computer", "electronic", "communications equipment", "telephone & telegraph apparatus",
         "photographic", "office machines", "instruments for meas", "measuring",
-        "laboratory analytical", "optical",
+        "laboratory analytical", "optical", "calculating",
     )),
     ("Healthcare", (
-        "pharmaceutical", "biological", "medical", "surgical", "dental", "health", "hospital",
-        "diagnostic", "ophthalmic", "x-ray", "electromedical", "in vitro",
+        "pharmaceutical", "biological", "medical", "medicinal", "surgical", "dental", "health",
+        "hospital", "diagnostic", "ophthalmic", "x-ray", "electromedical", "in vitro",
+        "doctors", "clinics", "nursing",
     )),
     ("Autos", (
         "motor vehicle", "auto dealers", "tires",
@@ -89,9 +98,22 @@ _RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
 # fmt: on
 
 
+def _pattern(keyword: str) -> re.Pattern[str]:
+    # A keyword matches at the start of a word only: "eating" must not find
+    # "Heating", nor "paper" "Newspapers". It may run on ("paper" finds
+    # "Paperboard", "metal" "Metals").
+    return re.compile(r"(?<![a-z])" + re.escape(keyword.strip()))
+
+
+_PATTERNS = tuple((sector, tuple(_pattern(k) for k in keywords)) for sector, keywords in _RULES)
+# "(No Computer Equip)", "(No Diagnostic Substances)": what a code excludes
+# is not what the company does.
+_NEGATED = re.compile(r"\(\s*no\b[^)]*\)")
+
+
 def sector_of(sic_description: str | None) -> str:
-    text = (sic_description or "").lower()
-    for sector, keywords in _RULES:
-        if any(k in text for k in keywords):
+    text = _NEGATED.sub(" ", (sic_description or "").lower())
+    for sector, patterns in _PATTERNS:
+        if any(p.search(text) for p in patterns):
             return sector
     return OTHER
