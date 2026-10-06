@@ -345,6 +345,15 @@ async def build_engine(
     # so a restart neither drops open positions nor leaves their rows orphaned.
     for asset, weight in (await outcomes.restore()).items():
         shadow_book.set_weight(asset, weight)
+    # Refit from the outcomes already on disk. The every-N-closes counter is
+    # per process, so a restart used to wait for N new closes in one run before
+    # the calibrator saw any outcome the earlier runs had collected. Awaited
+    # here (one indexed read and a small fit) so replay and the live stream
+    # both start on the fitted model; it keeps identity on too little data.
+    try:
+        await retrainer.retrain()
+    except Exception as exc:  # noqa: BLE001 — a failed refit keeps the prior model (INV-1)
+        logger.warning("start-up calibrator refit failed: %r", exc)
     # Bootstrap warm-start (Appendix F): replay recent observations to warm
     # beliefs BEFORE subscribing to the live stream + starting the worker, so
     # replay completes in isolation and event_id dedup absorbs any overlap.

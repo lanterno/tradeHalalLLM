@@ -16,7 +16,7 @@ import sqlalchemy as sa
 from halabot.app import build_engine
 from halabot.belief.schema import Direction
 from halabot.platform.clock import FakeClock
-from halabot.platform.db import OUTCOME_COHORT, open_position
+from halabot.platform.db import OUTCOME_COHORT, open_position, outcome
 from halabot.platform.events import Event, EventType, new_event
 
 T0 = datetime(2026, 5, 28, 15, 0, tzinfo=UTC)  # 11:00 ET, a Thursday: the market is open
@@ -178,6 +178,39 @@ async def test_engine_resumes_the_shadow_book_after_a_restart(halabot_engine):
     engine = await build_engine(db_engine=halabot_engine, clock=FakeClock(T0))
     try:
         assert engine.shadow._portfolio.weight("NVDA") == pytest.approx(0.08)
+    finally:
+        await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_engine_refits_the_calibrator_at_start_up(halabot_engine):
+    # The refit counter is per process: without a start-up refit, outcomes
+    # collected before a restart waited for N new closes in one run.
+    async with halabot_engine.begin() as conn:
+        for i in range(60):
+            raw, label = (0.8, 1) if i % 2 == 0 else (0.2, 0)
+            await conn.execute(
+                sa.insert(outcome).values(
+                    asset="NVDA",
+                    entry_ts=T0,
+                    exit_ts=T0 + timedelta(minutes=i),
+                    entry_price=100.0,
+                    exit_price=101.0,
+                    closed_weight=0.1,
+                    return_pct=0.01,
+                    hold_seconds=60,
+                    belief_version=1,
+                    entry_belief={"conviction_raw": raw},
+                    label=label,
+                    reason="test",
+                    created_at=T0,
+                    cohort=OUTCOME_COHORT,
+                )
+            )
+    engine = await build_engine(db_engine=halabot_engine, clock=FakeClock(T0))
+    try:
+        assert engine.retrainer is not None and engine.retrainer.refits == 1
+        assert engine.retrainer.calibrator.fitted is True
     finally:
         await engine.stop()
 
