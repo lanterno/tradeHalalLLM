@@ -190,23 +190,46 @@ export interface LlmMetrics {
   p95_ms: number | null;
 }
 
-// AAOIFI halal-compliance summary (GET /api/halal/compliance). DB-backed.
+export interface NonHalalBuy {
+  symbol: string;
+  day: string;
+  verdict: "doubtful" | "not_halal" | "unscreened" | string;
+  screen_as_of: string | null;
+}
+
+/** One account's quarter, its buys judged by the in-house screen on the trade's day. */
+export interface AccountCompliance {
+  account: string;
+  label: string;
+  status: "compliant" | "violation";
+  trades_today: number;
+  trades_this_month: number;
+  trades_this_quarter: number;
+  buys_this_quarter: number;
+  buy_verdicts: { halal: number; doubtful: number; not_halal: number; unscreened: number };
+  non_halal_buys_quarter: number;
+  non_halal_buys: NonHalalBuy[];
+}
+
+// Halal-compliance summary (GET /api/halal/compliance). DB-backed.
 export interface HalalCompliance {
   status: "compliant" | "attention" | "violation" | string;
   is_compliant: boolean;
+  // New York calendar days, "YYYY-MM-DD".
   quarter_start: string;
   month_start: string;
   today_start: string;
   trades_today: number;
   trades_this_month: number;
   trades_this_quarter: number;
-  halal_screenings_quarter: number;
-  doubtful_screenings_quarter: number;
-  not_halal_screenings_quarter: number;
   non_halal_fills_quarter: number;
+  accounts: AccountCompliance[];
+  // This quarter's.
   purification_accrued_usd: number;
   purification_disbursed_usd: number;
+  // Everything still owed, whenever it accrued.
   purification_outstanding_usd: number;
+  purification_unpaid_by_account: Record<string, number>;
 }
 
 // A guard/rejection: the cycle proposed a trade but a guard blocked it.

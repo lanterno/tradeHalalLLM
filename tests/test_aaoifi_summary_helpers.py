@@ -1,85 +1,54 @@
-"""Tests for the pure helpers + dataclass in `halal/aaoifi_summary.py`.
+"""Tests for the pure helpers + dataclasses in `halal/aaoifi_summary.py`.
 
-The DB-aggregating `compute_aaoifi_summary` runs against the live
-Postgres engine and is covered by the integration suite. This file
-pins the in-memory surface — boundary helpers + the `AAOIFISummary`
-status / compliance / outstanding-purification properties — so a
-refactor that flips a comparison breaks here first.
+The DB-aggregating `compute_aaoifi_summary` is covered in
+tests/test_aaoifi_summary_db.py. This file pins the in-memory surface —
+the period helper and the status / compliance / outstanding-purification
+properties — so a refactor that flips a comparison breaks here first.
 """
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import date
 
-from halal_trader.halal.aaoifi_summary import (
-    AAOIFISummary,
-    _month_start_utc,
-    _quarter_start_utc,
-    _today_start_utc,
+import pytest
+
+from halal_trader.halal.aaoifi_summary import AAOIFISummary, AccountCompliance, periods
+
+# ── Periods (New York calendar days) ──────────────────────
+
+
+@pytest.mark.parametrize(
+    ("today", "quarter"),
+    [
+        (date(2026, 1, 15), date(2026, 1, 1)),
+        (date(2026, 3, 31), date(2026, 1, 1)),
+        (date(2026, 4, 1), date(2026, 4, 1)),
+        (date(2026, 6, 20), date(2026, 4, 1)),
+        (date(2026, 9, 1), date(2026, 7, 1)),
+        (date(2026, 12, 31), date(2026, 10, 1)),
+        (date(2025, 8, 15), date(2025, 7, 1)),
+    ],
 )
-
-# ── Boundary helpers ──────────────────────────────────────
-
-
-def test_quarter_start_for_january_returns_january_first():
-    """Q1: months 1, 2, 3 all map to Jan 1."""
-    for month in (1, 2, 3):
-        now = datetime(2026, month, 15, 12, 0, tzinfo=UTC)
-        assert _quarter_start_utc(now) == datetime(2026, 1, 1, tzinfo=UTC)
-
-
-def test_quarter_start_for_april_returns_april_first():
-    """Q2: months 4, 5, 6 map to Apr 1."""
-    for month in (4, 5, 6):
-        now = datetime(2026, month, 20, 9, 30, tzinfo=UTC)
-        assert _quarter_start_utc(now) == datetime(2026, 4, 1, tzinfo=UTC)
-
-
-def test_quarter_start_for_july_returns_july_first():
-    for month in (7, 8, 9):
-        now = datetime(2026, month, 1, tzinfo=UTC)
-        assert _quarter_start_utc(now) == datetime(2026, 7, 1, tzinfo=UTC)
-
-
-def test_quarter_start_for_october_returns_october_first():
-    for month in (10, 11, 12):
-        # Use day=15 (always valid across all months) to avoid
-        # 30-vs-31-day month confusion.
-        now = datetime(2026, month, 15, 23, 59, tzinfo=UTC)
-        assert _quarter_start_utc(now) == datetime(2026, 10, 1, tzinfo=UTC)
-
-
-def test_quarter_start_preserves_year():
-    """Quarter boundary doesn't drift across the calendar year."""
-    now = datetime(2025, 8, 15, tzinfo=UTC)
-    out = _quarter_start_utc(now)
-    assert out.year == 2025
-    assert out.month == 7
-
-
-def test_quarter_start_returns_utc_tzaware():
-    """Return value is always tz-aware UTC — pinned so the SQL
-    comparison against tz-aware columns works correctly."""
-    now = datetime(2026, 5, 1, tzinfo=UTC)
-    assert _quarter_start_utc(now).tzinfo is UTC
-
-
-def test_month_start_drops_day_and_time():
-    now = datetime(2026, 4, 25, 14, 30, 45, tzinfo=UTC)
-    assert _month_start_utc(now) == datetime(2026, 4, 1, tzinfo=UTC)
-
-
-def test_today_start_drops_time():
-    now = datetime(2026, 4, 25, 14, 30, 45, tzinfo=UTC)
-    assert _today_start_utc(now) == datetime(2026, 4, 25, tzinfo=UTC)
-
-
-def test_today_start_returns_utc_tzaware():
-    now = datetime(2026, 4, 25, 14, 0, tzinfo=UTC)
-    assert _today_start_utc(now).tzinfo is UTC
+def test_the_quarter_starts_on_the_first_of_its_first_month(today: date, quarter: date) -> None:
+    q, m, t = periods(today)
+    assert q == quarter
+    assert m == today.replace(day=1)
+    assert t == today
 
 
 # ── AAOIFISummary properties ──────────────────────────────
+
+
+def _account(account: str = "core", **verdicts: int) -> AccountCompliance:
+    return AccountCompliance(
+        account=account,
+        label=account,
+        trades_today=0,
+        trades_this_month=0,
+        trades_this_quarter=sum(verdicts.values()),
+        buys_this_quarter=sum(verdicts.values()),
+        buy_verdicts={"halal": 0, "doubtful": 0, "not_halal": 0, "unscreened": 0, **verdicts},
+    )
 
 
 def _summary(
@@ -90,19 +59,25 @@ def _summary(
 ) -> AAOIFISummary:
     """Build a summary with controllable invariants for the property tests."""
     return AAOIFISummary(
-        quarter_start=datetime(2026, 4, 1, tzinfo=UTC),
-        month_start=datetime(2026, 4, 1, tzinfo=UTC),
-        today_start=datetime(2026, 4, 25, tzinfo=UTC),
-        trades_today=0,
-        trades_this_month=0,
-        trades_this_quarter=0,
-        halal_screenings_quarter=0,
-        doubtful_screenings_quarter=0,
-        not_halal_screenings_quarter=0,
-        non_halal_fills_quarter=non_halal_fills,
+        quarter_start=date(2026, 4, 1),
+        month_start=date(2026, 4, 1),
+        today_start=date(2026, 4, 25),
+        accounts=(_account("core", halal=3), _account("paper", not_halal=non_halal_fills)),
         purification_accrued_usd=accrued,
         purification_disbursed_usd=disbursed,
     )
+
+
+def test_an_account_violates_on_any_buy_the_screen_did_not_hold_halal() -> None:
+    assert _account(halal=5).status == "compliant"
+    for verdict in ("doubtful", "not_halal", "unscreened"):
+        acct = _account(halal=5, **{verdict: 1})
+        assert acct.non_halal_buys_quarter == 1 and acct.status == "violation"
+
+
+def test_trade_counts_sum_the_accounts() -> None:
+    s = _summary(non_halal_fills=2)
+    assert s.trades_this_quarter == 5 and s.non_halal_fills_quarter == 2
 
 
 def test_outstanding_is_accrued_minus_disbursed():
@@ -129,7 +104,7 @@ def test_is_compliant_true_when_zero_non_halal_fills():
 
 
 def test_is_compliant_false_with_any_non_halal_fill():
-    """A single non-halal fill flips compliance to False — the whole
+    """A single non-halal buy flips compliance to False — the whole
     point of the tile. Pin so a refactor doesn't accidentally
     threshold this."""
     s = _summary(non_halal_fills=1)
@@ -137,7 +112,7 @@ def test_is_compliant_false_with_any_non_halal_fill():
 
 
 def test_status_violation_takes_priority_over_attention():
-    """Even with outstanding purification, a non-halal fill renders
+    """Even with outstanding purification, a non-halal buy renders
     as 'violation' — the more severe state wins."""
     s = _summary(non_halal_fills=1, accrued=100.0, disbursed=0.0)
     assert s.status == "violation"
@@ -180,7 +155,5 @@ def test_status_treats_one_cent_or_more_as_attention():
 
 def test_summary_dataclass_is_frozen():
     s = _summary()
-    import pytest
-
     with pytest.raises(Exception):
-        s.trades_today = 999  # type: ignore[misc]
+        s.purification_accrued_usd = 999  # type: ignore[misc]
