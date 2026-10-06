@@ -153,3 +153,18 @@ async def test_bootstrap_empty_history_is_noop():
     warmed = await router.bootstrap(since=T0, until=now, now=now)
     assert warmed == frozenset()
     assert await store.all_active() == []
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_persists_one_version_per_asset_and_logs_no_scores():
+    """Replaying 30 bars must not write 30 belief versions and 30 conviction
+    scores (each restart did, ~22k versions and ~44k events in production)."""
+    router, bus, store, captured = _build()
+    await _seed_uptrend(bus)
+    scores: list[Event] = []
+    bus.subscribe({EventType.CONVICTION_SCORED}, lambda e: _cap(scores, e))
+    now = T0 + timedelta(hours=2)
+    await router.bootstrap(since=T0, until=now, now=now)
+    assert len(store._versions["NVDA"]) == 1
+    assert [e.type for e in captured] == [EventType.BELIEF_UPDATED]
+    assert scores == []

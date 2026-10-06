@@ -140,6 +140,31 @@ class BeliefUpdater:
     positions: PositionSource
     llm: LLMGate
     config: UpdaterConfig = field(default_factory=UpdaterConfig)
+    # Bootstrap replay folds days of history into beliefs in memory and
+    # persists the result once per asset (end_replay). Writing every replayed
+    # step cost ~22,000 belief versions and ~44,000 log events per restart,
+    # all of them re-statements of history the log already holds.
+    _replay: dict[str, BeliefState] | None = field(default=None, init=False, repr=False)
+
+    def begin_replay(self) -> None:
+        self._replay = {}
+
+    async def end_replay(self, *, correlation_id: UUID | None = None) -> None:
+        """Persist each warmed belief once and announce it."""
+        warmed, self._replay = self._replay or {}, None
+        for asset in sorted(warmed):
+            b = warmed[asset]
+            b.version = await self.store.put(b)
+            await self.bus.publish(
+                new_event(
+                    self.clock,
+                    EventType.BELIEF_UPDATED,
+                    source="belief.updater",
+                    asset=asset,
+                    payload={**_summary(b), "decay_only": False, "replay": True},
+                    correlation_id=correlation_id,
+                )
+            )
 
     async def set_compliance(
         self,
@@ -272,7 +297,9 @@ class BeliefUpdater:
         bootstrap replay warms beliefs without firing exits against historical
         prices (fix R, bootstrap).
         """
-        b = await self.store.get(asset) or BeliefState.neutral(asset)
+        replaying = is_replay and self._replay is not None
+        cached = self._replay.get(asset) if self._replay is not None and is_replay else None
+        b = cached or await self.store.get(asset) or BeliefState.neutral(asset)
         # Monotonic per-asset time (Appendix F, INV-5): an out-of-order older
         # event must never rewind `now`, or decay would *amplify* existing
         # evidence (negative age). Each item still carries its own ts, so the
@@ -317,6 +344,7 @@ class BeliefUpdater:
         # 4. thesis refresh — material shift AND a healthy LLM (triple-guarded)
         if (
             self.config.llm_thesis_enabled
+            and not replaying  # a narrative of history is stale on arrival
             and self.llm.available()
             and not self.llm.breaker_open()
             and material_shift(
@@ -343,6 +371,10 @@ class BeliefUpdater:
                 invalidated = True
 
         b.last_updated = now
+        if replaying:
+            assert self._replay is not None
+            self._replay[asset] = b  # persisted once, by end_replay
+            return b
         version = await self.store.put(b)
         b.version = version
 

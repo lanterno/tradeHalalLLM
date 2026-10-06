@@ -108,3 +108,19 @@ async def test_all_active_returns_latest_per_asset(halabot_engine):
     assert set(by_asset) == {"NVDA", "MSFT"}
     assert by_asset["NVDA"].version == 2
     assert by_asset["NVDA"].regime == Regime.BREAKOUT
+
+
+@pytest.mark.asyncio
+async def test_an_unchanged_belief_is_restamped_not_versioned(halabot_engine):
+    """A put that changes nothing but the time keeps the version and moves
+    last_updated forward; a real change still makes a new version."""
+    store = PgBeliefStore(halabot_engine)
+    b = BeliefState.neutral("NVDA")
+    b.last_updated = T0
+    assert await store.put(b) == 1
+    b.last_updated = datetime(2026, 5, 28, 13, 0, tzinfo=UTC)
+    assert await store.put(b) == 1
+    latest = await store.get("NVDA")
+    assert latest is not None and latest.last_updated == b.last_updated
+    b.conviction = 0.4
+    assert await store.put(b) == 2

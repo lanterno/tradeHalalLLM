@@ -98,17 +98,39 @@ class PgBeliefStore:
         return belief_from_row(dict(row._mapping)) if row is not None else None
 
     async def put(self, belief: BeliefState) -> int:
+        """A new version when the belief changed; otherwise the latest version,
+        re-stamped.
+
+        Until 2026-10 every update wrote a version, changed or not: about
+        60,000 rows a day across 21 assets, nearly all identical to the one
+        before (2.4 GB in a fortnight). A version now marks a change of
+        content; an unchanged belief only moves the latest row's
+        ``last_updated``/``updated_at`` forward, so freshness reads the same
+        and every version a position links to (INV-8) is still a distinct
+        state.
+        """
         t = _belief_table
+        values = belief_to_values(belief)
         async with self._engine.begin() as conn:
-            current_max = (
+            latest = (
                 await conn.execute(
-                    sa.select(sa.func.max(t.c.version)).where(t.c.asset == belief.asset)
+                    sa.select(t)
+                    .where(t.c.asset == belief.asset)
+                    .order_by(t.c.version.desc())
+                    .limit(1)
                 )
-            ).scalar()
-            new_version = (current_max or 0) + 1
-            values = belief_to_values(belief)
+            ).first()
+            now = datetime.now(UTC)
+            if latest is not None and _same_content(dict(latest._mapping), values):
+                await conn.execute(
+                    sa.update(t)
+                    .where(t.c.id == latest.id)
+                    .values(last_updated=values["last_updated"], updated_at=now)
+                )
+                return int(latest.version)
+            new_version = (latest.version if latest is not None else 0) + 1
             values["version"] = new_version
-            values["updated_at"] = datetime.now(UTC)
+            values["updated_at"] = now
             await conn.execute(sa.insert(t).values(**values))
         return new_version
 
@@ -119,3 +141,14 @@ class PgBeliefStore:
         async with self._engine.connect() as conn:
             rows = (await conn.execute(stmt)).all()
         return [belief_from_row(dict(r._mapping)) for r in rows]
+
+
+# Timestamps say when, not what: two beliefs differing only in these are one state.
+_NOT_CONTENT = frozenset({"id", "version", "updated_at", "last_updated"})
+
+
+def _same_content(row: dict[str, object], values: dict[str, object]) -> bool:
+    """Does the stored row hold the same belief as ``values``? Both sides are put
+    through the row round-trip, so JSONB and Python forms compare alike."""
+    stored = belief_to_values(belief_from_row(row))
+    return all(stored[k] == values[k] for k in values if k not in _NOT_CONTENT)

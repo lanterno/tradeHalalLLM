@@ -53,6 +53,7 @@ class CognitionRouter:
         # An inline sink over the updater guarantees that; fall back to the live
         # sink when no updater was injected.
         self._replay_sink: BeliefSink = InlineBeliefSink(updater) if updater else sink
+        self._updater = updater
         self._buffer = buffer
         self._by_type: dict[EventType, list[Interpreter]] = {}
         for itp in interpreters:
@@ -93,6 +94,8 @@ class CognitionRouter:
         """
         warmed: set[str] = set()
         count = 0
+        if self._updater is not None:
+            self._updater.begin_replay()
         async for event in self._bus.replay(since=since, until=until):
             if event.type not in _OBSERVATION_TYPES or event.asset is None:
                 continue
@@ -113,6 +116,8 @@ class CognitionRouter:
         # Bring each warmed belief to the present (decay-only, still suppressed).
         for asset in sorted(warmed):
             await self._replay_sink.evidence(asset, now, [], is_replay=True)
+        if self._updater is not None:
+            await self._updater.end_replay()
         if warmed:
             logger.info(
                 "bootstrap warmed %d assets from %d replayed observations", len(warmed), count
