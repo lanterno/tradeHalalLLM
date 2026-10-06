@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from halabot.belief.store import BeliefStore
 from halabot.platform.bus import EventBus, Subscription
+from halabot.platform.clock import parse_iso
 from halabot.platform.db import open_position as _open_position_table
 from halabot.platform.db import outcome as _outcome_table
 from halabot.platform.events import Event, EventType
@@ -60,6 +61,7 @@ class ShadowOutcomeTracker:
         # hooks here to refit off accumulated outcomes — L8).
         self._on_close = on_close
         self._positions: dict[str, _Position] = {}
+        self._last_bar: dict[str, datetime] = {}
         self._subs: list[Subscription] = []
         self.closed_count = 0
 
@@ -134,8 +136,19 @@ class ShadowOutcomeTracker:
     async def _on_bar(self, event: Event) -> None:
         """Mark a held position to the bar's close (upsert its open-MTM row)."""
         asset = event.asset
-        pos = self._positions.get(asset) if asset is not None else None
-        if asset is None or pos is None or pos.weight <= _EPS:
+        if asset is None:
+            return
+        # Only a bar newer than the last one seen moves the mark: a repeated or
+        # older bar would mark the position to a price from the past.
+        bar_ts = parse_iso(event.payload.get("bar_ts")) or event.ts
+        if bar_ts.tzinfo is None:
+            bar_ts = bar_ts.replace(tzinfo=UTC)
+        last = self._last_bar.get(asset)
+        if last is not None and bar_ts <= last:
+            return
+        self._last_bar[asset] = bar_ts
+        pos = self._positions.get(asset)
+        if pos is None or pos.weight <= _EPS:
             return
         price = event.payload.get("c")
         if price is None or price <= 0:

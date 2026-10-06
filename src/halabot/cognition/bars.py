@@ -27,14 +27,32 @@ class Bar:
 
 
 class BarBuffer:
-    """Rolling OHLCV window per asset (bounded; oldest evicted)."""
+    """Rolling OHLCV window per asset (bounded; oldest evicted), strictly
+    increasing in bar time."""
 
     def __init__(self, maxlen: int = 200) -> None:
         self._maxlen = maxlen
         self._bars: dict[str, deque[Bar]] = {}
 
-    def append(self, asset: str, bar: Bar) -> None:
-        self._bars.setdefault(asset, deque(maxlen=self._maxlen)).append(bar)
+    def append(self, asset: str, bar: Bar) -> bool:
+        """Add ``bar`` if it is newer than the asset's last bar; return whether it was.
+
+        A repeat or an older bar is dropped. Every indicator here reads the
+        window as one ordered series, and the shadow once fed it the same five
+        days again on each restart: the 200-bar window became repeated,
+        out-of-order runs of history and RSI, the SMAs and the forecaster all
+        computed on that.
+        """
+        window = self._bars.setdefault(asset, deque(maxlen=self._maxlen))
+        if window and bar.ts <= window[-1].ts:
+            return False
+        window.append(bar)
+        return True
+
+    def last_ts(self, asset: str) -> datetime | None:
+        """Bar time of the asset's latest bar, or None before its first."""
+        window = self._bars.get(asset)
+        return window[-1].ts if window else None
 
     def bars(self, asset: str) -> list[Bar]:
         return list(self._bars.get(asset, ()))

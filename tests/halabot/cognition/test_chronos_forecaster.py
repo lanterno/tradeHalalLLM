@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+import itertools
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -12,6 +13,14 @@ from halabot.platform.clock import FakeClock
 from halabot.platform.events import EventType, new_event
 
 T0 = datetime(2026, 5, 28, 12, 0, tzinfo=UTC)
+
+
+def _bar_ts() -> datetime:
+    """A fresh, strictly later bar time per call (the buffer drops repeats)."""
+    return T0 + timedelta(minutes=next(_BAR_SEQ))
+
+
+_BAR_SEQ = itertools.count()
 CLOCK = FakeClock(T0)
 
 
@@ -28,7 +37,7 @@ class _FakeForecaster:
 def _fill(buf: BarBuffer, asset: str, n: int, last: float = 100.0) -> None:
     for i in range(n):
         c = last - (n - 1 - i) * 0.0  # flat tail; only the last close matters for the ratio
-        buf.append(asset, Bar(o=c, h=c + 1, low=c - 1, c=last, v=1.0, ts=T0))
+        buf.append(asset, Bar(o=c, h=c + 1, low=c - 1, c=last, v=1.0, ts=_bar_ts()))
 
 
 def _obs(asset: str = "NVDA"):

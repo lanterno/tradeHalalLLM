@@ -135,8 +135,18 @@ async def _run_shadow(
     # Persisted dedup so a restart doesn't re-emit the last day of headlines.
     dedup = PgDedupStore(engine.db_engine)
 
+    from halabot.perception.watermark import PgBarWatermark
+
+    # Resume after the newest bar per asset the log already holds, so a restart
+    # doesn't publish the whole fetch window again as live bars.
     bar_source = AlpacaBarSource(
-        mcp, bar_universe, clock, timeframe=timeframe, days=days, interval_s=interval
+        mcp,
+        bar_universe,
+        clock,
+        timeframe=timeframe,
+        days=days,
+        interval_s=interval,
+        watermark=PgBarWatermark(engine.db_engine, lookback_days=days + 2),
     )
     # Compliance first, so beliefs carry a verdict before the first bars land.
     # Membership in the screened universe (get_halal_symbols -> compliance='halal')

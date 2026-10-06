@@ -12,6 +12,7 @@ from halabot.belief.store import PgBeliefStore
 from halabot.learning.shadow_outcomes import ShadowOutcomeTracker
 from halabot.platform.bus import InProcessEventBus
 from halabot.platform.clock import FakeClock
+from halabot.platform.db import open_position as open_position_table
 from halabot.platform.db import outcome as outcome_table
 from halabot.platform.event_log import PgEventLog
 from halabot.platform.events import EventType, new_event
@@ -141,3 +142,28 @@ async def test_entry_belief_snapshot_captured(halabot_engine):
     rows = await _outcomes(halabot_engine)
     assert rows[0]["entry_belief"]["regime"] == "trending_up"
     assert rows[0]["entry_belief"]["conviction"] == 0.7
+
+
+async def _bar(bus, clock, asset, close, bar_ts):
+    await bus.publish(
+        new_event(
+            clock,
+            EventType.OBSERVATION_BAR,
+            source="alpaca-bars",
+            asset=asset,
+            payload={"o": close, "h": close, "low": close, "c": close, "v": 1.0, "bar_ts": bar_ts},
+        )
+    )
+
+
+@pytest.mark.asyncio
+async def test_open_position_is_marked_only_by_newer_bars(halabot_engine):
+    bus, _, _ = _tracker(halabot_engine)
+    clock = FakeClock(T0)
+    await _propose(bus, clock, "NVDA", "buy", 0.10, 100.0)
+    await _bar(bus, clock, "NVDA", 110.0, "2026-05-28T15:00:00Z")
+    await _bar(bus, clock, "NVDA", 80.0, "2026-05-27T15:00:00Z")  # replayed history
+    await _bar(bus, clock, "NVDA", 90.0, "2026-05-28T15:00:00Z")  # the same bar again
+    async with halabot_engine.connect() as conn:
+        mark = (await conn.execute(sa.select(open_position_table.c.last_price))).scalar_one()
+    assert mark == 110.0

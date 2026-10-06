@@ -227,3 +227,21 @@ async def test_malformed_macro_observation_dropped_without_belief():
     )
     assert await store.get("NVDA") is None
     assert captured == []
+
+
+@pytest.mark.asyncio
+async def test_repeated_bar_is_not_interpreted_again():
+    bus, clock, store, events = _build()
+    bar = {"o": 1.0, "h": 2.0, "low": 0.5, "c": 1.5, "v": 10.0, "bar_ts": "2026-05-28T13:00:00Z"}
+    await bus.publish(
+        new_event(clock, EventType.OBSERVATION_BAR, source="alpaca", asset="NVDA", payload=bar)
+    )
+    seen = len(events)
+    clock.advance(timedelta(minutes=5))
+    for again in (bar, {**bar, "c": 9.0, "bar_ts": "2026-05-28T12:00:00Z"}):  # repeat, then older
+        await bus.publish(
+            new_event(
+                clock, EventType.OBSERVATION_BAR, source="alpaca", asset="NVDA", payload=again
+            )
+        )
+    assert len(events) == seen  # neither moved the belief

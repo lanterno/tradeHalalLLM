@@ -54,6 +54,10 @@ class PollingSource(ABC):
         """Stable key to suppress re-emitting a seen item; None = never dedup."""
         return None
 
+    def emitted(self, raw: Any) -> None:
+        """Called once ``raw``'s event has been published (a source's own bookkeeping)."""
+        return None
+
     async def _prime(self) -> None:
         """Load persisted seen-keys once, so a restart doesn't re-emit (INV-2)."""
         if self._primed:
@@ -94,6 +98,7 @@ class PollingSource(ABC):
                 self._seen.add(key)
                 new_keys.append(key)
             await emit(event)
+            self.emitted(raw)
             emitted += 1
 
         if new_keys and self._dedup is not None:

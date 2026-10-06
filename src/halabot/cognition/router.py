@@ -96,8 +96,10 @@ class CognitionRouter:
             if event.type not in _OBSERVATION_TYPES or event.asset is None:
                 continue
             asset = event.asset
-            if event.type == EventType.OBSERVATION_BAR:
-                self._buffer.append(asset, _parse_bar(event))
+            if event.type == EventType.OBSERVATION_BAR and not self._buffer.append(
+                asset, _parse_bar(event)
+            ):
+                continue  # a bar the log already replayed (or an older one)
             self._known_assets.add(asset)
             warmed.add(asset)
             evidence: list[EvidenceItem] = []
@@ -133,7 +135,11 @@ class CognitionRouter:
 
         asset = event.asset
         if event.type == EventType.OBSERVATION_BAR and asset is not None:
-            self._buffer.append(asset, _parse_bar(event))
+            if not self._buffer.append(asset, _parse_bar(event)):
+                # Already seen, or older than the window's last bar: interpreting
+                # it would score the newest window again as if a bar had printed.
+                logger.debug("stale bar for %s (%s) ignored", asset, event.payload.get("bar_ts"))
+                return
         if asset is not None:
             self._known_assets.add(asset)
 
@@ -216,11 +222,13 @@ class CognitionRouter:
 
 def _parse_bar(event: Event) -> Bar:
     p = event.payload
+    ts = parse_iso(p.get("bar_ts")) or event.ts
     return Bar(
         o=float(p["o"]),
         h=float(p["h"]),
         low=float(p["low"]),
         c=float(p["c"]),
         v=float(p.get("v", 0.0)),
-        ts=parse_iso(p.get("bar_ts")) or event.ts,
+        # Aware, so the buffer's ordering check never compares naive with aware.
+        ts=ts if ts.tzinfo is not None else ts.replace(tzinfo=UTC),
     )

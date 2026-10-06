@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from halabot.perception.sources.alpaca_bars import AlpacaBarSource, _extract_bars
+from halabot.perception.watermark import InMemoryBarWatermark, PgBarWatermark
 from halabot.platform.clock import FakeClock
-from halabot.platform.events import Event, EventType
+from halabot.platform.event_log import PgEventLog
+from halabot.platform.events import Event, EventType, new_event
 
 CLOCK = FakeClock(datetime(2026, 5, 28, 12, 0, tzinfo=UTC))
 
@@ -110,3 +112,68 @@ async def test_drops_nonpositive_close():
     sink: list[Event] = []
     n = await src.poll_once(await _emit_to(sink))
     assert n == 1 and sink[0].payload["c"] == 50
+
+
+class _HourlyMCP:
+    """Hourly bars with real timestamps, in whatever order it is given."""
+
+    def __init__(self, hours_closes: list[tuple[int, float]]):
+        self.rows = [
+            {"t": f"2026-05-28T{h:02d}:00:00Z", "o": c, "h": c, "l": c, "c": c, "v": 1}
+            for h, c in hours_closes
+        ]
+
+    async def get_stock_bars(self, symbol, days=5, timeframe="1Hour"):
+        return {"bars": {symbol: list(self.rows)}}
+
+
+@pytest.mark.asyncio
+async def test_resumes_after_the_logged_watermark():
+    # A restart used to publish the whole fetch window again as live bars.
+    mcp = _HourlyMCP([(13, 1.0), (14, 2.0), (15, 3.0)])
+    marks = InMemoryBarWatermark({"NVDA": datetime(2026, 5, 28, 14, 0, tzinfo=UTC)})
+    src = AlpacaBarSource(mcp, await _universe(["NVDA"]), CLOCK, interval_s=0, watermark=marks)
+    sink: list[Event] = []
+    emit = await _emit_to(sink)
+    await src.poll_once(emit)
+    assert [e.payload["c"] for e in sink] == [3.0]  # only the bar after the mark
+    await src.poll_once(emit)
+    assert len(sink) == 1  # and the mark moved with it
+
+
+@pytest.mark.asyncio
+async def test_emits_bars_oldest_first():
+    mcp = _HourlyMCP([(15, 3.0), (13, 1.0), (14, 2.0)])
+    src = AlpacaBarSource(mcp, await _universe(["NVDA"]), CLOCK, interval_s=0)
+    sink: list[Event] = []
+    await src.poll_once(await _emit_to(sink))
+    assert [e.payload["c"] for e in sink] == [1.0, 2.0, 3.0]
+
+
+@pytest.mark.asyncio
+async def test_pg_watermark_reads_the_newest_logged_bar_per_asset(halabot_engine):
+    log = PgEventLog(halabot_engine)
+    now = datetime.now(UTC)
+    rows = [
+        ("NVDA", "2026-05-28T13:00:00Z", now),
+        ("NVDA", "2026-05-28T15:00:00Z", now),
+        ("NVDA", "2026-05-28T14:00:00Z", now),  # a later replay of an older bar
+        ("MSFT", "not-a-time", now),  # one malformed payload costs only itself
+        ("MSFT", "2026-05-28T11:00:00Z", now),
+        ("AMD", "2026-05-28T16:00:00Z", now - timedelta(days=30)),  # outside the lookback
+    ]
+    for asset, bar_ts, ts in rows:
+        await log.append(
+            new_event(
+                FakeClock(ts),
+                EventType.OBSERVATION_BAR,
+                source="alpaca-bars",
+                asset=asset,
+                payload={"o": 1, "h": 1, "low": 1, "c": 1, "v": 1, "bar_ts": bar_ts},
+            )
+        )
+    marks = await PgBarWatermark(halabot_engine, lookback_days=7).load()
+    assert marks == {
+        "NVDA": datetime(2026, 5, 28, 15, 0, tzinfo=UTC),
+        "MSFT": datetime(2026, 5, 28, 11, 0, tzinfo=UTC),
+    }

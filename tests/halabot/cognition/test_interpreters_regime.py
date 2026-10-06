@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+import itertools
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -27,6 +28,14 @@ from halabot.platform.clock import FakeClock
 from halabot.platform.events import EventType, new_event
 
 T0 = datetime(2026, 5, 28, 12, 0, tzinfo=UTC)
+
+
+def _bar_ts() -> datetime:
+    """A fresh, strictly later bar time per call (the buffer drops repeats)."""
+    return T0 + timedelta(minutes=next(_BAR_SEQ))
+
+
+_BAR_SEQ = itertools.count()
 CLOCK = FakeClock(T0)
 
 
@@ -70,7 +79,7 @@ async def test_indicator_interpreter_emits_on_uptrend():
     buf = BarBuffer()
     for i in range(30):
         c = 100 + i
-        buf.append("NVDA", Bar(o=c, h=c + 1, low=c - 1, c=c, v=1.0, ts=T0))
+        buf.append("NVDA", Bar(o=c, h=c + 1, low=c - 1, c=c, v=1.0, ts=_bar_ts()))
     obs = new_event(CLOCK, EventType.OBSERVATION_BAR, source="alpaca", asset="NVDA")
     out = await IndicatorInterpreter(buf).interpret(obs)
     assert len(out) == 1
@@ -82,7 +91,7 @@ async def test_indicator_interpreter_emits_on_uptrend():
 @pytest.mark.asyncio
 async def test_indicator_interpreter_silent_without_history():
     buf = BarBuffer()
-    buf.append("NVDA", Bar(o=1, h=1, low=1, c=1, v=1.0, ts=T0))
+    buf.append("NVDA", Bar(o=1, h=1, low=1, c=1, v=1.0, ts=_bar_ts()))
     obs = new_event(CLOCK, EventType.OBSERVATION_BAR, source="alpaca", asset="NVDA")
     assert await IndicatorInterpreter(buf).interpret(obs) == []
 
@@ -90,7 +99,7 @@ async def test_indicator_interpreter_silent_without_history():
 # ── RsiInterpreter ──
 def _fill(buf, asset, closes):
     for c in closes:
-        buf.append(asset, Bar(o=c, h=c + 1, low=c - 1, c=c, v=1.0, ts=T0))
+        buf.append(asset, Bar(o=c, h=c + 1, low=c - 1, c=c, v=1.0, ts=_bar_ts()))
 
 
 @pytest.mark.asyncio
@@ -240,7 +249,7 @@ async def test_forecaster_silent_on_noisy_series():
 # ── VolumeConfirmationInterpreter ──
 def _fill_vol(buf, asset, closes, vols):
     for c, v in zip(closes, vols):
-        buf.append(asset, Bar(o=c, h=c + 1, low=c - 1, c=c, v=v, ts=T0))
+        buf.append(asset, Bar(o=c, h=c + 1, low=c - 1, c=c, v=v, ts=_bar_ts()))
 
 
 @pytest.mark.asyncio

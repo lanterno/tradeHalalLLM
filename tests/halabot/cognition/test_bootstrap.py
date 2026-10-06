@@ -168,3 +168,39 @@ async def test_bootstrap_persists_one_version_per_asset_and_logs_no_scores():
     assert len(store._versions["NVDA"]) == 1
     assert [e.type for e in captured] == [EventType.BELIEF_UPDATED]
     assert scores == []
+
+
+async def _seed_bars(bus, clk, closes_by_hour):
+    for hour, c in closes_by_hour:
+        clk.advance(timedelta(minutes=1))
+        await bus.publish(
+            new_event(
+                clk,
+                EventType.OBSERVATION_BAR,
+                source="alpaca-bars",
+                asset="NVDA",
+                payload={
+                    "o": c,
+                    "h": c + 1,
+                    "low": c - 1,
+                    "c": c,
+                    "v": 1000.0,
+                    "bar_ts": f"2026-05-28T{hour:02d}:00:00Z",
+                },
+            )
+        )
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_replays_each_bar_once_in_bar_order():
+    """The log holds restart bursts: the same bars published again, later in
+    event time. Replay must rebuild one ordered series, not repeated runs."""
+    router, bus, store, _ = _build()
+    clk = FakeClock(T0)
+    first = [(h, 100.0 + h) for h in range(10, 16)]
+    await _seed_bars(bus, clk, first)
+    await _seed_bars(bus, clk, first[:4])  # a restart re-published the window
+    await _seed_bars(bus, clk, [(16, 116.0)])
+    now = clk.now() + timedelta(minutes=5)
+    await router.bootstrap(since=T0, until=now, now=now)
+    assert router._buffer.closes("NVDA") == [110.0, 111.0, 112.0, 113.0, 114.0, 115.0, 116.0]
