@@ -51,10 +51,16 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from halal_trader.compliance.aaoifi import Fundamentals, ScreenResult, screen
-from halal_trader.compliance.sec import Company, Fact, SecClient
+from halal_trader.compliance.sec import Company, Fact, SecClient, SecUnavailable
 from halal_trader.compliance.successors import lineage
 
 logger = logging.getLogger(__name__)
+
+SUBMISSIONS_UNAVAILABLE = "SEC submissions record unavailable"
+# A run tolerates this many companies whose submissions record EDGAR would
+# not serve (each screened doubtful); beyond it the run aborts instead.
+MAX_FAILED_NAMES = 5
+MAX_FAILED_SHARE = 0.02
 
 # v2: 36-month average market cap; REITs and royalties face the ratios.
 # v3: every debt-concept family, and fallbacks for shares, cash and revenue.
@@ -259,6 +265,7 @@ async def gather(
     out: list[Fundamentals] = []
     meta: dict[str, tuple[int | None, str]] = {}
     titles: dict[str, str] = {}
+    failed: list[str] = []
     for symbol in symbols:
         sym = symbol.upper()
         company = companies.get(sym) or companies.get(sym.replace(".", "-"))
@@ -267,7 +274,15 @@ async def gather(
             meta[sym] = (None, UNMAPPED)
             continue
         cik = company.cik
-        sic, sic_desc = await sec.sic(cik)
+        try:
+            sic, sic_desc = await sec.sic(cik)
+            foreign = await sec.foreign_filer(cik)
+        except SecUnavailable as exc:
+            # One company's submissions record is not worth the night's
+            # screen: without its industry code it is doubtful, never halal.
+            logger.warning("halal screen: %s: %s", sym, exc)
+            failed.append(sym)
+            sic, sic_desc, foreign = None, SUBMISSIONS_UNAVAILABLE, False
         meta[sym] = (cik, sic_desc)
         titles[sym] = company.title
 
@@ -318,9 +333,17 @@ async def gather(
                 interest_income=interest,
                 revenue=revenue,
                 average_price=averages.get(sym),
-                foreign_filer=await sec.foreign_filer(cik),
+                foreign_filer=foreign,
                 receivables=v(_RECEIVABLES),
             )
+        )
+    mapped = sum(1 for cik, _ in meta.values() if cik is not None)
+    if len(failed) > max(MAX_FAILED_NAMES, MAX_FAILED_SHARE * mapped):
+        # EDGAR is down, not one record missing: a screen with this many
+        # doubtful names would empty the universe. Abort; the last one stands.
+        raise SecUnavailable(
+            f"submissions unavailable for {len(failed)} of {mapped} companies "
+            f"({', '.join(failed[:5])}, ...)"
         )
     return out, meta, titles
 
