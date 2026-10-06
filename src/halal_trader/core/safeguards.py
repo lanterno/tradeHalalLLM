@@ -22,11 +22,13 @@ adds a friction layer:
 from __future__ import annotations
 
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import TYPE_CHECKING
 
 from halal_trader.config import Settings
+from halal_trader.domain.models import Account
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncEngine
@@ -50,6 +52,8 @@ def is_live_mode(settings: Settings, *, market: str) -> bool:
     """Return True if the configured market is operating against real money."""
     if market == "stocks":
         return not settings.alpaca.paper_trade
+    if market == "core":
+        return not settings.core.paper
     raise ValueError(f"unknown market: {market}")
 
 
@@ -169,3 +173,125 @@ class LiveModeChecker:
 
     def _max_position_pct(self) -> float:
         return self.settings.stocks.max_position_pct
+
+
+# ── The core portfolio (portfolio/core_executor.py) ──────────────────
+#
+# The core is a second order path on its own account. Going live is
+# CORE_PAPER=false with the live account's keys, and every one of these must
+# hold first, at bot start and on `halal-trader core run`:
+#
+# * a dated token, CORE_LIVE_CONFIRMATION = "I-UNDERSTAND-REAL-MONEY-CORE-<UTC
+#   date>" (its own, so the day-trader's token never arms the core);
+# * the paper rehearsal passed its gate (portfolio/readiness.py:live_gate);
+# * a cash account: multiplier 1, shorting off, no debit. Any margin debit is
+#   riba, so an account able to borrow is refused even if it never has;
+# * keys that reach a different account from the day-trader's (checked on
+#   paper as well: two strategies on one account corrupt each other's books).
+#
+# The ceiling on what the live core holds invested (CORE_LIVE_MAX_NOTIONAL)
+# is enforced by the executor's budget.
+
+CORE_TOKEN_PREFIX = "I-UNDERSTAND-REAL-MONEY-CORE"
+
+
+def expected_core_token(today: datetime | None = None) -> str:
+    """The exact CORE_LIVE_CONFIRMATION value live money needs today (UTC)."""
+    today = today or datetime.now(UTC)
+    return f"{CORE_TOKEN_PREFIX}-{today.strftime('%Y-%m-%d')}"
+
+
+def core_token_problem(settings: Settings, *, now: datetime | None = None) -> str | None:
+    """Why the live core is not confirmed today; None on paper or when it is."""
+    if not is_live_mode(settings, market="core"):
+        return None
+    expected = expected_core_token(now)
+    if settings.core.live_confirmation.strip() == expected:
+        return None
+    return (
+        f"CORE_PAPER=false needs today's confirmation: CORE_LIVE_CONFIRMATION={expected} "
+        "(or set CORE_PAPER=true)"
+    )
+
+
+def cash_account_problems(account: Account) -> list[str]:
+    """Why ``account`` is not a cash account (empty when it is). Unknown is a no."""
+    problems = []
+    if account.multiplier is None:
+        problems.append("the account's margin multiplier is unknown")
+    elif account.multiplier > 1:
+        problems.append(f"a margin account (multiplier {account.multiplier:g}): use a cash account")
+    if account.shorting_enabled is not False:
+        problems.append("shorting is enabled (or unknown) on the account")
+    if account.cash < 0:
+        problems.append(f"the account owes ${-account.cash:,.2f} (a margin debit)")
+    return problems
+
+
+def same_account_problem(core: Account, day_trader: Account | None) -> str | None:
+    """Do the two sets of keys reach one account? Unknown ids are a refusal."""
+    if day_trader is None:
+        return None
+    if not (core.account_id or core.account_number):
+        return "the core's account id is unknown: cannot tell it from the day-trader's"
+    for mine, theirs in (
+        (core.account_id, day_trader.account_id),
+        (core.account_number, day_trader.account_number),
+    ):
+        if mine and theirs and mine == theirs:
+            return "the core's keys reach the day-trader's account: give the core its own"
+    return None
+
+
+async def day_trader_account(settings: Settings) -> Account | None:
+    """The day-trader's account, read with its own keys (None when it has none)."""
+    from halal_trader.execution.alpaca_broker import AlpacaRestBroker
+
+    alpaca = settings.alpaca
+    if not (alpaca.api_key and alpaca.secret_key):
+        return None
+    broker = AlpacaRestBroker(alpaca.api_key, alpaca.secret_key, paper=alpaca.paper_trade)
+    try:
+        return await broker.get_account_info()
+    finally:
+        await broker.disconnect()
+
+
+async def core_preflight(
+    settings: Settings,
+    *,
+    engine: AsyncEngine,
+    core: Account,
+    day_trader: Callable[[Settings], Awaitable[Account | None]],
+    today: date,
+    now: datetime | None = None,
+    check_token: bool = True,
+) -> list[str]:
+    """Every reason the core must not trade now (empty: it may).
+
+    ``check_token``: the bot checks the dated token once, at start (a token
+    can only match the day it was written); `core run` checks it every time.
+    """
+    problems: list[str] = []
+    if settings.core.alpaca_api_key and settings.core.alpaca_api_key == settings.alpaca.api_key:
+        problems.append("the core and the day-trader share API keys: give the core its own")
+    else:
+        try:
+            other = await day_trader(settings)
+        except Exception as exc:  # noqa: BLE001 -- unverifiable is a refusal, not a crash
+            problems.append(
+                f"cannot read the day-trader's account to tell it from the core's ({exc!r})"[:300]
+            )
+        else:
+            if (problem := same_account_problem(core, other)) is not None:
+                problems.append(problem)
+    if not is_live_mode(settings, market="core"):
+        return problems
+
+    if check_token and (token := core_token_problem(settings, now=now)) is not None:
+        problems.append(token)
+    problems.extend(cash_account_problems(core))
+    from halal_trader.portfolio.readiness import live_gate
+
+    problems.extend(await live_gate(engine, today=today))
+    return problems

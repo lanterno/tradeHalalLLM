@@ -10,7 +10,10 @@ import click
 from halal_trader.logging import console
 
 
-async def _run(execute: bool, monthly: bool | None) -> tuple[Any, list[Any]]:
+async def _run(execute: bool, monthly: bool | None) -> Any:
+    """One core run through core_executor.run, the scheduled job's own path:
+    kill-switch, market clock, open orders and the live gates included.
+    ``core plan`` (execute=False) reads only and records nothing."""
     from halal_trader.config import get_settings
     from halal_trader.db.models import init_db
     from halal_trader.execution.alpaca_broker import AlpacaRestBroker
@@ -27,25 +30,38 @@ async def _run(execute: bool, monthly: bool | None) -> tuple[Any, list[Any]]:
         raise click.ClickException("CORE_ENABLED is false: preview with `halal-trader core plan`")
     engine = await init_db(settings.database_url)
     broker = AlpacaRestBroker(core.alpaca_api_key, core.alpaca_secret_key, paper=core.paper)
-    today = today_eastern()
     try:
-        is_monthly = (await ce.monthly_due(engine, today)) if monthly is None else monthly
-        p = await ce.plan(engine, broker, today=today, monthly=is_monthly, top_n=core.top_n)
-        results = await ce.execute(engine, broker, p, today=today) if execute else []
-        await ce.record_run(engine, p, today=today, executed=execute)
-        return p, results
+        return await ce.run(
+            engine,
+            broker,
+            settings,
+            today=today_eastern(),
+            execute_orders=execute,
+            monthly=monthly,
+            check_token=True,
+        )
     finally:
         await broker.disconnect()
         await engine.dispose()
 
 
+def _refusal(outcome: Any) -> None:
+    """Stop with the reason when a run never reached a plan."""
+    if outcome.market_closed:
+        raise click.ClickException("the market is closed: the core trades in the session only")
+    if outcome.refused:
+        raise click.ClickException(
+            "the core is not allowed to trade now:\n  - " + "\n  - ".join(outcome.refused)
+        )
+
+
 def _show(p: Any) -> None:
     from halal_trader.config import get_settings
 
-    kind = "monthly rebalance" if p.monthly else "forced sales only"
+    kind = "monthly rebalance" if p.monthly else "sells of screen failures only"
     where = "paper account" if get_settings().core.paper else "[bold red]LIVE account[/bold red]"
     console.print(
-        f"[bold]core[/bold] on its {where}: {kind}; equity ${p.equity:,.2f}, "
+        f"[bold]{p.account}[/bold] on its {where}: {kind}; equity ${p.equity:,.2f}, "
         f"cash ${p.cash:,.2f}, screen {p.screen_as_of}"
     )
     if p.halted:
@@ -71,9 +87,9 @@ def core() -> None:
     "--monthly/--forced-only", default=None, help="Default: monthly if not yet run this month."
 )
 def plan_cmd(monthly: bool | None) -> None:
-    """Show the orders the core would place now, without placing any."""
-    p, _ = asyncio.run(_run(False, monthly))
-    _show(p)
+    """Show the orders the core would place now, without placing or recording any."""
+    outcome = asyncio.run(_run(False, monthly))
+    _show(outcome.plan)
 
 
 @core.command("run")
@@ -81,13 +97,16 @@ def plan_cmd(monthly: bool | None) -> None:
     "--monthly/--forced-only", default=None, help="Default: monthly if not yet run this month."
 )
 def run_cmd(monthly: bool | None) -> None:
-    """Place the core's orders now (needs CORE_ENABLED=true)."""
-    p, results = asyncio.run(_run(True, monthly))
-    _show(p)
-    console.print(
-        f"  {sum(1 for r in results if r['st'] == 'submitted')} submitted, "
-        f"{sum(1 for r in results if r['st'] != 'submitted')} refused"
-    )
+    """Place the core's orders now (needs CORE_ENABLED=true and an open market).
+
+    The scheduled job's path exactly: with the kill-switch engaged only
+    screen failures are sold; nothing runs while the account has open orders;
+    live money needs today's CORE_LIVE_CONFIRMATION and the paper gate.
+    """
+    outcome = asyncio.run(_run(True, monthly))
+    _refusal(outcome)
+    _show(outcome.plan)
+    console.print(f"  {len(outcome.submitted)} submitted, {len(outcome.rejected)} refused")
 
 
 @core.command("readiness")
@@ -111,8 +130,9 @@ def readiness_cmd() -> None:
     gap = f"{r.gap:+.2%}" if r.gap is not None else "n/a"
     console.print(
         f"core readiness: {'[green]READY[/green]' if r.ready else '[yellow]not yet[/yellow]'} — "
-        f"{r.days} days, {r.monthly_runs} monthly run(s), tracking error {te}, gap {gap}, "
-        f"{r.refused} refused, {r.halted} halted"
+        f"{r.days} days, {r.monthly_runs} monthly rebalance(s) with sells, tracking error {te}, "
+        f"gap {gap}, {r.refused} refused, {r.halted} halted, {r.unfilled} unfilled, "
+        f"{r.partial} partial"
     )
     for failure in r.failures:
         console.print(f"  - {failure}")
@@ -129,12 +149,19 @@ def slippage_cmd(days: int) -> None:
         from halal_trader.config import get_settings
         from halal_trader.db.models import init_db
         from halal_trader.market_hours import today_eastern
+        from halal_trader.portfolio.core_account import core_account
         from halal_trader.portfolio.execution_quality import report
 
-        engine = await init_db(get_settings().database_url)
+        settings = get_settings()
+        engine = await init_db(settings.database_url)
         try:
             today = today_eastern()
-            return await report(engine, today - timedelta(days=days), today)
+            return await report(
+                engine,
+                today - timedelta(days=days),
+                today,
+                account=core_account(settings.core.paper),
+            )
         finally:
             await engine.dispose()
 

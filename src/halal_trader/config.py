@@ -173,6 +173,12 @@ class CoreSettings(BaseSettings):
     # operator deliberately switches it; live money needs the plan's G1 sign-off.
     paper: bool = Field(default=True)
     top_n: int = Field(default=100, ge=10, le=500)
+    # Live money (paper=false) also needs, at bot start and on `core run`, this
+    # dated token: "I-UNDERSTAND-REAL-MONEY-CORE-<UTC date>" (core/safeguards.py).
+    live_confirmation: str = Field(default="")
+    # The first live stage's ceiling: the most the core may hold invested on
+    # the live account, in dollars. Buys stop there; nothing is sold to meet it.
+    live_max_notional: float = Field(default=1_000.0, gt=0)
 
 
 class ZakatSettings(BaseSettings):
