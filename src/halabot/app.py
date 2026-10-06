@@ -55,6 +55,7 @@ from halabot.platform.clock import Clock, SystemClock
 from halabot.platform.config import HalabotSettings, get_settings
 from halabot.platform.db import bootstrap_schema, make_engine
 from halabot.platform.event_log import PgEventLog
+from halabot.platform.session import is_regular_session
 from halabot.policy.policy import Policy
 from halabot.policy.portfolio import ShadowPortfolio
 from halabot.policy.shadow import ShadowPolicyRunner
@@ -317,6 +318,12 @@ async def build_engine(
         benchmark=s.cognition.benchmark_symbol if s.cognition.relstrength_enabled else None,
         market_gate=s.policy.market_gate_enabled and s.cognition.relstrength_enabled,
         market_sma_window=s.policy.market_sma_window,
+        # Book a hypothetical fill only when one could happen: in the regular
+        # session, on a recent close.
+        session=is_regular_session if s.policy.regular_session_only else None,
+        max_price_age=timedelta(minutes=s.policy.max_price_age_min)
+        if s.policy.max_price_age_min > 0
+        else None,
     )
     # Learning loop (L8): refit the calibrator off closed outcomes every N closes.
     retrainer = CalibratorRetrainer(
@@ -330,6 +337,7 @@ async def build_engine(
         store=store,
         win_threshold_pct=s.conviction.win_threshold_pct,
         on_close=retrainer.on_outcome_closed,
+        regular_session_marks=s.policy.regular_session_only,
     )
     conviction_writer = ConvictionScoreWriter(bus=bus, engine=db_engine)
     target_writer = TargetWeightWriter(bus=bus, engine=db_engine)

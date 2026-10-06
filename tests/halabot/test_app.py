@@ -17,7 +17,7 @@ from halabot.belief.schema import Direction
 from halabot.platform.clock import FakeClock
 from halabot.platform.events import Event, EventType, new_event
 
-T0 = datetime(2026, 5, 28, 12, 0, tzinfo=UTC)
+T0 = datetime(2026, 5, 28, 15, 0, tzinfo=UTC)  # 11:00 ET, a Thursday: the market is open
 
 
 @pytest.mark.asyncio

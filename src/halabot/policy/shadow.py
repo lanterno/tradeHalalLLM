@@ -67,6 +67,8 @@ class ShadowPolicyRunner:
         benchmark: str | None = None,
         market_gate: bool = False,
         market_sma_window: int = 50,
+        session: Callable[[datetime], bool] | None = None,
+        max_price_age: timedelta | None = None,
     ) -> None:
         self._bus = bus
         self._store = store
@@ -82,6 +84,18 @@ class ShadowPolicyRunner:
         self._benchmark = benchmark
         self._market_gate = market_gate
         self._market_sma_window = market_sma_window
+        # When a hypothetical fill could happen at all. Every proposal is priced
+        # at the latest bar close, so one made while the market is shut, or on
+        # a close hours old, records a fill that could never have happened:
+        # weekend proposals opened and closed at Friday's last print and booked
+        # 0% "losses". `session` says whether an instant is in the regular
+        # session; `max_price_age` bounds how old (bar start to decision) the
+        # asset's latest close may be. Either None = that gate off.
+        self._session = session
+        self._max_price_age = max_price_age
+        # Force-exits that arrived while no fill was possible, by asset; they
+        # go out at the first recompute that can fill them.
+        self._deferred_exits: dict[str, Event] = {}
         self._halted = False  # for risk.halt edge-emission
         self._nominal = nominal_equity
         self._compliance_ttl = compliance_ttl
@@ -121,11 +135,64 @@ class ShadowPolicyRunner:
 
         Models the live monitor's force-exit (Appendix H rung 1–2) in the
         shadow book: bypasses conviction/halal gates because exits always
-        reduce risk. No-op if the shadow book doesn't hold the asset.
+        reduce risk. No-op if the shadow book doesn't hold the asset. While no
+        fill is possible (market shut, stale price) the exit waits for the
+        first recompute that can fill it, as a real exit would wait for the open.
         """
         asset = event.asset
         if asset is None or not self._portfolio.holds(asset):
             return
+        if not self._can_fill(asset, event.ts):
+            self._deferred_exits[asset] = event
+            logger.info("SHADOW force-exit of %s waits for a fillable price", asset)
+            return
+        await self._force_exit(asset, event)
+
+    async def _flush_deferred_exits(self, now: datetime) -> None:
+        for asset, cause in list(self._deferred_exits.items()):
+            if not self._portfolio.holds(asset):
+                del self._deferred_exits[asset]
+            elif self._can_fill(asset, now):
+                del self._deferred_exits[asset]
+                await self._force_exit(asset, cause)
+
+    def _price_is_fresh(self, asset: str, now: datetime) -> bool:
+        if self._max_price_age is None or self._history is None:
+            return True
+        closes = self._history.timestamped_closes(asset)
+        return bool(closes) and now - closes[-1][0] <= self._max_price_age
+
+    def _can_fill(self, asset: str, now: datetime) -> bool:
+        """Could a hypothetical order on ``asset`` fill at its last close now?"""
+        if self._session is not None and not self._session(now):
+            return False
+        return self._price_is_fresh(asset, now)
+
+    def _fillable(self, proposals: list[TradeProposal], now: datetime) -> list[TradeProposal]:
+        """The proposals that could fill now. The rest are not booked, so the
+        policy proposes them again at the next recompute that can fill them."""
+        if not proposals:
+            return proposals
+        if self._session is not None and not self._session(now):
+            logger.info("SHADOW holding %d proposal(s): market closed", len(proposals))
+            return []
+        stale = {p.asset for p in proposals if not self._price_is_fresh(p.asset, now)}
+        if not stale:
+            return proposals
+        # A held-back sell may be what frees the room a buy in this same
+        # rebalance assumes, so a held sell holds the buys with it.
+        sell_held = any(p.weight_delta < 0 for p in proposals if p.asset in stale)
+        kept = [
+            p for p in proposals if p.asset not in stale and not (sell_held and p.weight_delta > 0)
+        ]
+        logger.info(
+            "SHADOW holding %d proposal(s) on stale prices: %s",
+            len(proposals) - len(kept),
+            ", ".join(sorted(stale)),
+        )
+        return kept
+
+    async def _force_exit(self, asset: str, event: Event) -> None:
         cur = self._portfolio.weight(asset)
         reason = str(event.payload.get("reason", "invalidated"))
         self._portfolio.set_weight(asset, 0.0)
@@ -228,6 +295,8 @@ class ShadowPolicyRunner:
         return sma_trend_state(closes, self._market_sma_window) == "below"
 
     async def _recompute(self, event: Event) -> None:
+        if self._deferred_exits:
+            await self._flush_deferred_exits(event.ts)
         beliefs = await self._store.all_active()
         by_asset = {b.asset: b for b in beliefs}
         returns = None
@@ -262,6 +331,7 @@ class ShadowPolicyRunner:
                 f"{reason}: {', '.join(sorted(assets))}" for reason, assets in by_reason.items()
             )
             logger.info("SHADOW gated %d buy(s) — %s", len(rejections), summary)
+        proposals = self._fillable(proposals, event.ts)
         self.last_proposals = proposals
         for p in proposals:
             self._portfolio.set_weight(p.asset, p.target_weight)  # hypothetical book moves

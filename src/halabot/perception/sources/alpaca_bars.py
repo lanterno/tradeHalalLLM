@@ -21,6 +21,7 @@ from halabot.perception.poll import PollingSource
 from halabot.perception.watermark import BarWatermark
 from halabot.platform.clock import Clock, parse_iso
 from halabot.platform.events import Event, EventType, new_event
+from halabot.platform.session import timeframe_interval
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +47,8 @@ class AlpacaBarSource(PollingSource):
         self._clock = clock
         self._tf = timeframe
         self._days = days
+        interval = timeframe_interval(timeframe)
+        self._interval_s = interval.total_seconds() if interval is not None else None
         self._watermark = watermark
         self._marks: dict[str, datetime] = {}  # newest emitted bar time per asset
 
@@ -105,7 +108,16 @@ class AlpacaBarSource(PollingSource):
             EventType.OBSERVATION_BAR,
             source="alpaca-bars",
             asset=raw["_asset"],
-            payload={"o": o, "h": h, "low": low, "c": c, "v": v, "bar_ts": str(raw.get("t", ""))},
+            payload={
+                "o": o,
+                "h": h,
+                "low": low,
+                "c": c,
+                "v": v,
+                "bar_ts": str(raw.get("t", "")),
+                # The bar's length, so a consumer can tell when its close printed.
+                **({"interval_s": self._interval_s} if self._interval_s else {}),
+            },
         )
 
     def dedup_key(self, raw: dict[str, Any]) -> str | None:

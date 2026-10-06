@@ -14,7 +14,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -25,6 +25,7 @@ from halabot.platform.clock import parse_iso
 from halabot.platform.db import open_position as _open_position_table
 from halabot.platform.db import outcome as _outcome_table
 from halabot.platform.events import Event, EventType
+from halabot.platform.session import bar_closes_in_session
 
 logger = logging.getLogger(__name__)
 
@@ -52,11 +53,15 @@ class ShadowOutcomeTracker:
         store: BeliefStore,
         win_threshold_pct: float = 0.002,
         on_close: Callable[[], Awaitable[None]] | None = None,
+        regular_session_marks: bool = False,
     ) -> None:
         self._bus = bus
         self._engine = engine
         self._store = store
         self._win_threshold = win_threshold_pct
+        # Mark open positions only to bars whose close is a regular-session
+        # print, the prices the policy is allowed to fill at.
+        self._session_marks = regular_session_marks
         # Called after each closed outcome is written (the calibrator retrainer
         # hooks here to refit off accumulated outcomes — L8).
         self._on_close = on_close
@@ -147,6 +152,10 @@ class ShadowOutcomeTracker:
         if last is not None and bar_ts <= last:
             return
         self._last_bar[asset] = bar_ts
+        if self._session_marks:
+            interval = timedelta(seconds=float(event.payload.get("interval_s") or 3600.0))
+            if not bar_closes_in_session(bar_ts, interval):
+                return
         pos = self._positions.get(asset)
         if pos is None or pos.weight <= _EPS:
             return

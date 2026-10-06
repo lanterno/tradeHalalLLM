@@ -167,3 +167,22 @@ async def test_open_position_is_marked_only_by_newer_bars(halabot_engine):
     async with halabot_engine.connect() as conn:
         mark = (await conn.execute(sa.select(open_position_table.c.last_price))).scalar_one()
     assert mark == 110.0
+
+
+@pytest.mark.asyncio
+async def test_open_position_is_marked_only_on_regular_session_bars(halabot_engine):
+    bus = InProcessEventBus(PgEventLog(halabot_engine))
+    tracker = ShadowOutcomeTracker(
+        bus=bus,
+        engine=halabot_engine,
+        store=PgBeliefStore(halabot_engine),
+        regular_session_marks=True,
+    )
+    tracker.start()
+    clock = FakeClock(T0)
+    await _propose(bus, clock, "NVDA", "buy", 0.10, 100.0)
+    await _bar(bus, clock, "NVDA", 105.0, "2026-05-28T19:00:00Z")  # 15:00 ET bar, closes 16:00
+    await _bar(bus, clock, "NVDA", 120.0, "2026-05-28T20:00:00Z")  # 16:00 ET: after hours
+    async with halabot_engine.connect() as conn:
+        mark = (await conn.execute(sa.select(open_position_table.c.last_price))).scalar_one()
+    assert mark == 105.0
