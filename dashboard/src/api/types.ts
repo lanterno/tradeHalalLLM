@@ -403,9 +403,27 @@ export interface BeliefCatalyst {
 
 export interface BeliefEvidence {
   source: string;
+  /** The name a reader knows the source by ("Relative strength"). */
+  label: string;
   direction: number;
   weight: number;
   detail: string;
+  /** The evidence as a sentence ("Outperforming SPY by 4.3%"). */
+  plain: string;
+}
+
+/** What the engine would do with a name now (server-computed). */
+export type Stance = "long" | "leaning" | "none" | "excluded" | "benchmark";
+
+/** The strict in-house screen's verdict on a name. */
+export type StrictVerdict = "halal" | "not_halal" | "doubtful" | "unscreened";
+
+export interface ShadowHolding {
+  weight: number;
+  entry_price: number;
+  last_price: number;
+  return_pct: number;
+  opened_at: string;
 }
 
 export interface Belief {
@@ -426,12 +444,101 @@ export interface Belief {
   halal: string | null;
   n_evidence: number;
   top_evidence: BeliefEvidence[];
+  /** The strongest evidence for and against, in plain words. */
+  main_reason: string | null;
+  counter_reason: string | null;
+  /** A note when a very high RSI is counted in the name's favour. */
+  caution: string | null;
   last_updated: string | null;
+  price: number | null;
+  price_at: string | null;
+  strict: StrictVerdict;
+  /** The core account's weight in the name (null: not held, or no snapshot). */
+  core_weight: number | null;
+  shadow: ShadowHolding | null;
+  stance: Stance;
 }
 
 export interface BeliefBoard {
   available: boolean;
   beliefs: Belief[];
+  entry_band: number;
+  exit_band: number;
+  benchmark: string;
+  screen_as_of: string | null;
+  screen_stale: boolean;
+  core_as_of: string | null;
+}
+
+export interface CohortRecord {
+  closed: number;
+  wins: number;
+  win_rate: number | null;
+  mean_return_pct: number | null;
+}
+
+export interface ShadowBookPosition extends ShadowHolding {
+  asset: string;
+  marked_at: string;
+  strict: StrictVerdict;
+}
+
+export interface MacroEvent {
+  kind: string;
+  plain: string;
+  scheduled_for: string;
+  expected_impact: number;
+  detail: string;
+  names: number;
+}
+
+export interface BeliefOverview {
+  available: boolean;
+  cohort: {
+    cohort: number;
+    started: string | null;
+    current: CohortRecord;
+    earlier: CohortRecord;
+    median_hold_s: number | null;
+  };
+  verdict: {
+    status: "unproven" | "beating" | "not_beating";
+    label: string;
+    age_days: number;
+    min_closed: number;
+    min_days: number;
+  };
+  baseline_win_rate: number;
+  baseline_note: string;
+  baseline_measured: boolean;
+  baseline_trades: number;
+  calibration: {
+    status: "fitted" | "identity" | "unknown";
+    scored_24h: number;
+    moved_24h: number;
+    samples: number;
+    min_samples: number;
+  };
+  book: {
+    positions: ShadowBookPosition[];
+    invested: number;
+    cash: number;
+    return_pct: number | null;
+    contribution_pct: number;
+  };
+  engine: {
+    status: "live" | "stale" | "missing";
+    heartbeat_at: string | null;
+    heartbeat_age_s: number | null;
+    last_bar_at: string | null;
+    last_event_at: string | null;
+    names: number;
+    refreshed_at: string | null;
+  };
+  llm: { per_day_usd: number | null; days: number; today_usd: number };
+  calendar: MacroEvent[];
+  entry_band: number;
+  exit_band: number;
 }
 
 export interface ShadowDecision {
@@ -442,6 +549,10 @@ export interface ShadowDecision {
   source: string;
   payload: Record<string, unknown>;
   correlation_id: string | null;
+  /** Why it was proposed, in plain words. */
+  plain: string;
+  /** Proposed while the regular session was shut: no fill was possible. */
+  outside_session: boolean;
 }
 
 export interface ZakatAssessment {

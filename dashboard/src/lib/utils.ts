@@ -56,6 +56,31 @@ export function formatTime(
   return `${(opts.seconds ? ET_DATETIME_SECONDS : ET_DATETIME).format(d)} ET`;
 }
 
+const ET_CLOCK = new Intl.DateTimeFormat("en-US", {
+  timeZone: MARKET_TZ,
+  hour: "2-digit",
+  minute: "2-digit",
+  hourCycle: "h23",
+});
+
+/**
+ * The time of day in New York, "12:16": for instants already known to be
+ * today (a stream of today's decisions). ``withDay`` prefixes the date when
+ * the instant is not today in New York ("Oct 5, 15:46"), and ``et`` appends
+ * the zone label.
+ */
+export function formatClock(
+  iso: string | null | undefined,
+  opts: { et?: boolean; withDay?: boolean; now?: Date } = {},
+): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const suffix = opts.et ? " ET" : "";
+  if (opts.withDay && todayET(d) !== todayET(opts.now)) return `${ET_DATETIME.format(d)}${suffix}`;
+  return `${ET_CLOCK.format(d)}${suffix}`;
+}
+
 /** Today's date in New York, "YYYY-MM-DD": the market's day, not the browser's. */
 export function todayET(now: Date = new Date()): string {
   return now.toLocaleDateString("en-CA", { timeZone: MARKET_TZ });
