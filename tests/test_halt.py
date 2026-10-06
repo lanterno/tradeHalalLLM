@@ -81,3 +81,54 @@ async def test_run_cycle_skips_when_killswitch_engaged(engine):
     await halt.clear_halt(engine)
     await cycle.run_cycle()
     assert cycle.impl_calls == 2
+
+
+# ── halt --close-all core ──────────────────────────────────────
+
+
+async def test_close_all_core_liquidates_the_cores_own_account(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    import pytest
+
+    from halal_trader.cli.halt import _close_core
+    from halal_trader.domain.models import Position
+
+    built: list[tuple] = []
+
+    class Core:
+        closed = False
+
+        def __init__(self, key, secret, *, paper):
+            built.append((key, paper))
+
+        async def get_all_positions(self):
+            return [] if Core.closed else [Position(symbol="AAPL", qty=2)]
+
+        async def close_all_positions(self):
+            Core.closed = True
+            return []
+
+        async def disconnect(self):
+            return None
+
+    monkeypatch.setattr("halal_trader.execution.alpaca_broker.AlpacaRestBroker", Core)
+    settings = SimpleNamespace(
+        core=SimpleNamespace(alpaca_api_key="ck", alpaca_secret_key="cs", paper=False)
+    )
+    await _close_core(settings)
+    assert built == [("ck", False)] and Core.closed  # the core's keys, its environment
+
+    with pytest.raises(SystemExit):  # no keys: says so, closes nothing
+        await _close_core(
+            SimpleNamespace(
+                core=SimpleNamespace(alpaca_api_key="", alpaca_secret_key="", paper=True)
+            )
+        )
+
+
+def test_close_all_offers_the_core() -> None:
+    from halal_trader.cli.halt import halt as halt_cmd
+
+    choice = next(p for p in halt_cmd.params if p.name == "close_all")
+    assert "core" in choice.type.choices  # type: ignore[attr-defined]

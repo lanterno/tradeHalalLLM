@@ -151,7 +151,10 @@ export function MoneyPanel({ data }: { data: HomeStatus }) {
           <p className="text-xs text-muted">purification owed, held as cash</p>
           {set_aside.zakat && (
             <div className="mt-3.5 grid gap-0.5">
-              <Row label="Zakat if due today" value={formatUsd(set_aside.zakat.amount)} />
+              <Row
+                label={set_aside.zakat.estimate ? "Zakat estimate (if due today)" : "Zakat due"}
+                value={formatUsd(set_aside.zakat.amount)}
+              />
               <Row label="Method" value={`${set_aside.zakat.chosen} (higher)`} />
               <Row
                 label="Next hawl"

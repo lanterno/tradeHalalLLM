@@ -213,6 +213,7 @@ def _settings():  # type: ignore[no-untyped-def]
     return SimpleNamespace(
         alpaca=SimpleNamespace(api_key="k", secret_key="s"),
         edgar=SimpleNamespace(user_agent="test test@example.invalid"),
+        core=SimpleNamespace(paper=True),
     )
 
 

@@ -109,13 +109,11 @@ async def _holdings(engine: AsyncEngine, account: str, day: date) -> dict[str, f
     """Market value per symbol at the close of ``day``."""
     from datetime import timedelta
 
-    from halal_trader.compliance.purification import BOOK_NOTIONAL, paper_positions
+    from halal_trader.compliance.purification import BOOK_NOTIONAL, held_shares
 
-    if not account.startswith("book:"):  # a broker account: "paper", "core"
+    if not account.startswith("book:"):  # a broker account: "paper", "core", "core-live"
         out = {}
-        for symbol, shares in (
-            await paper_positions(engine, day + timedelta(days=1), account)
-        ).items():
+        for symbol, shares in (await held_shares(engine, day + timedelta(days=1), account)).items():
             close = await _close_on_or_before(engine, symbol, day)
             if close:
                 out[symbol] = shares * close

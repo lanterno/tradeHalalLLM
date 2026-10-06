@@ -14,12 +14,12 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import httpx
 
-from halal_trader.market_hours import MARKET_TZ
+from halal_trader.market_hours import MARKET_TZ, effective_close_time, today_eastern
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +83,12 @@ def parse_activity(raw: dict[str, Any]) -> BrokerActivity:
     )
 
 
-def parse_portfolio_history(payload: dict[str, Any]) -> list[EquityPoint]:
+def parse_portfolio_history(
+    payload: dict[str, Any], *, now: datetime | None = None
+) -> list[EquityPoint]:
+    """Completed sessions only: a point for a session that has not closed yet
+    (a request reaching into today) is the equity of the moment, not a close."""
+    now = now or datetime.now(UTC)
     stamps = payload["timestamp"]
     equity = payload["equity"]
     pnl = payload["profit_loss"]
@@ -94,13 +99,16 @@ def parse_portfolio_history(payload: dict[str, Any]) -> list[EquityPoint]:
     for ts, eq, pl, plp in zip(stamps, equity, pnl, pnl_pct, strict=True):
         if eq is None:  # Alpaca pads days before the account existed with nulls
             continue
+        # Each 1D point is stamped 00:00 UTC *after* the session it closes
+        # (e.g. 2026-09-26 00:00 UTC, a Saturday, for Friday 2026-09-25).
+        # Converting to US/Eastern gives the session date; the UTC date would
+        # book every day's equity one day late.
+        day = datetime.fromtimestamp(int(ts), MARKET_TZ).date()
+        if now < datetime.combine(day, effective_close_time(day), MARKET_TZ):
+            continue  # the session is still open: not a closing equity yet
         points.append(
             EquityPoint(
-                # Each 1D point is stamped 00:00 UTC *after* the session it
-                # closes (e.g. 2026-09-26 00:00 UTC, a Saturday, for Friday
-                # 2026-09-25). Converting to US/Eastern gives the session date;
-                # the UTC date would book every day's equity one day late.
-                day=datetime.fromtimestamp(int(ts), MARKET_TZ).date(),
+                day=day,
                 equity=float(eq),
                 profit_loss=float(pl or 0.0),
                 profit_loss_pct=float(plp or 0.0),
@@ -157,14 +165,19 @@ class AlpacaRestClient:
         """Daily closing equity from ``start`` through ``end`` (default: today).
 
         ``end`` is always sent: with ``start`` alone Alpaca silently caps the
-        window at one month.
+        window at one month. It is sent a day *past* the last session wanted:
+        each point is stamped 00:00 UTC after its session, so ``end`` = today
+        stopped short of today's point and every account's newest equity
+        arrived a session late. A session still open is dropped by the parser,
+        so reaching into tomorrow cannot book an intraday value as a close.
         """
+        last = end or today_eastern()
         payload = await self._get(
             "/v2/account/portfolio/history",
             {
                 "timeframe": "1D",
                 "start": start.isoformat(),
-                "end": (end or datetime.now(UTC).date()).isoformat(),
+                "end": (last + timedelta(days=1)).isoformat(),
             },
         )
-        return parse_portfolio_history(payload)
+        return [p for p in parse_portfolio_history(payload) if p.day <= last]

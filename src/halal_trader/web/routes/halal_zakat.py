@@ -47,8 +47,11 @@ def register(app: FastAPI) -> None:
         _, last_hawl = z.hawl_period(hawl, today)
         # The next hawl: the one on or before a day a lunar year ahead.
         _, next_hawl = z.hawl_period(hawl, date.fromordinal(last_hawl.toordinal() + 360))
+        from halal_trader.portfolio.core_account import core_account
+
+        core_name = core_account(get_settings().core.paper)
         accounts = []
-        for account, label in (("core", "Core portfolio"), ("paper", "Day-trader")):
+        for account, label in ((core_name, "Core portfolio"), ("paper", "Day-trader")):
             now = await z.assess(ctx.engine, account, period_start=last_hawl, hawl_date=today)
             async with ctx.engine.connect() as conn:
                 row = (
@@ -64,7 +67,8 @@ def register(app: FastAPI) -> None:
                 {
                     "account": account,
                     "label": label,
-                    "if_due_today": _assessment_json(now),
+                    # Valued today: an estimate until the hawl day itself.
+                    "if_due_today": {**_assessment_json(now), "estimate": today != last_hawl},
                     "last_recorded": None
                     if row is None
                     else {
@@ -93,11 +97,12 @@ def register(app: FastAPI) -> None:
         year: int | None = None, ctx: DashboardContext = Depends(get_ctx)
     ) -> JSONResponse:
         from halal_trader.compliance.purification import report
+        from halal_trader.portfolio.core_account import CORE_ACCOUNTS
 
         y = year or date.today().year
         lines = [
             (account, line)
-            for account in ("core", "paper")
+            for account in (*CORE_ACCOUNTS, "paper")
             for line in await report(ctx.engine, account, y)
         ]
         return JSONResponse(

@@ -94,13 +94,23 @@ automate as much as possible. Recorded here so they can be revisited:
   $25 live / $15 research per month.
 - **The LLM day-trader is retired** (`DAY_TRADER_ENABLED=false`), not halted:
   +2.5%/yr vs SPUS 18.6%. Its exits and the EOD flatten still run. The
-  kill-switch stays for emergencies and stops every strategy, the core included.
+  kill-switch stays for emergencies and stops every strategy. The core under
+  a halt buys nothing but still sells what the screen no longer holds halal
+  (alerted as `core.halted_sells`); `halt --close-all core` liquidates it.
 - **The core's live-money gate** (portfolio/readiness.py, checked every
-  evening): >= 20 trading days on paper including an executed monthly
-  rebalance, tracking error vs its forward book < 3%/yr, cumulative gap < 1
-  point, no refused order or halted run in that window. A `core.ready` alert
-  asks for the live keys; the switch itself (live keys + `CORE_PAPER=false`)
-  is the operator's step.
+  evening): >= 20 trading days on paper, a run on each of the last 20, a
+  monthly rebalance that included sells, tracking error vs its forward book
+  < 3%/yr and a cumulative gap < 1 point (both from pre-trade equity), no
+  refused, unfilled or partly filled order and no halted run in that window.
+  A `core.ready` alert asks for the live keys. The switch (live keys +
+  `CORE_PAPER=false` + today's `CORE_LIVE_CONFIRMATION`) is the operator's
+  step; the bot and `core run` refuse it unless the paper gate passed, the
+  account is a cash account (multiplier 1, no shorting) and its keys are not
+  the day-trader's. The bot reads the dated token once, at start: a restart
+  on a later day leaves the live core refusing (alerted as `core.refused`)
+  until the token is renewed. The first live stage holds at most
+  `CORE_LIVE_MAX_NOTIONAL` invested. Live history is recorded as account
+  `core-live`, apart from paper's `core`.
 - **Paper purification is a rehearsal**: shown, but the compliance status
   only turns to "attention" for an account trading real money.
 - **No key rotation needed**: the only tokens in old local logs are retired

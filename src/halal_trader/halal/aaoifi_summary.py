@@ -33,13 +33,19 @@ from sqlmodel import col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from halal_trader.db.models import PurificationEntry, RoundTripPurificationRow
+from halal_trader.portfolio.core_account import CORE_ACCOUNTS, CORE_LIVE, CORE_PAPER
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncEngine
 
 logger = logging.getLogger(__name__)
 
-ACCOUNTS = (("core", "Core portfolio"), ("paper", "Day-trader"))
+# The live core is recorded apart from the paper one (portfolio/core_account.py).
+ACCOUNTS = (
+    (CORE_LIVE, "Core portfolio (live)"),
+    (CORE_PAPER, "Core portfolio"),
+    ("paper", "Day-trader"),
+)
 VERDICTS = ("halal", "doubtful", "not_halal", "unscreened")
 # Orders that never reached the market: not trades.
 _NOT_TRADED_DAY_TRADER = ("rejected", "canceled", "cancelled", "expired")
@@ -172,11 +178,20 @@ async def compute_aaoifi_summary(
         now = datetime.now(UTC)
     quarter, month, today = periods(_as_day(now))
 
+    from halal_trader.config import get_settings
+    from halal_trader.portfolio.core_account import core_account
+
+    # The configured core and the day-trader always show; the other core
+    # environment only once it has traded this quarter (the paper core's
+    # history the quarter it went live, say).
+    shown = {core_account(get_settings().core.paper), "paper"}
     accounts = tuple(
-        [
+        a
+        for a in [
             await _account(engine, account, label, quarter, month, today)
             for account, label in ACCOUNTS
         ]
+        if a.account in shown or a.trades_this_quarter
     )
     async with AsyncSession(engine) as session:
         q_start = datetime.combine(quarter, datetime.min.time(), UTC)
@@ -211,7 +226,7 @@ def _account_trades_sql(account: str) -> str:
     return (
         "SELECT symbol, side, (submitted_at AT TIME ZONE 'America/New_York')::date AS day "
         "FROM core_orders WHERE status NOT IN ('" + "', '".join(_NOT_TRADED_CORE) + "') "
-        "AND submitted_at >= :since"
+        f"AND account = '{account}' AND submitted_at >= :since"
     )
 
 
@@ -339,7 +354,7 @@ def _live_accounts() -> list[str]:
     settings = get_settings()
     live = [] if settings.alpaca.paper_trade else ["paper"]
     if not settings.core.paper:
-        live.append("core")
+        live.append(CORE_LIVE)
     return live
 
 
@@ -354,7 +369,7 @@ async def _accruals(
     payment date. Forward books are notional and stay out of the summary."""
     from halal_trader.db.models import PurificationAccrual
 
-    names = ["paper", "core"] if accounts is None else accounts
+    names = ["paper", *CORE_ACCOUNTS] if accounts is None else accounts
     if not names:
         return 0.0
     when = func.coalesce(PurificationAccrual.payable_date, PurificationAccrual.ex_date)

@@ -168,6 +168,45 @@ async def test_the_home_view_reads_the_live_snapshot(engine: AsyncEngine) -> Non
     assert held["screen"]["failing"] == ["MSFT"]  # held, and the newest screen fails it
 
 
+async def test_set_aside_counts_broker_accounts_and_zakat_is_an_estimate(
+    engine: AsyncEngine,
+) -> None:
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO purification_accruals (account, dividend_id, symbol, ex_date, shares, "
+                "dividend, impure_ratio, amount, method, accrued_at) VALUES "
+                "('core', 'd1', 'AAA', '2026-09-01', 1, 10, 0.1, 1.0, 'm', now()), "
+                "('paper', 'd2', 'AAA', '2026-09-01', 1, 10, 0.1, 2.0, 'm', now()), "
+                "('book:core', 'd3', 'AAA', '2026-09-01', 1, 10, 0.1, 40.0, 'm', now())"
+            )
+        )
+    settings = SimpleNamespace(
+        core=SimpleNamespace(enabled=True, paper=True),
+        stocks=SimpleNamespace(day_trader_enabled=False),
+        zakat=SimpleNamespace(hawl_hijri="09-01"),
+    )
+    view = await home.build(engine, settings, now=datetime(2026, 10, 6, 15, tzinfo=UTC))
+    # The forward book's $40 is per a notional $10,000 nobody holds.
+    assert view["set_aside"]["purification_unpaid"] == 3.0
+    assert view["set_aside"]["zakat"]["estimate"] is True
+
+
+async def test_a_live_core_is_shown_from_its_own_account(engine: AsyncEngine) -> None:
+    await snapshots.snapshot_account(engine, "core", FakeBroker())  # the paper history
+    settings = SimpleNamespace(
+        core=SimpleNamespace(enabled=True, paper=False),
+        stocks=SimpleNamespace(day_trader_enabled=False),
+        zakat=SimpleNamespace(hawl_hijri=""),
+    )
+    view = await home.build(engine, settings, now=datetime.now(UTC))
+    assert view["accounts"] == []  # paper's figures are not the live account's
+    await snapshots.snapshot_account(engine, "core-live", FakeBroker())
+    view = await home.build(engine, settings, now=datetime.now(UTC))
+    assert [a["account"] for a in view["accounts"]] == ["core-live"]
+    assert view["accounts"][0]["paper"] is False
+
+
 @pytest.fixture
 def client(database_url, tmp_path, monkeypatch):
     monkeypatch.setenv("LOG_DIR", str(tmp_path / "logs"))

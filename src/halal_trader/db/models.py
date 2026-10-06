@@ -1179,6 +1179,8 @@ class CoreOrder(SQLModel, table=True):
     __tablename__ = "core_orders"
 
     id: int | None = Field(default=None, primary_key=True)
+    # "core" (paper) or "core-live": portfolio/core_account.py.
+    account: str = Field(default="core", sa_column_kwargs={"server_default": "core"})
     submitted_at: datetime = Field(sa_type=sa.DateTime(timezone=True))
     symbol: str
     side: str
@@ -1200,14 +1202,21 @@ class CoreRun(SQLModel, table=True):
     __tablename__ = "core_runs"
 
     id: int | None = Field(default=None, primary_key=True)
+    account: str = Field(default="core", sa_column_kwargs={"server_default": "core"})
     run_on: date
     monthly: bool
+    # Orders were placed (or the plan was legitimately empty). A halted run is
+    # never executed, so it neither ends the month nor counts for the gate.
     executed: bool
     equity: float
     cash: float
     orders: int
     halted: str | None = None
     screen_as_of: date | None = None
+    notes: list = Field(
+        default_factory=list,
+        sa_column=sa.Column("notes", JSONB, nullable=False, server_default=sa.text("'[]'::jsonb")),
+    )
     recorded_at: datetime = Field(sa_type=sa.DateTime(timezone=True))
 
 

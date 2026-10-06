@@ -93,3 +93,28 @@ def test_core_page_shows_holdings_against_targets_and_the_gate(client) -> None:
     assert body["orders"][0]["fill_status"] == "unfilled"  # the seeded fill has no order id
     assert body["execution"]["orders"] == 1
     assert "alpaca_api_key" not in str(body)
+    assert body["equity_source"] == "ledger" and body["account"] == "core"
+
+
+async def _snapshot(url: str) -> None:
+    engine = create_async_engine(url)
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO account_snapshots (account, taken_at, equity, cash, positions) "
+                "VALUES ('core', now(), 2000, 800, "
+                '\'[{"symbol": "MSFT", "qty": 3, "market_value": 1200}]\')'
+            )
+        )
+    await engine.dispose()
+
+
+def test_the_core_page_prefers_the_brokers_snapshot(client, database_url) -> None:
+    """The ledger's equity is a session behind at best: the bot's snapshot is
+    the account now, and its positions count splits that fills cannot."""
+    asyncio.run(_snapshot(database_url))
+    body = client.get("/api/core").json()
+    assert body["equity"] == 2000.0 and body["equity_source"] == "live"
+    msft = next(h for h in body["holdings"] if h["symbol"] == "MSFT")
+    assert msft["shares"] == 3.0 and msft["weight"] == pytest.approx(0.6)
+    assert body["series"][-1]["date"] == "2026-10-06"  # the daily series stays the ledger's

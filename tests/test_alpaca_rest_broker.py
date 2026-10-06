@@ -208,3 +208,45 @@ async def test_close_position_and_flatten_use_alpacas_endpoints() -> None:
     assert (seen[0].method, seen[0].url.path) == ("DELETE", "/v2/positions/ORCL")
     assert seen[1].url.params["cancel_orders"] == "true"
     assert flattened == [{"symbol": "AMD", "status": 200, "body": {}}]
+
+
+async def test_account_reports_which_account_it_is_and_whether_it_can_borrow() -> None:
+    raw = {
+        **ACCOUNT,
+        "id": "uuid-1",
+        "account_number": "PA123",
+        "multiplier": "4",
+        "shorting_enabled": True,
+    }
+    account = await _broker(lambda r: httpx.Response(200, json=raw)).get_account_info()
+    assert (account.account_id, account.account_number) == ("uuid-1", "PA123")
+    assert account.multiplier == 4.0 and account.shorting_enabled is True
+    # Absent, or a string where a boolean belongs: unknown, never "no".
+    bare = await _broker(
+        lambda r: httpx.Response(200, json={**ACCOUNT, "shorting_enabled": "false"})
+    ).get_account_info()
+    assert bare.multiplier is None and bare.shorting_enabled is None
+
+
+async def test_a_caller_chosen_order_id_is_sent_as_is() -> None:
+    sent: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(json.loads(request.content))
+        return httpx.Response(200, json={"id": "o1"})
+
+    await _broker(handler).place_order("AAPL", "buy", 1.5, client_order_id="core-20261005-AAPL-buy")
+    assert sent[0]["client_order_id"] == "core-20261005-AAPL-buy"
+
+
+async def test_open_orders_are_listed_and_a_non_list_raises() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json=[{"id": "o1", "status": "new"}])
+
+    assert await _broker(handler).get_open_orders() == [{"id": "o1", "status": "new"}]
+    assert seen[0].url.params["status"] == "open"
+    with pytest.raises(BrokerError):
+        await _broker(lambda r: httpx.Response(200, json={})).get_open_orders()

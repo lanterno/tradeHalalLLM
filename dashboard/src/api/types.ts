@@ -619,7 +619,14 @@ export interface HomeStatus {
   };
   set_aside: {
     purification_unpaid: number;
-    zakat: { amount: number; chosen: string; next_hawl: string; next_hawl_hijri: string } | null;
+    zakat: {
+      amount: number;
+      chosen: string;
+      estimate: boolean; // valued today, before the hawl: not yet owed
+      as_of: string;
+      next_hawl: string;
+      next_hawl_hijri: string;
+    } | null;
   };
   portfolio: {
     holdings: {

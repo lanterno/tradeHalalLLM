@@ -131,12 +131,19 @@ class AlpacaRestBroker:
 
     async def get_account_info(self) -> Account:
         raw = await self._request("GET", self._trading("/v2/account"))
+        multiplier = raw.get("multiplier")
+        shorting = raw.get("shorting_enabled")
         return Account(
             equity=_f(raw, "equity"),
             buying_power=_f(raw, "buying_power"),
             cash=_f(raw, "cash"),
             portfolio_value=_f(raw, "portfolio_value"),
             status=str(raw["status"]),
+            account_id=str(raw["id"]) if raw.get("id") else None,
+            account_number=str(raw["account_number"]) if raw.get("account_number") else None,
+            multiplier=float(multiplier) if multiplier not in (None, "") else None,
+            # A string "false" would be truthy: only a JSON boolean counts.
+            shorting_enabled=shorting if isinstance(shorting, bool) else None,
         )
 
     async def get_clock(self) -> MarketClock:
@@ -239,6 +246,8 @@ class AlpacaRestBroker:
         quantity: float,
         order_type: str = "market",
         time_in_force: str = "day",
+        *,
+        client_order_id: str | None = None,
     ) -> Any:
         """Submit an order exactly once, even across a timeout.
 
@@ -246,8 +255,13 @@ class AlpacaRestBroker:
         "detail"}}`` with Alpaca's body as the detail: the shape the MCP
         server used, which the executor (no order id = rejected) and the
         monitor (wash-trade code 40310000, then cancel and retry) read.
+
+        ``client_order_id``: a caller-chosen id makes the order idempotent
+        across runs, not only across a timeout. Alpaca refuses a second order
+        with an id the account has already used (the core sends
+        ``core-<date>-<symbol>-<side>``, so a repeated run cannot buy twice).
         """
-        client_order_id = f"ht-{uuid.uuid4().hex}"
+        client_order_id = client_order_id or f"ht-{uuid.uuid4().hex}"
         qty = str(int(quantity)) if float(quantity).is_integer() else repr(float(quantity))
         body = {
             "symbol": symbol,
@@ -280,6 +294,15 @@ class AlpacaRestBroker:
                 if attempt == 1:
                     raise
         raise RuntimeError("unreachable")
+
+    async def get_open_orders(self) -> list[dict[str, Any]]:
+        """Every order not yet final (new, accepted, partially filled, ...)."""
+        raw = await self._request(
+            "GET", self._trading("/v2/orders"), params={"status": "open", "limit": 500}
+        )
+        if not isinstance(raw, list):
+            raise BrokerError(200, f"orders: expected a list, got {type(raw).__name__}")
+        return [dict(o) for o in raw]
 
     async def get_order_by_id(self, order_id: str) -> dict[str, Any]:
         raw = await self._request("GET", self._trading(f"/v2/orders/{order_id}"))

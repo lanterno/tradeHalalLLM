@@ -64,6 +64,53 @@ def test_portfolio_history_skips_pre_account_nulls() -> None:
     assert points == [EquityPoint(date(2026, 9, 25), 105764.43, 238.11, 0.0023)]
 
 
+def test_portfolio_history_keeps_only_closed_sessions() -> None:
+    payload = {
+        # Fri 2026-10-02's close, then Mon 2026-10-05's point (00:00 UTC Tuesday)
+        "timestamp": [1790985600, 1791244800],
+        "equity": [100.0, 101.0],
+        "profit_loss": [0, 1],
+        "profit_loss_pct": [0, 0.01],
+    }
+    during = parse_portfolio_history(payload, now=datetime(2026, 10, 5, 15, 0, tzinfo=UTC))
+    assert [p.day for p in during] == [date(2026, 10, 2)]  # Monday 11:00 ET: still open
+    after = parse_portfolio_history(payload, now=datetime(2026, 10, 5, 20, 30, tzinfo=UTC))
+    assert [p.day for p in after] == [date(2026, 10, 2), date(2026, 10, 5)]
+
+
+async def test_equity_history_asks_past_today_so_todays_close_arrives_today(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import httpx
+
+    from halal_trader.execution import alpaca_rest
+    from halal_trader.execution.alpaca_rest import AlpacaRestClient
+
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "timestamp": [1791244800, 1791331200],  # Mon 10-05, Tue 10-06 sessions
+                "equity": [101.0, 102.0],
+                "profit_loss": [0, 0],
+                "profit_loss_pct": [0, 0],
+            },
+        )
+
+    monkeypatch.setattr(alpaca_rest, "today_eastern", lambda: date(2026, 10, 5))
+    client = AlpacaRestClient(
+        "k",
+        "s",
+        client=httpx.AsyncClient(base_url="https://x", transport=httpx.MockTransport(handler)),
+    )
+    points = await client.equity_history(start=date(2026, 10, 1))
+    assert seen[0].url.params["end"] == "2026-10-06"
+    assert [p.day for p in points] == [date(2026, 10, 5)]  # nothing past the day asked for
+
+
 def test_portfolio_history_with_ragged_arrays_raises() -> None:
     with pytest.raises(ValueError):
         parse_portfolio_history(

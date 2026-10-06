@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 
 import click
 
@@ -14,9 +15,12 @@ from halal_trader.logging import console
 @click.option("--reason", required=True, help="Why are you halting? (audit trail)")
 @click.option(
     "--close-all",
-    type=click.Choice(["stocks"]),
+    type=click.Choice(["stocks", "core"]),
     default=None,
-    help="Also liquidate every open stock position before halting.",
+    help=(
+        "Also liquidate, once the halt is set: 'stocks' the day-trader's account, "
+        "'core' the core portfolio's own account."
+    ),
 )
 def halt(reason: str, close_all: str | None) -> None:
     """Engage the operator kill-switch — bots refuse new entries until resumed.
@@ -26,6 +30,11 @@ def halt(reason: str, close_all: str | None) -> None:
     liquidated, best-effort: a broker that cannot be reached is reported,
     but the halt is already in place. (It used to liquidate first, and a
     broker error aborted the command before the halt was ever set.)
+
+    ``--close-all core`` does the same to the core portfolio's account, with
+    its own keys (CORE_ALPACA_*): open orders cancelled, every position
+    closed. Without it the halt leaves the core's holdings in place and lets
+    only its forced (screen) sales through.
     """
 
     async def _halt() -> None:
@@ -57,10 +66,48 @@ def halt(reason: str, close_all: str | None) -> None:
                     raise SystemExit(1) from exc
                 finally:
                     await mcp.disconnect()
+            elif close_all == "core":
+                await _close_core(settings)
         finally:
             await engine.dispose()
 
     asyncio.run(_halt())
+
+
+async def _close_core(settings: Any) -> None:
+    """Liquidate the core's account (the halt is already engaged)."""
+    from halal_trader.core.liquidate import LiquidationResult, liquidate_stocks
+    from halal_trader.execution.alpaca_broker import AlpacaRestBroker
+
+    core = settings.core
+    if not (core.alpaca_api_key and core.alpaca_secret_key):
+        console.print("[red]No core keys (CORE_ALPACA_API_KEY/SECRET): nothing closed.[/red]")
+        raise SystemExit(1)
+    where = "paper" if core.paper else "LIVE"
+    console.print(f"Closing every position of the core's {where} account...")
+    broker = AlpacaRestBroker(core.alpaca_api_key, core.alpaca_secret_key, paper=core.paper)
+    try:
+        held = await broker.get_all_positions()
+        results = await liquidate_stocks(broker)
+    except Exception as exc:  # noqa: BLE001 -- the halt already holds
+        console.print(
+            f"[red]Core liquidation failed ({type(exc).__name__}: {exc}).[/red] "
+            "The kill-switch IS engaged; close the core's positions by hand or retry."
+        )
+        raise SystemExit(1) from exc
+    finally:
+        await broker.disconnect()
+    if any(r.status == "error" for r in results):
+        print_liquidation(results)
+        console.print("[red]The kill-switch IS engaged; the core's positions may be open.[/red]")
+        raise SystemExit(1)
+    # What was held when the close went out; the broker fills the sells.
+    print_liquidation(
+        [
+            LiquidationResult("core", p.symbol, float(p.qty), "closed", "close_all_positions")
+            for p in held
+        ]
+    )
 
 
 @click.command("resume")

@@ -1,9 +1,14 @@
 """GET /api/core — the Core page: the strict-halal core portfolio's own account.
 
-Read-only, from the database the core's jobs fill: holdings (rebuilt from
-the account's fills, valued at the last close) against the forward book's
-targets, the account's equity against the book's NAV, the live-money gate
-and the recent orders and runs.
+Read-only, from the database the core's jobs fill: holdings against the
+forward book's targets, the account's equity against the book's NAV, the
+live-money gate and the recent orders and runs, all for the core's account
+in the configured environment ("core" on paper, "core-live" live).
+
+Current equity and holdings come from the bot's newest account snapshot
+(``account_snapshots``: the broker's own positions and values) when there
+is one, else from the ledger: the last daily equity, and shares rebuilt
+from fills valued at the last close. The daily series is the ledger's.
 """
 
 from __future__ import annotations
@@ -40,19 +45,31 @@ def register(app: FastAPI) -> None:
         from halal_trader.config import get_settings
         from halal_trader.market_hours import today_eastern
         from halal_trader.portfolio import readiness as gate
+        from halal_trader.portfolio.core_account import core_account
 
         settings = get_settings()
+        account = core_account(settings.core.paper)
         today = today_eastern()
         engine = ctx.engine
         async with engine.connect() as conn:
             equity_rows = (
                 await conn.execute(
                     text(
-                        "SELECT day, equity FROM broker_equity WHERE account = 'core' "
+                        "SELECT day, equity FROM broker_equity WHERE account = :a "
                         "AND equity > 0 ORDER BY day"
-                    )
+                    ),
+                    {"a": account},
                 )
             ).all()
+            snap = (
+                await conn.execute(
+                    text(
+                        "SELECT taken_at, equity, positions FROM account_snapshots "
+                        "WHERE account = :a"
+                    ),
+                    {"a": account},
+                )
+            ).first()
             navs = {
                 r.day: float(r.nav)
                 for r in await conn.execute(
@@ -71,20 +88,23 @@ def register(app: FastAPI) -> None:
                 await conn.execute(
                     text(
                         "SELECT submitted_at, symbol, side, qty, est_price, notional, reason, "
-                        "screen_as_of, status FROM core_orders ORDER BY submitted_at DESC "
-                        "LIMIT 60"
-                    )
+                        "screen_as_of, status FROM core_orders WHERE account = :a "
+                        "ORDER BY submitted_at DESC LIMIT 60"
+                    ),
+                    {"a": account},
                 )
             ).all()
             runs = (
                 await conn.execute(
                     text(
                         "SELECT run_on, monthly, executed, equity, cash, orders, halted, "
-                        "screen_as_of FROM core_runs ORDER BY recorded_at DESC LIMIT 12"
-                    )
+                        "screen_as_of, notes FROM core_runs WHERE account = :a "
+                        "ORDER BY recorded_at DESC LIMIT 12"
+                    ),
+                    {"a": account},
                 )
             ).all()
-            shares = await paper_positions(engine, today + timedelta(days=1), "core")
+            shares = await paper_positions(engine, today + timedelta(days=1), account)
             closes = {
                 r.symbol: float(r.close)
                 for r in await conn.execute(
@@ -98,10 +118,22 @@ def register(app: FastAPI) -> None:
             }
 
         equity = float(equity_rows[-1].equity) if equity_rows else None
+        equity_day = equity_rows[-1].day.isoformat() if equity_rows else None
+        values = {s: q * closes.get(s, 0.0) for s, q in shares.items()}
+        source = "ledger"
+        if snap is not None and snap.equity > 0:
+            # The broker's own figures, minutes old in the session: newer than
+            # the ledger's last close, and they count what fills cannot (splits).
+            equity, equity_day, source = float(snap.equity), snap.taken_at.isoformat(), "live"
+            shares, values = {}, {}
+            for p in snap.positions or []:
+                if p.get("qty"):
+                    shares[p["symbol"]] = float(p["qty"])
+                    values[p["symbol"]] = float(p.get("market_value") or 0.0)
         targets = dict(book_weights or {})
         holdings: list[dict[str, Any]] = []
         for symbol in sorted(set(shares) | set(targets)):
-            value = shares.get(symbol, 0.0) * closes.get(symbol, 0.0)
+            value = values.get(symbol, 0.0)
             weight = value / equity if equity else None
             target = float(targets.get(symbol, 0.0))
             holdings.append(
@@ -133,15 +165,17 @@ def register(app: FastAPI) -> None:
 
         from halal_trader.portfolio.execution_quality import report as fills
 
-        executed = await fills(engine, today - timedelta(days=30), today)
+        executed = await fills(engine, today - timedelta(days=30), today, account=account)
         fill_of = {(o.submitted_at, o.symbol): o for o in executed.orders}
-        ready = await gate.check(engine, today=today)
+        ready = await gate.check(engine, today=today)  # the paper rehearsal's gate
         return JSONResponse(
             {
                 "enabled": settings.core.enabled,
                 "paper": settings.core.paper,
+                "account": account,
                 "equity": _f(equity),
-                "equity_day": equity_rows[-1].day.isoformat() if equity_rows else None,
+                "equity_day": equity_day,
+                "equity_source": source,
                 "holdings": holdings,
                 "series": series,
                 "readiness": {
@@ -155,6 +189,8 @@ def register(app: FastAPI) -> None:
                     "max_gap": gate.MAX_GAP,
                     "refused": ready.refused,
                     "unfilled": ready.unfilled,
+                    "partial": ready.partial,
+                    "missing_runs": [d.isoformat() for d in ready.missing_runs],
                     "halted": ready.halted,
                     "failures": ready.failures,
                 },
@@ -184,6 +220,7 @@ def register(app: FastAPI) -> None:
                         "orders": r.orders,
                         "halted": r.halted,
                         "screen_as_of": r.screen_as_of.isoformat() if r.screen_as_of else None,
+                        "notes": list(r.notes or []),
                     }
                     for r in runs
                 ],

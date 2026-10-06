@@ -930,6 +930,7 @@ class TradingBot:
         """
         from halal_trader.execution.alpaca_rest import AlpacaRestClient
         from halal_trader.execution.ledger import reconcile_fills, sync_broker_ledger
+        from halal_trader.portfolio.core_account import core_account
 
         if self._engine is None:
             return
@@ -947,7 +948,9 @@ class TradingBot:
                     core.alpaca_api_key, core.alpaca_secret_key, paper=core.paper
                 )
                 try:
-                    await sync_broker_ledger(self._engine, core_client, account="core")
+                    await sync_broker_ledger(
+                        self._engine, core_client, account=core_account(core.paper)
+                    )
                 finally:
                     await core_client.aclose()
             rec = await reconcile_fills(self._engine, today_eastern())
@@ -1082,13 +1085,15 @@ class TradingBot:
         """
         from halal_trader.execution.alpaca_broker import AlpacaRestBroker
         from halal_trader.portfolio import snapshots
+        from halal_trader.portfolio.core_account import core_account
 
         if self._engine is None:
             return
         alpaca, core = self.settings.alpaca, self.settings.core
         accounts = [("paper", alpaca.api_key, alpaca.secret_key, alpaca.paper_trade)]
         if core.alpaca_api_key and core.alpaca_secret_key:
-            accounts.append(("core", core.alpaca_api_key, core.alpaca_secret_key, core.paper))
+            label = core_account(core.paper)
+            accounts.append((label, core.alpaca_api_key, core.alpaca_secret_key, core.paper))
         taken = []
         for i, (name, key, secret, paper) in enumerate(accounts):
             if not (key and secret):
@@ -1145,8 +1150,19 @@ class TradingBot:
     async def core_trade(self) -> None:
         """Trade the strict-halal core portfolio on its own account (portfolio/core_executor.py).
 
-        Monthly rebalance on the first run of a month, forced sales otherwise;
-        skipped on a closed market and when the core's keys are missing.
+        Monthly rebalance on the first run of a month that trades, sells of
+        screen failures otherwise; skipped on a closed market and when the
+        core's keys are missing. The run itself (preflight, plan, orders,
+        record) is core_executor.run, shared with `halal-trader core run`.
+
+        With the kill-switch engaged it still runs, restricted to forced sales:
+        a holding the screen no longer passes is sold even in an emergency
+        stop (holding it is the thing the stop must not prolong), nothing is
+        bought, the run is recorded, and the operator is told.
+
+        Live money (CORE_PAPER=false) also needs the dated token, checked once
+        when the bot starts (core_start_check); every other gate is checked on
+        every run.
         """
         from halal_trader.execution.alpaca_broker import AlpacaRestBroker
         from halal_trader.portfolio import core_executor as ce
@@ -1156,30 +1172,45 @@ class TradingBot:
             core.enabled and core.alpaca_api_key and core.alpaca_secret_key
         ):
             return
-        from halal_trader.core.halt import is_halted
-
-        # Kill-switch first, as for every strategy: an emergency stop stops the core too.
-        if await is_halted(self._engine):
-            logger.info("core trade skipped: kill-switch engaged")
+        token = getattr(self, "_core_token_problem", "the live token was not checked at start")
+        if not core.paper and token:
+            logger.error("core trade refused: live money without its token (%s)", token)
+            await self._alerts.notify("core.refused", f"live core not armed: {token}"[:500])
             return
         broker = AlpacaRestBroker(core.alpaca_api_key, core.alpaca_secret_key, paper=core.paper)
         try:
-            if not (await broker.get_clock()).is_open:
-                return
-            today = today_eastern()
-            monthly = await ce.monthly_due(self._engine, today)
-            plan = await ce.plan(
-                self._engine, broker, today=today, monthly=monthly, top_n=core.top_n
+            outcome = await ce.run(
+                self._engine,
+                broker,
+                self.settings,
+                today=today_eastern(),
+                execute_orders=True,
+                check_token=False,  # checked at start: a dated token matches one day only
             )
-            results = await ce.execute(self._engine, broker, plan, today=today)
-            await ce.record_run(self._engine, plan, today=today, executed=True)
         except Exception as exc:  # noqa: BLE001 -- the job must not take the bot down
             logger.error("core trade failed: %r", exc)
             await self._alerts.notify("core.failed", repr(exc)[:500])
             return
         finally:
             await broker.disconnect()
-        refused = [r for r in results if r["st"] != "submitted"]
+        if outcome.market_closed:
+            return
+        if outcome.refused:
+            logger.error("core trade refused: %s", "; ".join(outcome.refused))
+            await self._alerts.notify(
+                "core.refused", ("core not run: " + "; ".join(outcome.refused))[:500]
+            )
+            return
+        plan = outcome.plan
+        assert plan is not None
+        refused = outcome.rejected
+        if outcome.kill_switch:
+            sold = [f"{r['s']} ${r['n']:,.2f}" for r in outcome.submitted]
+            await self._alerts.notify(
+                "core.halted_sells",
+                "Kill-switch engaged: the core bought nothing and sold only what the screen "
+                "no longer holds halal: " + (", ".join(sold) if sold else "nothing to sell") + ".",
+            )
         if plan.halted or refused:
             await self._alerts.notify(
                 "core.attention",
@@ -1187,11 +1218,63 @@ class TradingBot:
                 + (f"{len(refused)} order(s) refused." if refused else ""),
             )
         logger.info(
-            "core trade: %s, %d order(s), %d refused",
-            "monthly" if monthly else "forced-only",
-            len(results),
+            "core trade (%s): %s, %d order(s), %d refused%s",
+            outcome.account,
+            "monthly" if plan.monthly else "sells only",
+            len(outcome.results),
             len(refused),
+            "; " + "; ".join(plan.notes) if plan.notes else "",
         )
+
+    async def core_trade_early_close(self) -> None:
+        """The core's run on a 13:00 early close, when 15:40 finds the market shut."""
+        from halal_trader.market_hours import EARLY_CLOSE_DATES
+
+        if today_eastern() in EARLY_CLOSE_DATES:
+            await self.core_trade()
+
+    async def core_start_check(self) -> list[str]:
+        """At bot start: the core's dated live token, then every other preflight gate.
+
+        The token is remembered for the process (core_trade refuses live money
+        without it); the other gates are only reported here, and enforced on
+        every run, so a broker blip at start cannot disarm the core for good.
+        Returns the problems found (for tests and the log).
+        """
+        from halal_trader.core.safeguards import (
+            core_preflight,
+            core_token_problem,
+            day_trader_account,
+        )
+        from halal_trader.execution.alpaca_broker import AlpacaRestBroker
+
+        core = self.settings.core
+        self._core_token_problem = core_token_problem(self.settings)
+        problems = [self._core_token_problem] if self._core_token_problem else []
+        if self._engine is None or not (
+            core.enabled and core.alpaca_api_key and core.alpaca_secret_key
+        ):
+            return problems
+        broker = AlpacaRestBroker(core.alpaca_api_key, core.alpaca_secret_key, paper=core.paper)
+        try:
+            problems += await core_preflight(
+                self.settings,
+                engine=self._engine,
+                core=await broker.get_account_info(),
+                day_trader=day_trader_account,
+                today=today_eastern(),
+                check_token=False,
+            )
+        except Exception as exc:  # noqa: BLE001 -- reported; every run re-checks
+            problems.append(f"core preflight could not run: {exc!r}"[:300])
+        finally:
+            await broker.disconnect()
+        if problems:
+            logger.error("core start check: %s", "; ".join(problems))
+            await self._alerts.notify(
+                "core.refused", ("core at start: " + "; ".join(problems))[:500]
+            )
+        return problems
 
     async def end_of_day(self) -> None:
         """End-of-day job: close all positions, record P&L."""
@@ -1535,11 +1618,23 @@ class TradingBot:
                 coalesce=True,
             )
             if self.settings.core.enabled:
-                # The strict-halal core, on its own account, late in the session.
+                # The core's gates, once at start: the live token is held for
+                # the process, the rest are alerted now and re-checked per run.
+                await self.core_start_check()
+                # The strict-halal core, on its own account, late in the session
+                # (20 minutes before the close, on early-close days too).
                 self.scheduler.add_job(
                     self.core_trade,
                     CronTrigger(day_of_week="mon-fri", hour=15, minute=40, timezone=MARKET_TZ),
                     id="core_trade",
+                    replace_existing=True,
+                    misfire_grace_time=600,
+                    coalesce=True,
+                )
+                self.scheduler.add_job(
+                    self.core_trade_early_close,
+                    CronTrigger(day_of_week="mon-fri", hour=12, minute=40, timezone=MARKET_TZ),
+                    id="core_trade_early_close",
                     replace_existing=True,
                     misfire_grace_time=600,
                     coalesce=True,
