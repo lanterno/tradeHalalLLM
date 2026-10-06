@@ -380,9 +380,12 @@ class WebSettings(BaseSettings):
     # Forced confirmation for destructive ops can be turned off in tests
     # so the runner doesn't have to forge headers — never disable in prod.
     require_confirmation: bool = Field(default=True)
-    # Days to keep mutation-audit rows in ``web_actions``. The daily
-    # bot-end hook prunes anything older. 0 disables the prune.
+    # Days to keep mutation-audit rows in ``web_actions``. The bot's
+    # end-of-day job prunes anything older. 0 disables the prune.
     audit_retention_days: int = Field(default=90)
+    # How often the web's watchdog (web/watchdog.py) checks every process's
+    # and daily job's heartbeat and alerts on Telegram. 0 disables it.
+    watchdog_interval_seconds: int = Field(default=300, ge=0)
 
 
 # ── Top-level Settings ─────────────────────────────────────────

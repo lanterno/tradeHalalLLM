@@ -76,6 +76,15 @@ services:
     # monitor/reactor and close the broker before docker sends SIGKILL.
     init: true
     stop_grace_period: 30s
+    # "unhealthy" in `docker ps` when the run loop stops beating (it beats
+    # every 60 s), not only when the process exits. Docker does not restart
+    # on it; the web's watchdog is what alerts.
+    healthcheck:
+      test: ["CMD", "python", "-m", "halal_trader.core.healthcheck", "stock.process", "180"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 180s
     depends_on:
       trader-migrate:
         condition: service_completed_successfully
@@ -103,6 +112,13 @@ services:
     # monitor/reactor and close the broker before docker sends SIGKILL.
     init: true
     stop_grace_period: 30s
+    # The shadow beats shadow.process every 60 s from its event loop.
+    healthcheck:
+      test: ["CMD", "python", "-m", "halal_trader.core.healthcheck", "shadow.process", "180"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 300s
     depends_on:
       trader-migrate:
         condition: service_completed_successfully
