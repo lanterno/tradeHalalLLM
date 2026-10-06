@@ -119,3 +119,12 @@ async def test_pg_store_upsert_is_idempotent(halabot_engine):
     await store.add(ns, ["k1"])
     await store.add(ns, ["k1"])  # ON CONFLICT → no error, refreshes seen_at
     assert "k1" in await store.load(ns)
+
+
+@pytest.mark.asyncio
+async def test_pg_store_contains_answers_for_a_batch(halabot_engine):
+    store = PgDedupStore(halabot_engine)
+    await store.add("ns-a", ["k1", "k2"])
+    await store.add("ns-b", ["k3"])
+    assert await store.contains("ns-a", ["k1", "k3", "k9"]) == {"k1"}  # namespaced
+    assert await store.contains("ns-a", []) == set()

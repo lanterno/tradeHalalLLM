@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 
+from halabot.perception.dedup import InMemoryDedupStore
 from halabot.perception.poll import PollingSource
 from halabot.platform.clock import FakeClock
 from halabot.platform.events import Event, EventType, new_event
@@ -83,6 +84,53 @@ async def test_poll_once_swallows_fetch_error():
     sink: list[Event] = []
     n = await src.poll_once(await _emit_to(sink))
     assert n == 0 and sink == []  # transient feed failure → tick skipped, no crash
+
+
+@pytest.mark.asyncio
+async def test_a_large_feed_window_is_not_re_emitted():
+    # The seen set used to drop an arbitrary half of itself at 2,000 keys while
+    # the feed still returned those items, re-publishing ~1,000 every poll.
+    window = [{"url": f"u{i}", "asset": "NVDA"} for i in range(3000)]
+    src = _FakeNews([window, window, window])
+    sink: list[Event] = []
+    emit = await _emit_to(sink)
+    assert await src.poll_once(emit) == 3000
+    assert await src.poll_once(emit) == 0
+    assert await src.poll_once(emit) == 0
+
+
+@pytest.mark.asyncio
+async def test_a_key_is_forgotten_only_after_the_feed_drops_it_for_the_ttl():
+    now = [0.0]
+    src = _FakeNews(
+        [[{"url": "a", "asset": "NVDA"}]] * 3 + [[], [{"url": "a", "asset": "NVDA"}]],
+        seen_ttl_s=100.0,
+        monotonic=lambda: now[0],
+    )
+    sink: list[Event] = []
+    emit = await _emit_to(sink)
+    for _ in range(3):  # still in the feed well past one TTL: remembered throughout
+        await src.poll_once(emit)
+        now[0] += 80.0
+    assert len(sink) == 1
+    now[0] += 200.0
+    await src.poll_once(emit)  # gone from the feed for longer than the TTL
+    assert "a" not in src._seen
+    await src.poll_once(emit)  # (with no persisted store, it would be new again)
+    assert len(sink) == 2
+
+
+@pytest.mark.asyncio
+async def test_a_memory_miss_asks_the_persisted_store_first():
+    store = InMemoryDedupStore()
+    src = _FakeNews([[{"url": "b", "asset": "NVDA"}], [{"url": "a", "asset": "NVDA"}]])
+    src._dedup = store
+    sink: list[Event] = []
+    emit = await _emit_to(sink)
+    await src.poll_once(emit)  # primes from the (empty) store
+    await store.add("fake-news", ["a"])  # seen since, e.g. before memory was pruned
+    await src.poll_once(emit)
+    assert [e.payload["url"] for e in sink] == ["b"]
 
 
 @pytest.mark.asyncio

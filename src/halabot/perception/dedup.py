@@ -25,6 +25,10 @@ from halabot.platform.db import perception_seen
 
 class DedupStore(Protocol):
     async def load(self, namespace: str) -> set[str]: ...
+    async def contains(self, namespace: str, keys: Iterable[str]) -> set[str]:
+        """The subset of ``keys`` already seen (within retention)."""
+        ...
+
     async def add(self, namespace: str, keys: Iterable[str]) -> None: ...
 
 
@@ -36,6 +40,9 @@ class InMemoryDedupStore:
 
     async def load(self, namespace: str) -> set[str]:
         return set(self._seen.get(namespace, set()))
+
+    async def contains(self, namespace: str, keys: Iterable[str]) -> set[str]:
+        return set(keys) & self._seen.get(namespace, set())
 
     async def add(self, namespace: str, keys: Iterable[str]) -> None:
         self._seen.setdefault(namespace, set()).update(keys)
@@ -60,6 +67,21 @@ class PgDedupStore:
             rows = await conn.execute(
                 select(perception_seen.c.key).where(
                     perception_seen.c.namespace == namespace,
+                    perception_seen.c.seen_at >= self._cutoff(),
+                )
+            )
+            return {r[0] for r in rows}
+
+    async def contains(self, namespace: str, keys: Iterable[str]) -> set[str]:
+        """Keys among ``keys`` seen within the retention window (one query)."""
+        wanted = list(set(keys))
+        if not wanted:
+            return set()
+        async with self._engine.connect() as conn:
+            rows = await conn.execute(
+                select(perception_seen.c.key).where(
+                    perception_seen.c.namespace == namespace,
+                    perception_seen.c.key.in_(wanted),
                     perception_seen.c.seen_at >= self._cutoff(),
                 )
             )
