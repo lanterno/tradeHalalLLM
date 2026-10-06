@@ -54,7 +54,7 @@ Authoritative diagrams: `docs/ARCHITECTURE.md` (partly pre-dates the crypto remo
 
 - **Halal at the order boundary.** Every BUY passes `TradeExecutor._execute_buy`, which refuses any symbol the screener does not hold halal and **fails closed** if the screen can't be read. The prompt's symbol list is advisory; this gate is the rule. Every new order path must go through it.
 - **Long-only.** No short action exists; sells are clamped to the broker-held quantity (`core/long_only.py`).
-- **Kill-switch first.** `BaseCycleService.run_cycle` checks `core/halt.is_halted` before anything else; the reactor checks it too.
+- **Kill-switch first.** `BaseCycleService.run_cycle` checks `core/halt.is_halted` before anything else; the reactor checks it too. The core (`core_executor.run`, shared by the 15:40 job and `core run`) buys nothing while halted but still sells holdings that fail the halal screen, and alerts.
 - **Reactor entries obey the cycle's gates**: daily loss limit, the risk engine's last halt, max simultaneous positions. All fail closed.
 - **Daily loss limit is anchored to the day's first equity** (`daily_pnl`), not to whatever equity a restarted process sees.
 - **halabot execution stays dormant** (`tests/halabot/execution/test_dormant.py`; keep `ENGINE_LIVE` unset).
