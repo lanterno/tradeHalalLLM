@@ -47,8 +47,30 @@ def _strongest(evidence: Sequence[Any], sign: int) -> str | None:
     return plain.evidence_sentence(e.source, e.direction, e.detail)
 
 
+def _top_evidence(evidence: Sequence[Any], n: int = 5) -> list[Any]:
+    """The ``n`` strongest items, one per indicator.
+
+    A belief can hold an older, decayed reading of an indicator beside the
+    fresh one (relative strength +4.3% and +3.1%); shown together they read
+    as two facts. Indicators keep their strongest reading; news items stay
+    apart, each being a different headline.
+    """
+    ranked = sorted(evidence, key=lambda e: -abs(e.direction * e.weight))
+    seen: set[str] = set()
+    out: list[Any] = []
+    for e in ranked:
+        if e.source != "news":
+            if e.source in seen:
+                continue
+            seen.add(e.source)
+        out.append(e)
+        if len(out) == n:
+            break
+    return out
+
+
 def _belief_dict(b: Any) -> dict[str, Any]:
-    top = sorted(b.evidence, key=lambda e: -abs(e.direction * e.weight))[:5]
+    top = _top_evidence(b.evidence)
     top_dicts = [_evidence_dict(e) for e in top]
     return {
         "asset": b.asset,

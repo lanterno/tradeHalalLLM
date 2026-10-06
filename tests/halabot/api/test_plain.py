@@ -171,3 +171,19 @@ def test_random_entry_win_rate_skips_entries_outside_the_session_and_empty_input
     assert random_entry_win_rate({}, hold=timedelta(hours=1), threshold=0.0) == (None, 0)
     # A hold longer than the history leaves nothing to measure.
     assert random_entry_win_rate(series, hold=timedelta(days=1), threshold=0.0) == (None, 0)
+
+
+def test_top_evidence_keeps_one_reading_per_indicator() -> None:
+    from types import SimpleNamespace as E
+
+    from halabot.api.queries import _top_evidence
+
+    ev = [
+        E(source="indicator.relstrength", direction=1.0, weight=0.5, detail="rel +4.30% vs SPY"),
+        E(source="indicator.relstrength", direction=1.0, weight=0.3, detail="rel +3.10% vs SPY"),
+        E(source="news", direction=0.5, weight=0.6, detail="a"),
+        E(source="news", direction=0.5, weight=0.55, detail="b"),
+        E(source="indicator.rsi", direction=1.0, weight=0.2, detail="RSI 70"),
+    ]
+    top = _top_evidence(ev)
+    assert [e.detail for e in top] == ["rel +4.30% vs SPY", "a", "b", "RSI 70"]
