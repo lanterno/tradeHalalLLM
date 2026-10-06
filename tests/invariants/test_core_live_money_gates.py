@@ -187,7 +187,30 @@ async def test_the_core_refuses_the_day_traders_account(engine, halal_screen) ->
     assert broker.orders == []
 
 
-async def test_an_unreadable_day_trader_account_is_a_refusal(engine, halal_screen) -> None:
+async def test_an_unreadable_day_trader_account_refuses_a_live_core(engine, halal_screen) -> None:
+    async def down(_settings):
+        raise RuntimeError("401")
+
+    broker = FakeCoreBroker(cash=500, prices={"AAA": 10})
+    out = await ce.run(
+        engine,
+        broker,
+        core_settings(paper=False),
+        today=TODAY,
+        execute_orders=True,
+        day_trader=down,
+        sleep=no_sleep,
+    )
+    assert any("cannot read the day-trader" in r for r in out.refused)
+    assert broker.orders == []
+
+
+async def test_an_unreadable_day_trader_account_does_not_stop_the_paper_core(
+    engine, halal_screen
+) -> None:
+    """The retired day-trader's keys going stale must not stop the paper core's
+    daily run (identical keys are still refused, above)."""
+
     async def down(_settings):
         raise RuntimeError("401")
 
@@ -201,8 +224,7 @@ async def test_an_unreadable_day_trader_account_is_a_refusal(engine, halal_scree
         day_trader=down,
         sleep=no_sleep,
     )
-    assert any("cannot read the day-trader" in r for r in out.refused)
-    assert broker.orders == []
+    assert not any("cannot read the day-trader" in r for r in out.refused)
 
 
 async def test_the_bot_checks_the_token_at_start_and_refuses_a_live_core_without_it(

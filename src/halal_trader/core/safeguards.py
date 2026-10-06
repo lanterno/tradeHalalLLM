@@ -278,10 +278,16 @@ async def core_preflight(
     else:
         try:
             other = await day_trader(settings)
-        except Exception as exc:  # noqa: BLE001 -- unverifiable is a refusal, not a crash
-            problems.append(
-                f"cannot read the day-trader's account to tell it from the core's ({exc!r})"[:300]
-            )
+        except Exception as exc:  # noqa: BLE001 -- unverifiable must not crash the run
+            # Live money: unverifiable is a refusal. Paper: the retired
+            # day-trader's keys going stale (or one transient error) must not
+            # stop the core's daily run, which the readiness gate counts; the
+            # identical-keys check above still holds.
+            msg = f"cannot read the day-trader's account to tell it from the core's ({exc!r})"
+            if is_live_mode(settings, market="core"):
+                problems.append(msg[:300])
+            else:
+                logger.warning("%s; paper core continues", msg)
         else:
             if (problem := same_account_problem(core, other)) is not None:
                 problems.append(problem)
