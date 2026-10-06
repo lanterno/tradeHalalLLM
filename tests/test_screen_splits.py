@@ -15,11 +15,14 @@ AS_OF = date(2026, 10, 5)
 
 
 def test_split_ratios_are_recognised_and_anything_else_is_not() -> None:
-    assert split_ratio(2.0031) == 2.0  # APH: the jump carries a sliver of dividend
-    assert split_ratio(10.02) == 10.0  # KLAC
-    assert split_ratio(0.1001) == pytest.approx(0.1)  # a 1:10 reverse split
-    assert split_ratio(1.5) == 1.5
-    assert split_ratio(1.3) is None  # a spin-off, not a split
+    # The one-session jumps the stored bars show for 2025-26 splits.
+    assert split_ratio(1.9998) == 2.0  # APH, MNST
+    assert split_ratio(10.0000) == 10.0  # KLAC
+    assert split_ratio(15.0006) == 15.0  # ORLY
+    assert split_ratio(0.1000) == pytest.approx(0.1)  # LCID's 1:10
+    assert split_ratio(1.5001) == 1.5
+    assert split_ratio(1.4933) is None  # Fortive's spin-off of Ralliant, 0.45% off 3:2
+    assert split_ratio(2.3909) is None  # DuPont's spin-off of Qnity
     assert split_ratio(1.25) is None  # 5:4 is left out on purpose
 
 

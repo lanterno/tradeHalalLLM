@@ -362,7 +362,12 @@ async def _mapped_by_name(engine: AsyncEngine) -> dict[str, tuple[int, str]]:
 _FORWARD = (1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 10.0, 15.0, 20.0, 25.0, 30.0, 40.0, 50.0)
 _REVERSE = (2, 3, 4, 5, 6, 8, 10, 12, 15, 20, 25, 30, 40, 50, 100)
 SPLIT_RATIOS = (*_FORWARD, *(1.0 / x for x in _REVERSE))
-SPLIT_TOLERANCE = 0.02
+# Every split in the stored bars of 2025-26 jumps within 0.03% of its ratio
+# (APH 1.9998, KLAC 10.0000, ORLY 15.0006); Fortive's spin-off of Ralliant
+# jumped 1.4933, 0.45% off 3:2, and must not read as a split (it would add
+# half again to the share count). A split on an ex-dividend day misses too,
+# and is left unknown (doubtful) until the next filing.
+SPLIT_TOLERANCE = 0.003
 ADJUSTMENT_JUMP = 1.2  # raw / adjusted moving more than this in a session is not a dividend
 _STALE_JUMP = 1.4  # an adjusted close moving this much in a session, raw / adjusted not at all
 
