@@ -1,5 +1,5 @@
 import type { CandidateQuant, StockOfTheDay } from "../api/types";
-import { formatUsd, formatPct } from "../lib/utils";
+import { formatDate, formatUsd, formatPct, todayET } from "../lib/utils";
 
 interface Props {
   pick?: StockOfTheDay;
@@ -95,8 +95,13 @@ export function RecommendationCard({ pick, isLoading }: Props) {
     <div className="rounded-xl border border-border bg-surface p-5">
       <div className="flex items-center justify-between">
         {header}
-        <span className="text-xs text-muted">
-          {pick.date} · {pick.universe_size ?? 0} candidates
+        <span className="flex items-center gap-2 text-xs text-muted">
+          {pick.date && pick.date !== todayET() && (
+            <span className="rounded border border-warning/35 px-1.5 text-[10px] font-semibold uppercase tracking-wide text-warning">
+              stale
+            </span>
+          )}
+          {pick.date ? `Picked ${formatDate(pick.date)}` : "Undated"} · {pick.universe_size ?? 0} candidates
         </span>
       </div>
 

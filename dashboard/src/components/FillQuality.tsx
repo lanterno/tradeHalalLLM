@@ -7,6 +7,17 @@ import { cn, formatTime } from "../lib/utils";
 
 const FILLED = new Set(["filled", "closed"]);
 
+/**
+ * The EOD close-all's sell rows are bookkeeping, not orders: the executor
+ * writes one per flattened position with submitted_at == filled_at (a zero
+ * latency) and the close price as the fill. Counted, they drag the latency
+ * and slippage figures toward zero.
+ */
+function isSyntheticExit(t: Trade): boolean {
+  if (t.llm_reasoning?.startsWith("EOD close-all")) return true;
+  return t.side === "sell" && !!t.submitted_at && t.submitted_at === t.filled_at;
+}
+
 function latencyMs(t: Trade): number | null {
   if (!t.submitted_at || !t.filled_at) return null;
   const ms = new Date(t.filled_at).getTime() - new Date(t.submitted_at).getTime();
@@ -43,7 +54,8 @@ export function FillQuality() {
   const { data, isLoading, isError, error, refetch } = useTrades({ limit: 100 });
 
   const stats = useMemo(() => {
-    const rows = data ?? [];
+    const all = data ?? [];
+    const rows = all.filter((t) => !isSyntheticExit(t));
     const filled = rows.filter(
       (t) => FILLED.has(t.status) && (t.filled_quantity ?? t.quantity) > 0,
     );
@@ -59,6 +71,7 @@ export function FillQuality() {
       : null;
     return {
       total: rows.length,
+      synthetic: all.length - rows.length,
       filledCount: filled.length,
       unfilledCount: unfilled.length,
       medLatency: median(latencies),
@@ -74,7 +87,11 @@ export function FillQuality() {
         Fill Quality
       </h3>
       <p className="mb-4 text-xs text-muted">
-        Execution latency + slippage over the last {stats.total} orders.
+        The day-trader's execution latency + slippage over its last {stats.total} orders
+        {stats.synthetic
+          ? ` (${stats.synthetic} synthetic end-of-day close-all row${stats.synthetic === 1 ? "" : "s"} left out: bookkeeping, not orders)`
+          : ""}
+        .
       </p>
       {isError ? (
         <ErrorState compact error={error} onRetry={refetch} />

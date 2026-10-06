@@ -1,8 +1,12 @@
 import { apiFetch } from "./client";
-import type { BackupRow, HaltStatus, ReconcileLogRow, RiskState } from "./types";
+import type { BackupRow, CoreRisk, HaltStatus, ReconcileLogRow, RiskState } from "./types";
 
 export async function fetchRiskState(): Promise<RiskState> {
   return apiFetch<RiskState>("/api/risk/state");
+}
+
+export async function fetchCoreRisk(): Promise<CoreRisk> {
+  return apiFetch<CoreRisk>("/api/risk/core");
 }
 
 export async function fetchHaltStatus(): Promise<HaltStatus> {

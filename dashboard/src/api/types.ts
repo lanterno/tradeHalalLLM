@@ -46,9 +46,13 @@ export interface DailyPnl {
   id: number;
   date: string;
   starting_equity: number;
-  ending_equity: number;
+  ending_equity: number | null;
+  /** Misnamed in the ledger: the writer stores the equity change, and some old
+   *  rows something else. Plot equity_change instead. */
   realized_pnl: number;
-  return_pct: number;
+  /** Ending minus starting equity; null while the day is open. */
+  equity_change: number | null;
+  return_pct: number | null;
   trades_count: number;
 }
 
@@ -73,17 +77,41 @@ export interface StrategyAdjustment {
   reasoning: string;
 }
 
-export interface OpenPosition {
-  id: number;
+/** One holding, marked by the broker (GET /api/positions). */
+export interface Holding {
   symbol: string;
-  quantity: number;
-  entry_price: number;
-  stop_loss: number | null;
-  target_price: number | null;
-  timestamp: string;
-  current_price?: number;
-  unrealized_pnl?: number;
-  unrealized_pnl_pct?: number;
+  qty: number | null;
+  avg_entry: number | null;
+  price: number | null;
+  market_value: number | null;
+  cost_basis: number | null;
+  unrealized_pl: number | null;
+  unrealized_pl_pct: number | null;
+  change_today: number | null; // a fraction: 0.012 is +1.2%
+  weight: number | null; // of the account's equity
+  // The day-trader's own exit levels (its ledger); absent on the core.
+  stop_loss?: number | null;
+  target_price?: number | null;
+  opened_at?: string;
+}
+
+export interface AccountPositions {
+  account: "core" | "paper" | string;
+  label: string;
+  status: "active" | "disabled" | "retired" | string;
+  /** "snapshot": the broker's marks, as of `as_of`; "ledger": fills at the last close. */
+  source: "snapshot" | "ledger";
+  as_of: string | null;
+  age_seconds: number | null;
+  equity: number | null;
+  cash: number | null;
+  invested: number;
+  unrealized_pl: number | null;
+  positions: Holding[];
+}
+
+export interface PositionsResponse {
+  accounts: AccountPositions[];
 }
 
 export interface HealthStatus {
@@ -92,13 +120,39 @@ export interface HealthStatus {
   version: string;
   /** The bot's own heartbeat verdict: the real "is it running?". */
   bot_alive?: boolean;
-  bot?: Record<string, { stale?: boolean; age_seconds?: number; reason?: string | null }>;
+  bot?: Record<
+    string,
+    {
+      stale?: boolean;
+      age_seconds?: number;
+      reason?: string | null;
+      // "disabled": the component is switched off on purpose (e.g. the retired
+      // day-trader's cycle), so its old beat is not a fault.
+      status?: string;
+    }
+  >;
 }
 
-/** Bot alive and no component's heartbeat stale: what "healthy" means. */
-export function staleComponents(h: HealthStatus): string[] {
+/** The day-trader's cycle beat; it stops for good when the day-trader is retired. */
+export const DAY_TRADER_CYCLE = "stock.cycle";
+
+/**
+ * Components whose heartbeat is stale for real: bot alive and none of these is
+ * what "healthy" means. A component the backend reports as disabled is skipped,
+ * and so is the day-trader's cycle while the day-trader is switched off (an
+ * older backend reports that beat as plainly stale).
+ */
+export function staleComponents(
+  h: HealthStatus,
+  opts: { dayTraderEnabled?: boolean } = {},
+): string[] {
   return Object.entries(h.bot ?? {})
-    .filter(([name, b]) => !name.startsWith("_") && b.stale)
+    .filter(([name, b]) => {
+      if (name.startsWith("_") || !b.stale) return false;
+      if (b.status === "disabled") return false;
+      if (name === DAY_TRADER_CYCLE && opts.dayTraderEnabled === false) return false;
+      return true;
+    })
     .map(([name]) => name);
 }
 
@@ -107,6 +161,8 @@ export interface SystemStatus {
   last_cycle: string | null;
   stocks_cycle_interval_seconds: number;
   uptime_seconds: number | null;
+  day_trader_enabled?: boolean;
+  core_enabled?: boolean;
 }
 
 export interface AppConfig {
@@ -138,23 +194,46 @@ export interface LlmMetrics {
   p95_ms: number | null;
 }
 
-// AAOIFI halal-compliance summary (GET /api/halal/compliance). DB-backed.
+export interface NonHalalBuy {
+  symbol: string;
+  day: string;
+  verdict: "doubtful" | "not_halal" | "unscreened" | string;
+  screen_as_of: string | null;
+}
+
+/** One account's quarter, its buys judged by the in-house screen on the trade's day. */
+export interface AccountCompliance {
+  account: string;
+  label: string;
+  status: "compliant" | "violation";
+  trades_today: number;
+  trades_this_month: number;
+  trades_this_quarter: number;
+  buys_this_quarter: number;
+  buy_verdicts: { halal: number; doubtful: number; not_halal: number; unscreened: number };
+  non_halal_buys_quarter: number;
+  non_halal_buys: NonHalalBuy[];
+}
+
+// Halal-compliance summary (GET /api/halal/compliance). DB-backed.
 export interface HalalCompliance {
   status: "compliant" | "attention" | "violation" | string;
   is_compliant: boolean;
+  // New York calendar days, "YYYY-MM-DD".
   quarter_start: string;
   month_start: string;
   today_start: string;
   trades_today: number;
   trades_this_month: number;
   trades_this_quarter: number;
-  halal_screenings_quarter: number;
-  doubtful_screenings_quarter: number;
-  not_halal_screenings_quarter: number;
   non_halal_fills_quarter: number;
+  accounts: AccountCompliance[];
+  // This quarter's.
   purification_accrued_usd: number;
   purification_disbursed_usd: number;
+  // Everything still owed, whenever it accrued.
   purification_outstanding_usd: number;
+  purification_unpaid_by_account: Record<string, number>;
 }
 
 // A guard/rejection: the cycle proposed a trade but a guard blocked it.
@@ -179,6 +258,29 @@ export interface RiskState {
   // ISO timestamp of when the cycle wrote this snapshot — useful
   // for surfacing staleness if the cycle has stopped running.
   pushed_at?: string;
+  // False once the day-trader is retired: its last read then stays as it was.
+  day_trader_enabled?: boolean;
+}
+
+/** The core portfolio's risk (GET /api/risk/core). Weights are of equity. */
+export interface CoreRisk {
+  available: boolean;
+  source?: "snapshot" | "ledger";
+  as_of?: string | null;
+  age_seconds?: number | null;
+  equity?: number | null;
+  cash?: number | null;
+  cash_pct?: number | null;
+  positions?: number;
+  top10_weight?: number | null;
+  largest?: { symbol: string; weight: number | null } | null;
+  sectors?: { sector: string; weight: number | null }[];
+  failing_screen?: string[];
+  drawdown_pct?: number | null;
+  peak_equity?: number;
+  peak_day?: string | null;
+  history_from?: string | null;
+  history_days?: number;
 }
 
 export interface HaltStatus {
@@ -254,8 +356,14 @@ export interface StockOfTheDay {
 // Aggregate track record for the daily recommendation (forward returns).
 export interface RecommendationScorecard {
   available: boolean;
+  /** Days with a pick (one per day: a re-generated day counts once). */
   n_total: number;
   n_scored: number;
+  n_duplicates?: number;
+  /** The record in a word; "negative" while picks lag the benchmark or IC < 0. */
+  verdict?: "negative" | "unproven" | "positive";
+  conviction_ic?: number | null;
+  conviction_mode?: { value: number; n: number; of: number } | null;
   sufficient?: boolean;
   min_samples?: number;
   hit_rate_5d?: number;

@@ -77,8 +77,13 @@ export default function Trades() {
 
   return (
     <div className="space-y-6 p-4 sm:p-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-white">Trade History</h1>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-bold text-white">Day-trader trades</h1>
+          <p className="mt-1 text-xs text-muted">
+            The retired intraday day-trader's orders. The core portfolio's orders are on the Core page.
+          </p>
+        </div>
         <button
           onClick={exportCsv}
           className="rounded-lg border border-border bg-surface px-3 py-1.5 text-xs font-medium text-muted hover:text-white hover:bg-surface-hover transition-colors"

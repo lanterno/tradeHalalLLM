@@ -1,100 +1,119 @@
-"""AAOIFI compliance summary — the dashboard tile data source.
+"""AAOIFI compliance summary — the Halal page's and the weekly digest's source.
 
-The operator's dashboard has a "live AAOIFI compliance" tile. This
-module computes the rollup that powers it:
+Per broker account (the core first; the retired day-trader beside it):
 
-* trades-this-quarter (and this-month / today)
-* screenings-by-decision (halal / doubtful / not_halal counts)
-* compliance violation count (any trade that filled with
-  ``decision != 'halal'``)
-* purification accrued (dividend + capital-gains sides combined)
-* purification disbursed (paid out to charity)
-* outstanding purification due
+* trades today / this month / this quarter (New York calendar days);
+* every **buy** this quarter judged against the in-house screen
+  (``halal_screen_results``): the newest verdict for that symbol on or
+  before the trade's date. A buy of a symbol that screen did not hold halal
+  (not halal, doubtful, or never screened) is a violation;
+* purification accrued and disbursed this quarter, and what is still owed
+  whenever it accrued.
 
-The summary is **read-only** — it reads from existing tables
-(`halal_screenings`, `purification_entries`,
-`round_trip_purification`, `trades`, `crypto_trades`) and returns
-a typed dataclass the dashboard route serialises to JSON.
+The day-trader's trades are the ``trades`` table; the core's orders are
+``core_orders``. A sale is never a violation: selling a holding the screen
+fails is the remedy, not the breach.
 
-Design choice: pure SQL aggregations, no Python-side per-row math.
-Keeps the tile fast even when the audit log has 100k+ rows.
-
-Halal-jurisprudence note: this summary doesn't re-implement the AAOIFI
-ratio rules (``docs/halal_jurisprudence.md`` section 2); it counts
-decisions made by upstream screeners (Zoya, manual overrides) that
-already encode them.
-
-``crypto_trades`` is still counted: crypto trading stopped on 2026-10-01
-but its rows remain, and dropping them from the counts would change
-this quarter's figures. The count goes when the operator-gated
-migration drops that table.
+Read-only: pure SQL aggregations, no broker or screener calls. It judges by
+the screen's record and does not re-implement the AAOIFI ratio rules
+(``compliance/`` does). The day-trader's own order gate used an older
+screener at the time, so a violation there says the in-house screen
+disagrees with what it bought.
 """
 
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
-from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from dataclasses import dataclass, field
+from datetime import UTC, date, datetime
+from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import and_, func
+from sqlalchemy import and_, func, text
 from sqlmodel import col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from halal_trader.db.models import (
-    CryptoTrade,
-    HalalScreening,
-    PurificationEntry,
-    RoundTripPurificationRow,
-    Trade,
-)
+from halal_trader.db.models import PurificationEntry, RoundTripPurificationRow
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncEngine
 
 logger = logging.getLogger(__name__)
 
+ACCOUNTS = (("core", "Core portfolio"), ("paper", "Day-trader"))
+VERDICTS = ("halal", "doubtful", "not_halal", "unscreened")
+# Orders that never reached the market: not trades.
+_NOT_TRADED_DAY_TRADER = ("rejected", "canceled", "cancelled", "expired")
+_NOT_TRADED_CORE = ("refused",)
+_LISTED = 50  # non-halal buys itemised per account
+
+
+@dataclass(frozen=True)
+class AccountCompliance:
+    """One account's quarter: what it traded and whether its buys were halal."""
+
+    account: str
+    label: str
+    trades_today: int
+    trades_this_month: int
+    trades_this_quarter: int
+    buys_this_quarter: int
+    # Buys this quarter by the screen's verdict at the time ("unscreened":
+    # the screen had no verdict for the symbol on or before that day).
+    buy_verdicts: dict[str, int] = field(default_factory=dict)
+    # The offending buys, newest first: {symbol, day, verdict, screen_as_of}.
+    non_halal_buys: list[dict[str, Any]] = field(default_factory=list)
+
+    @property
+    def non_halal_buys_quarter(self) -> int:
+        return sum(n for v, n in self.buy_verdicts.items() if v != "halal")
+
+    @property
+    def status(self) -> str:
+        return "violation" if self.non_halal_buys_quarter else "compliant"
+
 
 @dataclass(frozen=True)
 class AAOIFISummary:
     """Snapshot of halal-compliance state at a point in time.
 
-    All counts are inclusive of the current period; the period
-    boundaries are 'today' (UTC midnight), 'this month' (1st of
-    current month UTC), and 'this quarter' (1st of current quarter
-    UTC). Operator's dashboard renders the quarter view by default.
+    Periods are New York calendar days: today, this month (from the 1st)
+    and this quarter (from the 1st of its first month). The page renders
+    the quarter.
     """
 
-    quarter_start: datetime
-    month_start: datetime
-    today_start: datetime
+    quarter_start: date
+    month_start: date
+    today_start: date
+    accounts: tuple[AccountCompliance, ...] = ()
 
-    # Trade counts (any trade that filled, regardless of compliance)
-    trades_today: int
-    trades_this_month: int
-    trades_this_quarter: int
-
-    # Screening decisions across the quarter (most useful audit slice)
-    halal_screenings_quarter: int
-    doubtful_screenings_quarter: int
-    not_halal_screenings_quarter: int
-
-    # The number that matters most: trades that filled with a
-    # NON-halal screening attached. Should always be 0 in normal ops;
-    # any non-zero value is a red-alert tile state.
-    non_halal_fills_quarter: int
-
-    # Purification: combined across dividend (PurificationEntry) and
-    # capital-gains (RoundTripPurificationRow) sides.
-    purification_accrued_usd: float
-    purification_disbursed_usd: float
-    # Everything accrued and not yet given away, whenever it accrued. Accrued
-    # and disbursed above are quarter-to-date; outstanding must not be, or an
-    # unpaid obligation would vanish from the tile when the quarter turns.
+    # Purification: dividend (accruals ledger, plus the legacy dividend table)
+    # and capital-gains sides combined. Accrued and disbursed are this
+    # quarter's; unpaid is everything accrued and not yet given away, whenever
+    # it accrued, or an unpaid obligation would vanish when the quarter turns.
+    purification_accrued_usd: float = 0.0
+    purification_disbursed_usd: float = 0.0
     purification_unpaid_usd: float | None = None
     # The part owed by accounts trading real money. Paper accounts accrue
     # purification as a rehearsal: shown, but not a reason for "attention".
     purification_unpaid_live_usd: float | None = None
+    purification_unpaid_by_account: dict[str, float] = field(default_factory=dict)
+
+    @property
+    def trades_today(self) -> int:
+        return sum(a.trades_today for a in self.accounts)
+
+    @property
+    def trades_this_month(self) -> int:
+        return sum(a.trades_this_month for a in self.accounts)
+
+    @property
+    def trades_this_quarter(self) -> int:
+        return sum(a.trades_this_quarter for a in self.accounts)
+
+    @property
+    def non_halal_fills_quarter(self) -> int:
+        """Buys this quarter of a symbol the screen did not hold halal, any account."""
+        return sum(a.non_halal_buys_quarter for a in self.accounts)
 
     @property
     def purification_outstanding_usd(self) -> float:
@@ -104,17 +123,16 @@ class AAOIFISummary:
 
     @property
     def is_compliant(self) -> bool:
-        """True iff no non-halal trades filled this quarter."""
+        """True iff no account bought a non-halal symbol this quarter."""
         return self.non_halal_fills_quarter == 0
 
     @property
     def status(self) -> str:
         """Operator-readable status: 'compliant' | 'attention' | 'violation'.
 
-        * 'violation' — at least one non-halal trade filled this
-          quarter. Tile renders red.
-        * 'attention' — outstanding purification is non-zero (operator
-          owes a disbursement). Tile renders amber.
+        * 'violation' — some account bought a symbol the screen did not hold
+          halal this quarter. Renders red.
+        * 'attention' — a real-money account owes purification. Amber.
         * 'compliant' — green.
         """
         if self.non_halal_fills_quarter > 0:
@@ -129,18 +147,16 @@ class AAOIFISummary:
         return "compliant"
 
 
-def _quarter_start_utc(now: datetime) -> datetime:
-    """Return the start of the calendar quarter containing ``now``."""
-    quarter_first_month = ((now.month - 1) // 3) * 3 + 1
-    return datetime(now.year, quarter_first_month, 1, tzinfo=UTC)
+def periods(today: date) -> tuple[date, date, date]:
+    """(quarter start, month start, today) for a New York calendar day."""
+    quarter_first_month = ((today.month - 1) // 3) * 3 + 1
+    return today.replace(month=quarter_first_month, day=1), today.replace(day=1), today
 
 
-def _month_start_utc(now: datetime) -> datetime:
-    return datetime(now.year, now.month, 1, tzinfo=UTC)
+def _as_day(dt: datetime) -> date:
+    from halal_trader.market_hours import MARKET_TZ
 
-
-def _today_start_utc(now: datetime) -> datetime:
-    return datetime(now.year, now.month, now.day, tzinfo=UTC)
+    return dt.astimezone(MARKET_TZ).date()
 
 
 async def compute_aaoifi_summary(
@@ -148,122 +164,117 @@ async def compute_aaoifi_summary(
     *,
     now: datetime | None = None,
 ) -> AAOIFISummary:
-    """Aggregate compliance state into a single dashboard-tile object.
+    """Aggregate compliance state for the Halal page and the weekly digest.
 
-    The ``now`` arg is for testing — production callers leave it
-    None and get the current UTC time. All boundary datetimes are
-    UTC-tz-aware so the SQL comparisons against tz-aware columns
-    work correctly.
+    ``now`` is for tests; production callers leave it None.
     """
     if now is None:
         now = datetime.now(UTC)
-    quarter = _quarter_start_utc(now)
-    month = _month_start_utc(now)
-    today = _today_start_utc(now)
+    quarter, month, today = periods(_as_day(now))
 
+    accounts = tuple(
+        [
+            await _account(engine, account, label, quarter, month, today)
+            for account, label in ACCOUNTS
+        ]
+    )
     async with AsyncSession(engine) as session:
-        # ── Trade counts (combined stocks + crypto) ───────────
-        trades_today = await _count_trades_since(session, today)
-        trades_month = await _count_trades_since(session, month)
-        trades_quarter = await _count_trades_since(session, quarter)
-
-        # ── Screening counts per decision (quarter) ───────────
-        halal_q = await _count_screenings(session, quarter, "halal")
-        doubtful_q = await _count_screenings(session, quarter, "doubtful")
-        not_halal_q = await _count_screenings(session, quarter, "not_halal")
-
-        # ── Non-halal fills (the red-alert metric) ────────────
-        non_halal_fills = await _count_non_halal_fills(session, quarter)
-
-        # ── Purification (accrued + disbursed) ────────────────
-        accrued = await _sum_purification_accrued(session, quarter)
-        disbursed = await _sum_purification_disbursed(session, quarter)
+        q_start = datetime.combine(quarter, datetime.min.time(), UTC)
+        accrued = await _sum_purification_accrued(session, q_start)
+        disbursed = await _sum_purification_disbursed(session, q_start)
         ever = datetime(2000, 1, 1, tzinfo=UTC)
-        unpaid = await _sum_purification_accrued(session, ever) - await _sum_purification_disbursed(
-            session, ever
-        )
+        by_account = await _unpaid_by_account(session, ever)
         live = _live_accounts()
-        unpaid_live = await _accruals(
-            session, ever, paid_only=False, accounts=live
-        ) - await _accruals(session, ever, paid_only=True, accounts=live)
 
     return AAOIFISummary(
         quarter_start=quarter,
         month_start=month,
         today_start=today,
-        trades_today=trades_today,
-        trades_this_month=trades_month,
-        trades_this_quarter=trades_quarter,
-        halal_screenings_quarter=halal_q,
-        doubtful_screenings_quarter=doubtful_q,
-        not_halal_screenings_quarter=not_halal_q,
-        non_halal_fills_quarter=non_halal_fills,
+        accounts=accounts,
         purification_accrued_usd=accrued,
         purification_disbursed_usd=disbursed,
-        purification_unpaid_usd=unpaid,
-        purification_unpaid_live_usd=unpaid_live,
+        purification_unpaid_usd=sum(by_account.values()),
+        purification_unpaid_live_usd=sum(v for a, v in by_account.items() if a in live),
+        purification_unpaid_by_account=by_account,
     )
 
 
-async def _count_trades_since(session: AsyncSession, since: datetime) -> int:
-    """Total trades (stocks + crypto) on or after ``since``."""
-    stocks = (
-        await session.exec(select(func.count()).select_from(Trade).where(Trade.timestamp >= since))
-    ).one()
-    crypto = (
-        await session.exec(
-            select(func.count()).select_from(CryptoTrade).where(CryptoTrade.timestamp >= since)
+def _account_trades_sql(account: str) -> str:
+    """The account's trades this quarter as (symbol, side, day): the day-trader's
+    ``trades`` rows, the core's ``core_orders``, each minus what never traded."""
+    if account == "paper":
+        return (
+            "SELECT symbol, side, (timestamp AT TIME ZONE 'America/New_York')::date AS day "
+            "FROM trades WHERE status NOT IN ('" + "', '".join(_NOT_TRADED_DAY_TRADER) + "') "
+            "AND timestamp >= :since"
         )
-    ).one()
-    return int(stocks or 0) + int(crypto or 0)
+    return (
+        "SELECT symbol, side, (submitted_at AT TIME ZONE 'America/New_York')::date AS day "
+        "FROM core_orders WHERE status NOT IN ('" + "', '".join(_NOT_TRADED_CORE) + "') "
+        "AND submitted_at >= :since"
+    )
 
 
-async def _count_screenings(session: AsyncSession, since: datetime, decision: str) -> int:
-    result = await session.exec(
-        select(func.count())
-        .select_from(HalalScreening)
-        .where(
-            and_(
-                HalalScreening.timestamp >= since,
-                HalalScreening.decision == decision,
+async def _account(
+    engine: AsyncEngine, account: str, label: str, quarter: date, month: date, today: date
+) -> AccountCompliance:
+    """One account's trade counts and its buys' verdicts this quarter.
+
+    The verdict for a buy is the newest ``halal_screen_results`` row for its
+    symbol with ``as_of`` on or before the trade's day; ties on ``as_of``
+    (several screening methods on one day) go to the newest ``screened_at``.
+    """
+    # A coarse bound for the index; the exact test is on the New York day,
+    # whose midnight falls after UTC's.
+    since = datetime.combine(quarter, datetime.min.time(), UTC)
+    trades_sql = _account_trades_sql(account)
+    async with engine.connect() as conn:
+        counts = (
+            await conn.execute(
+                text(
+                    "SELECT count(*) FILTER (WHERE day >= :q) AS quarter, "
+                    "count(*) FILTER (WHERE day >= :m) AS month, "
+                    f"count(*) FILTER (WHERE day = :t) AS today FROM ({trades_sql}) x"
+                ),
+                {"since": since, "q": quarter, "m": month, "t": today},
             )
-        )
-    )
-    return int(result.one() or 0)
-
-
-async def _count_non_halal_fills(session: AsyncSession, since: datetime) -> int:
-    """Any *filled* trade (stocks or crypto) joined to a screening with
-    a non-``halal`` decision. The screening rows are the single source
-    of truth — a trade with no `halal_screening_id` is "unattested" and
-    counted here defensively (better surfaced than hidden)."""
-    stmt_stock = (
-        select(func.count())
-        .select_from(Trade)
-        .join(HalalScreening, Trade.halal_screening_id == HalalScreening.id, isouter=True)
-        .where(
-            and_(
-                Trade.timestamp >= since,
-                Trade.status.in_(["filled", "submitted"]),
-                ~(HalalScreening.decision == "halal"),
+        ).one()
+        buys = (
+            await conn.execute(
+                text(
+                    f"SELECT x.symbol, x.day, s.verdict, s.as_of FROM ({trades_sql}) x "
+                    "LEFT JOIN LATERAL (SELECT verdict, as_of FROM halal_screen_results r "
+                    "WHERE r.symbol = x.symbol AND r.as_of <= x.day "
+                    "ORDER BY r.as_of DESC, r.screened_at DESC LIMIT 1) s ON true "
+                    "WHERE x.side = 'buy' AND x.day >= :q ORDER BY x.day DESC, x.symbol"
+                ),
+                {"since": since, "q": quarter},
             )
-        )
-    )
-    stmt_crypto = (
-        select(func.count())
-        .select_from(CryptoTrade)
-        .join(HalalScreening, CryptoTrade.halal_screening_id == HalalScreening.id, isouter=True)
-        .where(
-            and_(
-                CryptoTrade.timestamp >= since,
-                CryptoTrade.status.in_(["filled", "submitted"]),
-                ~(HalalScreening.decision == "halal"),
+        ).all()
+    verdicts = dict.fromkeys(VERDICTS, 0)
+    offending: list[dict[str, Any]] = []
+    for b in buys:
+        v = b.verdict or "unscreened"
+        verdicts[v] = verdicts.get(v, 0) + 1
+        if v != "halal" and len(offending) < _LISTED:
+            offending.append(
+                {
+                    "symbol": b.symbol,
+                    "day": b.day.isoformat(),
+                    "verdict": v,
+                    "screen_as_of": b.as_of.isoformat() if b.as_of else None,
+                }
             )
-        )
+    return AccountCompliance(
+        account=account,
+        label=label,
+        trades_today=int(counts.today or 0),
+        trades_this_month=int(counts.month or 0),
+        trades_this_quarter=int(counts.quarter or 0),
+        buys_this_quarter=len(buys),
+        buy_verdicts=verdicts,
+        non_halal_buys=offending,
     )
-    s = (await session.exec(stmt_stock)).one() or 0
-    c = (await session.exec(stmt_crypto)).one() or 0
-    return int(s) + int(c)
 
 
 async def _sum_purification_accrued(session: AsyncSession, since: datetime) -> float:
@@ -285,6 +296,40 @@ async def _sum_purification_accrued(session: AsyncSession, since: datetime) -> f
         )
     ).one()
     return float(div or 0.0) + ledger + float(cap or 0.0)
+
+
+async def _unpaid_by_account(session: AsyncSession, since: datetime) -> dict[str, float]:
+    """Purification accrued and not yet paid, per broker account. The legacy
+    dividend table and the round-trip ledger predate the core and carry no
+    account: both were the day-trader's ("paper")."""
+    out: dict[str, float] = {}
+    for account, _ in ACCOUNTS:
+        owed = await _accruals(session, since, paid_only=False, accounts=[account]) - (
+            await _accruals(session, since, paid_only=True, accounts=[account])
+        )
+        if abs(owed) > 1e-9:
+            out[account] = owed
+    legacy = (await _sum_legacy(session, since, paid_only=False)) - (
+        await _sum_legacy(session, since, paid_only=True)
+    )
+    if abs(legacy) > 1e-9:
+        out["paper"] = out.get("paper", 0.0) + legacy
+    return out
+
+
+async def _sum_legacy(session: AsyncSession, since: datetime, *, paid_only: bool) -> float:
+    div_q = select(func.coalesce(func.sum(PurificationEntry.purification_usd), 0.0)).where(
+        PurificationEntry.timestamp >= since
+    )
+    cap_q = select(
+        func.coalesce(func.sum(RoundTripPurificationRow.purification_due_usd), 0.0)
+    ).where(RoundTripPurificationRow.timestamp >= since)
+    if paid_only:
+        div_q = div_q.where(col(PurificationEntry.paid_at).is_not(None))
+        cap_q = cap_q.where(col(RoundTripPurificationRow.disbursed).is_(True))
+    div = (await session.exec(div_q)).one()
+    cap = (await session.exec(cap_q)).one()
+    return float(div or 0.0) + float(cap or 0.0)
 
 
 def _live_accounts() -> list[str]:
@@ -331,8 +376,8 @@ async def _sum_purification_disbursed(session: AsyncSession, since: datetime) ->
         await session.exec(
             select(func.coalesce(func.sum(PurificationEntry.purification_usd), 0.0)).where(
                 and_(
-                    PurificationEntry.timestamp >= since,
-                    PurificationEntry.paid_at.is_not(None),
+                    col(PurificationEntry.timestamp) >= since,
+                    col(PurificationEntry.paid_at).is_not(None),
                 )
             )
         )
@@ -344,8 +389,8 @@ async def _sum_purification_disbursed(session: AsyncSession, since: datetime) ->
                 func.coalesce(func.sum(RoundTripPurificationRow.purification_due_usd), 0.0)
             ).where(
                 and_(
-                    RoundTripPurificationRow.timestamp >= since,
-                    RoundTripPurificationRow.disbursed.is_(True),
+                    col(RoundTripPurificationRow.timestamp) >= since,
+                    col(RoundTripPurificationRow.disbursed).is_(True),
                 )
             )
         )

@@ -2,6 +2,7 @@ import { useState } from "react";
 import {
   useBackups,
   useClearHalt,
+  useCoreRisk,
   useHaltStatus,
   useReconcileRecent,
   useRiskState,
@@ -9,11 +10,12 @@ import {
 } from "../hooks/useRisk";
 import { StatCard } from "../components/StatCard";
 import { ErrorState } from "../components/ErrorState";
-import { cn } from "../lib/utils";
+import type { CoreRisk, RiskState } from "../api/types";
+import { cn, formatDate, formatDuration, formatTime, formatUsd } from "../lib/utils";
 
-function formatPct(v: number | null | undefined): string {
+function formatPct(v: number | null | undefined, digits = 2): string {
   if (v == null) return "—";
-  return `${(v * 100).toFixed(2)}%`;
+  return `${(v * 100).toFixed(digits)}%`;
 }
 
 function formatBytes(n: number): string {
@@ -22,17 +24,141 @@ function formatBytes(n: number): string {
   return `${(n / 1024 / 1024).toFixed(1)} MB`;
 }
 
-function formatTimestamp(ts: string | null | undefined): string {
-  if (!ts) return "—";
-  try {
-    return new Date(ts).toLocaleString();
-  } catch {
-    return ts;
-  }
+const SECTORS_SHOWN = 5;
+const SECTOR_COLORS = ["#4ade80", "#60a5fa", "#c084fc", "#facc15", "#fb923c"];
+
+function CoreRiskPanel({ risk }: { risk: CoreRisk }) {
+  const sectors = risk.sectors ?? [];
+  const shown = sectors.slice(0, SECTORS_SHOWN);
+  const rest = sectors.slice(SECTORS_SHOWN).reduce((s, x) => s + (x.weight ?? 0), 0);
+  const dd = risk.drawdown_pct ?? null;
+  const failing = risk.failing_screen ?? [];
+  return (
+    <>
+      <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+        <StatCard
+          label="Drawdown from peak"
+          value={<span className={dd != null && dd < 0 ? "text-loss" : "text-accent"}>{formatPct(dd)}</span>}
+          sub={
+            risk.peak_day
+              ? `peak ${formatUsd(risk.peak_equity ?? 0)} on ${formatDate(risk.peak_day)}`
+              : `at its peak · ${risk.history_days ?? 0} day${risk.history_days === 1 ? "" : "s"} of history${
+                  risk.history_from ? ` since ${formatDate(risk.history_from)}` : ""
+                }`
+          }
+        />
+        <StatCard
+          label="Top 10 holdings"
+          value={formatPct(risk.top10_weight, 1)}
+          sub={`of equity · ${risk.positions ?? 0} holdings`}
+        />
+        <StatCard
+          label="Largest holding"
+          value={risk.largest ? formatPct(risk.largest.weight, 1) : "—"}
+          sub={risk.largest?.symbol}
+        />
+        <StatCard
+          label="Cash"
+          value={formatPct(risk.cash_pct, 1)}
+          sub={risk.cash != null ? formatUsd(risk.cash) : undefined}
+        />
+      </div>
+      <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-[1.4fr_1fr]">
+        <div className="rounded-xl border border-border bg-surface p-4">
+          <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-muted">Sector concentration</p>
+          <div className="mb-3 flex h-3 overflow-hidden rounded-full bg-border">
+            {shown.map((s, i) => (
+              <i key={s.sector} style={{ width: formatPct(s.weight), background: SECTOR_COLORS[i] }} />
+            ))}
+            {rest > 0 && <i className="bg-gray-700" style={{ width: formatPct(rest) }} />}
+          </div>
+          <div className="grid gap-1 text-xs tabular-nums">
+            {shown.map((s, i) => (
+              <div key={s.sector} className="flex items-center gap-2">
+                <i className="h-2.5 w-2.5 shrink-0 rounded-sm" style={{ background: SECTOR_COLORS[i] }} />
+                <span>{s.sector}</span>
+                <span className="ml-auto text-white">{formatPct(s.weight, 1)}</span>
+              </div>
+            ))}
+            {rest > 0 && (
+              <div className="flex items-center gap-2 text-muted">
+                <i className="h-2.5 w-2.5 shrink-0 rounded-sm bg-gray-700" />
+                <span>{sectors.length - shown.length} more sectors</span>
+                <span className="ml-auto">{formatPct(rest, 1)}</span>
+              </div>
+            )}
+          </div>
+        </div>
+        <div
+          className={cn(
+            "rounded-xl border bg-surface p-4 text-xs",
+            failing.length ? "border-warning/30" : "border-border",
+          )}
+        >
+          <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-muted">Halal screen</p>
+          {failing.length ? (
+            <p className="text-warning">
+              {failing.length} holding{failing.length === 1 ? "" : "s"} the newest screen does not pass:{" "}
+              {failing.slice(0, 8).join(", ")}
+              {failing.length > 8 ? "…" : ""}. The core sells them at its next run (15:40 ET).
+            </p>
+          ) : (
+            <p className="text-accent">Every holding passes the newest screen.</p>
+          )}
+          <p className="mt-3 text-muted">
+            {risk.source === "ledger"
+              ? "No broker snapshot yet: ledger quantities at the last close."
+              : `Broker marks as of ${formatTime(risk.as_of)}${
+                  (risk.age_seconds ?? 0) > 60 ? ` · ${formatDuration((risk.age_seconds ?? 0) * 1000)} old` : ""
+                }.`}{" "}
+            The drawdown is against the account's own daily closes.
+          </p>
+        </div>
+      </div>
+    </>
+  );
+}
+
+function DayTraderRisk({ data, fetchedAt }: { data: RiskState; fetchedAt: number }) {
+  const retired = data.day_trader_enabled === false;
+  const ageMs = data.pushed_at ? fetchedAt - new Date(data.pushed_at).getTime() : NaN;
+  // A running day-trader cycles every 15 minutes; a gap past 20 is a fault.
+  const stale = !retired && Number.isFinite(ageMs) && ageMs > 20 * 60 * 1000;
+  return (
+    <>
+      <p className="mb-3 text-xs text-muted">
+        {retired ? "Retired: it opens nothing new and runs no cycles, so this is its last read, " : "Last cycle's read, "}
+        taken {data.pushed_at ? formatTime(data.pushed_at) : "—"}
+        {Number.isFinite(ageMs) ? ` (${formatDuration(ageMs)} ago)` : ""}.
+        {stale && (
+          <span className="ml-2 rounded bg-loss/20 px-2 py-0.5 text-loss">stale {formatDuration(ageMs)}</span>
+        )}
+      </p>
+      <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+        <StatCard
+          label="Risk engine"
+          value={data.is_halted ? <span className="text-loss">HALTED</span> : <span className="text-muted">OK</span>}
+          sub={data.halt_reason || undefined}
+        />
+        <StatCard label="Heat (unrealized)" value={formatPct(data.portfolio_heat_pct)} />
+        <StatCard label="Drawdown from peak" value={formatPct(data.drawdown_pct)} />
+        <StatCard
+          label="Avg correlation"
+          value={data.avg_correlation != null ? data.avg_correlation.toFixed(2) : "—"}
+        />
+      </div>
+      {data.summary && (
+        <div className="mt-3 rounded-xl border border-border bg-surface p-4">
+          <p className="whitespace-pre-line font-mono text-xs text-muted">{data.summary}</p>
+        </div>
+      )}
+    </>
+  );
 }
 
 export default function RiskAndSystem() {
   const risk = useRiskState();
+  const core = useCoreRisk();
   const halt = useHaltStatus();
   const setHaltMut = useSetHalt();
   const clearHaltMut = useClearHalt();
@@ -40,13 +166,14 @@ export default function RiskAndSystem() {
   const backups = useBackups();
 
   const [haltReason, setHaltReason] = useState("");
+  const engaged = halt.data?.enabled === true;
 
   const onEngageHalt = () => {
     const reason = haltReason.trim() || "manual via dashboard";
     if (
       !confirm(
         `Engage the kill-switch with reason: "${reason}"?\n\n` +
-          `Bots will refuse new entries until you Resume.`,
+          `The core stops buying (it still sells holdings that fail the halal screen) until you Resume.`,
       )
     )
       return;
@@ -55,48 +182,39 @@ export default function RiskAndSystem() {
   };
 
   const onClearHalt = () => {
-    if (!confirm("Clear the kill-switch and resume trading?")) return;
+    if (!confirm("Clear the kill-switch and let the core buy again?")) return;
     clearHaltMut.mutate();
   };
 
   return (
     <div className="space-y-6 p-4 sm:p-6">
-      <h1 className="text-2xl font-bold text-white">Risk & System</h1>
+      <h1 className="text-2xl font-bold text-white">Risk & Halt</h1>
 
       {/* Halt control */}
       <section className="rounded-xl border border-border bg-surface p-4">
-        <h2 className="mb-3 text-sm font-medium uppercase tracking-wider text-muted">
-          Kill-Switch
-        </h2>
+        <h2 className="mb-3 text-sm font-medium uppercase tracking-wider text-muted">Kill-Switch</h2>
         <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <div className="flex items-center gap-3">
-            <span
-              className={cn(
-                "h-3 w-3 rounded-full",
-                halt.data?.enabled ? "bg-loss animate-pulse" : "bg-accent",
-              )}
-            />
+            <span className={cn("h-3 w-3 shrink-0 rounded-full", engaged ? "bg-loss animate-pulse" : "bg-accent")} />
             <div>
-              <p
-                className={cn(
-                  "text-lg font-bold",
-                  halt.data?.enabled ? "text-loss" : "text-accent",
-                )}
-              >
-                {halt.data?.enabled ? "HALTED" : "Running"}
+              <p className={cn("text-lg font-bold", engaged ? "text-loss" : "text-accent")}>
+                {engaged ? "HALTED" : "Not engaged"}
               </p>
-              {halt.data?.set_by && (
+              {engaged ? (
                 <p className="text-xs text-muted">
-                  {halt.data.enabled ? "Set" : "Last set"} by {halt.data.set_by}{" "}
-                  at {formatTimestamp(halt.data.set_at)}
-                  {halt.data.reason && ` — ${halt.data.reason}`}
+                  Set by {halt.data?.set_by ?? "—"} at {formatTime(halt.data?.set_at)}
+                  {halt.data?.reason ? ` — ${halt.data.reason}` : ""}
                 </p>
-              )}
+              ) : halt.data?.set_at ? (
+                <p className="text-xs text-muted">
+                  Last engaged by {halt.data.set_by ?? "—"} at {formatTime(halt.data.set_at)}; since cleared.
+                </p>
+              ) : null}
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
-            {halt.data?.enabled ? (
+          <div className="flex flex-wrap items-center gap-2">
+            {engaged ? (
               <button
                 onClick={onClearHalt}
                 disabled={clearHaltMut.isPending}
@@ -111,7 +229,7 @@ export default function RiskAndSystem() {
                   value={haltReason}
                   onChange={(e) => setHaltReason(e.target.value)}
                   placeholder="Reason (audit trail)"
-                  className="w-56 rounded-md border border-border bg-surface-hover px-3 py-2 text-sm focus:border-accent focus:outline-none"
+                  className="w-full min-w-0 rounded-md border border-border bg-surface-hover px-3 py-2 text-sm focus:border-accent focus:outline-none sm:w-56"
                 />
                 <button
                   onClick={onEngageHalt}
@@ -125,84 +243,45 @@ export default function RiskAndSystem() {
           </div>
         </div>
         <p className="mt-3 text-xs text-muted">
-          Engaging the halt blocks NEW positions on every cycle. In-flight
-          SL/TP exits still run. Use the CLI{" "}
-          <code className="font-mono">halal-trader halt --close-all stocks</code>{" "}
-          for the full panic button (also liquidates positions).
+          While engaged, the core makes no buys, monthly rebalance included; its runs still sell any holding
+          that fails the halal screen. The retired day-trader opens nothing either way, and its stop exits
+          keep running. <code className="font-mono">halal-trader halt --close-all stocks</code> also
+          liquidates the day-trader's account (not the core's).
         </p>
       </section>
 
-      {/* Portfolio risk state */}
+      {/* The core: the product */}
       <section>
-        <h2 className="mb-3 text-sm font-medium uppercase tracking-wider text-muted">
-          Portfolio Risk (last cycle{risk.data?.market ? ` · ${risk.data.market}` : ""})
-          {(() => {
-            // Stale-snapshot badge: "stale Nm" when the last cycle's risk
-            // read is older than one 15-min cycle plus slack. Age is taken
-            // at fetch time (dataUpdatedAt, refreshed every 15 s) rather
-            // than Date.now(), which would make render impure.
-            const pushedAt = risk.data?.pushed_at;
-            if (!pushedAt || !risk.dataUpdatedAt) return null;
-            const ageMs = risk.dataUpdatedAt - new Date(pushedAt).getTime();
-            if (Number.isNaN(ageMs)) return null;
-            const thresholdMs = 20 * 60 * 1000;
-            if (ageMs < thresholdMs) return null;
-            const ageMin = Math.floor(ageMs / 60000);
-            return (
-              <span className="ml-2 rounded bg-loss/20 px-2 py-0.5 text-xs text-loss">
-                stale {ageMin}m
-              </span>
-            );
-          })()}
-        </h2>
-
-        {risk.isError ? (
-          <ErrorState compact error={risk.error} onRetry={risk.refetch} />
-        ) : !risk.data?.available ? (
+        <h2 className="mb-3 text-sm font-medium uppercase tracking-wider text-muted">Core portfolio risk</h2>
+        {core.isError ? (
+          <ErrorState compact error={core.error} onRetry={core.refetch} />
+        ) : core.isLoading ? (
+          <p className="text-sm text-muted">Loading…</p>
+        ) : !core.data?.available ? (
           <div className="rounded-xl border border-border bg-surface p-4 text-sm text-muted">
-            No risk state cached yet — wait for the next cycle to populate it.
+            The core holds nothing yet: it buys at its first monthly rebalance.
           </div>
         ) : (
-          <>
-            <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-              <StatCard
-                label="Status"
-                value={
-                  risk.data.is_halted ? (
-                    <span className="text-loss">HALTED</span>
-                  ) : (
-                    <span className="text-accent">OK</span>
-                  )
-                }
-                sub={risk.data.halt_reason || undefined}
-              />
-              <StatCard
-                label="Heat (unrealized)"
-                value={formatPct(risk.data.portfolio_heat_pct)}
-              />
-              <StatCard
-                label="Drawdown from peak"
-                value={formatPct(risk.data.drawdown_pct)}
-              />
-              <StatCard
-                label="Avg correlation"
-                value={
-                  risk.data.avg_correlation != null
-                    ? risk.data.avg_correlation.toFixed(2)
-                    : "—"
-                }
-              />
-            </div>
-
-            {risk.data.summary && (
-              <div className="mt-3 rounded-xl border border-border bg-surface p-4">
-                <p className="whitespace-pre-line font-mono text-xs text-muted">
-                  {risk.data.summary}
-                </p>
-              </div>
-            )}
-          </>
+          <CoreRiskPanel risk={core.data} />
         )}
+      </section>
+
+      {/* The retired day-trader */}
+      <section className="rounded-xl border border-border bg-surface p-4">
+        <details open={risk.data?.day_trader_enabled === true}>
+          <summary className="cursor-pointer text-sm font-medium uppercase tracking-wider text-muted">
+            Day-trader risk{risk.data?.day_trader_enabled === false ? " · retired" : ""}
+          </summary>
+          <div className="mt-3">
+            {risk.isError ? (
+              <ErrorState compact error={risk.error} onRetry={risk.refetch} />
+            ) : !risk.data?.available ? (
+              <p className="text-sm text-muted">No risk read recorded.</p>
+            ) : (
+              <DayTraderRisk data={risk.data} fetchedAt={risk.dataUpdatedAt} />
+            )}
+          </div>
+        </details>
       </section>
 
       {/* Reconciliation log */}
@@ -231,7 +310,7 @@ export default function RiskAndSystem() {
           <p className="text-sm text-accent">No drift recorded — DB and broker agree.</p>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+            <table className="w-full min-w-[720px] text-sm">
               <thead>
                 <tr className="border-b border-border text-left text-xs uppercase tracking-wider text-muted">
                   <th className="px-3 py-2">When</th>
@@ -250,8 +329,8 @@ export default function RiskAndSystem() {
                     key={row.id}
                     className="border-b border-border/50 hover:bg-surface-hover/50 transition-colors"
                   >
-                    <td className="px-3 py-2 text-xs text-muted">
-                      {formatTimestamp(row.timestamp)}
+                    <td className="whitespace-nowrap px-3 py-2 text-xs text-muted">
+                      {formatTime(row.timestamp)}
                     </td>
                     <td className="px-3 py-2 capitalize">{row.market}</td>
                     <td className="px-3 py-2 font-mono">{row.symbol}</td>
@@ -267,7 +346,7 @@ export default function RiskAndSystem() {
                     <td className="px-3 py-2 text-right font-mono">
                       {row.drift_usd != null ? `$${row.drift_usd.toFixed(2)}` : "—"}
                     </td>
-                    <td className="px-3 py-2 text-xs text-muted">{row.notes ?? ""}</td>
+                    <td className="min-w-48 whitespace-normal px-3 py-2 text-xs text-muted">{row.notes ?? ""}</td>
                   </tr>
                 ))}
               </tbody>
@@ -292,7 +371,7 @@ export default function RiskAndSystem() {
           </p>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+            <table className="w-full min-w-[480px] text-sm">
               <thead>
                 <tr className="border-b border-border text-left text-xs uppercase tracking-wider text-muted">
                   <th className="px-3 py-2">Date</th>
@@ -306,9 +385,7 @@ export default function RiskAndSystem() {
                     key={b.path}
                     className="border-b border-border/50 hover:bg-surface-hover/50 transition-colors"
                   >
-                    <td className="px-3 py-2">
-                      {formatTimestamp(b.backed_up_at).split(",")[0]}
-                    </td>
+                    <td className="whitespace-nowrap px-3 py-2">{formatTime(b.backed_up_at)}</td>
                     <td className="px-3 py-2 font-mono text-xs text-muted">
                       {b.path}
                     </td>

@@ -162,7 +162,9 @@ def test_analytics_returns_zeros_with_no_trades(client):
 def test_risk_state_unavailable_when_unset(client):
     r = client.get("/api/risk/state")
     assert r.status_code == 200
-    assert r.json() == {"available": False}
+    # Whether the day-trader runs at all comes along, so a retired one's last
+    # read can be shown as retired rather than stale.
+    assert r.json() == {"available": False, "day_trader_enabled": True}
 
 
 def test_risk_state_round_trips_cached_value(client, database_url):
@@ -330,12 +332,12 @@ def test_metrics_llm_returns_zero_calls_with_no_log(client, tmp_path, monkeypatc
     assert r.json()["calls"] == 0
 
 
-def test_positions_reads_stocks_open_trades(client):
-    """``/api/positions`` reads ``get_open_trades`` (stocks repo).
-    Empty pre-trade is fine — the route just must return 200 and a list."""
+def test_positions_answer_with_no_account_reported(client):
+    """``/api/positions`` groups holdings by account (test_positions_api.py);
+    before any snapshot or fill it answers 200 with no accounts."""
     r = client.get("/api/positions")
     assert r.status_code == 200
-    assert isinstance(r.json(), list)
+    assert r.json() == {"accounts": []}
 
 
 # ── /api/system/status cadence ────────────────────
@@ -349,6 +351,19 @@ def test_system_status_exposes_stocks_cadence(client):
     # Default: 15min * 60 = 900s.
     assert body["stocks_cycle_interval_seconds"] == 900
     assert "crypto_cycle_interval_seconds" not in body
+    # Which strategies run, so the dashboard can ignore a retired one's beats.
+    assert body["day_trader_enabled"] is True and body["core_enabled"] is False
+
+
+def test_core_config_lists_the_cores_parameters_and_no_secret(client, monkeypatch):
+    from halal_trader.config import get_settings
+
+    monkeypatch.setattr(get_settings().core, "alpaca_secret_key", "sk-secret-value")
+    body = client.get("/api/system/core-config").json()
+    assert body["core_enabled"] is False and body["core_paper"] is True
+    assert body["core_top_n"] == 100 and body["core_rebalance_band"] == 0.25
+    assert body["core_trades_at_et"] == "15:40" and body["core_keys_set"] is False
+    assert "sk-secret-value" not in str(body)
 
 
 def test_system_status_classifier_health_null_without_reactor(client):

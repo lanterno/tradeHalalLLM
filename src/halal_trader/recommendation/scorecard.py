@@ -503,13 +503,65 @@ def _rate(rows: list[dict[str, Any]], key: str) -> float | None:
     return round(sum(1 for v in vals if v) / len(vals), 4) if vals else None
 
 
+def one_per_day(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The pick of each day: the newest generated for its date.
+
+    A day re-generated (a manual regenerate, a retried pre-market run) has
+    several rows, and counting each one scored that day's outcome two or three
+    times: 2026-07-01 and 07-02 held five AMAT rows between them. The newest is
+    what the dashboard showed as the day's pick by the end of the run.
+    """
+    newest: dict[Any, dict[str, Any]] = {}
+    for r in rows:
+        day = r.get("date")
+        kept = newest.get(day)
+        if kept is None or (r.get("id") or 0) > (kept.get("id") or 0):
+            newest[day] = r
+    return sorted(newest.values(), key=lambda r: -(r.get("id") or 0))
+
+
+def verdict(*, sufficient: bool, conviction_ic: float | None, avg_excess_5d: float | None) -> str:
+    """One word for the track record, so every surface says the same thing.
+
+    ``negative`` when the picks lag the benchmark on average or the model's
+    conviction ranks them backwards (IC < 0): the record argues against acting
+    on the pick. ``unproven`` while the sample is too thin to say more.
+    ``positive`` otherwise: beating the benchmark on a sufficient sample, which
+    is still evidence, not proof.
+    """
+    if (avg_excess_5d is not None and avg_excess_5d < 0) or (
+        conviction_ic is not None and conviction_ic < 0
+    ):
+        return "negative"
+    if not sufficient:
+        return "unproven"
+    return "positive"
+
+
+def _conviction_mode(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """The most common conviction and its share: 0.72 on most days says the
+    model's number carries little information."""
+    values = [round(float(r["conviction"]), 2) for r in rows if r.get("conviction") is not None]
+    if not values:
+        return None
+    mode = max(set(values), key=values.count)
+    return {"value": mode, "n": values.count(mode), "of": len(values)}
+
+
 async def compute_scorecard(repo: Any, *, limit: int = 500) -> dict[str, Any]:
-    """Aggregate track record over labeled picks (5-day horizon as the anchor)."""
-    rows = await repo.get_recent_recommendations(limit=limit)
+    """Aggregate track record over labeled picks (5-day horizon as the anchor),
+    one pick per day (``one_per_day``)."""
+    generated = await repo.get_recent_recommendations(limit=limit)
+    rows = one_per_day(generated)
     labeled = [r for r in rows if r.get("fwd_return_5d") is not None]
     n = len(labeled)
     if n == 0:
-        return {"available": False, "n_total": len(rows), "n_scored": 0}
+        return {
+            "available": False,
+            "n_total": len(rows),
+            "n_scored": 0,
+            "verdict": "unproven",
+        }
 
     fwd5 = [r["fwd_return_5d"] for r in labeled]
     hit = sum(1 for x in fwd5 if x > 0) / n
@@ -566,10 +618,17 @@ async def compute_scorecard(repo: Any, *, limit: int = 500) -> dict[str, Any]:
         if pick_ret is not None and len(rets) >= 5:
             worse = sum(1 for v in rets.values() if v < pick_ret)
             pick_pcts.append(worse / (len(rets) - 1))
+    avg_excess = round(sum(excess) / len(excess), 4) if excess else None
     return {
         "available": True,
         "n_total": len(rows),
         "n_scored": n,
+        # Extra rows for days generated more than once, left out of every figure.
+        "n_duplicates": len(generated) - len(rows),
+        "verdict": verdict(
+            sufficient=gate.sufficient, conviction_ic=conviction_ic, avg_excess_5d=avg_excess
+        ),
+        "conviction_mode": _conviction_mode(rows),
         # Honest caveat: below ~20 scored picks the hit-rate/averages are noise.
         "sufficient": gate.sufficient,
         "min_samples": gate.min_n,
@@ -578,7 +637,7 @@ async def compute_scorecard(repo: Any, *, limit: int = 500) -> dict[str, Any]:
         "avg_fwd_1d": _avg(labeled, "fwd_return_1d"),
         "avg_fwd_5d": _avg(labeled, "fwd_return_5d"),
         "avg_fwd_20d": _avg(labeled, "fwd_return_20d"),
-        "avg_excess_5d": round(sum(excess) / len(excess), 4) if excess else None,
+        "avg_excess_5d": avg_excess,
         "benchmark": DEFAULT_BENCHMARK,
         # ── Plan quality (LLM suggested_target/stop vs the realized path) ──
         "n_with_levels": len(with_levels),
@@ -631,8 +690,9 @@ async def whatif_equity_curve(
     forward return in date order (buy the pick, hold 5 trading days, repeat),
     against the same-pick SPUS benchmark. Sequential/non-overlapping is an
     approximation (real picks overlap), but it's a fair directional read.
+    One pick per day (``one_per_day``): a re-generated day is one trade, not two.
     """
-    rows = await repo.get_recent_recommendations(limit=limit)
+    rows = one_per_day(await repo.get_recent_recommendations(limit=limit))
     scored = sorted(
         (r for r in rows if r.get("fwd_return_5d") is not None),
         key=lambda r: (r.get("date", ""), r.get("id", 0)),

@@ -1,6 +1,6 @@
 import { Calendar, ShieldCheck, ShieldQuestion } from "lucide-react";
 import type { Belief } from "../api/types";
-import { cn, relativeTime } from "../lib/utils";
+import { cn, formatTime, relativeTime } from "../lib/utils";
 
 function directionBadge(direction: string) {
   const label = direction.replace("_", " ");
@@ -67,18 +67,27 @@ export function BeliefCard({ belief }: { belief: Belief }) {
         <p className="mt-3 text-sm text-gray-300">{belief.thesis}</p>
       )}
 
-      <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
-        {level("support", belief.support)}
-        {level("resistance", belief.resistance)}
-        {level("stop", belief.stop)}
-        {level("invalidation", belief.invalidation)}
-      </div>
+      {/* The engine often sets support, stop and invalidation to one price;
+          three identical cells read as three levels, so say it once. */}
+      {belief.support != null && belief.support === belief.stop && belief.stop === belief.invalidation ? (
+        <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+          <div className="sm:col-span-2">{level("support = stop = invalidation", belief.support)}</div>
+          {belief.resistance != null && level("resistance", belief.resistance)}
+        </div>
+      ) : (
+        <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+          {level("support", belief.support)}
+          {level("resistance", belief.resistance)}
+          {level("stop", belief.stop)}
+          {level("invalidation", belief.invalidation)}
+        </div>
+      )}
 
       {belief.top_evidence.length > 0 && (
         <div className="mt-3 flex flex-wrap gap-1.5">
-          {belief.top_evidence.map((e) => (
+          {belief.top_evidence.map((e, i) => (
             <span
-              key={`${e.source}-${e.direction}`}
+              key={`${e.source}-${i}`}
               className={cn(
                 "rounded px-1.5 py-0.5 text-xs",
                 e.direction >= 0 ? "bg-accent/10 text-accent" : "bg-loss/10 text-loss",
@@ -101,14 +110,7 @@ export function BeliefCard({ belief }: { belief: Belief }) {
             >
               <Calendar className="h-3.5 w-3.5" />
               <span className="font-medium">{c.kind}</span>
-              <span className="text-muted">
-                {new Date(c.scheduled_for).toLocaleString(undefined, {
-                  month: "short",
-                  day: "numeric",
-                  hour: "2-digit",
-                  minute: "2-digit",
-                })}
-              </span>
+              <span className="text-muted">{formatTime(c.scheduled_for)}</span>
               <span className="text-muted">impact {(c.expected_impact * 100).toFixed(0)}%</span>
             </div>
           ))}

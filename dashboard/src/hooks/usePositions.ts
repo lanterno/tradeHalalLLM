@@ -5,6 +5,7 @@ export function usePositions() {
   return useQuery({
     queryKey: ["positions"],
     queryFn: fetchPositions,
-    refetchInterval: 5_000,
+    // The bot snapshots each account once a minute; polling faster shows nothing new.
+    refetchInterval: 30_000,
   });
 }

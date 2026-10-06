@@ -7,7 +7,9 @@ import { apiFetch } from "./client";
 
 export interface PurificationSummary {
   available: true;
+  /** Still owed, all accounts. */
   total_usd: number;
+  by_account?: Record<string, number>;
   by_symbol: Record<string, number>;
   disbursed_total_usd: number;
   n_entries: number;

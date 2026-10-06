@@ -19,7 +19,7 @@ export function StatCard({ label, value, sub, className }: StatCardProps) {
       <p className="text-xs font-medium uppercase tracking-wider text-muted">
         {label}
       </p>
-      <p className="mt-1 text-2xl font-bold">{value}</p>
+      <p className="mt-1 text-lg font-bold tabular-nums sm:text-2xl">{value}</p>
       {sub && <p className="mt-0.5 text-xs text-muted">{sub}</p>}
     </div>
   );

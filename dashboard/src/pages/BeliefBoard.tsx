@@ -41,8 +41,8 @@ export default function BeliefBoard() {
       <div>
         <h1 className="text-2xl font-bold text-white">Belief Board</h1>
         <p className="text-sm text-muted">
-          The shadow engine's live market understanding — advisory only, never
-          trades.
+          Research: the shadow engine's live market understanding — advisory only, never
+          trades, and nothing the core portfolio acts on.
         </p>
       </div>
 

@@ -29,3 +29,27 @@ body {
   background: var(--color-border);
   border-radius: 3px;
 }
+
+/* Wide tables on a phone: keep each column on one line and let the table
+   scroll sideways in its box, rather than crushing columns into one word a
+   line. A cell meant to wrap (a thesis, a reason) opts out with
+   `whitespace-normal`; this sits in the base layer so utilities win. */
+@layer base {
+  .overflow-x-auto > table :is(th, td) {
+    white-space: nowrap;
+  }
+}
+
+/* Scroll shadows: a soft edge shows on whichever side has more table to
+   scroll to, and disappears at the ends (the "local" covers slide with the
+   content over the "scroll" shadows). */
+@layer components {
+  .overflow-x-auto:has(> table) {
+    background:
+      linear-gradient(to right, var(--color-surface) 30%, transparent) left / 2.5rem 100% no-repeat local,
+      linear-gradient(to left, var(--color-surface) 30%, transparent) right / 2.5rem 100% no-repeat local,
+      radial-gradient(farthest-side at 0 50%, rgb(255 255 255 / 0.12), transparent) left / 0.75rem 100% no-repeat scroll,
+      radial-gradient(farthest-side at 100% 50%, rgb(255 255 255 / 0.12), transparent) right / 0.75rem 100% no-repeat scroll;
+    background-color: var(--color-surface);
+  }
+}
