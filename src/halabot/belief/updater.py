@@ -192,6 +192,7 @@ class BeliefUpdater:
             return b  # keep the good prior verdict (INV-2)
         b.halal = verdict
         b.last_updated = now
+        prev_version = b.version
         version = await self.store.put(b)
         b.version = version
 
@@ -221,6 +222,8 @@ class BeliefUpdater:
                     correlation_id=correlation_id,
                 )
             )
+        if prev_version > 0 and version == prev_version:
+            return b  # the same verdict again: re-stamped, nothing to announce
         await self.bus.publish(
             new_event(
                 self.clock,
@@ -266,8 +269,11 @@ class BeliefUpdater:
         kept.sort(key=lambda c: c.scheduled_for)
         b.catalysts_pending = kept
         b.last_updated = now
+        prev_version = b.version
         version = await self.store.put(b)
         b.version = version
+        if prev_version > 0 and version == prev_version:
+            return b  # a calendar re-emitting a known release changes nothing
         await self.bus.publish(
             new_event(
                 self.clock,
@@ -377,6 +383,11 @@ class BeliefUpdater:
             return b
         version = await self.store.put(b)
         b.version = version
+        # The store re-stamps an unchanged belief under its existing version
+        # (PgBeliefStore.put). Nothing moved, so there is no update to announce
+        # and no new score to log: every RTH-calendar heartbeat outside the
+        # session used to publish belief.updated + conviction.scored per asset.
+        unchanged = prev.version > 0 and version == prev.version
 
         if invalidated:
             await self.bus.publish(
@@ -394,6 +405,8 @@ class BeliefUpdater:
                     correlation_id=correlation_id,
                 )
             )
+        if unchanged:
+            return b
         await self.bus.publish(
             new_event(
                 self.clock,

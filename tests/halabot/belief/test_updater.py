@@ -8,7 +8,7 @@ import pytest
 
 from halabot.belief.evidence import ContinuousCalendar
 from halabot.belief.schema import EvidenceItem, Levels, Regime
-from halabot.belief.store import InMemoryBeliefStore
+from halabot.belief.store import InMemoryBeliefStore, PgBeliefStore
 from halabot.belief.updater import BeliefUpdater, UpdaterConfig
 from halabot.conviction.raw import IdentityCalibrator
 from halabot.platform.bus import InProcessEventBus
@@ -444,3 +444,43 @@ async def test_prewindow_thesis_does_not_starve_catalyst_refresh():
     await updater.set_catalyst("NVDA", _cat("CPI", T0 + timedelta(minutes=45), impact=0.9), T0)
     await updater.apply_evidence("NVDA", [], T0 + timedelta(minutes=20))  # in-window
     assert thesis.calls == baseline + 1
+
+
+class _ClosedMarket:
+    """A calendar with no trading minutes in it: decay changes nothing."""
+
+    def minutes_between(self, start, end):
+        return 0.0
+
+
+@pytest.mark.asyncio
+async def test_unchanged_belief_announces_nothing(halabot_engine):
+    # PgBeliefStore re-stamps an unchanged belief under its version; the
+    # updater used to publish belief.updated + conviction.scored for it anyway.
+    bus = InProcessEventBus(InMemoryEventLog())
+    published: list[Event] = []
+    bus.subscribe(
+        {EventType.BELIEF_UPDATED, EventType.CONVICTION_SCORED}, lambda e: _append(published, e)
+    )
+    updater = BeliefUpdater(
+        store=PgBeliefStore(halabot_engine),
+        bus=bus,
+        clock=FakeClock(T0),
+        calendar=_ClosedMarket(),
+        regime=FakeRegime(),
+        levels=FakeLevels(),
+        calibrator=IdentityCalibrator(),
+        thesis_writer=FakeThesis(),
+        prices=FakePrices(),
+        positions=FakePositions(),
+        llm=FakeLLM(available=False),
+    )
+    await updater.apply_evidence("NVDA", [_ev(0.5)], T0)
+    assert [e.type for e in published] == [EventType.BELIEF_UPDATED, EventType.CONVICTION_SCORED]
+    published.clear()
+    await updater.apply_evidence("NVDA", [], T0 + timedelta(hours=1))  # a closed-market tick
+    catalyst = _cat("CPI", T0 + timedelta(days=1), impact=0.9)
+    await updater.set_catalyst("NVDA", catalyst, T0 + timedelta(hours=2))
+    assert [e.type for e in published] == [EventType.BELIEF_UPDATED]  # the new catalyst
+    await updater.set_catalyst("NVDA", catalyst, T0 + timedelta(hours=3))  # the same again
+    assert len(published) == 1
