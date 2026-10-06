@@ -57,3 +57,16 @@ def test_schema_default_for_simple_int_field(client):
     by_name = {r["env_name"]: r for r in rows}
     # The stock cycle ships at 15 minutes by default.
     assert by_name["TRADING_INTERVAL_MINUTES"]["default"] == 15
+
+
+def test_schema_never_sends_a_secrets_default(client):
+    rows = client.get("/api/config/schema").json()
+    by_name = {r["env_name"]: r for r in rows}
+
+    # Its default holds the repo-default Postgres password.
+    assert by_name["DATABASE_URL"]["secret"] is True
+    assert by_name["DATABASE_URL"]["default"] is None
+    for name in ("SLACK_WEBHOOK_URL", "LIVE_MODE_CONFIRMATION", "TELEGRAM_BOT_TOKEN"):
+        assert by_name[name]["secret"] is True
+    assert all(r["default"] is None for r in rows if r["secret"])
+    assert "trader-dev-only" not in str(rows)

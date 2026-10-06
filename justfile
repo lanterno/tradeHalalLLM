@@ -126,8 +126,10 @@ db-reset:
 # infra_pg-data volume attached) and infra/compose.home.yml is always layered
 # on: dashboard on 127.0.0.1:6010, Postgres on 127.0.0.1:5433. A recipe that
 # used the base file alone would recreate the running containers with both
-# ports published on every interface.
-home_compose := "docker compose -p infra -f infra/docker-compose.yml -f infra/compose.home.yml"
+# ports published on every interface. `--env-file .env` makes the repo's .env
+# the source of ${POSTGRES_PASSWORD} in the compose files (compose otherwise
+# looks for infra/.env, which does not exist, and silently uses the default).
+home_compose := "docker compose --env-file .env -p infra -f infra/docker-compose.yml -f infra/compose.home.yml"
 
 # Bring up the Postgres + pgvector container (127.0.0.1:5433)
 pg-up:
