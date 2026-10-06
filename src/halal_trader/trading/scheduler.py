@@ -7,23 +7,29 @@ import logging
 import os
 import signal
 from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
-from sqlalchemy.ext.asyncio import AsyncEngine
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from halal_trader.config import get_settings
 from halal_trader.core import events
 from halal_trader.core.heartbeat import (
+    DAILY_JOBS,
+    RECOMMENDATION,
     RESEARCH,
     STOCK_CYCLE,
+    STOCK_EOD,
     STOCK_LEDGER,
     STOCK_MONITOR,
     STOCK_PROCESS,
+    Beat,
     beat,
+    read_beats,
+    scheduled_at,
 )
 from halal_trader.core.llm import create_llm
 from halal_trader.db.models import init_db
@@ -55,6 +61,72 @@ _TRADING_LOCK_KEY = 0x48414C414C53544B
 
 
 _PID_FILE = Path("halal_trader.pid")
+
+_RECOMMEND_RETRY_AFTER = timedelta(minutes=15)
+# The core trades at 15:40 ET with market orders; a catch-up run after a
+# restart must leave them time to fill before the close.
+_CORE_TRADE_AT = time(15, 40)
+_CORE_CATCH_UP_CUTOFF = timedelta(minutes=5)
+# Daily jobs older than this are not caught up: their moment has passed.
+_CATCH_UP_HORIZON = timedelta(days=4)
+
+
+def plan_catch_up(
+    now: datetime,
+    beats: dict[str, Beat],
+    *,
+    core_due: bool,
+) -> list[tuple[str, date]]:
+    """The daily jobs a bot starting at ``now`` missed and may still run.
+
+    The scheduler's job store is in memory, so a restart near a job's time
+    silently skipped it (~30 restarts in 4.5 days, 2026-10). Each job's last
+    success is its heartbeat; each job has its own "too late" rule:
+
+    * ``recommend`` (09:05) and ``end_of_day`` (15:50, 12:50 on early-close
+      days) -- today's run, and only while the session is still open: an
+      end-of-day flatten after the close would queue market orders for the
+      next open.
+    * ``core_trade`` (15:40) -- today's, only if ``core_due`` (enabled, keyed
+      and not yet run today) and at least 5 minutes before the close, so its
+      market orders can fill.
+    * ``sync_broker_ledger`` (16:30) and ``research_daily`` (20:30) -- the
+      newest missed trading day within a few days, run for THAT day.
+
+    Returns ``(job, day)`` pairs, in the order to run them.
+    """
+    et = now.astimezone(MARKET_TZ)
+    today = et.date()
+    plan: list[tuple[str, date]] = []
+    trading_today = is_trading_day(today)
+    close = datetime.combine(today, effective_close_time(today), MARKET_TZ)
+
+    def missed(component: str, at: datetime) -> bool:
+        b = beats.get(component)
+        return b is None or b.beat_at < at
+
+    if trading_today and now < close:
+        rec_at = scheduled_at(DAILY_JOBS[RECOMMENDATION], today)
+        if now >= rec_at and missed(RECOMMENDATION, rec_at):
+            plan.append(("recommend", today))
+        core_at = datetime.combine(today, _CORE_TRADE_AT, MARKET_TZ)
+        if core_due and core_at <= now < close - _CORE_CATCH_UP_CUTOFF:
+            plan.append(("core_trade", today))
+        eod_at = scheduled_at(DAILY_JOBS[STOCK_EOD], today)
+        if now >= eod_at and missed(STOCK_EOD, eod_at):
+            plan.append(("end_of_day", today))
+
+    for component, job in ((STOCK_LEDGER, "sync_broker_ledger"), (RESEARCH, "research_daily")):
+        day = today
+        while today - day <= _CATCH_UP_HORIZON:
+            if is_trading_day(day):
+                at = scheduled_at(DAILY_JOBS[component], day)
+                if at <= now:
+                    if missed(component, at):
+                        plan.append((job, day))
+                    break
+            day -= timedelta(days=1)
+    return plan
 
 
 def _zoya_for(settings: Any) -> ZoyaClient | None:
@@ -95,8 +167,16 @@ class TradingBot:
         # ``_create_components``, run by the pre-market ``recommend`` job.
         # Never trades.
         self._recommendation: Any | None = None
-        self.scheduler = AsyncIOScheduler()
+        # Defaults for every job: a job delayed past its time (a busy event
+        # loop) still runs once rather than being dropped or run twice. Each
+        # job may widen its own grace. A restart skips jobs regardless -- the
+        # job store is in memory -- which _catch_up_missed_jobs handles.
+        self.scheduler = AsyncIOScheduler(
+            job_defaults={"coalesce": True, "max_instances": 1, "misfire_grace_time": 300}
+        )
         self._lock_file: int | None = None
+        # The session holding the database trading lock (_acquire_trading_lock).
+        self._trading_lock_conn: AsyncConnection | None = None
         # Lazy-built in ``_create_components``; closed in ``shutdown``.
         self._stocks_news: Any | None = None
         # Stocks-side self-review — wired in ``_create_components`` and
@@ -481,10 +561,13 @@ class TradingBot:
 
         logger.info("Trading bot initialized successfully")
 
-    async def recommend(self) -> None:
+    async def recommend(self, *, is_retry: bool = False) -> None:
         """Pre-market job: generate the advisory halal stock-of-the-day.
 
         Best-effort and non-fatal — a failure here must never affect trading.
+        A failed run is retried once, 15 minutes later (on 2026-10-05 one
+        transient failure left the day without a pick); only a failed retry
+        alerts.
         """
         now = now_eastern()
         if not is_trading_day(now.date()):
@@ -493,6 +576,7 @@ class TradingBot:
             return
         try:
             rec = await self._recommendation.generate()
+            await beat(self._engine, RECOMMENDATION, {"symbol": rec.get("symbol")})
             logger.info(
                 "Daily recommendation ready: %s (conviction %.2f)",
                 rec.get("symbol"),
@@ -536,9 +620,22 @@ class TradingBot:
                         market="stocks",
                     )
         except Exception as exc:  # noqa: BLE001 — advisory; never break the bot
-            logger.warning("Daily recommendation generation failed: %s", exc)
+            logger.warning("Daily recommendation generation failed: %r", exc)
+            if not is_retry and self.scheduler.running:
+                from apscheduler.triggers.date import DateTrigger
+
+                self.scheduler.add_job(
+                    self.recommend,
+                    DateTrigger(run_date=datetime.now(UTC) + _RECOMMEND_RETRY_AFTER),
+                    kwargs={"is_retry": True},
+                    id="daily_recommendation_retry",
+                    replace_existing=True,
+                    misfire_grace_time=900,
+                )
+                logger.info("Daily recommendation: retrying in %s", _RECOMMEND_RETRY_AFTER)
+                return
             if self._alerts is not None:
-                await self._alerts.notify("recommendation.failed", str(exc)[:300], market="stocks")
+                await self._alerts.notify("recommendation.failed", repr(exc)[:300], market="stocks")
 
     def _get_cycle_service(self) -> TradingCycleService:
         _, _, _, cs = self._require_initialized()
@@ -547,10 +644,7 @@ class TradingBot:
     async def _prune_audit_log(self) -> None:
         """Delete ``web_actions`` rows older than the retention window.
 
-        A retention of ``0`` disables the prune. Nothing calls this yet, so
-        ``WEB_AUDIT_RETENTION_DAYS`` is not enforced; wiring it into
-        ``end_of_day`` is an operator decision (the first run deletes the
-        whole backlog past the window).
+        Run by ``end_of_day``. A retention of ``0`` disables the prune.
         """
         retention = int(getattr(self.settings.web, "audit_retention_days", 0) or 0)
         if retention <= 0 or self._bundle is None:
@@ -920,13 +1014,14 @@ class TradingBot:
         risk = getattr(cycle_service, "last_risk_snapshot", None)
         await beat(self._engine, STOCK_CYCLE, {"risk": risk} if risk else None)
 
-    async def sync_broker_ledger(self) -> None:
+    async def sync_broker_ledger(self, *, day: date | None = None) -> None:
         """After-close job: copy Alpaca's record into the ledger and check ours.
 
         The broker's fills and equity are the books of truth
-        (execution/ledger.py). Today's fills are reconciled against the fills
-        this bot recorded; any difference alerts, because a fill the bot does
-        not know about is a position it is not managing.
+        (execution/ledger.py). The day's fills (``day``, default today; a
+        catch-up run after a restart passes the day it missed) are reconciled
+        against the fills this bot recorded; any difference alerts, because a
+        fill the bot does not know about is a position it is not managing.
         """
         from halal_trader.execution.alpaca_rest import AlpacaRestClient
         from halal_trader.execution.ledger import reconcile_fills, sync_broker_ledger
@@ -950,7 +1045,7 @@ class TradingBot:
                     await sync_broker_ledger(self._engine, core_client, account="core")
                 finally:
                     await core_client.aclose()
-            rec = await reconcile_fills(self._engine, today_eastern())
+            rec = await reconcile_fills(self._engine, day or today_eastern())
         except Exception as exc:  # noqa: BLE001 -- the job must not take the bot down
             logger.error("broker ledger sync failed: %r", exc)
             await self._alerts.notify("ledger.sync_failed", repr(exc)[:500])
@@ -968,19 +1063,21 @@ class TradingBot:
         logger.warning("broker ledger drift on %s: %s", rec.day, "; ".join(lines))
         await self._alerts.notify("ledger.fill_drift", f"{rec.day}: " + "; ".join(lines))
 
-    async def research_daily(self) -> None:
+    async def research_daily(self, *, day: date | None = None) -> None:
         """Evening job: top up bars, re-screen weekly, advance the forward books.
 
         Research only -- nothing here places an order. It runs after the
         extended session so the day's bars are final, and any failure is
-        alerted and contained.
+        alerted and contained. ``day`` defaults to today; a catch-up run after
+        a restart passes the trading day whose run was missed, so the books
+        never advance into a session that has not happened.
         """
         from halal_trader.research.daily import run_research
 
         if self._engine is None:
             return
         try:
-            run = await run_research(self._engine, self.settings, today=today_eastern())
+            run = await run_research(self._engine, self.settings, today=day or today_eastern())
         except Exception as exc:  # noqa: BLE001 -- the job must not take the bot down
             logger.error("research run failed: %r", exc)
             await self._alerts.notify("research.failed", repr(exc)[:500])
@@ -1113,9 +1210,8 @@ class TradingBot:
         """
         from halal_trader.execution.alpaca_broker import AlpacaRestBroker
 
-        accounts = [
-            ("day-trader", self.settings.alpaca.api_key, self.settings.alpaca.secret_key, True)
-        ]
+        alpaca = self.settings.alpaca
+        accounts = [("day-trader", alpaca.api_key, alpaca.secret_key, alpaca.paper_trade)]
         core = self.settings.core
         if core.alpaca_api_key and core.alpaca_secret_key:
             accounts.append(("core", core.alpaca_api_key, core.alpaca_secret_key, core.paper))
@@ -1270,6 +1366,9 @@ class TradingBot:
                         logger.debug("classifier telemetry roll-up failed: %s", exc)
 
             logger.info("Day summary: %s", summary)
+            # The flatten and the day's P&L are done: what the watchdog and a
+            # restarted bot's catch-up check for.
+            await beat(self._engine, STOCK_EOD, {"date": summary["date"]})
 
             # End-of-day self-review. Pulls
             # the day's closed round-trips, asks the LLM what patterns
@@ -1295,14 +1394,17 @@ class TradingBot:
                     logger.debug("Failed to send stocks daily summary: %s", exc)
 
         except Exception as e:
-            logger.error("End of day routine failed: %s", e)
+            logger.error("End of day routine failed: %r", e)
             if self._alerts is not None:
                 await self._alerts.notify(
                     "stock.end_of_day.failed",
-                    f"{type(e).__name__}: {e}",
+                    repr(e),
                     market="stocks",
                     severity="error",
                 )
+        # Housekeeping, whatever happened above: the dashboard's mutation audit
+        # rows past WEB_AUDIT_RETENTION_DAYS.
+        await self._prune_audit_log()
 
     async def _early_close_eod(self) -> None:
         """End-of-day for early-close days (market closes at 1:00 PM ET).
@@ -1457,6 +1559,66 @@ class TradingBot:
         except Exception as exc:  # noqa: BLE001 -- drop the session; that frees the lock too
             logger.debug("trading lock release failed (%r); invalidating the connection", exc)
             await conn.invalidate()
+
+    async def _core_due_today(self, today: date) -> bool:
+        """Is the core enabled, keyed, and without a run (or an order) today?"""
+        from sqlalchemy import text
+
+        core = self.settings.core
+        if self._engine is None or not (
+            core.enabled and core.alpaca_api_key and core.alpaca_secret_key
+        ):
+            return False
+        async with self._engine.connect() as conn:
+            ran = (
+                await conn.execute(
+                    text(
+                        "SELECT EXISTS (SELECT 1 FROM core_runs WHERE run_on = :d AND executed) "
+                        "OR EXISTS (SELECT 1 FROM core_orders WHERE "
+                        "(submitted_at AT TIME ZONE 'America/New_York')::date = :d)"
+                    ),
+                    {"d": today},
+                )
+            ).scalar()
+        return not ran
+
+    async def _catch_up_missed_jobs(self, now: datetime | None = None) -> list[tuple[str, date]]:
+        """Queue every daily job this (re)start missed and may still run (plan_catch_up).
+
+        Each runs as a one-off scheduler job, so startup is not held up and
+        the scheduler's one-instance rule still applies. Returns the plan.
+        """
+        if self._engine is None:
+            return []
+        now = now or datetime.now(UTC)
+        try:
+            beats = await read_beats(self._engine)
+            core_due = await self._core_due_today(now.astimezone(MARKET_TZ).date())
+        except Exception as exc:  # noqa: BLE001 -- the scheduled runs still happen
+            logger.warning("missed-job catch-up skipped: %r", exc)
+            return []
+        plan = plan_catch_up(now, beats, core_due=core_due)
+        for job, day in plan:
+            func = getattr(self, job)
+            kwargs: dict[str, Any] = (
+                {"day": day} if job in ("sync_broker_ledger", "research_daily") else {}
+            )
+            self.scheduler.add_job(
+                func,
+                "date",
+                run_date=now,
+                kwargs=kwargs,
+                id=f"catch_up_{job}",
+                replace_existing=True,
+                misfire_grace_time=600,
+            )
+            logger.warning(
+                "catching up %s for %s (its scheduled run was missed)",
+                job,
+                day,
+                extra={"event": events.JOB_CATCH_UP, "job": job},
+            )
+        return plan
 
     async def run_once(self) -> None:
         """One pre-market check and one trading cycle, then exit.
@@ -1722,7 +1884,10 @@ class TradingBot:
             try:
                 await self.pre_market()
             except Exception as e:
-                logger.warning("Startup pre-market failed (will retry at scheduled time): %s", e)
+                logger.warning("Startup pre-market failed (will retry at scheduled time): %r", e)
+
+            # Then any daily job this (re)start skipped and may still run.
+            await self._catch_up_missed_jobs()
 
             # Keep running until interrupted
             # The run loop doubles as the process heartbeat: every 60 s it
