@@ -113,3 +113,53 @@ async def test_system_health_counts(halabot_engine):
     assert health["last_event_ts"] == T0.isoformat()
     # active_beliefs counts current beliefs (one per asset, not per version).
     assert health["active_beliefs"] == 2
+
+
+@pytest.mark.asyncio
+async def test_list_beliefs_reads_the_latest_version_of_each_asset(halabot_engine):
+    await _seed_belief(halabot_engine, "NVDA", 0.6)
+    await _seed_belief(halabot_engine, "NVDA", 0.2)  # the newer version wins
+    await _seed_belief(halabot_engine, "AAPL", 0.5)
+    beliefs = await queries.list_beliefs(halabot_engine)
+    assert [(b["asset"], b["conviction"]) for b in beliefs] == [("AAPL", 0.5), ("NVDA", 0.2)]
+    assert await queries.list_beliefs(halabot_engine) == beliefs  # deterministic
+
+
+async def _bar(engine, asset: str, at: datetime, close: float, *, seen: datetime | None = None):
+    bar = new_event(
+        FakeClock(seen or at),
+        EventType.OBSERVATION_BAR,
+        source="alpaca-bars",
+        asset=asset,
+        payload={"o": close, "h": close, "low": close, "c": close, "bar_ts": at.isoformat()},
+    )
+    await PgEventLog(engine).append(bar)
+
+
+@pytest.mark.asyncio
+async def test_latest_prices_and_bar_closes(halabot_engine):
+    from datetime import timedelta
+
+    h = timedelta(hours=1)
+    await _bar(halabot_engine, "NVDA", T0, 100.0)
+    await _bar(halabot_engine, "NVDA", T0 + h, 101.0)
+    # The same bar seen again later, finalised: its last print is the close.
+    await _bar(halabot_engine, "NVDA", T0 + h, 102.0, seen=T0 + 2 * h)
+    await _bar(halabot_engine, "AAPL", T0 - timedelta(days=9), 50.0)
+
+    prices = await queries.latest_prices(halabot_engine, ["NVDA", "AAPL", "TSLA"], now=T0 + 3 * h)
+    assert prices == {"NVDA": (102.0, T0 + 2 * h)}  # AAPL's bar is outside the window
+    assert await queries.last_bar_at(halabot_engine) == T0 + 2 * h
+
+    closes = await queries.bar_closes(halabot_engine, ["NVDA"], since=T0 - h)
+    assert closes == {"NVDA": [(T0, 100.0), (T0 + h, 102.0)]}
+    assert await queries.latest_prices(halabot_engine, [], now=T0) == {}
+
+
+@pytest.mark.asyncio
+async def test_outcome_stats_and_open_positions_on_an_empty_engine(halabot_engine):
+    stats = await queries.outcome_stats(halabot_engine, cohort=2)
+    assert stats["current"]["closed"] == 0 and stats["earlier"]["closed"] == 0
+    assert stats["started"] is None and stats["median_hold_s"] is None
+    assert await queries.open_positions(halabot_engine, cohort=2) == []
+    assert await queries.calibration_probe(halabot_engine, ["NVDA"], since=T0) == (0, 0)

@@ -1,4 +1,7 @@
-"""GET /api/halabot/* — the shadow engine's belief board (Task D slice 1).
+"""GET /api/halabot/* — the shadow engine's belief board.
+
+``/beliefs`` and ``/overview`` are what the Belief Board page polls; their
+payloads are assembled in ``web/belief_board.py``.
 
 Read-only bridge from the :8082 dashboard to the halabot shadow engine's
 data. Reuses ``halabot.api.queries`` (pure async functions over any
@@ -14,6 +17,7 @@ payload instead of a 500 — the dashboard renders an honest empty board.
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
@@ -40,10 +44,24 @@ def register(app: FastAPI) -> None:
     async def api_halabot_beliefs(
         ctx: DashboardContext = Depends(get_ctx),
     ) -> JSONResponse:
-        from halabot.api import queries
+        from halal_trader.portfolio.core_account import core_account
+        from halal_trader.web import belief_board
 
-        rows = await _soft(queries.list_beliefs(ctx.engine), [])
-        return JSONResponse({"available": bool(rows), "beliefs": rows})
+        body = await belief_board.board(
+            ctx.engine,
+            core_account=core_account(ctx.settings.core.paper),
+            now=datetime.now(UTC),
+        )
+        return JSONResponse(body)
+
+    @app.get("/api/halabot/overview")
+    async def api_halabot_overview(
+        ctx: DashboardContext = Depends(get_ctx),
+    ) -> JSONResponse:
+        """The board's trust strip and side column in one read."""
+        from halal_trader.web import belief_board
+
+        return JSONResponse(await belief_board.overview(ctx.engine, now=datetime.now(UTC)))
 
     @app.get("/api/halabot/beliefs/{asset}")
     async def api_halabot_belief(
@@ -58,13 +76,21 @@ def register(app: FastAPI) -> None:
 
     @app.get("/api/halabot/decisions")
     async def api_halabot_decisions(
-        limit: int = 50, ctx: DashboardContext = Depends(get_ctx)
+        limit: int = 50,
+        asset: str | None = None,
+        ctx: DashboardContext = Depends(get_ctx),
     ) -> JSONResponse:
         from halabot.api import queries
+        from halal_trader.web import belief_board
 
         limit = max(1, min(limit, 200))
-        rows = await _soft(queries.recent_decisions(ctx.engine, limit=limit), [])
-        return JSONResponse(rows)
+        rows = await _soft(
+            queries.recent_decisions(
+                ctx.engine, limit=limit, asset=asset.upper() if asset else None
+            ),
+            [],
+        )
+        return JSONResponse(belief_board.decorate_decisions(rows))
 
     @app.get("/api/halabot/decisions/{correlation_id}")
     async def api_halabot_decision_chain(

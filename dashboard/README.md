@@ -37,7 +37,7 @@ What the SPA reads (one `src/api/*.ts` client per group):
 | `GET /api/home` | Home |
 | `GET /api/core` | Core portfolio |
 | `GET /api/recommendation{,/history,/scorecard}` | Stock of the Day |
-| `GET /api/halabot/{beliefs,decisions}` | Belief Board (shadow engine) |
+| `GET /api/halabot/{beliefs,overview,decisions}` | Belief Board (shadow engine) |
 | `GET /api/positions`, `GET /api/trades` | Positions, Trades |
 | `GET /api/analytics`, `GET /api/pnl/daily` | Analytics |
 | `GET /api/decisions`, `GET /api/adjustments`, `GET /api/metrics/rejections` | Decisions |
