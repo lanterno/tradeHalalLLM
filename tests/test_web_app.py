@@ -330,12 +330,12 @@ def test_metrics_llm_returns_zero_calls_with_no_log(client, tmp_path, monkeypatc
     assert r.json()["calls"] == 0
 
 
-def test_positions_reads_stocks_open_trades(client):
-    """``/api/positions`` reads ``get_open_trades`` (stocks repo).
-    Empty pre-trade is fine — the route just must return 200 and a list."""
+def test_positions_answer_with_no_account_reported(client):
+    """``/api/positions`` groups holdings by account (test_positions_api.py);
+    before any snapshot or fill it answers 200 with no accounts."""
     r = client.get("/api/positions")
     assert r.status_code == 200
-    assert isinstance(r.json(), list)
+    assert r.json() == {"accounts": []}
 
 
 # ── /api/system/status cadence ────────────────────

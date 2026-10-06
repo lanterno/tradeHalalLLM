@@ -23,17 +23,49 @@ export function formatQty(value: number, decimals = 6): string {
   return parseFloat(value.toFixed(decimals)).toString();
 }
 
-export function formatTime(iso: string): string {
+/** Every time on the dashboard is the market's: New York, labelled "ET". */
+export const MARKET_TZ = "America/New_York";
+
+const ET_DATETIME = new Intl.DateTimeFormat("en-US", {
+  timeZone: MARKET_TZ,
+  month: "short",
+  day: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+  hourCycle: "h23",
+});
+
+const ET_DATETIME_SECONDS = new Intl.DateTimeFormat("en-US", {
+  timeZone: MARKET_TZ,
+  month: "short",
+  day: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hourCycle: "h23",
+});
+
+/** An instant as "Oct 2, 15:46 ET": New York time whatever the browser's zone. */
+export function formatTime(
+  iso: string | null | undefined,
+  opts: { seconds?: boolean } = {},
+): string {
   if (!iso) return "";
   const d = new Date(iso);
-  return d.toLocaleString("en-US", {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false,
-  });
+  if (Number.isNaN(d.getTime())) return iso;
+  return `${(opts.seconds ? ET_DATETIME_SECONDS : ET_DATETIME).format(d)} ET`;
+}
+
+/** A span in its two largest units: "3d 15h", "2h 5m", "40s". */
+export function formatDuration(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  const d = Math.floor(s / 86_400);
+  const h = Math.floor((s % 86_400) / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  if (d) return h ? `${d}d ${h}h` : `${d}d`;
+  if (h) return m ? `${h}h ${m}m` : `${h}h`;
+  if (m) return `${m}m`;
+  return `${s}s`;
 }
 
 const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
@@ -62,11 +94,6 @@ export function pnlColor(value: number): string {
 export function relativeTime(iso: string): string {
   if (!iso) return "";
   const diff = Date.now() - new Date(iso).getTime();
-  const minutes = Math.floor(diff / 60_000);
-  if (minutes < 1) return "just now";
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  return `${days}d ago`;
+  if (diff < 60_000) return "just now";
+  return `${formatDuration(diff)} ago`;
 }

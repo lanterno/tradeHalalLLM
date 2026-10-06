@@ -1,6 +1,6 @@
 import { apiFetch } from "./client";
-import type { OpenPosition } from "./types";
+import type { PositionsResponse } from "./types";
 
-export async function fetchPositions(): Promise<OpenPosition[]> {
-  return apiFetch<OpenPosition[]>("/api/positions");
+export async function fetchPositions(): Promise<PositionsResponse> {
+  return apiFetch<PositionsResponse>("/api/positions");
 }

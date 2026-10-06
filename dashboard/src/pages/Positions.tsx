@@ -1,174 +1,193 @@
-import { useMemo } from "react";
+import { useState } from "react";
 import { usePositions } from "../hooks/usePositions";
 import { StatCard } from "../components/StatCard";
 import { ErrorState } from "../components/ErrorState";
-import { cn, formatUsd, formatQty, formatTime, pnlColor } from "../lib/utils";
-import { CHART_COLORS, CHART_TOOLTIP } from "../lib/charts";
-import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts";
+import type { AccountPositions, Holding } from "../api/types";
+import { cn, formatDate, formatDuration, formatQty, formatTime, formatUsd, pnlColor } from "../lib/utils";
 
-export default function Positions() {
-  const { data: positions, isLoading, isError, error, refetch } = usePositions();
+const SHOWN = 15;
+const STALE_SECONDS = 15 * 60;
 
-  // Positions are marked at the backend's REST snapshot (current_price =
-  // entry until a quote path lands).
-  const enriched = useMemo(() => {
-    if (!positions) return [];
-    return positions.map((p) => {
-      const current = p.current_price ?? p.entry_price;
-      const unrealizedPnl = (current - p.entry_price) * p.quantity;
-      const unrealizedPct = p.entry_price
-        ? (current - p.entry_price) / p.entry_price
-        : 0;
-      return { ...p, current_price: current, unrealized_pnl: unrealizedPnl, unrealized_pnl_pct: unrealizedPct };
-    });
-  }, [positions]);
+function usd(v: number | null | undefined): string {
+  return v == null ? "—" : formatUsd(v);
+}
 
-  const totalUnrealized = enriched.reduce(
-    (s, p) => s + (p.unrealized_pnl ?? 0),
-    0,
-  );
+function signedPct(v: number | null | undefined, digits = 2): string {
+  if (v == null) return "—";
+  return `${v >= 0 ? "+" : "−"}${Math.abs(v * 100).toFixed(digits)}%`;
+}
 
-  const allocationData = enriched.map((p) => ({
-    name: p.symbol,
-    value: p.entry_price * p.quantity,
-  }));
+const STATUS_STYLE: Record<string, string> = {
+  active: "border-accent/35 bg-accent/5 text-accent",
+  retired: "border-border bg-bg/40 text-muted",
+  disabled: "border-border bg-bg/40 text-muted",
+};
 
-  if (isError)
+function MarkedAt({ account }: { account: AccountPositions }) {
+  if (account.source === "ledger") {
     return (
-      <div className="p-4 sm:p-6">
-        <ErrorState error={error} onRetry={refetch} />
-      </div>
+      <span className="text-warning">
+        No broker snapshot yet · ledger quantities at the{" "}
+        {account.as_of ? `${formatDate(account.as_of)} close` : "last close"}
+      </span>
     );
-
+  }
+  const age = account.age_seconds ?? 0;
   return (
-    <div className="space-y-6 p-4 sm:p-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-white">Open Positions</h1>
-        <span className="text-xs text-muted">Marked at entry (REST snapshot)</span>
-      </div>
+    <span className={cn(age > STALE_SECONDS ? "text-warning" : "text-muted")}>
+      Broker marks as of {formatTime(account.as_of)}
+      {age > 60 ? ` · ${formatDuration(age * 1000)} old` : ""}
+    </span>
+  );
+}
 
-      <div className="grid grid-cols-2 gap-4 md:grid-cols-3">
-        <StatCard
-          label="Open Positions"
-          value={enriched.length}
-        />
+function HoldingsTable({ account }: { account: AccountPositions }) {
+  const [all, setAll] = useState(false);
+  const dayTrader = account.account === "paper";
+  const rows: Holding[] = all ? account.positions : account.positions.slice(0, SHOWN);
+  const hidden = account.positions.length - rows.length;
+
+  if (!account.positions.length) {
+    return (
+      <p className="rounded-xl border border-border bg-surface p-4 text-sm text-muted">
+        Nothing held.
+      </p>
+    );
+  }
+  return (
+    <div className="rounded-xl border border-border bg-surface p-2 sm:p-4">
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[640px] text-sm tabular-nums">
+          <thead>
+            <tr className="border-b border-border text-left text-xs uppercase tracking-wider text-muted">
+              <th className="px-3 py-2">Symbol</th>
+              <th className="px-3 py-2 text-right">Qty</th>
+              <th className="px-3 py-2 text-right">Avg cost</th>
+              <th className="px-3 py-2 text-right">Price</th>
+              <th className="px-3 py-2 text-right">Value</th>
+              <th className="px-3 py-2 text-right">Weight</th>
+              <th className="px-3 py-2 text-right">Unrealized P&L</th>
+              <th className="px-3 py-2 text-right">Today</th>
+              {dayTrader && (
+                <>
+                  <th className="px-3 py-2 text-right">Stop</th>
+                  <th className="px-3 py-2 text-right">Target</th>
+                  <th className="px-3 py-2">Opened</th>
+                </>
+              )}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((p) => (
+              <tr key={p.symbol} className="border-b border-border/50 hover:bg-surface-hover/50 transition-colors">
+                <td className="px-3 py-2 font-medium text-white">{p.symbol}</td>
+                <td className="px-3 py-2 text-right font-mono">{p.qty == null ? "—" : formatQty(p.qty, 4)}</td>
+                <td className="px-3 py-2 text-right font-mono text-muted">{usd(p.avg_entry)}</td>
+                <td className="px-3 py-2 text-right font-mono">{usd(p.price)}</td>
+                <td className="px-3 py-2 text-right font-mono">{usd(p.market_value)}</td>
+                <td className="px-3 py-2 text-right font-mono text-muted">
+                  {p.weight == null ? "—" : `${(p.weight * 100).toFixed(1)}%`}
+                </td>
+                <td className={cn("px-3 py-2 text-right font-mono font-semibold", pnlColor(p.unrealized_pl ?? 0))}>
+                  {usd(p.unrealized_pl)}
+                  <span className="ml-1 text-[10px] font-normal">({signedPct(p.unrealized_pl_pct)})</span>
+                </td>
+                <td className={cn("px-3 py-2 text-right font-mono", pnlColor(p.change_today ?? 0))}>
+                  {signedPct(p.change_today, 1)}
+                </td>
+                {dayTrader && (
+                  <>
+                    <td className="px-3 py-2 text-right font-mono text-loss">{usd(p.stop_loss)}</td>
+                    <td className="px-3 py-2 text-right font-mono text-accent">{usd(p.target_price)}</td>
+                    <td className="whitespace-nowrap px-3 py-2 text-muted">{formatTime(p.opened_at)}</td>
+                  </>
+                )}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {account.positions.length > SHOWN && (
+        <button
+          type="button"
+          onClick={() => setAll(!all)}
+          className="mt-3 px-3 text-xs text-muted hover:text-white"
+        >
+          {all ? "Show the largest only ▴" : `Show all ${account.positions.length} holdings (${hidden} more) ▾`}
+        </button>
+      )}
+    </div>
+  );
+}
+
+function AccountSection({ account }: { account: AccountPositions }) {
+  const pl = account.unrealized_pl;
+  const plPct = pl != null && account.invested - pl ? pl / (account.invested - pl) : null;
+  return (
+    <section className="space-y-3">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+        <h2 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-widest text-muted">
+          {account.label}
+          <span
+            className={cn(
+              "rounded-full border px-2 py-0.5 text-[10px] font-semibold tracking-wide",
+              STATUS_STYLE[account.status] ?? STATUS_STYLE.disabled,
+            )}
+          >
+            {account.status}
+          </span>
+        </h2>
+        <p className="text-xs">
+          <MarkedAt account={account} />
+        </p>
+      </div>
+      {account.account === "paper" && account.status === "retired" && (
+        <p className="text-xs text-muted">
+          Retired: it opens nothing new. What it still holds is closed by its own exits (stop, trailing
+          stop), which keep running.
+        </p>
+      )}
+      <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+        <StatCard label="Market value" value={formatUsd(account.invested)} />
         <StatCard
           label="Unrealized P&L"
-          value={
-            <span className={pnlColor(totalUnrealized)}>
-              {formatUsd(totalUnrealized)}
-            </span>
-          }
+          value={<span className={pnlColor(pl ?? 0)}>{usd(pl)}</span>}
+          sub={plPct == null ? undefined : `${signedPct(plPct)} on cost`}
         />
+        <StatCard label="Positions" value={account.positions.length} />
         <StatCard
-          label="Total Exposure"
-          value={formatUsd(
-            enriched.reduce((s, p) => s + p.entry_price * p.quantity, 0),
-          )}
+          label="Cash"
+          value={usd(account.cash)}
+          sub={account.equity != null ? `equity ${formatUsd(account.equity)}` : undefined}
         />
       </div>
+      <HoldingsTable account={account} />
+    </section>
+  );
+}
 
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-        {/* Positions table */}
-        <div className="lg:col-span-2 rounded-xl border border-border bg-surface p-4">
-          {isLoading ? (
-            <p className="py-8 text-center text-sm text-muted">Loading…</p>
-          ) : !enriched.length ? (
-            <p className="py-8 text-center text-sm text-muted">
-              No open positions.
-            </p>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-border text-left text-xs uppercase tracking-wider text-muted">
-                    <th className="px-3 py-2">Symbol</th>
-                    <th className="px-3 py-2 text-right">Qty</th>
-                    <th className="px-3 py-2 text-right">Entry</th>
-                    <th className="px-3 py-2 text-right">Current</th>
-                    <th className="px-3 py-2 text-right">P&L</th>
-                    <th className="px-3 py-2 text-right">SL</th>
-                    <th className="px-3 py-2 text-right">TP</th>
-                    <th className="px-3 py-2">Opened</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {enriched.map((p) => (
-                    <tr
-                      key={p.id}
-                      className="border-b border-border/50 hover:bg-surface-hover/50 transition-colors"
-                    >
-                      <td className="px-3 py-2 font-medium">{p.symbol}</td>
-                      <td className="px-3 py-2 text-right font-mono">
-                        {formatQty(p.quantity)}
-                      </td>
-                      <td className="px-3 py-2 text-right font-mono">
-                        {formatUsd(p.entry_price)}
-                      </td>
-                      <td className="px-3 py-2 text-right font-mono">
-                        {formatUsd(p.current_price ?? 0)}
-                      </td>
-                      <td
-                        className={cn(
-                          "px-3 py-2 text-right font-mono font-semibold",
-                          pnlColor(p.unrealized_pnl ?? 0),
-                        )}
-                      >
-                        {formatUsd(p.unrealized_pnl ?? 0)}
-                        <span className="ml-1 text-[10px] font-normal">
-                          ({((p.unrealized_pnl_pct ?? 0) * 100).toFixed(2)}%)
-                        </span>
-                      </td>
-                      <td className="px-3 py-2 text-right font-mono text-loss">
-                        {p.stop_loss ? formatUsd(p.stop_loss) : "—"}
-                      </td>
-                      <td className="px-3 py-2 text-right font-mono text-accent">
-                        {p.target_price ? formatUsd(p.target_price) : "—"}
-                      </td>
-                      <td className="px-3 py-2 text-muted whitespace-nowrap">
-                        {formatTime(p.timestamp)}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
+export default function Positions() {
+  const { data, isLoading, isError, error, refetch } = usePositions();
 
-        {/* Allocation pie */}
-        <div className="rounded-xl border border-border bg-surface p-4">
-          <h3 className="mb-4 text-sm font-medium uppercase tracking-wider text-muted">
-            Allocation
-          </h3>
-          {allocationData.length ? (
-            <ResponsiveContainer width="100%" height={240}>
-              <PieChart>
-                <Pie
-                  data={allocationData}
-                  cx="50%"
-                  cy="50%"
-                  innerRadius={50}
-                  outerRadius={80}
-                  paddingAngle={3}
-                  dataKey="value"
-                  stroke="none"
-                >
-                  {allocationData.map((_, i) => (
-                    <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />
-                  ))}
-                </Pie>
-                <Tooltip
-                  contentStyle={CHART_TOOLTIP}
-                  formatter={(value) => [formatUsd(Number(value)), "Value"]}
-                />
-              </PieChart>
-            </ResponsiveContainer>
-          ) : (
-            <p className="py-12 text-center text-sm text-muted">No positions.</p>
-          )}
-        </div>
+  return (
+    <div className="space-y-8 p-4 sm:p-6">
+      <div>
+        <h1 className="text-2xl font-bold text-white">Positions</h1>
+        <p className="mt-1 text-xs text-muted">
+          What each account holds, marked at the broker's prices from the bot's minute snapshot: the same
+          figures as the home page.
+        </p>
       </div>
+
+      {isError ? (
+        <ErrorState error={error} onRetry={refetch} />
+      ) : isLoading || !data ? (
+        <p className="py-8 text-center text-sm text-muted">Loading…</p>
+      ) : !data.accounts.length ? (
+        <p className="py-8 text-center text-sm text-muted">No account has reported any holdings yet.</p>
+      ) : (
+        data.accounts.map((a) => <AccountSection key={a.account} account={a} />)
+      )}
     </div>
   );
 }

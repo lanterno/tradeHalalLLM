@@ -73,17 +73,41 @@ export interface StrategyAdjustment {
   reasoning: string;
 }
 
-export interface OpenPosition {
-  id: number;
+/** One holding, marked by the broker (GET /api/positions). */
+export interface Holding {
   symbol: string;
-  quantity: number;
-  entry_price: number;
-  stop_loss: number | null;
-  target_price: number | null;
-  timestamp: string;
-  current_price?: number;
-  unrealized_pnl?: number;
-  unrealized_pnl_pct?: number;
+  qty: number | null;
+  avg_entry: number | null;
+  price: number | null;
+  market_value: number | null;
+  cost_basis: number | null;
+  unrealized_pl: number | null;
+  unrealized_pl_pct: number | null;
+  change_today: number | null; // a fraction: 0.012 is +1.2%
+  weight: number | null; // of the account's equity
+  // The day-trader's own exit levels (its ledger); absent on the core.
+  stop_loss?: number | null;
+  target_price?: number | null;
+  opened_at?: string;
+}
+
+export interface AccountPositions {
+  account: "core" | "paper" | string;
+  label: string;
+  status: "active" | "disabled" | "retired" | string;
+  /** "snapshot": the broker's marks, as of `as_of`; "ledger": fills at the last close. */
+  source: "snapshot" | "ledger";
+  as_of: string | null;
+  age_seconds: number | null;
+  equity: number | null;
+  cash: number | null;
+  invested: number;
+  unrealized_pl: number | null;
+  positions: Holding[];
+}
+
+export interface PositionsResponse {
+  accounts: AccountPositions[];
 }
 
 export interface HealthStatus {
