@@ -22,21 +22,52 @@ import { cn } from "../lib/utils";
 import { useHealth } from "../hooks/useSystem";
 import { ErrorBoundary } from "./ErrorBoundary";
 
-const NAV_ITEMS = [
-  { to: "/", icon: LayoutDashboard, label: "Home", end: true },
-  { to: "/core", icon: PieChart, label: "Core portfolio" },
-  { to: "/recommendation", icon: Star, label: "Stock of the Day" },
-  { to: "/beliefs", icon: Telescope, label: "Belief Board" },
-  { to: "/positions", icon: Crosshair, label: "Positions" },
-  { to: "/trades", icon: ArrowLeftRight, label: "Trades" },
-  { to: "/analytics", icon: BarChart3, label: "Analytics" },
-  { to: "/decisions", icon: Brain, label: "Decisions" },
-  { to: "/halal", icon: ShieldCheck, label: "Halal" },
-  { to: "/risk", icon: ShieldAlert, label: "Risk & Halt" },
-  { to: "/insights", icon: Microscope, label: "Insights" },
-  { to: "/observability", icon: Gauge, label: "Observability" },
-  { to: "/system", icon: Settings, label: "System" },
-] as const;
+interface NavItem {
+  to: string;
+  icon: typeof LayoutDashboard;
+  label: string;
+  end?: boolean;
+}
+
+// The core portfolio is the product and comes first; the advisory research
+// and the retired day-trader keep their pages, under headings that say so.
+const NAV_GROUPS: { heading: string | null; note?: string; items: NavItem[] }[] = [
+  {
+    heading: null,
+    items: [
+      { to: "/", icon: LayoutDashboard, label: "Home", end: true },
+      { to: "/core", icon: PieChart, label: "Core portfolio" },
+      { to: "/positions", icon: Crosshair, label: "Positions" },
+      { to: "/halal", icon: ShieldCheck, label: "Halal" },
+      { to: "/risk", icon: ShieldAlert, label: "Risk & Halt" },
+      { to: "/insights", icon: Microscope, label: "Insights" },
+    ],
+  },
+  {
+    heading: "Research",
+    note: "advisory, never trades",
+    items: [
+      { to: "/recommendation", icon: Star, label: "Stock of the Day" },
+      { to: "/beliefs", icon: Telescope, label: "Belief Board" },
+    ],
+  },
+  {
+    heading: "Day-trader",
+    note: "retired",
+    items: [
+      { to: "/trades", icon: ArrowLeftRight, label: "Trades" },
+      { to: "/analytics", icon: BarChart3, label: "Analytics" },
+      { to: "/decisions", icon: Brain, label: "Decisions" },
+    ],
+  },
+  {
+    heading: "Operations",
+    items: [
+      { to: "/observability", icon: Gauge, label: "Observability" },
+      { to: "/system", icon: Settings, label: "System" },
+    ],
+  },
+];
 
 function StatusDot({ isLive }: { isLive: boolean }) {
   return (
@@ -107,23 +138,37 @@ export function Layout() {
 
         {/* Nav */}
         <nav className="flex flex-1 flex-col gap-0.5 overflow-y-auto px-3 py-2">
-          {NAV_ITEMS.map(({ to, icon: Icon, label, ...rest }) => (
-            <NavLink
-              key={to}
-              to={to}
-              end={"end" in rest}
-              className={({ isActive }) =>
-                cn(
-                  "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors md:py-2",
-                  isActive
-                    ? "bg-accent/10 text-accent"
-                    : "text-muted hover:text-white hover:bg-surface-hover",
-                )
-              }
-            >
-              <Icon className="h-4 w-4" />
-              {label}
-            </NavLink>
+          {NAV_GROUPS.map((group) => (
+            <div key={group.heading ?? "main"} className="flex flex-col gap-0.5">
+              {group.heading && (
+                <p className="mt-4 mb-1 px-3 text-[10px] font-semibold uppercase tracking-widest text-muted/80">
+                  {group.heading}
+                  {group.note && (
+                    <span className="ml-1.5 font-normal normal-case tracking-normal text-muted/70">
+                      · {group.note}
+                    </span>
+                  )}
+                </p>
+              )}
+              {group.items.map(({ to, icon: Icon, label, end }) => (
+                <NavLink
+                  key={to}
+                  to={to}
+                  end={end}
+                  className={({ isActive }) =>
+                    cn(
+                      "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors md:py-2",
+                      isActive
+                        ? "bg-accent/10 text-accent"
+                        : "text-muted hover:text-white hover:bg-surface-hover",
+                    )
+                  }
+                >
+                  <Icon className="h-4 w-4" />
+                  {label}
+                </NavLink>
+              ))}
+            </div>
           ))}
         </nav>
 

@@ -32,7 +32,13 @@ export default function Decisions() {
 
   return (
     <div className="space-y-6 p-4 sm:p-6">
-      <h1 className="text-2xl font-bold text-white">LLM Decisions</h1>
+      <div>
+        <h1 className="text-2xl font-bold text-white">Day-trader decisions</h1>
+        <p className="mt-1 text-xs text-muted">
+          The retired day-trader's LLM calls, guard rejections and self-review. It runs no cycles now; this is
+          its record.
+        </p>
+      </div>
 
       {/* Guard rejections — why the bot didn't trade */}
       <GuardRejections />
