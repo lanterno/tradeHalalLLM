@@ -68,7 +68,7 @@ export function GuardRejections() {
                         {cat.label}
                       </span>
                     </td>
-                    <td className="px-3 py-2 text-xs text-muted">{r.reason}</td>
+                    <td className="min-w-64 whitespace-normal px-3 py-2 text-xs text-muted">{r.reason}</td>
                   </tr>
                 );
               })}

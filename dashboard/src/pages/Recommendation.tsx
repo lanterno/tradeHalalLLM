@@ -264,7 +264,7 @@ export default function Recommendation() {
                     <td className={`py-2 pr-4 ${pctColor(r.fwd_return_5d)}`}>
                       {pct(r.fwd_return_5d)}
                     </td>
-                    <td className="max-w-md py-2 text-muted">
+                    <td className="min-w-64 max-w-md whitespace-normal py-2 text-muted">
                       <Thesis text={r.thesis} />
                     </td>
                   </tr>

@@ -346,7 +346,7 @@ export default function RiskAndSystem() {
                     <td className="px-3 py-2 text-right font-mono">
                       {row.drift_usd != null ? `$${row.drift_usd.toFixed(2)}` : "—"}
                     </td>
-                    <td className="px-3 py-2 text-xs text-muted">{row.notes ?? ""}</td>
+                    <td className="min-w-48 whitespace-normal px-3 py-2 text-xs text-muted">{row.notes ?? ""}</td>
                   </tr>
                 ))}
               </tbody>

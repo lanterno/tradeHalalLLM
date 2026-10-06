@@ -10,7 +10,7 @@ import { MarketPanel } from "../components/home/MarketPanel";
 import { MoneyPanel } from "../components/home/MoneyPanel";
 import { PortfolioPanel } from "../components/home/PortfolioPanel";
 import { GatePanel, UpcomingPanel } from "../components/home/PlanPanels";
-import { cn, formatDate, formatPct, formatUsd, pnlColor, todayET } from "../lib/utils";
+import { cn, formatDate, formatPct, formatUsd, MARKET_TZ, pnlColor, todayET } from "../lib/utils";
 import { staleComponents, type HealthStatus } from "../api/types";
 
 const HIJRI_MONTHS = [
@@ -151,11 +151,13 @@ export default function Dashboard() {
   // Wait for that answer before judging staleness, so a retired day-trader's
   // old cycle beat never flashes the badge red on load.
   const healthReady = health && (status || statusError || data);
+  // The market's day (New York), like the Hijri date beside it from the API.
   const todayLong = new Date().toLocaleDateString("en-GB", {
     weekday: "long",
     day: "numeric",
     month: "long",
     year: "numeric",
+    timeZone: MARKET_TZ,
   });
 
   return (
