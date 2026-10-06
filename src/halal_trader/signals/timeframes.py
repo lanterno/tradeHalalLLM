@@ -47,7 +47,7 @@ class TimeframeAnalyzer:
                     "support_resistance": sr_levels,
                 }
             except Exception as e:
-                logger.debug("Multi-timeframe analysis failed for %s: %s", symbol, e)
+                logger.debug("Multi-timeframe analysis failed for %s: %r", symbol, e)
 
         return results
 
@@ -71,7 +71,7 @@ class TimeframeAnalyzer:
                     tf_indicators[interval] = indicators
                     self._cache[cache_key] = (now, indicators)
             except Exception as e:
-                logger.debug("Failed to get %s klines for %s: %s", interval, symbol, e)
+                logger.debug("Failed to get %s klines for %s: %r", interval, symbol, e)
 
         return tf_indicators
 
@@ -196,7 +196,7 @@ async def build_timeframe_text(analyzer: TimeframeAnalyzer | None, symbols: list
         if tf_results:
             return format_timeframes_for_prompt(tf_results)
     except Exception as exc:  # noqa: BLE001
-        logger.debug("Multi-timeframe analysis unavailable: %s", exc)
+        logger.debug("Multi-timeframe analysis unavailable: %r", exc)
     return ""
 
 

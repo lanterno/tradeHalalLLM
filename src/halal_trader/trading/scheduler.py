@@ -447,7 +447,7 @@ class TradingBot:
                 watchlist = await self.screener.get_halal_symbols()
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
-                    "halal symbols unavailable for reactor watchlist (%s) — reactor disabled",
+                    "halal symbols unavailable for reactor watchlist (%r) — reactor disabled",
                     exc,
                 )
                 watchlist = []
@@ -662,7 +662,7 @@ class TradingBot:
             if deleted:
                 logger.info("Pruned %d web_actions row(s) older than %d days", deleted, retention)
         except Exception as exc:  # noqa: BLE001
-            logger.warning("web_actions prune failed: %s", exc)
+            logger.warning("web_actions prune failed: %r", exc)
 
     # ── PID Lock ─────────────────────────────────────────────────
 
@@ -733,7 +733,7 @@ class TradingBot:
             try:
                 await self._stocks_news.close()
             except Exception as exc:  # noqa: BLE001
-                logger.debug("Stock news collector close failed: %s", exc)
+                logger.debug("Stock news collector close failed: %r", exc)
         await self._broker_client.disconnect()
         self._release_lock()
         await self._release_trading_lock()
@@ -832,7 +832,7 @@ class TradingBot:
             if await is_halted(self._engine):
                 return None, "Observation only — kill-switch engaged"
         except Exception as exc:  # noqa: BLE001
-            logger.debug("reactor entry halt check failed: %s", exc)
+            logger.debug("reactor entry halt check failed: %r", exc)
             return None, "Observation only — halt state unknown"
 
         # Only trade a live session — the reactor polls around the clock.
@@ -841,7 +841,7 @@ class TradingBot:
             if not getattr(clock, "is_open", False):
                 return None, "Observation only — market closed"
         except Exception as exc:  # noqa: BLE001
-            logger.debug("reactor entry market-clock check failed: %s", exc)
+            logger.debug("reactor entry market-clock check failed: %r", exc)
             return None, "Observation only — market state unknown"
 
         # The same entry gates the scheduled cycle applies, which this path
@@ -877,7 +877,7 @@ class TradingBot:
                 positions=positions,
             )
         except Exception as exc:  # noqa: BLE001
-            logger.error("reactor entry execution failed for %s: %s", event.symbol, exc)
+            logger.error("reactor entry execution failed for %s: %r", event.symbol, exc)
             return None, "Entry attempt errored — see logs"
 
         status = str(result.get("status", ""))
@@ -978,7 +978,7 @@ class TradingBot:
                         [d.get("date", d) if isinstance(d, dict) else d for d in next_days],
                     )
             except Exception as e:
-                logger.debug("Could not fetch market calendar: %s", e)
+                logger.debug("Could not fetch market calendar: %r", e)
 
             # Refresh halal stock cache
             await screener.ensure_cache()
@@ -988,11 +988,11 @@ class TradingBot:
 
             logger.info("Pre-market routine complete")
         except Exception as e:
-            logger.error("Pre-market routine failed: %s", e)
+            logger.error("Pre-market routine failed: %r", e)
             if self._alerts is not None:
                 await self._alerts.notify(
                     "stock.pre_market.failed",
-                    f"{type(e).__name__}: {e}",
+                    repr(e),
                     market="stocks",
                     severity="error",
                 )
@@ -1012,7 +1012,7 @@ class TradingBot:
                     logger.info("Consecutive stock losses detected — triggering self-review")
                     await self._self_review.review(lookback_days=1)
             except Exception as exc:  # noqa: BLE001
-                logger.debug("Stocks self-review trigger check failed: %s", exc)
+                logger.debug("Stocks self-review trigger check failed: %r", exc)
 
         await cycle_service.run_cycle()
         # The cycle's latest risk read rides along with its heartbeat: that is
@@ -1038,7 +1038,7 @@ class TradingBot:
         try:
             client = AlpacaRestClient(alpaca.api_key, alpaca.secret_key, paper=alpaca.paper_trade)
         except ValueError as exc:
-            logger.warning("broker ledger sync skipped: %s", exc)
+            logger.warning("broker ledger sync skipped: %r", exc)
             return
         try:
             await sync_broker_ledger(self._engine, client)
@@ -1335,7 +1335,7 @@ class TradingBot:
                             summary["llm_calls"] = int(row[0] or 0)
                             summary["llm_cost_usd"] = float(row[1] or 0.0)
                 except Exception as exc:
-                    logger.debug("Failed to enrich stocks daily summary with LLM cost: %s", exc)
+                    logger.debug("Failed to enrich stocks daily summary with LLM cost: %r", exc)
 
             # Classifier telemetry (cumulative since process start) —
             # surfaces reactor classify volume + cost so we can answer
@@ -1369,7 +1369,7 @@ class TradingBot:
                                     severity="critical",
                                 )
                     except Exception as exc:  # noqa: BLE001
-                        logger.debug("classifier telemetry roll-up failed: %s", exc)
+                        logger.debug("classifier telemetry roll-up failed: %r", exc)
 
             logger.info("Day summary: %s", summary)
             # The flatten and the day's P&L are done: what the watchdog and a
@@ -1390,14 +1390,14 @@ class TradingBot:
                             "; ".join(review.observations[:3]),
                         )
                 except Exception as exc:
-                    logger.debug("Stocks self-review failed: %s", exc)
+                    logger.debug("Stocks self-review failed: %r", exc)
 
             # Send daily summary via Telegram.
             if self._notifier and self._notifier.enabled:
                 try:
                     await self._notifier.notify_daily_summary(summary or {})
                 except Exception as exc:
-                    logger.debug("Failed to send stocks daily summary: %s", exc)
+                    logger.debug("Failed to send stocks daily summary: %r", exc)
 
         except Exception as e:
             logger.error("End of day routine failed: %r", e)

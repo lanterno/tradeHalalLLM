@@ -102,7 +102,7 @@ class EDGAREightKSource:
         try:
             await self._ensure_ticker_map()
         except Exception as exc:  # noqa: BLE001
-            logger.debug("EDGAR ticker-map fetch failed: %s", exc)
+            logger.debug("EDGAR ticker-map fetch failed: %r", exc)
             return []
 
         out: list[Catalyst] = []
@@ -114,7 +114,7 @@ class EDGAREightKSource:
             try:
                 cats = await self._fetch_8k_for_cik(sym, cik)
             except Exception as exc:  # noqa: BLE001
-                logger.debug("EDGAR 8-K fetch failed for %s: %s", sym, exc)
+                logger.debug("EDGAR 8-K fetch failed for %s: %r", sym, exc)
                 continue
             out.extend(cats)
         return out

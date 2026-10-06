@@ -201,5 +201,5 @@ async def fetch_vix_term_structure() -> RegimeReading | None:
             _last_good = reading
         return reading if reading is not None else _last_good
     except Exception as exc:  # noqa: BLE001 — advisory; a VIX outage is non-fatal
-        logger.debug("VIX term-structure fetch failed: %s", exc)
+        logger.debug("VIX term-structure fetch failed: %r", exc)
         return _last_good

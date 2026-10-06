@@ -590,7 +590,7 @@ async def _import_broker_only_positions(
     try:
         positions = await broker.get_all_positions()
     except Exception as exc:  # noqa: BLE001
-        logger.debug("reverse-orphan import: get_all_positions failed: %s", exc)
+        logger.debug("reverse-orphan import: get_all_positions failed: %r", exc)
         return
 
     recent = await repos.trades.get_recent_trades(limit=500)
@@ -719,7 +719,7 @@ async def reconcile_db_to_broker(
     try:
         positions = await broker.get_all_positions()
     except Exception as exc:  # noqa: BLE001
-        logger.warning("reconcile_db_to_broker: get_all_positions failed: %s", exc)
+        logger.warning("reconcile_db_to_broker: get_all_positions failed: %r", exc)
         positions = []
     for p in positions:
         sym = str(getattr(p, "symbol", "") or "").upper()

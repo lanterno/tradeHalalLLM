@@ -103,7 +103,7 @@ class BaseCycleService(ABC):
             except Exception as e:
                 elapsed_ms = int((time.monotonic() - t0) * 1000)
                 logger.error(
-                    "Trading cycle failed: %s",
+                    "Trading cycle failed: %r",
                     e,
                     exc_info=True,
                     extra={

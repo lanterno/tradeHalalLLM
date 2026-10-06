@@ -168,7 +168,7 @@ async def stage(
         outcome.error = repr(exc)
         if not swallow:
             raise
-        logger.debug("cycle stage %r failed (swallowed): %s", name, exc)
+        logger.debug("cycle stage %r failed (swallowed): %r", name, exc)
     finally:
         outcome.elapsed_ms = (time.monotonic() - t0) * 1000.0
         # Prometheus histogram (no-op without prometheus_client).

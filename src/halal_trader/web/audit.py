@@ -71,7 +71,7 @@ async def audit_middleware(
                 payload=payload,
             )
         except Exception as e:
-            logger.debug("audit begin_web_action failed: %s", e)
+            logger.debug("audit begin_web_action failed: %r", e)
 
     # Re-inject the body so downstream handlers can still read it.
     async def _receive() -> dict[str, Any]:
@@ -93,7 +93,7 @@ async def audit_middleware(
             try:
                 await repo.complete_web_action(action_id, status_code=status, error=error)
             except Exception as e:
-                logger.debug("audit complete_web_action failed: %s", e)
+                logger.debug("audit complete_web_action failed: %r", e)
 
 
 def _truncate_payload(body: bytes) -> str | None:

@@ -214,9 +214,19 @@ class SpendMeter:
             )
 
     async def _alert_once(self, day: date, kind: str, message: str) -> None:
+        """Alert ``kind`` once per ``day`` -- per pool, across processes and restarts.
+
+        The in-memory set alone re-sent "80% of the cap" after every restart,
+        and the bot and the shadow (one pool) each sent their own. The claim
+        lives in the database (core/heartbeat.py:claim_once), keyed by pool.
+        """
         if (day, kind) in self._alerted:
             return
         self._alerted.add((day, kind))
+        from halal_trader.core.heartbeat import claim_once
+
+        if not await claim_once(self._engine, f"{kind}:{self._pool}:{day.isoformat()}"):
+            return
         logger.warning(message, extra={"event": kind})
         if self._alert is not None:
             try:

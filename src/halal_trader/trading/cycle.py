@@ -320,9 +320,9 @@ class TradingCycleService(BaseCycleService):
                     ]
                     learnings_text = _format_learnings(obs)
                 except Exception as exc:  # noqa: BLE001
-                    logger.debug("self-review observation read failed: %s", exc)
+                    logger.debug("self-review observation read failed: %r", exc)
         except Exception as exc:  # noqa: BLE001
-            logger.debug("prompt-context fetch failed: %s", exc)
+            logger.debug("prompt-context fetch failed: %r", exc)
 
         analyze_kwargs = dict(
             account=account,
@@ -400,7 +400,7 @@ class TradingCycleService(BaseCycleService):
                         str(r.get("reason", status)),
                     )
                 except Exception as exc:  # noqa: BLE001
-                    logger.debug("Failed to record execution failure: %s", exc)
+                    logger.debug("Failed to record execution failure: %r", exc)
             if self._notifier and status in ("submitted", "filled"):
                 try:
                     await self._notifier.notify_trade(
@@ -412,7 +412,7 @@ class TradingCycleService(BaseCycleService):
                         order_id=str(r.get("order_id", "")),
                     )
                 except Exception as exc:  # noqa: BLE001
-                    logger.debug("Failed to send trade notification: %s", exc)
+                    logger.debug("Failed to send trade notification: %r", exc)
 
         # If the LLM proposed work AND every result was rejected/errored/
         # skipped, the cycle was a no-op despite a full LLM call. Emit
@@ -442,12 +442,12 @@ class TradingCycleService(BaseCycleService):
                 snap = await self._broker.get_stock_snapshot(sym)
                 snapshots[sym] = snap
             except Exception as e:
-                logger.debug("Failed to get snapshot for %s: %s", sym, e)
+                logger.debug("Failed to get snapshot for %s: %r", sym, e)
             try:
                 bar = await self._broker.get_stock_bars(
                     sym, days=_BARS_LOOKBACK_DAYS, timeframe="1Day"
                 )
                 bars[sym] = bar
             except Exception as e:
-                logger.debug("Failed to get bars for %s: %s", sym, e)
+                logger.debug("Failed to get bars for %s: %r", sym, e)
         return snapshots, bars

@@ -132,7 +132,7 @@ class FREDReleaseCalendarSource:
             try:
                 dates = await self._fetch_release_dates(release_id)
             except Exception as exc:  # noqa: BLE001
-                logger.debug("FRED fetch failed for %s: %s", release, exc)
+                logger.debug("FRED fetch failed for %s: %r", release, exc)
                 continue
             for d in dates:
                 out.append((release, d))

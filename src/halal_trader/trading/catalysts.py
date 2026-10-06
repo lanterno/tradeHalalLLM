@@ -65,7 +65,7 @@ class StockCatalystFeed:
             try:
                 out.extend(await source.fetch(symbols))
             except Exception as e:  # noqa: BLE001 — never let a source crash the cycle
-                logger.debug("Catalyst source %s failed: %s", type(source).__name__, e)
+                logger.debug("Catalyst source %s failed: %r", type(source).__name__, e)
         out.sort(key=lambda c: c.timestamp, reverse=True)
         return out
 

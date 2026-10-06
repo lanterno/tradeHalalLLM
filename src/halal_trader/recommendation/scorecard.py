@@ -258,7 +258,7 @@ async def _fetch_ohlc_cached(
         bars = await broker.get_stock_bars(symbol, days=_BARS_LOOKBACK_DAYS, timeframe="1Day")
         cache[symbol] = _ohlc_by_date(bars)
     except Exception as exc:  # noqa: BLE001 — skip a flaky symbol
-        logger.debug("scorecard: bars for %s failed: %s", symbol, exc)
+        logger.debug("scorecard: bars for %s failed: %r", symbol, exc)
         cache[symbol] = []
     return cache[symbol]
 
@@ -431,7 +431,7 @@ async def audit_scored_outcomes(broker: Any, repo: Any, *, limit: int = 500) -> 
                 rec["symbol"], days=max(days_needed, _BARS_LOOKBACK_DAYS), timeframe="1Day"
             )
         except Exception as exc:  # noqa: BLE001 — leave the row for a retry
-            logger.debug("audit: bars for %s failed: %s", rec.get("symbol"), exc)
+            logger.debug("audit: bars for %s failed: %r", rec.get("symbol"), exc)
             continue
         fr = _forward_outcomes(
             _ohlc_by_date(bars),

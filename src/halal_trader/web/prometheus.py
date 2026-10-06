@@ -8,7 +8,7 @@ hand keeps deployment dependency-free.
 Exposed metrics (all snapshot-style — Prometheus scrapes; we don't
 push):
 
-* ``halal_trader_bot_running`` — 1 / 0 liveness flag
+* ``halal_trader_bot_running`` — 1 / 0, from the bot's heartbeat
 * ``halal_trader_drawdown_pct`` — current drawdown from peak
 * ``halal_trader_portfolio_heat_pct`` — unrealized P&L / equity
 * ``halal_trader_cycle_latency_ms`` — last cycle's elapsed time
@@ -21,9 +21,12 @@ Each metric has a ``HELP`` + ``TYPE`` header per Prometheus convention.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncEngine
+
     from halal_trader.core.context import RuntimeView
 
 
@@ -69,20 +72,41 @@ def _format_value(value: float) -> str:
     return f"{value:g}"
 
 
-def collect_default_snapshots(runtime: RuntimeView) -> list[MetricSnapshot]:
+async def bot_alive(engine: AsyncEngine) -> bool:
+    """The stock bot's liveness from its heartbeat rows (core/heartbeat.py).
+
+    The web is a separate process: ``RuntimeView.bot_running`` is never set
+    in it, which is why ``halal_trader_bot_running`` always read 0.
+    """
+    from halal_trader.core.heartbeat import bot_liveness, read_beats
+
+    try:
+        beats = await read_beats(engine)
+    except Exception:  # noqa: BLE001 -- cannot tell: report not running
+        return False
+    now = datetime.now(UTC)
+    alive, _ = bot_liveness(beats, now=now, cycles_due=False)
+    return alive
+
+
+def collect_default_snapshots(
+    runtime: RuntimeView, *, bot_running: bool | None = None
+) -> list[MetricSnapshot]:
     """Pull standard halal-trader metrics out of the dashboard runtime view.
 
     Populated by the cycle, monitor, and analytics surfaces. Absent
     metrics are skipped (not fabricated as zero) so Prometheus alerting
-    can detect the gap explicitly.
+    can detect the gap explicitly. ``bot_running`` (from :func:`bot_alive`)
+    overrides the runtime view's flag, which only an in-process bot sets.
     """
     out: list[MetricSnapshot] = []
 
+    running = runtime.bot_running if bot_running is None else bot_running
     out.append(
         MetricSnapshot(
             name="halal_trader_bot_running",
-            help_text="1 if the bot's main loop is running, 0 otherwise",
-            value=1.0 if runtime.bot_running else 0.0,
+            help_text="1 if the stock bot's process heartbeat is fresh, 0 otherwise",
+            value=1.0 if running else 0.0,
         )
     )
 

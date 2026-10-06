@@ -123,6 +123,12 @@ def create_app() -> Any:
         allow_headers=["*"],
     )
 
+    # The container healthcheck and the home stack's probe poll /api/health*
+    # constantly; their access-log lines drowned everything else.
+    from halal_trader.logging import install_health_access_filter
+
+    install_health_access_filter()
+
     # Middleware execution is LIFO — the LAST registered runs FIRST
     # on inbound. To get the documented flow
     #   correlate (outermost) → auth → audit (innermost) → handler

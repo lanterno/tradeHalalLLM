@@ -81,5 +81,5 @@ async def record_stock_snapshot(
             trade_id=trade_id, pair=symbol, indicators=payload
         )
     except Exception as exc:
-        logger.debug("Failed to record stock snapshot for #%d: %s", trade_id, exc)
+        logger.debug("Failed to record stock snapshot for #%d: %r", trade_id, exc)
         return None

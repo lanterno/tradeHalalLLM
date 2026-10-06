@@ -362,7 +362,9 @@ class LogSettings(BaseSettings):
     model_config = SettingsConfigDict(**_BASE_CONFIG, env_prefix="LOG_")
     level: str = Field(default="INFO")
     dir: Path = Field(default=Path("logs"))
-    file_level: str = Field(default="DEBUG")
+    # INFO: the bot at DEBUG rotated its 10 MB log ~5x a session, pushing
+    # the last useful lines out of reach. LOG_FILE_LEVEL=DEBUG to dig.
+    file_level: str = Field(default="INFO")
     max_bytes: int = Field(default=10_485_760)
     backup_count: int = Field(default=5)
 

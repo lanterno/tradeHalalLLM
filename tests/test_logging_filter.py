@@ -88,3 +88,26 @@ def test_only_top_level_name_is_consulted():
     """A logger like `mybot.apscheduler` should NOT match — only the
     leading segment is checked."""
     assert _filt().filter(_record("mybot.apscheduler", logging.INFO)) is True
+
+
+def _access(path: str, status: int) -> logging.LogRecord:
+    return logging.LogRecord(
+        name="uvicorn.access",
+        level=logging.INFO,
+        pathname="x.py",
+        lineno=1,
+        msg='%s - "%s %s HTTP/%s" %d',
+        args=("127.0.0.1:5000", "GET", path, "1.1", status),
+        exc_info=None,
+    )
+
+
+def test_health_probe_access_lines_are_dropped_unless_they_fail() -> None:
+    from halal_trader.logging import HealthAccessFilter
+
+    f = HealthAccessFilter()
+    assert not f.filter(_access("/api/health", 200))
+    assert not f.filter(_access("/api/health/bot", 200))
+    assert f.filter(_access("/api/health/bot", 503))  # a failing probe is news
+    assert f.filter(_access("/api/home", 200))
+    assert f.filter(_record("uvicorn.access", logging.INFO))  # not an access tuple

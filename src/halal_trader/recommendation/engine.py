@@ -168,7 +168,7 @@ class DailyRecommendationEngine:
                 # vol forecaster (needs ~110+); indicators use the tail.
                 bars = await self._broker.get_stock_bars(sym, days=200, timeframe="1Day")
             except Exception as exc:  # noqa: BLE001 — skip a flaky symbol, keep the rest
-                logger.debug("recommendation: bars fetch failed for %s: %s", sym, exc)
+                logger.debug("recommendation: bars fetch failed for %s: %r", sym, exc)
                 continue
             klines = bars_to_klines(bars)
             if len(klines) < 20:
@@ -243,7 +243,7 @@ class DailyRecommendationEngine:
                 calibration=load_default_artifact(),
             )
         except ValueError as exc:
-            logger.debug("recommendation: outlook failed: %s", exc)
+            logger.debug("recommendation: outlook failed: %r", exc)
             return {}
         if outlook is None:
             return {}

@@ -73,7 +73,7 @@ class BuildPerformanceStage:
             stats = await self._analytics.compute_stats(lookback_days=self._lookback_days)
             state.performance_text = self._analytics.format_for_prompt(stats)
         except Exception as exc:  # noqa: BLE001
-            logger.debug("Performance stats unavailable: %s", exc)
+            logger.debug("Performance stats unavailable: %r", exc)
             state.performance_text = ""
         return state
 
@@ -101,7 +101,7 @@ class BuildActiveAdjustmentsStage:
         try:
             state.active_adjustments = self._self_review.format_adjustments_for_prompt()
         except Exception as exc:  # noqa: BLE001
-            logger.debug("Active adjustments unavailable: %s", exc)
+            logger.debug("Active adjustments unavailable: %r", exc)
             state.active_adjustments = ""
         return state
 
@@ -133,7 +133,7 @@ class BuildCatalystsStage:
             cats = await self._feed.fetch_all(state.halal_pairs)
             state.catalysts_text = format_catalysts_for_prompt(cats, symbols=state.halal_pairs)
         except Exception as exc:  # noqa: BLE001
-            logger.debug("Catalyst feed unavailable: %s", exc)
+            logger.debug("Catalyst feed unavailable: %r", exc)
             state.catalysts_text = ""
         return state
 
@@ -187,7 +187,7 @@ class BuildStockRiskStage:
             state.risk_state = output.state
             state.halt = bool(getattr(output.state, "is_halted", False))
         except Exception as exc:  # noqa: BLE001
-            logger.debug("Stock risk engine evaluation failed: %s", exc)
+            logger.debug("Stock risk engine evaluation failed: %r", exc)
             state.risk_text = ""
             state.halt = False
         return state
@@ -220,6 +220,6 @@ class FetchStockNewsStage:
             events = await self._news_collector.fetch_for_symbols(list(state.halal_pairs))
             state.news_text = format_news_for_prompt(events, symbol_filter=state.halal_pairs)
         except Exception as exc:  # noqa: BLE001
-            logger.debug("Stock news fetch failed: %s", exc)
+            logger.debug("Stock news fetch failed: %r", exc)
             state.news_text = ""
         return state

@@ -18,13 +18,13 @@ from fastapi.responses import PlainTextResponse
 from halal_trader.core.context import DashboardContext
 from halal_trader.core.metrics import render_prometheus_text
 from halal_trader.web.dependencies import get_ctx
-from halal_trader.web.prometheus import collect_default_snapshots, render_metrics
+from halal_trader.web.prometheus import bot_alive, collect_default_snapshots, render_metrics
 
 
 def register(app: FastAPI) -> None:
     @app.get("/metrics")
     async def metrics(ctx: DashboardContext = Depends(get_ctx)) -> PlainTextResponse:
-        snapshots = collect_default_snapshots(ctx.runtime)
+        snapshots = collect_default_snapshots(ctx.runtime, bot_running=await bot_alive(ctx.engine))
         body = render_metrics(snapshots)
         # Append the prometheus_client histograms.
         histograms = render_prometheus_text().decode("utf-8", errors="replace")
