@@ -133,17 +133,15 @@ choice (verified research verdict, 2026-07-01):
 
 ## Open operator-gated issues (you cannot fix these in code)
 
-1. **Halal screening runs in Zoya SANDBOX** (`ZOYA_USE_SANDBOX=true`) — verdicts
-   are *randomised*, not real Shariah screening. The universe is tiny (~3 of 20
-   "halal": AAPL/ADBE/INTU are arbitrary sandbox output), which is the root cause
-   of the stock bot's **symbol fixation** — the LLM funnels every entry into
-   those names because they're the *only* ones `get_halal_symbols()` returns.
-   Ironic corollary: with **no** Zoya key, `halal/cache.py` seeds the full
-   20-symbol AAOIFI `DEFAULT_HALAL_SYMBOLS` — a *better* universe than the
-   sandbox's 3. Fix is operator-only: a paid Zoya **production** key +
-   `ZOYA_USE_SANDBOX=false`. Until then, universe breadth is capped by the
-   screener, not the LLM — don't chase "symbol diversity" prompt tweaks; they
-   can't help.
+1. ~~Halal screening runs in Zoya SANDBOX~~ **Resolved 2026-10-06:** every
+   halal gate reads the strict in-house screen (`halal_screen_results`, weekly
+   in the evening research run): the core's order boundary, and since then the
+   day-trader's and reactor's (`halal/strict.py` via `HalalScreener`), whose
+   universe is the screen's `HALAL_UNIVERSE_SIZE` largest halal names. A stale
+   (>10 days) or missing screen makes nothing halal. Sandbox Zoya verdicts are
+   ignored; a production key could only veto. The old curated 20-name list
+   (`DEFAULT_HALAL_SYMBOLS`) is research-only now: seven of its names fail the
+   strict screen.
 2. **Chronic ~100% stock reconcile drift** is **ledger hygiene, not a trading
    bug** — the cycle and the monitor both decide off *broker truth*, not the DB
    ledger. Root cause was inconsistent exit recording; it's fixed *forward* (the
@@ -222,9 +220,9 @@ dormancy test enforces this). Live trading only arms via `ENGINE_LIVE` + a dated
 
 - **Daily "stock of the day" recommendation** (`recommendation/engine.py`, CLI
   `halal-trader recommend`, `/api/recommendation`, dashboard page, 09:05 ET job):
-  an LLM picks the single most-promising halal stock from the curated AAOIFI-20
-  universe (deliberately decoupled from the randomised sandbox Zoya screener so
-  "most promising" spans a real opportunity set). Advisory only — kept out of the
-  execution path entirely.
+  an LLM picks the single most-promising halal stock from the 30 largest names
+  the strict in-house screen passes (no pick when the screen is stale). A failed
+  run retries once after 15 minutes. Advisory only — kept out of the execution
+  path entirely.
 - **Belief Board** (`/beliefs` on the :8082 dashboard): renders the shadow
   engine's live per-asset beliefs + decision stream. Advisory only.

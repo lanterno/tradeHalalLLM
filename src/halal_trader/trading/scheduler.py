@@ -130,19 +130,18 @@ def plan_catch_up(
 
 
 def _zoya_for(settings: Any) -> ZoyaClient | None:
-    """The Zoya client the halal screen may trust, or None for the default list.
+    """The Zoya client the halal screen may consult as a veto, or None.
 
-    Zoya's SANDBOX returns randomised verdicts, so it must not decide what is
-    halal (operator decision 2026-10-01): with a sandbox key the bot screens
-    from the curated AAOIFI default list, as with no key at all, until the
-    in-house screen (plan 3.2) or a production key replaces it.
+    Zoya's SANDBOX returns randomised verdicts, so it must not decide anything
+    (operator decision 2026-10-01): with a sandbox key, as with none, the
+    strict in-house screen alone decides (halal/cache.py, halal/strict.py).
     """
     if not settings.zoya.api_key:
         return None
     if settings.zoya.use_sandbox:
         logger.warning(
             "Zoya key is a SANDBOX key: its verdicts are random, so they are ignored; "
-            "screening from the curated AAOIFI default list instead"
+            "the strict in-house screen alone decides"
         )
         return None
     return ZoyaClient(api_key=settings.zoya.api_key, use_sandbox=False)
@@ -256,7 +255,14 @@ class TradingBot:
         llm = create_llm(self.settings)
 
         # Halal screener
-        self.screener = HalalScreener(repo, _zoya_for(self.settings))
+        # The strict in-house screen decides (fails closed when stale). Its
+        # universe is rebuilt now, so the reactor's watchlist below and the
+        # shadow (which reads the same cache) never start from an old one.
+        self.screener = HalalScreener(repo, _zoya_for(self.settings), engine=self._engine)
+        try:
+            await self.screener.ensure_cache(force=True)
+        except Exception as exc:  # noqa: BLE001 -- pre-market retries; the gate reads the screen
+            logger.warning("halal universe refresh at startup failed: %r", exc)
 
         # Strategy & executor
         strategy = TradingStrategy(
@@ -556,7 +562,7 @@ class TradingBot:
         from halal_trader.recommendation.engine import DailyRecommendationEngine
 
         self._recommendation = DailyRecommendationEngine(
-            broker=self.broker, repo=self._repo, settings=self.settings
+            broker=self.broker, repo=self._repo, settings=self.settings, engine=self._engine
         )
 
         logger.info("Trading bot initialized successfully")

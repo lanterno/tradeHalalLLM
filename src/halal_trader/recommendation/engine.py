@@ -1,7 +1,8 @@
 """Daily halal "stock of the day" recommendation engine.
 
 ADVISORY ONLY. The engine assembles a compact technical snapshot of the
-curated AAOIFI halal universe, asks the LLM to pick the single most
+largest names the strict in-house halal screen passes, asks the LLM to pick
+the single most
 promising buy for the day, and persists the pick. It NEVER places an
 order or touches the execution path — it is purely a research surface
 for the dashboard / CLI / API.
@@ -14,29 +15,34 @@ from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from sqlalchemy.ext.asyncio import AsyncEngine
+
 from halal_trader.config import Settings
 from halal_trader.core.llm.base import BaseLLM
 from halal_trader.core.llm.factory import create_llm
 from halal_trader.core.llm.prompts import register as _register_prompt
 from halal_trader.db.repository import Repository
 from halal_trader.domain.ports import Broker
-from halal_trader.halal.cache import DEFAULT_HALAL_SYMBOLS
 from halal_trader.signals.indicators import compute_all
 from halal_trader.trading.bars import bars_to_klines
 
 logger = logging.getLogger(__name__)
 _ET = ZoneInfo("America/New_York")
+# How many of the screen's largest halal names the pick chooses from: liquid
+# enough to act on, small enough for one prompt and ~2 bar fetches each.
+UNIVERSE_SIZE = 30
 
 SYSTEM_PROMPT = """\
 You are a disciplined halal (Shariah-compliant) equity analyst for a
 single-user paper-trading research tool. Each day you pick the SINGLE most
-promising stock to BUY from a pre-screened, AAOIFI Shariah-compliant universe.
+promising stock to BUY from a pre-screened, Shariah-compliant universe (the
+stricter of AAOIFI and S&P Shariah on every axis).
 
 Rules:
 - Every candidate is ALREADY halal-screened — do not reject on compliance.
   In `halal_note`, briefly affirm why a long equity position in your pick is
   Shariah-permissible (a real productive business, not interest/gambling/
-  prohibited sectors, within AAOIFI financial-ratio limits).
+  prohibited sectors, within the screen's financial-ratio limits).
 - Pick exactly ONE symbol FROM THE PROVIDED UNIVERSE. Never invent a symbol.
 - "Most promising" = best risk/reward for a swing buy given the momentum,
   trend and technical posture in the data. Favour constructive structure
@@ -59,7 +65,7 @@ PROMPT_VERSION = _register_prompt("recommendation.daily.system", SYSTEM_PROMPT)
 USER_PROMPT_TEMPLATE = """\
 Date: {date} (US/Eastern).
 
-Candidate universe — {n} AAOIFI Shariah-compliant large-caps. Metrics are from
+Candidate universe — {n} Shariah-compliant large-caps. Metrics are from
 daily bars: chg5d/chg20d = % change over the last 5/20 daily bars; rsi =
 RSI-14; macd_h = MACD histogram; bb = position in the Bollinger band (0 low ..
 1 high); vol = volume vs 20-day average; atr = ATR-14; adx = ADX-14; from_hi =
@@ -94,18 +100,35 @@ class DailyRecommendationEngine:
         settings: Settings,
         llm: BaseLLM | None = None,
         universe: list[str] | None = None,
+        engine: AsyncEngine | None = None,
     ) -> None:
         self._broker = broker
         self._repo = repo
         self._settings = settings
         self._llm = llm or create_llm(settings)
-        # Curated AAOIFI list, NOT the (randomised in sandbox) Zoya screener —
-        # so "most promising" spans a real, stable opportunity set.
-        self._universe = universe or list(DEFAULT_HALAL_SYMBOLS)
+        # The universe is the strict in-house screen's largest halal names,
+        # read at each run (halal/strict.py); a test may pin its own. It used
+        # to be a curated 20-name list, seven of which the strict screen fails.
+        self._universe = list(universe) if universe else None
+        self._engine = engine if engine is not None else getattr(repo, "_engine", None)
+
+    async def _resolve_universe(self) -> list[str]:
+        if self._universe is not None:
+            return self._universe
+        from halal_trader.halal.strict import halal_universe
+
+        if self._engine is None:
+            raise RuntimeError("no database to read the halal screen from")
+        as_of, names = await halal_universe(
+            self._engine, today=datetime.now(_ET).date(), limit=UNIVERSE_SIZE
+        )
+        if not names:
+            raise RuntimeError(f"no fresh strict halal screen (newest: {as_of})")
+        return names
 
     async def generate(self) -> dict[str, Any]:
         """Assemble candidate data, pick the best, persist and return it."""
-        candidates = await self._build_candidates()
+        candidates = await self._build_candidates(await self._resolve_universe())
         if not candidates:
             raise RuntimeError("no candidate market data available")
         pick = await self._pick(candidates)
@@ -136,10 +159,10 @@ class DailyRecommendationEngine:
         )
         return rec
 
-    async def _build_candidates(self) -> dict[str, dict[str, Any]]:
+    async def _build_candidates(self, universe: list[str]) -> dict[str, dict[str, Any]]:
         """Per-symbol compact technical summary for the LLM context."""
         out: dict[str, dict[str, Any]] = {}
-        for sym in self._universe:
+        for sym in universe:
             try:
                 # 200 calendar days ≈ 138 trading bars — enough for the HAR
                 # vol forecaster (needs ~110+); indicators use the tail.
