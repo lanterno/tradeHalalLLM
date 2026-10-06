@@ -169,8 +169,15 @@ def test_bot_liveness_verdict(beats: dict, cycles_due: bool, alive: bool) -> Non
 
 
 def test_a_hung_cycle_during_market_hours_is_a_dead_bot(
-    client: TestClient, database_url: str, market_open: dict[str, bool]
+    client: TestClient,
+    database_url: str,
+    market_open: dict[str, bool],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    import halal_trader.config as config
+
+    monkeypatch.setenv("DAY_TRADER_ENABLED", "true")  # retired by default since 2026-10
+    monkeypatch.setattr(config, "_settings", None)
     market_open["open"] = True
     _beat_now(database_url, STOCK_PROCESS)  # the process is turning...
     _beat_now(database_url, STOCK_CYCLE, minutes_ago=60)  # ...but no cycle for an hour
