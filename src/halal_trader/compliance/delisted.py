@@ -122,7 +122,7 @@ def frame_periods(today: date) -> list[str]:
 async def unmapped_symbols(engine: AsyncEngine) -> list[str]:
     async with engine.connect() as conn:
         rows = await conn.execute(
-            text("SELECT DISTINCT symbol FROM halal_screen_results WHERE sic_description = :u"),
+            text("SELECT DISTINCT symbol FROM halal_screen_current WHERE sic_description = :u"),
             {"u": UNMAPPED},
         )
         return sorted(r.symbol for r in rows)
@@ -193,7 +193,7 @@ async def rescreen_mapped(sec: SecClient, engine: AsyncEngine) -> dict[date, int
     async with engine.connect() as conn:
         rows = await conn.execute(
             text(
-                "SELECT r.as_of, array_agg(r.symbol) AS symbols FROM halal_screen_results r "
+                "SELECT r.as_of, array_agg(r.symbol) AS symbols FROM halal_screen_current r "
                 "JOIN ticker_ciks t ON t.symbol = r.symbol AND t.status = 'mapped' "
                 "WHERE r.sic_description = :u GROUP BY r.as_of ORDER BY r.as_of"
             ),

@@ -87,7 +87,7 @@ async def covered_companies(engine: AsyncEngine) -> dict[int, str]:
         rows = await conn.execute(
             text(
                 "SELECT DISTINCT ON (cik) cik, symbol FROM ("
-                "  SELECT cik, symbol, count(*) AS n FROM halal_screen_results "
+                "  SELECT cik, symbol, count(*) AS n FROM halal_screen_current "
                 "  WHERE cik IS NOT NULL GROUP BY cik, symbol"
                 ") c ORDER BY cik, n DESC, symbol"
             )

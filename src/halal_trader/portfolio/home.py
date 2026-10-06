@@ -237,7 +237,7 @@ async def build(
             r.verdict: int(r.n)
             for r in await conn.execute(
                 text(
-                    "SELECT verdict, count(*) AS n FROM halal_screen_results "
+                    "SELECT verdict, count(*) AS n FROM halal_screen_current "
                     "WHERE as_of = :a GROUP BY verdict"
                 ),
                 {"a": screen_as_of},
@@ -397,7 +397,7 @@ async def build(
             r.symbol: (r.verdict, r.sic_description)
             for r in await conn.execute(
                 text(
-                    "SELECT symbol, verdict, sic_description FROM halal_screen_results "
+                    "SELECT symbol, verdict, sic_description FROM halal_screen_current "
                     "WHERE as_of = :a AND symbol = ANY(:s)"
                 ),
                 {"a": screen_as_of, "s": symbols},

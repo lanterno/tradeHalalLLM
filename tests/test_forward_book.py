@@ -255,7 +255,7 @@ async def _cap_screen(engine: AsyncEngine, as_of: date, caps: dict[str, float]) 
             text(
                 "INSERT INTO halal_screen_results (as_of, symbol, sic_description, verdict, "
                 "reasons, metrics, method, screened_at) VALUES (:a, :s, '', :v, '[]', "
-                "CAST(:m AS JSONB), 'test', now()) ON CONFLICT (as_of, symbol) DO UPDATE "
+                "CAST(:m AS JSONB), 'test', now()) ON CONFLICT (as_of, symbol, method) DO UPDATE "
                 "SET verdict = EXCLUDED.verdict, metrics = EXCLUDED.metrics"
             ),
             [

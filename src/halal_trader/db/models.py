@@ -978,12 +978,14 @@ class DailyBarRow(SQLModel, table=True):
 
 
 class HalalScreenResult(SQLModel, table=True):
-    """One in-house Shariah screening verdict per (as_of, symbol) (compliance/).
+    """One in-house Shariah screening verdict per (as_of, symbol, method) (compliance/).
 
     Every run is kept, so the screening history is point-in-time: a backtest
-    asks what the screen said on a given day. ``metrics`` stores the inputs
-    and ratios behind the verdict so each decision can be audited.
-    Research-grade until validated against halal ETF holdings (plan D3).
+    asks what the screen said on a given day. A re-screen under a new method
+    adds rows beside the old ones rather than rewriting them; readers use the
+    ``halal_screen_current`` view (the newest method per as_of and symbol).
+    ``metrics`` stores the inputs and ratios behind the verdict so each
+    decision can be audited.
     """
 
     __tablename__ = "halal_screen_results"
@@ -995,7 +997,7 @@ class HalalScreenResult(SQLModel, table=True):
     verdict: str = Field(index=True)
     reasons: list[str] = Field(sa_column=sa.Column("reasons", JSONB, nullable=False))
     metrics: dict[str, Any] = Field(sa_column=sa.Column("metrics", JSONB, nullable=False))
-    method: str
+    method: str = Field(primary_key=True)
     screened_at: datetime = Field(
         default_factory=lambda: datetime.now(UTC), sa_type=sa.DateTime(timezone=True)
     )

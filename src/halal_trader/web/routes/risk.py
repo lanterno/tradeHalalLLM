@@ -101,7 +101,7 @@ async def core_risk(engine: AsyncEngine) -> dict[str, Any]:
             for r in await conn.execute(
                 text(
                     "SELECT DISTINCT ON (symbol) symbol, verdict, sic_description "
-                    "FROM halal_screen_results WHERE symbol = ANY(:s) "
+                    "FROM halal_screen_current WHERE symbol = ANY(:s) "
                     "ORDER BY symbol, as_of DESC, screened_at DESC"
                 ),
                 {"s": symbols},

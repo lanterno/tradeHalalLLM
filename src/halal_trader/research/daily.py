@@ -11,6 +11,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -51,6 +52,20 @@ async def _screen_age(engine: AsyncEngine, today: date) -> timedelta | None:
     async with engine.connect() as conn:
         newest = (await conn.execute(text("SELECT max(as_of) FROM halal_screen_results"))).scalar()
     return None if newest is None else today - newest
+
+
+async def _screened_at(engine: AsyncEngine) -> datetime | None:
+    """When the newest screen ran: a filing accepted after it is not in it."""
+    async with engine.connect() as conn:
+        value: datetime | None = (
+            await conn.execute(
+                text(
+                    "SELECT max(screened_at) FROM halal_screen_results "
+                    "WHERE as_of = (SELECT max(as_of) FROM halal_screen_results)"
+                )
+            )
+        ).scalar()
+    return value
 
 
 UNIVERSE = 1500  # screened and kept current: wider than any book's universe
@@ -112,12 +127,13 @@ async def run_research(engine: AsyncEngine, settings: Settings, *, today: date) 
     age = await _screen_age(engine, today)
     reported: list[str] = []
     if age is not None and timedelta(days=1) <= age < SCREEN_EVERY:
-        # A core holding's new 10-Q/10-K can change its ratios: screen again
-        # now rather than at the end of the week, so a failing holding is
-        # sold days sooner.
+        # A core holding's new report (or an amended one) can change its
+        # ratios: screen again now rather than at the end of the week, so a
+        # failing holding is sold days sooner.
         sec = SecClient(settings.edgar.user_agent)
         try:
-            reported = await _holdings_reported(engine, sec, today - age)
+            since = await _screened_at(engine) or datetime.combine(today - age, time(), UTC)
+            reported = await _holdings_reported(engine, sec, since)
         except Exception as exc:  # noqa: BLE001
             logger.error("research: holdings filings check failed: %r", exc)
             run.errors.append(f"holdings filings: {exc!r}"[:300])
@@ -326,13 +342,15 @@ async def _backup_health(engine: AsyncEngine) -> list[str]:
 
 
 async def _validate_screen(engine: AsyncEngine, today: date) -> list[str]:
-    """After a weekly screen: agreement with SPUS/HLAL, kept for the digest; a large
-    pass neither ETF holds is reported (under the strict option it should not happen)."""
+    """After a weekly screen: agreement with SPUS/HLAL, kept for the digest. Reported:
+    a large pass neither ETF holds (under the strict option it should not happen),
+    and any pass whose interest expense implies debt over the limit."""
     from halal_trader.compliance.validate import weekly_check
     from halal_trader.core.heartbeat import beat
 
     v = await weekly_check(engine, today)
     suspects = [x.symbol for x in v.large_halal_not_in_etfs]
+    implied = [x.symbol for x in v.implied_debt_suspects]
     await beat(
         engine,
         "screen.validation",
@@ -340,13 +358,21 @@ async def _validate_screen(engine: AsyncEngine, today: date) -> list[str]:
             "agreement": round(v.agreement, 3),
             "etf_names": v.screened_etf_names,
             "rejected_etf_names": len(v.etf_held_we_reject),
+            "rejected_by": {kind: len(items) for kind, items in v.rejected_by_kind.items()},
             "large_passes_no_etf_holds": suspects,
+            "implied_debt_suspects": implied,
             "missing_data": [x.symbol for x in v.missing_data],
         },
     )
+    errors = []
     if suspects:
-        return [f"screen: passes large names no halal ETF holds: {', '.join(suspects[:8])}"]
-    return []
+        errors.append(f"screen: passes large names no halal ETF holds: {', '.join(suspects[:8])}")
+    if implied:
+        errors.append(
+            "screen: passes whose interest expense implies debt over 30% of market cap: "
+            f"{', '.join(implied[:8])}"
+        )
+    return errors
 
 
 async def _core_holdings(engine: AsyncEngine) -> set[str]:
@@ -371,29 +397,62 @@ async def _core_holdings(engine: AsyncEngine) -> set[str]:
     return set(dict(weights or {})) | ordered
 
 
-async def _holdings_reported(engine: AsyncEngine, sec: Any, screened: date) -> list[str]:
-    """Core holdings with a 10-Q or 10-K filed on or after the newest screen's date.
+# Filings that can change a screen's inputs: annual and quarterly reports,
+# their amendments and transition reports, and a foreign issuer's (whose
+# interim reports come on 6-K).
+SCREEN_FORMS = frozenset(
+    {
+        "10-K", "10-K/A", "10-KT", "10-KT/A",
+        "10-Q", "10-Q/A", "10-QT", "10-QT/A",
+        "20-F", "20-F/A", "40-F", "40-F/A", "6-K", "6-K/A",
+    }
+)  # fmt: skip
 
-    Their submissions are fetched fresh (about a hundred requests): the
-    weekly filings refresh is too slow to act on.
+
+def _accepted(recent: dict[str, Any], i: int) -> datetime | None:
+    """When filing ``i`` of a submissions page was accepted (UTC); its date at 17:00 ET
+    if the time is missing, as the filings history records it."""
+    stamps = recent.get("acceptanceDateTime") or []
+    stamp = str(stamps[i] or "") if i < len(stamps) else ""
+    if stamp:
+        return datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+    dates = recent.get("filingDate") or []
+    if i >= len(dates) or not dates[i]:
+        return None
+    filed = date.fromisoformat(str(dates[i]))
+    return datetime.combine(filed, time(17), ZoneInfo("America/New_York")).astimezone(UTC)
+
+
+async def _holdings_reported(engine: AsyncEngine, sec: Any, screened: datetime) -> list[str]:
+    """Core holdings with a report (``SCREEN_FORMS``) accepted after the newest screen ran.
+
+    ``screened`` is that screen's own timestamp, not its date: a report
+    accepted that afternoon, before the evening's screen, is already in it
+    and must not bring the next one forward. Submissions are fetched fresh
+    (about a hundred requests; the weekly filings refresh is too slow to act
+    on), and their 10-Q/10-K/8-K rows are recorded as events on the way.
     """
-    from halal_trader.events.daily import refresh_filings
-    from halal_trader.events.history import covered_companies
+    from halal_trader.events.history import covered_companies, filing_records
+    from halal_trader.events.store import EventRecorder
 
     held = await _core_holdings(engine)
     if not held:
         return []
     companies = {c: s for c, s in (await covered_companies(engine)).items() if s in held}
-    await refresh_filings(engine, sec, companies)
-    async with engine.connect() as conn:
-        rows = await conn.execute(
-            text(
-                "SELECT DISTINCT symbol FROM events WHERE kind IN ('10-q', '10-k') "
-                "AND symbol = ANY(:s) AND published_at >= :d ORDER BY symbol"
-            ),
-            {"s": sorted(held), "d": datetime.combine(screened, time(), UTC)},
-        )
-        return [r.symbol for r in rows]
+    recorder = EventRecorder(engine, raise_errors=True)
+    out: set[str] = set()
+    for cik, symbol in sorted(companies.items()):
+        subs = await sec.submissions(cik)
+        if not subs:
+            continue
+        recent = subs["filings"]["recent"]
+        await recorder.record(filing_records(recent, symbol))
+        for i, form in enumerate(recent.get("form") or []):
+            accepted = _accepted(recent, i) if form in SCREEN_FORMS else None
+            if accepted is not None and accepted > screened:
+                out.add(symbol)
+                break
+    return sorted(out)
 
 
 async def _execution_quality(

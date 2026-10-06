@@ -73,3 +73,37 @@ def test_names_doubted_only_for_missing_data_are_listed() -> None:
     }
     v = compare(verdicts, {"GAP", "MIX", "ADR"})
     assert [x.symbol for x in v.missing_data] == ["GAP"]
+
+
+def test_rejections_of_etf_held_names_are_split_by_kind() -> None:
+    from halal_trader.compliance.validate import rejection_kind
+
+    verdicts = {
+        "LAMR": Verdict("LAMR", "not_halal", ["business activity: billboard advertising"], 1e10),
+        "META": Verdict("META", "not_halal", ["excluded by SPUS's Shariah index (...)"], 1e12),
+        "KDP": Verdict(
+            "KDP", "not_halal", ["interest-bearing debt / market cap 75.7% >= 30%"], 4e10
+        ),
+        "XOM": Verdict("XOM", "doubtful", ["not computable: revenue"], 4e11),
+    }
+    v = compare(verdicts, set(verdicts))
+
+    assert {k: [x.symbol for x in items] for k, items in v.rejected_by_kind.items()} == {
+        "activity": ["LAMR"],
+        "veto": ["META"],
+        "ratio": ["KDP"],
+        "data": ["XOM"],
+    }
+    assert rejection_kind(verdicts["KDP"]) == "ratio"
+
+
+def test_passes_whose_interest_expense_implies_heavy_debt_are_listed_whatever_their_size() -> None:
+    verdicts = {
+        "SM": Verdict("SM", "halal", [], 7.7e9, implied_debt_ratio=0.37, debt_ratio=0.0),
+        "AES": Verdict("AES", "halal", [], 9.9e9, implied_debt_ratio=2.37, debt_ratio=0.07),
+        "OK": Verdict("OK", "halal", [], 5e9, implied_debt_ratio=0.12, debt_ratio=0.10),
+        "BXP": Verdict("BXP", "not_halal", ["debt"], 9.9e9, implied_debt_ratio=1.1),
+        "OLD": Verdict("OLD", "halal", [], 5e9),  # screened before v11: no figure
+    }
+    v = compare(verdicts, set())
+    assert [x.symbol for x in v.implied_debt_suspects] == ["AES", "SM"]  # largest first

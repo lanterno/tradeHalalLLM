@@ -18,8 +18,14 @@ Two screens, both must pass (AAOIFI Shariah Standard No. 21):
    * interest-bearing debt < 30% of market cap;
    * cash + interest-bearing securities < 30% of market cap;
    * interest (impermissible) income < 5% of revenue (when not reported,
-     estimated as cash and securities x 5%);
+     estimated as cash and securities x 5%), lending income included: a
+     mortgage REIT's loan interest, a captive finance arm's revenue;
    * accounts receivable < 49% of market cap (S&P's fourth ratio).
+
+   Cross-checks that make a pass doubtful rather than trusting it: a share
+   count so mis-scaled the market cap is implausible, and interest expense
+   implying far more debt than the tags read (``IMPLIED_RATE``). A REIT
+   whose assets are mostly loans fails as a lender.
 
 The operator chose the strict option (2026-10-02): wherever AAOIFI and
 S&P Shariah differ, the stricter rule applies, and an index Shariah
@@ -36,6 +42,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal
 
+from halal_trader.compliance.exclusions import NON_ALCOHOLIC_2080, denied
+
 Verdict = Literal["halal", "not_halal", "doubtful"]
 
 DEBT_LIMIT = 0.30
@@ -46,6 +54,20 @@ RECEIVABLES_LIMIT = 0.49  # S&P Shariah: accounts receivable < 49% of market cap
 # not report its interest income: at or above US bill yields in most years
 # since 2016, so the estimate errs high.
 ESTIMATED_YIELD = 0.05
+# Rate at which interest expense is read back into the debt it implies.
+# Investment-grade US borrowers paid about 4-5% on average in 2023-2026 and
+# high yield 7-9%; 6% sits between, and the implied figure only matters
+# when the debt read from the tags explains under half of it.
+IMPLIED_RATE = 0.06
+REIT_SIC = 6798
+# A REIT whose loans and mortgages held are at least this share of its assets
+# is a lender (mortgage REITs hold 70-100%; equity REITs' mezzanine loans
+# are a few percent: SLG 1%, RHP 1%, STWD 36%).
+LOANS_TO_ASSETS_LIMIT = 0.25
+# Sanity bound: no balance-sheet ratio of a listed company comes near 50x
+# its market cap (a distressed one at 10x is already rare). Beyond it the
+# share count is mis-scaled and the verdict is doubtful, not a ratio failure.
+IMPLAUSIBLE_RATIO = 50.0
 
 # (low, high, reason): SIC ranges whose primary activity is impermissible.
 PROHIBITED_SIC: tuple[tuple[int, int, str], ...] = (
@@ -60,10 +82,11 @@ PROHIBITED_SIC: tuple[tuple[int, int, str], ...] = (
     (6793, 6793, "commodity traders (financial)"),
     (6796, 6797, "investment offices (financial)"),
     (6799, 6799, "investors, not elsewhere classified (financial)"),
+    (2080, 2080, "beverages: SIC 2080 does not separate alcoholic drinks from soft drinks"),
     (2082, 2085, "alcoholic beverages"),
     (5181, 5182, "alcohol wholesale"),
     (5921, 5921, "liquor stores"),
-    (2111, 2141, "tobacco products"),
+    (2100, 2199, "tobacco products"),
     (5194, 5194, "tobacco wholesale"),
     (2011, 2013, "meat packing and processing (pork)"),
     (7011, 7011, "hotels and casinos (gambling, alcohol)"),
@@ -81,9 +104,18 @@ PROHIBITED_SIC: tuple[tuple[int, int, str], ...] = (
 )
 
 
-def prohibited_activity(sic: int | None) -> str | None:
-    """The reason a SIC code's activity is impermissible, or None if it is not."""
+def prohibited_activity(sic: int | None, cik: int | None = None) -> str | None:
+    """The reason a company's activity is impermissible, or None if it is not.
+
+    A company excluded by name (compliance/exclusions.py) is excluded
+    whatever its SIC code; otherwise the code decides, except that the
+    named non-alcoholic drink makers are exempt from SIC 2080.
+    """
+    if (reason := denied(cik)) is not None:
+        return reason
     if sic is None:
+        return None
+    if sic == 2080 and cik in NON_ALCOHOLIC_2080:
         return None
     for low, high, reason in PROHIBITED_SIC:
         if low <= sic <= high:
@@ -106,6 +138,17 @@ class Fundamentals:
     average_price: float | None = None  # 36-month mean month-end close
     foreign_filer: bool = False  # files 20-F/40-F: shares are ordinary shares, not the ADRs
     receivables: float | None = None  # accounts receivable; unreported counts as none
+    cik: int | None = None
+    # Annual interest expense: a debt figure the balance-sheet tags may miss
+    # (AES files ~$20B of debt under its own elements) shows up here.
+    interest_expense: float | None = None
+    # Interest and fees earned lending (a mortgage REIT's loan income, a
+    # captive finance arm's revenue): impure income on top of interest_income.
+    lender_income: float | None = None
+    loans_receivable: float | None = None  # loans and mortgages held as assets
+    total_assets: float | None = None
+    # Why an input could not be trusted; each makes the verdict doubtful.
+    data_issues: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -143,8 +186,13 @@ def screen(f: Fundamentals) -> ScreenResult:
         f.interest_income
         if f.interest_income is not None
         else (f.cash_and_securities or 0.0) * ESTIMATED_YIELD
-    )
+    ) + max(f.lender_income or 0.0, 0.0)
     impure_ratio = _ratio(impure, f.revenue) if f.revenue else None
+    implied_debt = (
+        f.interest_expense / IMPLIED_RATE if f.interest_expense and f.interest_expense > 0 else None
+    )
+    implied_debt_ratio = _ratio(implied_debt, market_cap)
+    loan_share = _ratio(f.loans_receivable, f.total_assets)
     metrics: dict[str, float | None] = {
         "sic": float(f.sic) if f.sic is not None else None,
         "market_cap": market_cap,
@@ -154,16 +202,44 @@ def screen(f: Fundamentals) -> ScreenResult:
         "receivables_ratio": receivables_ratio,
         "impure_income_ratio": impure_ratio,
         "impure_income_estimated": 1.0 if estimated else 0.0,
+        "lender_income_ratio": _ratio(f.lender_income, f.revenue) if f.lender_income else None,
+        "implied_debt_ratio": implied_debt_ratio,
+        "loans_to_assets": loan_share,
     }
 
-    activity = prohibited_activity(f.sic)
+    activity = prohibited_activity(f.sic, f.cik)
+    if activity is None and f.sic == REIT_SIC and loan_share is not None:
+        if loan_share >= LOANS_TO_ASSETS_LIMIT:
+            # SIC 6798 files mortgage REITs beside equity REITs. One whose
+            # assets are mostly loans is a lender, whatever it calls itself.
+            activity = (
+                f"financial: loans and mortgages are {loan_share:.0%} of assets "
+                f"(>= {LOANS_TO_ASSETS_LIMIT:.0%}): a mortgage REIT lends at interest"
+            )
     if activity is not None:
         return ScreenResult(f.symbol, "not_halal", [f"business activity: {activity}"], metrics)
 
     failures: list[str] = []
-    missing: list[str] = []
+    missing: list[str] = list(f.data_issues)
     if f.sic is None:
         missing.append("industry code")
+    if (
+        market_cap is not None
+        and max(debt_ratio or 0.0, cash_ratio or 0.0, receivables_ratio or 0.0) > IMPLAUSIBLE_RATIO
+    ):
+        # McDonald's tagged 711 diluted shares (millions, unscaled): a market
+        # cap of $0.2M and a debt ratio of 22,948,444%. That is a units error,
+        # not a verdict on the company; it says nothing either way.
+        return ScreenResult(
+            f.symbol,
+            "doubtful",
+            [
+                *(f"not computable: {m}" for m in missing),
+                f"not computable: market cap {market_cap:,.0f} is implausible against the "
+                f"balance sheet (over {IMPLAUSIBLE_RATIO:.0f}x): share count probably mis-scaled",
+            ],
+            metrics,
+        )
     for name, value, limit in (
         ("interest-bearing debt / market cap", debt_ratio, DEBT_LIMIT),
         ("cash and interest-bearing securities / market cap", cash_ratio, CASH_LIMIT),
@@ -176,6 +252,21 @@ def screen(f: Fundamentals) -> ScreenResult:
             failures.append(f"{name} {value:.1%} >= {limit:.0%}")
     if failures:
         return ScreenResult(f.symbol, "not_halal", failures, metrics)
+    if (
+        implied_debt is not None
+        and implied_debt_ratio is not None
+        and implied_debt_ratio >= DEBT_LIMIT
+        and (f.interest_bearing_debt or 0.0) < implied_debt / 2
+    ):
+        # The interest bill says the debt is there even if no tag we read
+        # does: at IMPLIED_RATE, interest expense implies debt over the limit,
+        # and the reported debt accounts for under half of it. Doubtful, not a
+        # failure: the true figure is unknown, but it is not evidence of a pass.
+        missing.append(
+            f"interest-bearing debt (interest expense implies about "
+            f"{implied_debt_ratio:.0%} of market cap at {IMPLIED_RATE:.0%}; "
+            f"the debt tags read explain under half)"
+        )
     if f.foreign_filer:
         # Ordinary shares x the ADR's price overstates market cap by the ADR
         # ratio (25x for NetEase), shrinking both balance-sheet ratios: a

@@ -189,7 +189,7 @@ def validate_cmd() -> None:
 
         from halal_trader.compliance.etf_holdings import HALAL_ETFS, latest_holdings
         from halal_trader.compliance.sec import SecClient
-        from halal_trader.compliance.validate import Verdict, compare
+        from halal_trader.compliance.validate import compare, verdict_of
         from halal_trader.config import get_settings
         from halal_trader.db.models import init_db
 
@@ -201,17 +201,13 @@ def validate_cmd() -> None:
             async with engine.connect() as conn:
                 rows = await conn.execute(
                     text(
-                        "SELECT symbol, verdict, reasons, metrics->>'market_cap' AS mc "
-                        "FROM halal_screen_results "
+                        "SELECT symbol, verdict, reasons, metrics->>'market_cap' AS mc, "
+                        "metrics->>'implied_debt_ratio' AS implied, "
+                        "metrics->>'debt_ratio' AS debt FROM halal_screen_current "
                         "WHERE as_of = (SELECT max(as_of) FROM halal_screen_results)"
                     )
                 )
-                verdicts = {
-                    r.symbol: Verdict(
-                        r.symbol, r.verdict, list(r.reasons), float(r.mc) if r.mc else None
-                    )
-                    for r in rows
-                }
+                verdicts = {r.symbol: verdict_of(r) for r in rows}
         finally:
             await sec.aclose()
             await engine.dispose()
@@ -227,12 +223,19 @@ def validate_cmd() -> None:
         f"ETF names screened: {v.screened_etf_names}/{v.etf_names}; "
         f"we agree on {v.agree} ({v.agreement:.0%})"
     )
+    by_kind = v.rejected_by_kind
     for title, items in (
-        ("ETF holds, we REJECT (possible false negatives)", v.etf_held_we_reject),
-        ("ETF holds, we are DOUBTFUL (missing data)", v.etf_held_we_doubt),
+        ("ETF holds, we REJECT on a ratio (possible false negatives)", by_kind.get("ratio", [])),
+        ("ETF holds, we REJECT on activity (a judgment)", by_kind.get("activity", [])),
+        ("ETF holds, the other ETF's index VETOES it", by_kind.get("veto", [])),
+        ("ETF holds, we are DOUBTFUL (missing data)", by_kind.get("data", [])),
         (
             "We PASS, no ETF holds, market cap >= $50B (possible false positives)",
             v.large_halal_not_in_etfs,
+        ),
+        (
+            "We PASS, interest expense implies debt >= 30% (possible false positives)",
+            v.implied_debt_suspects,
         ),
     ):
         console.print(f"\n[bold]{title}: {len(items)}[/bold]")

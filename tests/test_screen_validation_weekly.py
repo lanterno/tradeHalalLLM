@@ -62,3 +62,25 @@ async def test_a_large_pass_no_etf_holds_is_reported(engine: AsyncEngine) -> Non
     errors = await _validate_screen(engine, TODAY)
     assert errors and "BIG" in errors[0]
     assert (await _beat(engine))["large_passes_no_etf_holds"] == ["BIG"]
+
+
+async def test_a_pass_whose_interest_expense_implies_heavy_debt_is_reported(
+    engine: AsyncEngine,
+) -> None:
+    await _seed(engine, {"AAA": ("halal", 2e11), "BBB": ("not_halal", 2e11)})
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO halal_screen_results (as_of, symbol, sic_description, verdict, "
+                "reasons, metrics, method, screened_at) VALUES (:a, 'SM', '', 'halal', '[]', "
+                "CAST(:m AS JSONB), 'test', now())"
+            ),
+            {"a": TODAY, "m": json.dumps({"market_cap": 7.7e9, "implied_debt_ratio": 0.37})},
+        )
+
+    errors = await _validate_screen(engine, TODAY)
+
+    assert any("interest expense" in e and "SM" in e for e in errors)
+    beat = await _beat(engine)
+    assert beat["implied_debt_suspects"] == ["SM"]
+    assert beat["rejected_by"] == {"ratio": 1}  # BBB, held by the ETF and rejected

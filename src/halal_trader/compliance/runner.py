@@ -1,33 +1,73 @@
 """Gather fundamentals from SEC and the price store, screen, persist.
 
 One screening run = one ``as_of`` date. Results go to
-``halal_screen_results`` keyed (as_of, symbol), so every run is kept: the
-screening history is point-in-time, and a backtest can ask what the screen
-said on a given day instead of using today's verdicts on yesterday's data.
+``halal_screen_results`` keyed (as_of, symbol, method), so every run is
+kept: the screening history is point-in-time, and a backtest can ask what
+the screen said on a given day instead of using today's verdicts on
+yesterday's data. A re-screen under a newer method adds rows beside the old
+ones (an order that cited a screen can still be audited against what it
+said); readers take the newest method through the ``halal_screen_current``
+view. Re-running the same method for the same date replaces its own rows.
 
 Concept choices (each a judgment call, recorded here):
 
-* interest-bearing debt = the largest of the long-term totals companies
-  actually file (LongTermDebt; LongTermDebtNoncurrent + LongTermDebtCurrent;
-  LongTermDebtAndCapitalLeaseObligationsIncludingCurrentMaturities;
-  LongTermDebtAndCapitalLeaseObligations + its Current part; the noncurrent
-  figure + DebtCurrent), plus ShortTermBorrowings, CommercialPaper and
-  FinanceLeaseLiability. Filers pick one family: CVX files only the
-  IncludingCurrentMaturities total, and before v3 its $37B of debt read as
-  its $0.4B of short-term borrowings. Overlaps between families can count
-  some debt twice; taking the largest errs strict, never lenient.
-  Operating leases are excluded (not interest-bearing borrowing). A company
-  that files XBRL but tags none of these is treated as debt-free.
+* interest-bearing debt is read two ways and the larger wins (``debt_of``):
+  - **filed totals**: LongTermDebt; LongTermDebtNoncurrent + Current;
+    LongTermDebtAndCapitalLeaseObligationsIncludingCurrentMaturities;
+    LongTermDebtAndCapitalLeaseObligations + its Current part; the
+    noncurrent figure + DebtCurrent; DebtAndCapitalLeaseObligations;
+    DebtLongtermAndShorttermCombinedAmount; DebtInstrumentCarryingAmount;
+    NotesAndLoansPayable. Filers pick one family: CVX files only the
+    IncludingCurrentMaturities total, and before v3 its $37B of debt read as
+    its $0.4B of short-term borrowings.
+  - **the sum of five kinds of borrowing**, each read as the largest of its
+    synonyms: notes (NotesPayable, SeniorNotes, SeniorLongTermNotes +
+    SeniorNotesCurrent, LongTermNotesPayable + NotesPayableCurrent,
+    UnsecuredDebt, UnsecuredLongTermDebt), secured debt (SecuredDebt,
+    SecuredLongTermDebt), credit lines (LineOfCredit, LongTermLineOfCredit +
+    LinesOfCreditCurrent), convertibles (ConvertibleDebt, its Noncurrent +
+    Current, ConvertibleNotesPayable, ConvertibleLongTermNotesPayable +
+    ConvertibleNotesPayableCurrent) and loans (LoansPayable, OtherLongTermDebt,
+    OtherBorrowings, OtherLoansPayable). REITs and homebuilders file their debt
+    only this way: KRC as SecuredDebt + UnsecuredDebt, BXP as SeniorNotes +
+    SecuredDebt, NNN as NotesPayable + LoansPayable. Before v11 none of these
+    were read, and 98 of 467 passes on 2026-10-05 read as debt-free.
+  Synonyms within a kind are not added (MAA files the same notes as
+  NotesPayable and UnsecuredDebt), kinds are, and the two readings are never
+  added to each other. Where a filer tags one borrowing under two kinds the
+  sum overstates (MAA's NotesPayable includes its $0.36B secured debt: +6%);
+  the error is always upward, which the strict option accepts.
+  ShortTermBorrowings, CommercialPaper and FinanceLeaseLiability are added
+  on top, as before. Operating leases are excluded (not borrowing).
+  A company that tags none of it reads as debt-free, and is then held to its
+  interest expense (InterestExpense, InterestExpenseNonoperating,
+  InterestExpenseDebt, InterestPaidNet; the largest): debt implied at 6%
+  over the limit, with the tags explaining under half, is doubtful
+  (aaoifi.IMPLIED_RATE). AES files ~$20B of debt under its own elements.
 * cash and interest-bearing securities = CashAndCashEquivalentsAtCarryingValue
   (else CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents, which
-  is larger, so strict) plus the largest of ShortTermInvestments, MarketableSecuritiesCurrent and
-  AvailableForSaleSecuritiesDebtSecuritiesCurrent (companies often tag the
-  same holding under more than one, so they are not summed).
+  is larger, so strict, else Cash) plus the largest of ShortTermInvestments,
+  MarketableSecuritiesCurrent and AvailableForSaleSecuritiesDebtSecuritiesCurrent
+  (companies often tag the same holding under more than one, so they are not
+  summed).
 * interest income = InvestmentIncomeInterest, else InterestIncomeOther, else
-  InvestmentIncomeInterestAndDividend; revenue = Revenues, else
-  RevenueFromContractWithCustomerExcludingAssessedTax, else the Including
-  variant, else SalesRevenueNet.
-  Both from the latest calendar-year frame that has them.
+  InvestmentIncomeInterestAndDividend; plus lending income, the largest of
+  InterestAndDividendIncomeOperating, InterestAndFeeIncomeLoansAndLeases (and
+  its Commercial, Consumer and RealEstate parts), InterestIncomeOperating,
+  InterestIncomeSecuritiesMortgageBacked and FinancialServicesRevenue: 82%
+  of STWD's revenue is InterestAndFeeIncomeLoansCommercial, which v10 did not
+  read. Revenue = Revenues, else RevenueFromContractWithCustomerExcluding-
+  AssessedTax, else the Including variant, else SalesRevenueNet. All from the
+  latest calendar-year frame that has them.
+* loans held = the largest of MortgageLoansOnRealEstate, LoansAndLeases-
+  ReceivableNetReportedAmount, FinancingReceivableExcludingAccruedInterest-
+  AfterAllowanceForCreditLoss and NotesReceivableNet, against Assets: a REIT
+  (SIC 6798) whose assets are mostly loans is a lender.
+* receivables = the largest of AccountsReceivableNetCurrent,
+  ReceivablesNetCurrent (CAH and MCK file only this) and
+  AccountsNotesAndLoansReceivableNetCurrent. Unreported still counts as
+  none: the 49% test rarely binds, and an absent tag on a REIT or a
+  software company is usually a real absence.
 * price = the latest raw close in daily_bars (run `halal-trader data
   backfill` first). Shares = dei EntityCommonStockSharesOutstanding, else
   diluted weighted-average shares: multi-class filers (GOOG, META) report
@@ -38,23 +78,49 @@ Concept choices (each a judgment call, recorded here):
   Market cap = shares x the average price, else x the price. Adjusting
   for dividends within the window lowers past prices a little, so the
   average understates market cap and errs strict.
+* splits after a share count was filed: the price is today's, the count is
+  as of its filing, so each count is put on the price's basis
+  (``corporate_actions``, ``rescale``). A split shows in the stored bars as
+  a one-session jump in raw / adjusted close (adjusted bars carry every
+  split up to the day they were fetched), and that jump is the split ratio:
+  APH's 2:1 of 2026-09-03 and MNST's of 2026-08-11 halved their market caps
+  until v11, and KLAC's pre-split diluted count won the mis-scale guard
+  against its post-split cover page. A count is rescaled by the splits
+  after it was known: the cover page's count from its own date, the
+  financial statements' counts from the filing date (SEC.filed), since a
+  filing issued after a split restates them (KLAC's 10-K restated its
+  2025 balance-sheet count ten-fold). When the filing date is unknown only
+  reverse splits apply (fewer shares: strict). A jump that is no split
+  ratio (a spin-off, a large special dividend) leaves the count unknown
+  and the verdict doubtful until the next filing. An adjusted series that
+  jumps by a split ratio together with the raw one was fetched before the
+  split and never re-adjusted: its average mixes share bases, so that name
+  falls back to the spot price.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Sequence
-from datetime import date
+import re
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass, field
+from datetime import date, timedelta
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from halal_trader.compliance.aaoifi import Fundamentals, ScreenResult, screen
-from halal_trader.compliance.sec import Company, Fact, SecClient
+from halal_trader.compliance.sec import Company, Fact, SecClient, SecUnavailable
 from halal_trader.compliance.successors import lineage
 
 logger = logging.getLogger(__name__)
+
+SUBMISSIONS_UNAVAILABLE = "SEC submissions record unavailable"
+# A run tolerates this many companies whose submissions record EDGAR would
+# not serve (each screened doubtful); beyond it the run aborts instead.
+MAX_FAILED_NAMES = 5
+MAX_FAILED_SHARE = 0.02
 
 # v2: 36-month average market cap; REITs and royalties face the ratios.
 # v3: every debt-concept family, and fallbacks for shares, cash and revenue.
@@ -65,7 +131,14 @@ logger = logging.getLogger(__name__)
 #     of AAOIFI, and an index Shariah board's exclusion as a veto.
 # v8: the veto recognises holdings named in fund-administrator style.
 # v9: unreported interest income is estimated (cash and securities x 5%), not zero.
-METHOD = "aaoifi-sec-v10"
+# v10: a successor registrant reads its predecessor's facts; two fallback tags.
+# v11: debt read from the kinds REITs and homebuilders file (notes, secured,
+#      credit lines, convertibles, loans) and checked against interest expense;
+#      lending income is impure; a REIT that mostly holds loans is a lender;
+#      more receivables tags; implausible share counts are doubtful; a CIK
+#      deny-list for activities a SIC code hides; share counts rescaled for
+#      splits after they were filed.
+METHOD = "aaoifi-sec-v11"
 UNMAPPED = "not an SEC registrant (or ticker not mapped)"
 _MIN_MONTHS = 12
 
@@ -75,13 +148,64 @@ _DEBT_WITH_LEASES_TOTAL = "LongTermDebtAndCapitalLeaseObligationsIncludingCurren
 _DEBT_WITH_LEASES = "LongTermDebtAndCapitalLeaseObligations"
 _DEBT_WITH_LEASES_CURRENT = "LongTermDebtAndCapitalLeaseObligationsCurrent"
 _DEBT_CURRENT = "DebtCurrent"
+# Totals a filer may report instead of the families above.
+_DEBT_OTHER_TOTALS = (
+    "DebtAndCapitalLeaseObligations",
+    "DebtLongtermAndShorttermCombinedAmount",
+    "DebtInstrumentCarryingAmount",
+    "NotesAndLoansPayable",
+)
+# (kind, alternatives): an alternative is concepts summed (noncurrent + current);
+# a kind is the largest alternative; the kinds are added together.
+DEBT_KINDS: tuple[tuple[str, tuple[tuple[str, ...], ...]], ...] = (
+    (
+        "notes",
+        (
+            ("NotesPayable",),
+            ("SeniorNotes",),
+            ("SeniorLongTermNotes", "SeniorNotesCurrent"),
+            ("LongTermNotesPayable", "NotesPayableCurrent"),
+            ("UnsecuredDebt",),
+            ("UnsecuredLongTermDebt",),
+        ),
+    ),
+    ("secured", (("SecuredDebt",), ("SecuredLongTermDebt",))),
+    ("credit lines", (("LineOfCredit",), ("LongTermLineOfCredit", "LinesOfCreditCurrent"))),
+    (
+        "convertibles",
+        (
+            ("ConvertibleDebt",),
+            ("ConvertibleDebtNoncurrent", "ConvertibleDebtCurrent"),
+            ("ConvertibleNotesPayable",),
+            ("ConvertibleLongTermNotesPayable", "ConvertibleNotesPayableCurrent"),
+        ),
+    ),
+    (
+        "loans",
+        (("LoansPayable",), ("OtherLongTermDebt",), ("OtherBorrowings",), ("OtherLoansPayable",)),
+    ),
+)
+_DEBT_KIND_CONCEPTS = tuple(
+    dict.fromkeys(c for _, alternatives in DEBT_KINDS for alt in alternatives for c in alt)
+)
 _CASH_WIDE = "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents"
 _DILUTED_SHARES = "WeightedAverageNumberOfDilutedSharesOutstanding"
 _DEBT_EXTRA = ("ShortTermBorrowings", "CommercialPaper", "FinanceLeaseLiability")
 _CASH = "CashAndCashEquivalentsAtCarryingValue"
 _CASH_PLAIN = "Cash"  # SLB tags its cash only as this
 _BALANCE_SHARES = "CommonStockSharesOutstanding"  # balance-sheet count, one class only
-_RECEIVABLES = "AccountsReceivableNetCurrent"
+_RECEIVABLES = (
+    "AccountsReceivableNetCurrent",
+    "ReceivablesNetCurrent",
+    "AccountsNotesAndLoansReceivableNetCurrent",
+)
+_LOANS_HELD = (
+    "MortgageLoansOnRealEstate",
+    "LoansAndLeasesReceivableNetReportedAmount",
+    "FinancingReceivableExcludingAccruedInterestAfterAllowanceForCreditLoss",
+    "NotesReceivableNet",
+)
+_ASSETS = "Assets"
 _SECURITIES = (
     "ShortTermInvestments",
     "MarketableSecuritiesCurrent",
@@ -92,12 +216,35 @@ _INTEREST = (
     "InterestIncomeOther",
     "InvestmentIncomeInterestAndDividend",
 )
+_LENDER_INCOME = (
+    "InterestAndDividendIncomeOperating",
+    "InterestAndFeeIncomeLoansAndLeases",
+    "InterestAndFeeIncomeLoansCommercial",
+    "InterestAndFeeIncomeLoansConsumer",
+    "InterestAndFeeIncomeLoansRealEstate",
+    "InterestIncomeOperating",
+    "InterestIncomeSecuritiesMortgageBacked",
+    "FinancialServicesRevenue",
+)
+_INTEREST_EXPENSE = (
+    "InterestExpense",
+    "InterestExpenseNonoperating",
+    "InterestExpenseDebt",
+    "InterestPaidNet",
+)
 _REVENUE = (
     "Revenues",
     "RevenueFromContractWithCustomerExcludingAssessedTax",
     "RevenueFromContractWithCustomerIncludingAssessedTax",
     "SalesRevenueNet",
 )
+
+
+def method_rank(method: str) -> int | None:
+    """The version number of a method name ("aaoifi-sec-v11" -> 11), as the SQL
+    function ``halal_screen_method_rank`` reads it; None when it has none."""
+    match = re.search(r"-v([0-9]+)$", method)
+    return int(match.group(1)) if match else None
 
 
 SHARE_CONFLICT = 3.0  # cover-page and diluted counts further apart than this: a units error
@@ -124,6 +271,38 @@ def _sum(*values: float | None) -> float | None:
     return sum(present) if present else None
 
 
+def _largest(*values: float | None) -> float | None:
+    return max((x for x in values if x is not None), default=None)
+
+
+def debt_of(v: Callable[[str], float | None]) -> tuple[float | None, dict[str, float | None]]:
+    """Interest-bearing debt from one company's facts (``v``: concept -> value).
+
+    Returns the debt (None when no debt concept is filed at all) and the two
+    readings behind it, for the record. See the module docstring for why
+    the larger reading wins and what each can overstate.
+    """
+    noncurrent = v(_DEBT_PARTS[0])
+    totals = _largest(
+        v(_DEBT_TOTAL),
+        _sum(noncurrent, v(_DEBT_PARTS[1])),
+        v(_DEBT_WITH_LEASES_TOTAL),
+        _sum(v(_DEBT_WITH_LEASES), v(_DEBT_WITH_LEASES_CURRENT)),
+        _sum(noncurrent if noncurrent is not None else v(_DEBT_WITH_LEASES), v(_DEBT_CURRENT)),
+        *(v(c) for c in _DEBT_OTHER_TOTALS),
+    )
+    kinds = _sum(
+        *(
+            _largest(*(_sum(*(v(c) for c in alt)) for alt in alternatives))
+            for _, alternatives in DEBT_KINDS
+        )
+    )
+    extras = _sum(*(v(e) for e in _DEBT_EXTRA))
+    core = _largest(totals, kinds)
+    debt = None if core is None and extras is None else (core or 0.0) + (extras or 0.0)
+    return debt, {"debt_from_totals": totals, "debt_from_kinds": kinds, "debt_extras": extras}
+
+
 def recent_quarter_instants(as_of: date, n: int = 5) -> list[str]:
     """SEC instant-frame periods for the last ``n`` completed quarters, newest first."""
     year, quarter = as_of.year, (as_of.month - 1) // 3  # quarters fully before as_of
@@ -136,8 +315,8 @@ def recent_quarter_instants(as_of: date, n: int = 5) -> list[str]:
     return out
 
 
-def _newest(frames: list[dict[int, Fact]], cik: int) -> float | None:
-    """The most recent value across frames (ordered newest period first),
+def _newest_fact(frames: list[dict[int, Fact]], cik: int) -> Fact | None:
+    """The most recent fact across frames (ordered newest period first),
     from ``cik`` or, if it has none, its predecessor (compliance/successors.py)."""
     for filer in lineage(cik):
         best: Fact | None = None
@@ -146,8 +325,13 @@ def _newest(frames: list[dict[int, Fact]], cik: int) -> float | None:
             if fact is not None and (best is None or fact.end > best.end):
                 best = fact
         if best is not None:
-            return best.val
+            return best
     return None
+
+
+def _newest(frames: list[dict[int, Fact]], cik: int) -> float | None:
+    fact = _newest_fact(frames, cik)
+    return fact.val if fact is not None else None
 
 
 async def _instant(
@@ -170,10 +354,162 @@ async def _mapped_by_name(engine: AsyncEngine) -> dict[str, tuple[int, str]]:
     return await mapped_ciks(engine)
 
 
+# Ratios a split or reverse split is declared in. A one-session jump in raw /
+# adjusted close within SPLIT_TOLERANCE of one is a split; any other jump over
+# ADJUSTMENT_JUMP is an adjustment we cannot read (a spin-off, a big special
+# dividend). 5:4 and 4:3 are left out on purpose: rare as splits, and near
+# the size of a spin-off, where reading one as the other would add shares.
+_FORWARD = (1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 10.0, 15.0, 20.0, 25.0, 30.0, 40.0, 50.0)
+_REVERSE = (2, 3, 4, 5, 6, 8, 10, 12, 15, 20, 25, 30, 40, 50, 100)
+SPLIT_RATIOS = (*_FORWARD, *(1.0 / x for x in _REVERSE))
+# Every split in the stored bars of 2025-26 jumps within 0.03% of its ratio
+# (APH 1.9998, KLAC 10.0000, ORLY 15.0006); Fortive's spin-off of Ralliant
+# jumped 1.4933, 0.45% off 3:2, and must not read as a split (it would add
+# half again to the share count). A split on an ex-dividend day misses too,
+# and is left unknown (doubtful) until the next filing.
+SPLIT_TOLERANCE = 0.003
+ADJUSTMENT_JUMP = 1.2  # raw / adjusted moving more than this in a session is not a dividend
+_STALE_JUMP = 1.4  # an adjusted close moving this much in a session, raw / adjusted not at all
+
+
+def split_ratio(jump: float) -> float | None:
+    """The split ratio a one-session jump in raw / adjusted close is, or None."""
+    for ratio in SPLIT_RATIOS:
+        if abs(jump / ratio - 1.0) <= SPLIT_TOLERANCE:
+            return ratio
+    return None
+
+
+@dataclass(frozen=True, slots=True)
+class CorporateActions:
+    """What the stored bars say happened to each symbol's share basis.
+
+    ``splits``: symbol -> [(first session on the new basis, ratio or None)],
+    a ratio of new shares per old (2.0 for 2:1, 0.1 for 1:10), None for an
+    adjustment that is no split. ``stale``: symbol -> the session where the
+    adjusted series jumps by a split ratio with the raw one (never
+    re-adjusted after the split).
+    """
+
+    splits: dict[str, list[tuple[date, float | None]]] = field(default_factory=dict)
+    stale: dict[str, date] = field(default_factory=dict)
+
+
+async def corporate_actions(
+    engine: AsyncEngine, symbols: Sequence[str], since: date, through: date
+) -> CorporateActions:
+    """Splits and unreadable adjustments in (since, through], from raw vs adjusted bars."""
+    async with engine.connect() as conn:
+        rows = await conn.execute(
+            text(
+                """
+                WITH s AS (
+                    SELECT r.symbol, r.day, r.close AS raw, a.close AS adj,
+                           lag(r.close) OVER w AS raw_prev, lag(a.close) OVER w AS adj_prev
+                    FROM daily_bars r
+                    JOIN daily_bars a
+                      ON a.symbol = r.symbol AND a.day = r.day AND a.adjustment = 'all'
+                    WHERE r.adjustment = 'raw' AND r.symbol = ANY(:s)
+                      AND r.day >= :since AND r.day <= :through
+                    WINDOW w AS (PARTITION BY r.symbol ORDER BY r.day)
+                )
+                SELECT symbol, day, raw, adj, raw_prev, adj_prev FROM s
+                WHERE raw > 0 AND adj > 0 AND raw_prev > 0 AND adj_prev > 0
+                  AND (abs(ln((raw_prev / adj_prev) / (raw / adj))) > ln(:jump)
+                       OR abs(ln(adj_prev / adj)) > ln(:stale))
+                ORDER BY symbol, day
+                """
+            ),
+            {
+                "s": [s.upper() for s in symbols],
+                "since": since,
+                "through": through,
+                "jump": ADJUSTMENT_JUMP,
+                "stale": _STALE_JUMP,
+            },
+        )
+        found = CorporateActions()
+        for r in rows:
+            raw, adj, raw_prev, adj_prev = (
+                float(r.raw),
+                float(r.adj),
+                float(r.raw_prev),
+                float(r.adj_prev),
+            )
+            jump = (raw_prev / adj_prev) / (raw / adj)
+            if max(jump, 1.0 / jump) > ADJUSTMENT_JUMP:
+                found.splits.setdefault(r.symbol, []).append((r.day, split_ratio(jump)))
+                continue
+            # Raw / adjusted held still while the adjusted close fell by a
+            # forward-split ratio: the adjusted bars before this day were
+            # fetched before a split and never re-adjusted (or the stock
+            # really halved; either way the spot price is the safer basis).
+            fell = adj_prev / adj
+            if fell > 1.0 and split_ratio(fell) is not None:
+                found.stale.setdefault(r.symbol, r.day)
+    return found
+
+
+def rescale(
+    fact: Fact | None,
+    actions: list[tuple[date, float | None]],
+    *,
+    known: date | None,
+    through: date,
+) -> tuple[float | None, str | None]:
+    """A share count put on the basis of ``through``, or (None, why) if it cannot be.
+
+    ``known``: the date from which the count reflects every split (the cover
+    page's date, or the filing date of a financial statement); None when the
+    filing date is unknown, and then only reverse splits apply.
+    """
+    if fact is None:
+        return None, None
+    factor = 1.0
+    for day, ratio in actions:
+        if day <= (known or fact.end) or day > through:
+            continue
+        if ratio is None:
+            return None, (
+                f"share count (an adjustment on {day} that is no split: "
+                "spin-off or special dividend?)"
+            )
+        factor *= ratio if known is not None else min(ratio, 1.0)
+    return fact.val * factor, None
+
+
+class _Rebase:
+    """One company's share counts, each put on the basis of the price day."""
+
+    def __init__(
+        self,
+        sec: SecClient,
+        cik: int,
+        actions: list[tuple[date, float | None]],
+        through: date,
+    ) -> None:
+        self.sec, self.cik, self.actions, self.through = sec, cik, actions, through
+        self.issues: list[str] = []
+
+    def count(self, frames: list[dict[int, Fact]], *, cover: bool = False) -> float | None:
+        fact = _newest_fact(frames, self.cik)
+        if fact is None or not self.actions:
+            return fact.val if fact is not None else None
+        known = fact.end if cover else self.sec.filed(fact.accn)
+        value, issue = rescale(fact, self.actions, known=known, through=self.through)
+        if issue is not None and issue not in self.issues:
+            self.issues.append(issue)
+        return value
+
+
+Audit = dict[str, dict[str, float | None]]
+
+
 async def gather(
     sec: SecClient, engine: AsyncEngine, symbols: Sequence[str], as_of: date
-) -> tuple[list[Fundamentals], dict[str, tuple[int | None, str]], dict[str, str]]:
-    """Fundamentals for each symbol, (cik, SIC description) for the record, and company names."""
+) -> tuple[list[Fundamentals], dict[str, tuple[int | None, str]], dict[str, str], Audit]:
+    """Fundamentals for each symbol, (cik, SIC description) for the record, company
+    names, and the intermediate figures worth keeping beside each verdict."""
     companies = await sec.companies()
     # Tickers SEC no longer lists, matched to their filer by name
     # (compliance/delisted.py); SEC's own current mapping wins.
@@ -189,12 +525,16 @@ async def gather(
             _DEBT_WITH_LEASES,
             _DEBT_WITH_LEASES_CURRENT,
             _DEBT_CURRENT,
+            *_DEBT_OTHER_TOTALS,
+            *_DEBT_KIND_CONCEPTS,
             *_DEBT_EXTRA,
             _CASH,
             _CASH_WIDE,
             _CASH_PLAIN,
             *_SECURITIES,
-            _RECEIVABLES,
+            *_RECEIVABLES,
+            *_LOANS_HELD,
+            _ASSETS,
         )
     }
     shares = await _instant(sec, "EntityCommonStockSharesOutstanding", periods, dei=True)
@@ -202,7 +542,10 @@ async def gather(
         await sec.frame("us-gaap", _DILUTED_SHARES, "shares", p.removesuffix("I")) for p in periods
     ]
     balance_shares = [await sec.frame("us-gaap", _BALANCE_SHARES, "shares", p) for p in periods]
-    annual = {c: await _annual(sec, c, as_of) for c in (*_INTEREST, *_REVENUE)}
+    annual = {
+        c: await _annual(sec, c, as_of)
+        for c in (*_INTEREST, *_LENDER_INCOME, *_INTEREST_EXPENSE, *_REVENUE)
+    }
     async with engine.connect() as conn:
         rows = await conn.execute(
             text(
@@ -255,10 +598,23 @@ async def gather(
         for sym, avg in adjusted_averages.items()
         if sym in prices and adjusted_now.get(sym)
     }
+    # The window covers the 36-month average and every share fact read
+    # (five quarters back, plus the cover page's lag).
+    actions = await corporate_actions(engine, symbols, as_of - timedelta(days=3 * 366), as_of)
+    for sym, day in actions.stale.items():
+        if averages.pop(sym, None) is not None:
+            logger.warning(
+                "halal screen: %s adjusted bars jump with the raw ones on %s (fetched before "
+                "a split?): spot price used; re-fetch its adjusted bars",
+                sym,
+                day,
+            )
 
     out: list[Fundamentals] = []
     meta: dict[str, tuple[int | None, str]] = {}
     titles: dict[str, str] = {}
+    audit: Audit = {}
+    failed: list[str] = []
     for symbol in symbols:
         sym = symbol.upper()
         company = companies.get(sym) or companies.get(sym.replace(".", "-"))
@@ -267,62 +623,93 @@ async def gather(
             meta[sym] = (None, UNMAPPED)
             continue
         cik = company.cik
-        sic, sic_desc = await sec.sic(cik)
+        try:
+            sic, sic_desc = await sec.sic(cik)
+            foreign = await sec.foreign_filer(cik)
+        except SecUnavailable as exc:
+            # One company's submissions record is not worth the night's
+            # screen: without its industry code it is doubtful, never halal.
+            logger.warning("halal screen: %s: %s", sym, exc)
+            failed.append(sym)
+            sic, sic_desc, foreign = None, SUBMISSIONS_UNAVAILABLE, False
         meta[sym] = (cik, sic_desc)
         titles[sym] = company.title
 
         def v(concept: str, cik: int = cik) -> float | None:
             return _newest(frames[concept], cik)
 
-        noncurrent = v(_DEBT_PARTS[0])
-        candidates = (
-            v(_DEBT_TOTAL),
-            _sum(noncurrent, v(_DEBT_PARTS[1])),
-            v(_DEBT_WITH_LEASES_TOTAL),
-            _sum(v(_DEBT_WITH_LEASES), v(_DEBT_WITH_LEASES_CURRENT)),
-            _sum(noncurrent if noncurrent is not None else v(_DEBT_WITH_LEASES), v(_DEBT_CURRENT)),
-        )
-        extras = [v(e) for e in _DEBT_EXTRA]
-        core = max((x for x in candidates if x is not None), default=None)
+        def yearly(concepts: Sequence[str], cik: int = cik) -> list[float | None]:
+            return [_newest(annual[c], cik) for c in concepts]
+
         cash = v(_CASH)
         if cash is None:
             cash = v(_CASH_WIDE)
         if cash is None:
             cash = v(_CASH_PLAIN)
-        securities = max((x for x in (v(s) for s in _SECURITIES) if x is not None), default=0.0)
+        securities = _largest(*(v(s) for s in _SECURITIES)) or 0.0
         files_xbrl = cash is not None or _newest(shares, cik) is not None
-        debt: float | None
-        if core is None and all(e is None for e in extras):
-            debt = 0.0 if files_xbrl else None  # tags no debt at all: debt-free
-        else:
-            debt = (core or 0.0) + sum(e for e in extras if e is not None)
-        interest = next(
-            (x for x in (_newest(annual[c], cik) for c in _INTEREST) if x is not None), None
+        debt, readings = debt_of(v)
+        if debt is None and files_xbrl:
+            debt = 0.0  # tags no debt at all; interest expense is the check (aaoifi)
+        interest = next((x for x in yearly(_INTEREST) if x is not None), None)
+        revenue = next((x for x in yearly(_REVENUE) if x is not None), None)
+        # Each share count on the basis of the price it multiplies (see the
+        # module docstring): the cover page's from its own date, the
+        # statements' from their filing date.
+        on_basis = _Rebase(
+            sec,
+            cik,
+            actions.splits.get(sym, []),
+            priced[sym][0] if sym in priced else as_of,
         )
-        revenue = next(
-            (x for x in (_newest(annual[c], cik) for c in _REVENUE) if x is not None), None
-        )
+        # The cover page's count, else the diluted average, else the balance
+        # sheet's (HSY tags the cover page per share class, which frames
+        # omit; the balance-sheet count is its common stock alone, so the
+        # market cap errs small: ratios fail closed).
+        share_total = share_count(
+            on_basis.count(shares, cover=True), on_basis.count(diluted)
+        ) or on_basis.count(balance_shares)
+        issues = on_basis.issues
+        cover_fact = _newest_fact(shares, cik)
+        audit[sym] = {
+            **readings,
+            "interest_expense": _largest(*yearly(_INTEREST_EXPENSE)),
+            "lender_income": _largest(*yearly(_LENDER_INCOME)),
+            "loans_receivable": _largest(*(v(c) for c in _LOANS_HELD)),
+            "total_assets": v(_ASSETS),
+            "receivables": _largest(*(v(c) for c in _RECEIVABLES)),
+            "shares_as_filed": cover_fact.val if cover_fact is not None else None,
+        }
         out.append(
             Fundamentals(
                 symbol=sym,
                 sic=sic,
-                # The cover page's count, else the diluted average, else the
-                # balance sheet's (HSY tags the cover page per share class,
-                # which frames omit; the balance-sheet count is its common
-                # stock alone, so the market cap errs small: ratios fail closed).
-                shares_outstanding=share_count(_newest(shares, cik), _newest(diluted, cik))
-                or _newest(balance_shares, cik),
+                shares_outstanding=share_total,
                 price=prices.get(sym),
                 interest_bearing_debt=debt,
                 cash_and_securities=(cash + securities) if cash is not None else None,
                 interest_income=interest,
                 revenue=revenue,
                 average_price=averages.get(sym),
-                foreign_filer=await sec.foreign_filer(cik),
-                receivables=v(_RECEIVABLES),
+                foreign_filer=foreign,
+                receivables=audit[sym]["receivables"],
+                cik=cik,
+                interest_expense=audit[sym]["interest_expense"],
+                lender_income=audit[sym]["lender_income"],
+                loans_receivable=audit[sym]["loans_receivable"],
+                total_assets=audit[sym]["total_assets"],
+                data_issues=tuple(issues) if share_total is None else (),
             )
         )
-    return out, meta, titles
+    mapped = sum(1 for cik, _ in meta.values() if cik is not None)
+    if len(failed) > max(MAX_FAILED_NAMES, MAX_FAILED_SHARE * mapped):
+        # EDGAR is down, not one record missing: a screen with this many
+        # doubtful names would empty the universe. Abort; the last one stands.
+        raise SecUnavailable(
+            f"submissions unavailable for {len(failed)} of {mapped} companies "
+            f"({', '.join(failed[:5])}, ...)"
+        )
+    return out, meta, titles, audit
 
 
 async def run_screen(
@@ -331,7 +718,7 @@ async def run_screen(
     """Screen ``symbols`` as of ``as_of`` and store every verdict with its inputs."""
     from halal_trader.compliance.index_veto import apply_veto, views_at
 
-    fundamentals, meta, titles = await gather(sec, engine, symbols, as_of)
+    fundamentals, meta, titles, audit = await gather(sec, engine, symbols, as_of)
     results = apply_veto([screen(f) for f in fundamentals], titles, await views_at(engine, as_of))
     async with engine.begin() as conn:
         for f, r in zip(fundamentals, results, strict=True):
@@ -343,10 +730,10 @@ async def run_screen(
                         verdict, reasons, metrics, method, screened_at)
                     VALUES (:as_of, :symbol, :cik, :sic_desc, :verdict, CAST(:reasons AS JSONB),
                         CAST(:metrics AS JSONB), :method, now())
-                    ON CONFLICT (as_of, symbol) DO UPDATE SET cik = EXCLUDED.cik,
+                    ON CONFLICT (as_of, symbol, method) DO UPDATE SET cik = EXCLUDED.cik,
                         sic_description = EXCLUDED.sic_description, verdict = EXCLUDED.verdict,
                         reasons = EXCLUDED.reasons, metrics = EXCLUDED.metrics,
-                        method = EXCLUDED.method, screened_at = EXCLUDED.screened_at
+                        screened_at = EXCLUDED.screened_at
                     """
                 ),
                 {
@@ -359,6 +746,7 @@ async def run_screen(
                     "metrics": json.dumps(
                         {
                             **r.metrics,
+                            **audit.get(r.symbol, {}),
                             "interest_bearing_debt": f.interest_bearing_debt,
                             "cash_and_securities": f.cash_and_securities,
                             "interest_income": f.interest_income,

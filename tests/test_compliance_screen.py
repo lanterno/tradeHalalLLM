@@ -429,9 +429,15 @@ async def test_rescreen_redoes_rows_from_an_older_method_once(
     assert await rescreen_stale(Foreign(), engine) == {as_of: 2}  # type: ignore[arg-type]
     assert await rescreen_stale(Foreign(), engine) == {}  # type: ignore[arg-type]  # resumable
     async with engine.connect() as conn:
-        rows = await conn.execute(text("SELECT symbol, verdict FROM halal_screen_results"))
+        rows = await conn.execute(text("SELECT symbol, verdict FROM halal_screen_current"))
         verdicts = {r.symbol: r.verdict for r in rows}
+        kept = (
+            await conn.execute(
+                text("SELECT count(*) FROM halal_screen_results WHERE method = 'aaoifi-sec-v3'")
+            )
+        ).scalar()
     assert verdicts == {"SOFT": "halal", "NODEBT": "doubtful"}
+    assert kept == 2  # the older method's verdicts are still there, unchanged
 
 
 def test_a_mis_scaled_share_count_gives_way_to_the_smaller() -> None:

@@ -129,7 +129,7 @@ async def _screen(
             await conn.execute(
                 text(
                     "SELECT symbol, cik, (metrics->>'price')::float AS p, "
-                    "(metrics->>'shares_outstanding')::float AS sh FROM halal_screen_results "
+                    "(metrics->>'shares_outstanding')::float AS sh FROM halal_screen_current "
                     "WHERE as_of = :a AND verdict = 'halal'"
                 ),
                 {"a": as_of},
@@ -148,7 +148,7 @@ async def is_halal_now(engine: AsyncEngine, symbol: str, day: date) -> tuple[boo
         row = (
             await conn.execute(
                 text(
-                    "SELECT as_of, verdict FROM halal_screen_results WHERE symbol = :s "
+                    "SELECT as_of, verdict FROM halal_screen_current WHERE symbol = :s "
                     "AND as_of = (SELECT max(as_of) FROM halal_screen_results WHERE as_of <= :d)"
                 ),
                 {"s": symbol, "d": day},

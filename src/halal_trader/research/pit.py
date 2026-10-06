@@ -57,7 +57,7 @@ async def _screens(engine: AsyncEngine) -> dict[date, _Screen]:
             text(
                 "SELECT as_of, symbol, verdict, sic_description, cik, "
                 "metrics->>'price' AS price, metrics->>'shares_outstanding' AS shares "
-                "FROM halal_screen_results"
+                "FROM halal_screen_current"
             )
         )
         for r in rows:

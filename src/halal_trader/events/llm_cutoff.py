@@ -58,7 +58,7 @@ async def probes(
                 text(
                     """
                     WITH big AS (
-                        SELECT DISTINCT ON (cik) cik, symbol FROM halal_screen_results
+                        SELECT DISTINCT ON (cik) cik, symbol FROM halal_screen_current
                         WHERE cik IS NOT NULL AND (metrics->>'market_cap')::float > 5e10
                         ORDER BY cik, as_of DESC
                     ), firsts AS (

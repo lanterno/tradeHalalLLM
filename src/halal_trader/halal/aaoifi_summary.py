@@ -235,7 +235,7 @@ async def _account(
 ) -> AccountCompliance:
     """One account's trade counts and its buys' verdicts this quarter.
 
-    The verdict for a buy is the newest ``halal_screen_results`` row for its
+    The verdict for a buy is the newest ``halal_screen_current`` row for its
     symbol with ``as_of`` on or before the trade's day; ties on ``as_of``
     (several screening methods on one day) go to the newest ``screened_at``.
     """
@@ -258,7 +258,7 @@ async def _account(
             await conn.execute(
                 text(
                     f"SELECT x.symbol, x.day, s.verdict, s.as_of FROM ({trades_sql}) x "
-                    "LEFT JOIN LATERAL (SELECT verdict, as_of FROM halal_screen_results r "
+                    "LEFT JOIN LATERAL (SELECT verdict, as_of FROM halal_screen_current r "
                     "WHERE r.symbol = x.symbol AND r.as_of <= x.day "
                     "ORDER BY r.as_of DESC, r.screened_at DESC LIMIT 1) s ON true "
                     "WHERE x.side = 'buy' AND x.day >= :q ORDER BY x.day DESC, x.symbol"
