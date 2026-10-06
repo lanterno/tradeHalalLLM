@@ -16,6 +16,13 @@ class Account(BaseModel):
     cash: float = 0.0
     portfolio_value: float = 0.0
     status: str = ""
+    # Which account the keys reach, and whether it can borrow. None when the
+    # adapter does not report them (the MCP server): every check that needs
+    # them treats unknown as a refusal.
+    account_id: str | None = None
+    account_number: str | None = None
+    multiplier: float | None = None  # 1 = a cash account; 2 or 4 = margin
+    shorting_enabled: bool | None = None
 
     @property
     def effective_equity(self) -> float:
