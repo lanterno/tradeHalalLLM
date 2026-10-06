@@ -13,10 +13,8 @@ Rules, all failing CLOSED:
   only while it is **fresh** (``MAX_SCREEN_AGE``, as for the core): a stale
   or missing screen makes nothing halal;
 * a symbol absent from the newest screen is not halal;
-* a symbol is halal only if **every** row the newest screen has for it says
-  so. The table may carry more than one row per symbol and day (a
-  ``method`` column is joining its key): whether those rows are a re-run or
-  parallel methods, a single non-halal row is enough to refuse.
+* the verdict is the newest method's (``halal_screen_current``, the view the
+  core reads too): one row per symbol and day.
 """
 
 from __future__ import annotations
@@ -57,7 +55,7 @@ async def verdict(engine: AsyncEngine, symbol: str, *, today: date) -> Verdict:
                            count(r.symbol) AS n,
                            coalesce(bool_and(r.verdict = 'halal'), false) AS halal
                     FROM newest
-                    LEFT JOIN halal_screen_results r
+                    LEFT JOIN halal_screen_current r
                            ON r.as_of = newest.as_of AND r.symbol = :s
                     GROUP BY newest.as_of
                     """
@@ -94,7 +92,7 @@ async def halal_universe(
             text(
                 """
                 SELECT symbol, max((metrics->>'market_cap')::float) AS cap
-                FROM halal_screen_results
+                FROM halal_screen_current
                 WHERE as_of = :a
                 GROUP BY symbol
                 HAVING bool_and(verdict = 'halal')
