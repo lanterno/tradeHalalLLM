@@ -27,7 +27,7 @@ def _bar(c, *, o=None, h=None, low=None, i=0):
 def test_buffer_appends_and_reads_per_asset():
     buf = BarBuffer(maxlen=10)
     buf.append("NVDA", _bar(100))
-    buf.append("NVDA", _bar(101))
+    buf.append("NVDA", _bar(101, i=1))
     buf.append("MSFT", _bar(400))
     assert buf.closes("NVDA") == [100, 101]
     assert buf.closes("MSFT") == [400]
@@ -88,3 +88,16 @@ def test_momentum_signal_negative_on_downtrend():
 
 def test_momentum_signal_zero_when_insufficient():
     assert momentum_signal([100, 101, 102]) == (0.0, 0.0)
+
+
+def test_buffer_drops_repeated_and_older_bars():
+    # A restart once re-fed the same five days into the window as live bars:
+    # the buffer must keep one ordered series whatever it is handed.
+    buf = BarBuffer()
+    assert buf.append("NVDA", _bar(100, i=1))
+    assert not buf.append("NVDA", _bar(999, i=1))  # the same bar again
+    assert not buf.append("NVDA", _bar(998, i=0))  # an older one
+    assert buf.append("NVDA", _bar(101, i=2))
+    assert buf.closes("NVDA") == [100, 101]
+    assert buf.last_ts("NVDA") == T0 + timedelta(minutes=2)
+    assert buf.last_ts("MSFT") is None

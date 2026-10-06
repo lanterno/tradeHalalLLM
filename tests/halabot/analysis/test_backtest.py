@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
@@ -12,6 +13,14 @@ from halabot.cognition.bars import Bar, BarBuffer, BufferPriceSource
 from halabot.policy.sizing import PolicyConfig
 
 T0 = datetime(2026, 5, 1, 14, 0, tzinfo=UTC)  # a weekday, RTH
+
+
+def _bar_ts() -> datetime:
+    """A fresh, strictly later bar time per call (the buffer drops repeats)."""
+    return T0 + timedelta(minutes=next(_BAR_SEQ))
+
+
+_BAR_SEQ = itertools.count()
 
 
 def _bars(prices: list[float], *, start: datetime = T0, step_min: int = 1) -> list[Bar]:
@@ -237,7 +246,7 @@ async def test_book_tags_entry_structure_from_buffer():
     buf = BarBuffer()
     for i in range(40):
         c = 100.0 + i
-        buf.append("UP", Bar(o=c, h=c + 0.3, low=c - 0.3, c=c, v=1000.0, ts=T0))
+        buf.append("UP", Bar(o=c, h=c + 0.3, low=c - 0.3, c=c, v=1000.0, ts=_bar_ts()))
     book = _Book(win_threshold_pct=0.002, prices=BufferPriceSource(buf), buffer=buf)
     await book.on_proposal(
         SimpleNamespace(asset="UP", ts=T0, payload={"price": 139.0, "weight_delta": 0.2})

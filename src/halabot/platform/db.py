@@ -31,6 +31,7 @@ from sqlalchemy import (
     Table,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PgUUID
@@ -97,7 +98,19 @@ outcome = Table(
     Column("label", Integer, nullable=False),  # win=1 if return_pct > threshold else 0
     Column("reason", Text, nullable=True),
     Column("created_at", DateTime(timezone=True), nullable=False),
+    # The engine generation that produced the trade (OUTCOME_COHORT below);
+    # NULL for every row from before cohorts existed.
+    Column("cohort", Integer, nullable=True),
 )
+
+# Outcomes are only comparable within one cohort: the rules that made them
+# (what counts as a bar, when a fill is possible, how evidence decays) must be
+# the same. Rows written before 2026-10-06 came from an engine that replayed
+# history as live bars on restart, booked fills while the market was shut and
+# compounded evidence decay, so the calibrator, ab-report and attribution read
+# OUTCOME_COHORT only and those rows stay as history. Bump this when a change
+# makes new outcomes incomparable with the old ones.
+OUTCOME_COHORT = 2
 
 # Open-position mark-to-market: the CURRENT unrealized state of each held
 # (hypothetical) position, upserted by the shadow each cycle and deleted on
@@ -117,6 +130,7 @@ open_position = Table(
     Column("belief_version", Integer, nullable=False),
     Column("entry_belief", JSONB, nullable=True),
     Column("updated_at", DateTime(timezone=True), nullable=False),
+    Column("cohort", Integer, nullable=True),  # as hb_outcome.cohort
 )
 
 # Conviction telemetry: one row per scoring (INV-5). NOT a calibration input —
@@ -191,6 +205,17 @@ async def bootstrap_schema(engine: AsyncEngine) -> None:
     """
     async with engine.begin() as conn:
         await conn.run_sync(metadata.create_all)
+        # create_all never alters an existing table: columns added since a
+        # table was first created are added here, idempotently (a nullable
+        # column without a default is a catalogue-only change in Postgres).
+        for table, column in _ADDED_COLUMNS:
+            await conn.execute(
+                text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} integer")
+            )
+
+
+# (table, column) added after the table first shipped; all nullable integers.
+_ADDED_COLUMNS = (("hb_outcome", "cohort"), ("hb_open_position", "cohort"))
 
 
 def make_engine(database_url: str) -> AsyncEngine:
@@ -203,6 +228,7 @@ __all__ = [
     "event_log",
     "belief_state",
     "outcome",
+    "OUTCOME_COHORT",
     "open_position",
     "perception_seen",
     "conviction_score",

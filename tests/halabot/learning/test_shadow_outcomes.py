@@ -12,6 +12,8 @@ from halabot.belief.store import PgBeliefStore
 from halabot.learning.shadow_outcomes import ShadowOutcomeTracker
 from halabot.platform.bus import InProcessEventBus
 from halabot.platform.clock import FakeClock
+from halabot.platform.db import OUTCOME_COHORT
+from halabot.platform.db import open_position as open_position_table
 from halabot.platform.db import outcome as outcome_table
 from halabot.platform.event_log import PgEventLog
 from halabot.platform.events import EventType, new_event
@@ -141,3 +143,99 @@ async def test_entry_belief_snapshot_captured(halabot_engine):
     rows = await _outcomes(halabot_engine)
     assert rows[0]["entry_belief"]["regime"] == "trending_up"
     assert rows[0]["entry_belief"]["conviction"] == 0.7
+
+
+async def _bar(bus, clock, asset, close, bar_ts):
+    await bus.publish(
+        new_event(
+            clock,
+            EventType.OBSERVATION_BAR,
+            source="alpaca-bars",
+            asset=asset,
+            payload={"o": close, "h": close, "low": close, "c": close, "v": 1.0, "bar_ts": bar_ts},
+        )
+    )
+
+
+@pytest.mark.asyncio
+async def test_open_position_is_marked_only_by_newer_bars(halabot_engine):
+    bus, _, _ = _tracker(halabot_engine)
+    clock = FakeClock(T0)
+    await _propose(bus, clock, "NVDA", "buy", 0.10, 100.0)
+    await _bar(bus, clock, "NVDA", 110.0, "2026-05-28T15:00:00Z")
+    await _bar(bus, clock, "NVDA", 80.0, "2026-05-27T15:00:00Z")  # replayed history
+    await _bar(bus, clock, "NVDA", 90.0, "2026-05-28T15:00:00Z")  # the same bar again
+    async with halabot_engine.connect() as conn:
+        mark = (await conn.execute(sa.select(open_position_table.c.last_price))).scalar_one()
+    assert mark == 110.0
+
+
+async def _open_rows(engine):
+    async with engine.connect() as conn:
+        rows = (await conn.execute(sa.select(open_position_table))).all()
+    return {r.asset: dict(r._mapping) for r in rows}
+
+
+@pytest.mark.asyncio
+async def test_the_book_is_durable_from_the_moment_a_position_opens(halabot_engine):
+    bus, _, _ = _tracker(halabot_engine)
+    clock = FakeClock(T0)
+    await _propose(bus, clock, "NVDA", "buy", 0.10, 100.0)
+    row = (await _open_rows(halabot_engine))["NVDA"]
+    assert row["weight"] == pytest.approx(0.10) and row["cohort"] == OUTCOME_COHORT
+    await _propose(bus, clock, "NVDA", "buy", 0.10, 120.0)
+    await _propose(bus, clock, "NVDA", "sell", -0.05, 130.0)  # a partial reduce
+    row = (await _open_rows(halabot_engine))["NVDA"]
+    assert row["weight"] == pytest.approx(0.15) and row["entry_vwap"] == pytest.approx(110.0)
+
+
+@pytest.mark.asyncio
+async def test_restore_resumes_the_cohort_and_closes_older_positions(halabot_engine):
+    async with halabot_engine.begin() as conn:
+        for asset, cohort, last in (("NVDA", OUTCOME_COHORT, 105.0), ("QCOM", None, 90.0)):
+            await conn.execute(
+                sa.insert(open_position_table).values(
+                    asset=asset,
+                    entry_ts=T0,
+                    entry_vwap=100.0,
+                    weight=0.1,
+                    last_price=last,
+                    unrealized_return_pct=(last - 100.0) / 100.0,
+                    belief_version=3,
+                    entry_belief={"conviction_raw": 0.5},
+                    updated_at=T0 + timedelta(hours=2),
+                    cohort=cohort,
+                )
+            )
+    bus, _, tracker = _tracker(halabot_engine)
+    assert await tracker.restore() == {"NVDA": pytest.approx(0.1)}
+    # The pre-cohort orphan is closed at its last mark, outside the cohort.
+    rows = await _outcomes(halabot_engine)
+    assert [(r["asset"], r["reason"], r["cohort"]) for r in rows] == [("QCOM", "restart", None)]
+    assert rows[0]["exit_price"] == 90.0 and rows[0]["hold_seconds"] == 2 * 3600
+    assert set(await _open_rows(halabot_engine)) == {"NVDA"}
+    # The resumed position closes as if the process had never stopped.
+    await _propose(bus, FakeClock(T0 + timedelta(days=1)), "NVDA", "sell", -0.1, 110.0)
+    last = (await _outcomes(halabot_engine))[-1]
+    assert (last["asset"], last["cohort"]) == ("NVDA", OUTCOME_COHORT)
+    assert last["return_pct"] == pytest.approx(0.10) and last["entry_ts"] == T0
+    assert await _open_rows(halabot_engine) == {}
+
+
+@pytest.mark.asyncio
+async def test_open_position_is_marked_only_on_regular_session_bars(halabot_engine):
+    bus = InProcessEventBus(PgEventLog(halabot_engine))
+    tracker = ShadowOutcomeTracker(
+        bus=bus,
+        engine=halabot_engine,
+        store=PgBeliefStore(halabot_engine),
+        regular_session_marks=True,
+    )
+    tracker.start()
+    clock = FakeClock(T0)
+    await _propose(bus, clock, "NVDA", "buy", 0.10, 100.0)
+    await _bar(bus, clock, "NVDA", 105.0, "2026-05-28T19:00:00Z")  # 15:00 ET bar, closes 16:00
+    await _bar(bus, clock, "NVDA", 120.0, "2026-05-28T20:00:00Z")  # 16:00 ET: after hours
+    async with halabot_engine.connect() as conn:
+        mark = (await conn.execute(sa.select(open_position_table.c.last_price))).scalar_one()
+    assert mark == 105.0

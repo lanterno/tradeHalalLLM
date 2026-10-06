@@ -87,18 +87,11 @@ async def _run_shadow(
     hb = get_hb_settings()  # engine config: bands, heartbeat, thresholds
     clock = SystemClock()
     interval = interval if interval is not None else hb.engine.heartbeat_interval_s
-    # Engine configs (cold-start bands, decay, risk) derive from HalabotSettings —
-    # the fitted calibrator (L4/L8) replaces the cold-start bands once enough
-    # closed outcomes map raw → P(win). The two systems share one DATABASE_URL.
-    # Coalesce belief writes in the continuous loop (per-asset ts-ordering,
-    # Appendix F); inline + synchronous for --once so the summary is immediate.
-    # Bootstrap warms beliefs from the event log before the live stream starts.
-    engine = await build_engine(
-        database_url=settings.database_url, settings=hb, coalesce=not once, bootstrap=True
-    )
     ht_engine = await init_db(settings.database_url)  # legacy DB, for the halal universe
     # The shadow bills the same LLM key as the stock bot: meter it into the
-    # same daily total (core/llm/spend.py) so the cap covers both.
+    # same daily total (core/llm/spend.py) so the cap covers both. Installed
+    # BEFORE build_engine, whose bootstrap replay is the first thing that could
+    # reach the LLM; it used to run unmetered.
     from halal_trader.core.llm import spend
 
     spend.install(
@@ -113,6 +106,15 @@ async def _run_shadow(
                 research_usd=settings.llm.monthly_research_usd,
             ),
         )
+    )
+    # Engine configs (cold-start bands, decay, risk) derive from HalabotSettings —
+    # the fitted calibrator (L4/L8) replaces the cold-start bands once enough
+    # closed outcomes map raw → P(win). The two systems share one DATABASE_URL.
+    # Coalesce belief writes in the continuous loop (per-asset ts-ordering,
+    # Appendix F); inline + synchronous for --once so the summary is immediate.
+    # Bootstrap warms beliefs from the event log before the live stream starts.
+    engine = await build_engine(
+        database_url=settings.database_url, settings=hb, coalesce=not once, bootstrap=True
     )
     repo = Repository(ht_engine)
     mcp = AlpacaMCPClient()
@@ -136,8 +138,18 @@ async def _run_shadow(
     # Persisted dedup so a restart doesn't re-emit the last day of headlines.
     dedup = PgDedupStore(engine.db_engine)
 
+    from halabot.perception.watermark import PgBarWatermark
+
+    # Resume after the newest bar per asset the log already holds, so a restart
+    # doesn't publish the whole fetch window again as live bars.
     bar_source = AlpacaBarSource(
-        mcp, bar_universe, clock, timeframe=timeframe, days=days, interval_s=interval
+        mcp,
+        bar_universe,
+        clock,
+        timeframe=timeframe,
+        days=days,
+        interval_s=interval,
+        watermark=PgBarWatermark(engine.db_engine, lookback_days=days + 2),
     )
     # Compliance first, so beliefs carry a verdict before the first bars land.
     # Membership in the screened universe (get_halal_symbols -> compliance='halal')

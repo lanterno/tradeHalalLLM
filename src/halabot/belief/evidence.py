@@ -81,8 +81,20 @@ def decay(
     *,
     halflife_min: float,
     calendar: Calendar,
+    since: datetime | None = None,
 ) -> list[EvidenceItem]:
-    """Exponentially decay each item's weight by its *trading-time* age.
+    """Exponentially decay each item's weight by the *trading-time* that has
+    passed since its weight was last brought up to date.
+
+    ``since`` is when the weights were last decayed (the belief's
+    ``last_updated``); an item newer than that has its undecayed weight and
+    ages from its own ``ts``. Without ``since`` every item ages from its
+    ``ts``, which is right only for weights that were never decayed: a stored
+    belief's weights already carry the decay up to ``since``, and measuring
+    from ``ts`` again compounded it on every update (w·f(t1−ts)·f(t2−ts) where
+    w·f(t2−ts) is meant). With an update every 15 minutes an item lost half
+    its weight in about 80 minutes against a 240-minute half-life, and every
+    extra update (a bar, a headline) shortened that further.
 
     Items whose ``ts`` is None are treated as ageless (no decay) — defensive,
     though live evidence always carries a ``ts``. Fully-decayed items are pruned.
@@ -92,7 +104,8 @@ def decay(
         if it.ts is None:
             out.append(it)
             continue
-        age = calendar.minutes_between(it.ts, now)
+        start = it.ts if since is None or it.ts > since else since
+        age = calendar.minutes_between(start, now)
         factor = 0.5 ** (age / halflife_min) if halflife_min > 0 else 1.0
         if it.weight * factor < _EPS_PRUNE:
             continue  # fully decayed — drop

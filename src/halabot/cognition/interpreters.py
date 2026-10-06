@@ -537,6 +537,9 @@ class NewsLlmInterpreter:
     perception already recorded "we saw news"; the directional read is best-effort."""
 
     consumes = frozenset({EventType.OBSERVATION_NEWS})
+    # Each call is a paid LLM request: bootstrap replay skips this interpreter
+    # (CognitionRouter.bootstrap) rather than re-score days of history per restart.
+    replay_safe = False
 
     def __init__(
         self,

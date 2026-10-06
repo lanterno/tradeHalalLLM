@@ -106,6 +106,18 @@ class PolicySettings(BaseModel):
     # as live outcomes accumulate; flip OFF if the OOS edge doesn't hold.
     market_gate_enabled: bool = True
     market_sma_window: int = Field(default=50, ge=2)
+    # When a shadow proposal may be booked. Each is priced at the latest bar
+    # close, so outside the regular session (or on a close hours old) the
+    # booked fill could never have happened: 113 of 144 proposals since
+    # 2026-10-01 were made outside regular hours, and weekend round trips at
+    # Friday's last price were labelled 0% losses. Held-back proposals are
+    # re-proposed at the first recompute that can fill them. max_price_age_min
+    # runs from the latest bar's START. An hourly bar arrives 75-90 min after it
+    # opens (once final, plus the feed's 15-min delay), so the newest bar is
+    # routinely up to 150 min old; 180 leaves room for a slow poll. 0 = off.
+    # Not applied by `halabot backtest`, which replays bars without a session.
+    regular_session_only: bool = True
+    max_price_age_min: float = Field(default=180.0, ge=0)
 
 
 class RiskSettings(BaseModel):

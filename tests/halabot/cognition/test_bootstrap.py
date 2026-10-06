@@ -168,3 +168,109 @@ async def test_bootstrap_persists_one_version_per_asset_and_logs_no_scores():
     assert len(store._versions["NVDA"]) == 1
     assert [e.type for e in captured] == [EventType.BELIEF_UPDATED]
     assert scores == []
+
+
+async def _seed_bars(bus, clk, closes_by_hour):
+    for hour, c in closes_by_hour:
+        clk.advance(timedelta(minutes=1))
+        await bus.publish(
+            new_event(
+                clk,
+                EventType.OBSERVATION_BAR,
+                source="alpaca-bars",
+                asset="NVDA",
+                payload={
+                    "o": c,
+                    "h": c + 1,
+                    "low": c - 1,
+                    "c": c,
+                    "v": 1000.0,
+                    "bar_ts": f"2026-05-28T{hour:02d}:00:00Z",
+                },
+            )
+        )
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_replays_each_bar_once_in_bar_order():
+    """The log holds restart bursts: the same bars published again, later in
+    event time. Replay must rebuild one ordered series, not repeated runs."""
+    router, bus, store, _ = _build()
+    clk = FakeClock(T0)
+    first = [(h, 100.0 + h) for h in range(10, 16)]
+    await _seed_bars(bus, clk, first)
+    await _seed_bars(bus, clk, first[:4])  # a restart re-published the window
+    await _seed_bars(bus, clk, [(16, 116.0)])
+    now = clk.now() + timedelta(minutes=5)
+    await router.bootstrap(since=T0, until=now, now=now)
+    assert router._buffer.closes("NVDA") == [110.0, 111.0, 112.0, 113.0, 114.0, 115.0, 116.0]
+
+
+class _CountingLlmNews:
+    """Stands in for the LLM headline scorer: counts calls, scores nothing."""
+
+    consumes = frozenset({EventType.OBSERVATION_NEWS})
+    replay_safe = False
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def interpret(self, observation):
+        self.calls += 1
+        return []
+
+
+class _SpyLog(InMemoryEventLog):
+    def __init__(self) -> None:
+        super().__init__()
+        self.replay_types: list[object] = []
+
+    def replay(self, *, since=None, until=None, types=None, asset=None):
+        self.replay_types.append(types)
+        return super().replay(since=since, until=until, types=types, asset=asset)
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_reads_only_observations_and_spends_no_llm():
+    log = _SpyLog()
+    bus = InProcessEventBus(log)
+    buffer = BarBuffer()
+    llm_news = _CountingLlmNews()
+    updater = BeliefUpdater(
+        store=InMemoryBeliefStore(),
+        bus=bus,
+        clock=FakeClock(T0),
+        calendar=ContinuousCalendar(),
+        regime=EvidenceRegimeClassifier(),
+        levels=BarLevelEngine(buffer),
+        calibrator=IdentityCalibrator(),
+        thesis_writer=_NoThesis(),
+        prices=_BufferPrices(buffer),
+        positions=_NoPositions(),
+        llm=_OffLLM(),
+    )
+    router = CognitionRouter(bus=bus, updater=updater, buffer=buffer, interpreters=[llm_news])
+    clk = FakeClock(T0)
+    news = {"headline": "Chipmaker files 10-Q", "url": "http://x", "lexicon_polarity": None}
+    await bus.publish(
+        new_event(
+            clk, EventType.OBSERVATION_NEWS, source="finnhub-news", asset="NVDA", payload=news
+        )
+    )
+    now = T0 + timedelta(hours=1)
+    await router.bootstrap(since=T0, until=now, now=now)
+    assert llm_news.calls == 0  # history is not re-scored on every restart
+    assert log.replay_types == [
+        {EventType.OBSERVATION_BAR, EventType.OBSERVATION_NEWS, EventType.OBSERVATION_PRICE}
+    ]
+    router.start()
+    await bus.publish(
+        new_event(
+            clk,
+            EventType.OBSERVATION_NEWS,
+            source="finnhub-news",
+            asset="NVDA",
+            payload={**news, "url": "http://y"},
+        )
+    )
+    assert llm_news.calls == 1  # live headlines still are

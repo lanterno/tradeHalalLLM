@@ -55,6 +55,7 @@ from halabot.platform.clock import Clock, SystemClock
 from halabot.platform.config import HalabotSettings, get_settings
 from halabot.platform.db import bootstrap_schema, make_engine
 from halabot.platform.event_log import PgEventLog
+from halabot.platform.session import is_regular_session
 from halabot.policy.policy import Policy
 from halabot.policy.portfolio import ShadowPortfolio
 from halabot.policy.shadow import ShadowPolicyRunner
@@ -317,6 +318,12 @@ async def build_engine(
         benchmark=s.cognition.benchmark_symbol if s.cognition.relstrength_enabled else None,
         market_gate=s.policy.market_gate_enabled and s.cognition.relstrength_enabled,
         market_sma_window=s.policy.market_sma_window,
+        # Book a hypothetical fill only when one could happen: in the regular
+        # session, on a recent close.
+        session=is_regular_session if s.policy.regular_session_only else None,
+        max_price_age=timedelta(minutes=s.policy.max_price_age_min)
+        if s.policy.max_price_age_min > 0
+        else None,
     )
     # Learning loop (L8): refit the calibrator off closed outcomes every N closes.
     retrainer = CalibratorRetrainer(
@@ -330,9 +337,23 @@ async def build_engine(
         store=store,
         win_threshold_pct=s.conviction.win_threshold_pct,
         on_close=retrainer.on_outcome_closed,
+        regular_session_marks=s.policy.regular_session_only,
     )
     conviction_writer = ConvictionScoreWriter(bus=bus, engine=db_engine)
     target_writer = TargetWeightWriter(bus=bus, engine=db_engine)
+    # Resume the shadow book where the last process left it (hb_open_position),
+    # so a restart neither drops open positions nor leaves their rows orphaned.
+    for asset, weight in (await outcomes.restore()).items():
+        shadow_book.set_weight(asset, weight)
+    # Refit from the outcomes already on disk. The every-N-closes counter is
+    # per process, so a restart used to wait for N new closes in one run before
+    # the calibrator saw any outcome the earlier runs had collected. Awaited
+    # here (one indexed read and a small fit) so replay and the live stream
+    # both start on the fitted model; it keeps identity on too little data.
+    try:
+        await retrainer.retrain()
+    except Exception as exc:  # noqa: BLE001 — a failed refit keeps the prior model (INV-1)
+        logger.warning("start-up calibrator refit failed: %r", exc)
     # Bootstrap warm-start (Appendix F): replay recent observations to warm
     # beliefs BEFORE subscribing to the live stream + starting the worker, so
     # replay completes in isolation and event_id dedup absorbs any overlap.

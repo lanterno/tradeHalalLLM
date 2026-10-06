@@ -92,16 +92,27 @@ class CognitionRouter:
         count = 0
         if self._updater is not None:
             self._updater.begin_replay()
-        async for event in self._bus.replay(since=since, until=until):
+        # Ask the log for observations only (ix_hb_event_type_ts serves it): the
+        # unfiltered read streamed ~1.3M events to use ~38k.
+        async for event in self._bus.replay(
+            since=since, until=until, types=set(_OBSERVATION_TYPES)
+        ):
             if event.type not in _OBSERVATION_TYPES or event.asset is None:
                 continue
             asset = event.asset
-            if event.type == EventType.OBSERVATION_BAR:
-                self._buffer.append(asset, _parse_bar(event))
+            if event.type == EventType.OBSERVATION_BAR and not self._buffer.append(
+                asset, _parse_bar(event)
+            ):
+                continue  # a bar the log already replayed (or an older one)
             self._known_assets.add(asset)
             warmed.add(asset)
             evidence: list[EvidenceItem] = []
             for itp in self._by_type.get(event.type, []):
+                # An interpreter that spends money per call (the LLM headline
+                # scorer) sits replay out: history is re-read on every restart,
+                # and the log keeps no score to reuse.
+                if not getattr(itp, "replay_safe", True):
+                    continue
                 try:
                     evidence.extend(await itp.interpret(event))
                 except Exception as exc:  # noqa: BLE001 — a bad interpreter yields no evidence
@@ -133,7 +144,11 @@ class CognitionRouter:
 
         asset = event.asset
         if event.type == EventType.OBSERVATION_BAR and asset is not None:
-            self._buffer.append(asset, _parse_bar(event))
+            if not self._buffer.append(asset, _parse_bar(event)):
+                # Already seen, or older than the window's last bar: interpreting
+                # it would score the newest window again as if a bar had printed.
+                logger.debug("stale bar for %s (%s) ignored", asset, event.payload.get("bar_ts"))
+                return
         if asset is not None:
             self._known_assets.add(asset)
 
@@ -216,11 +231,13 @@ class CognitionRouter:
 
 def _parse_bar(event: Event) -> Bar:
     p = event.payload
+    ts = parse_iso(p.get("bar_ts")) or event.ts
     return Bar(
         o=float(p["o"]),
         h=float(p["h"]),
         low=float(p["low"]),
         c=float(p["c"]),
         v=float(p.get("v", 0.0)),
-        ts=parse_iso(p.get("bar_ts")) or event.ts,
+        # Aware, so the buffer's ordering check never compares naive with aware.
+        ts=ts if ts.tzinfo is not None else ts.replace(tzinfo=UTC),
     )

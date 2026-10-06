@@ -21,6 +21,7 @@ from halabot.analysis.significance import (
     promotion_gate,
     variance,
 )
+from halabot.platform.db import OUTCOME_COHORT
 from halabot.platform.db import event_log as _event_log
 from halabot.platform.db import outcome as _outcome
 from halabot.platform.events import EventType
@@ -106,28 +107,23 @@ async def ab_report(engine: AsyncEngine, *, since: datetime, until: datetime) ->
 
         # Shadow hypothetical per-trade returns from closed outcomes in the window.
         o = _outcome
+        # The current cohort only: older rows came from an engine whose fills
+        # (replayed bars, closed-market prices) aren't comparable.
+        in_window = (o.c.exit_ts >= since, o.c.exit_ts <= until, o.c.cohort == OUTCOME_COHORT)
         shadow_returns = [
-            float(r[0])
-            for r in await conn.execute(
-                sa.select(o.c.return_pct).where(o.c.exit_ts >= since, o.c.exit_ts <= until)
-            )
+            float(r[0]) for r in await conn.execute(sa.select(o.c.return_pct).where(*in_window))
         ]
         weighted_ret = float(
             (
                 await conn.execute(
                     sa.select(
                         sa.func.coalesce(sa.func.sum(o.c.return_pct * o.c.closed_weight), 0.0)
-                    ).where(o.c.exit_ts >= since, o.c.exit_ts <= until)
+                    ).where(*in_window)
                 )
             ).scalar_one()
             or 0.0
         )
-        labels = [
-            int(r[0])
-            for r in await conn.execute(
-                sa.select(o.c.label).where(o.c.exit_ts >= since, o.c.exit_ts <= until)
-            )
-        ]
+        labels = [int(r[0]) for r in await conn.execute(sa.select(o.c.label).where(*in_window))]
 
         # Live realized per-trade returns from the legacy regret_records (raw SQL,
         # avoids importing the legacy SQLModel). Empty/missing → no live P&L data

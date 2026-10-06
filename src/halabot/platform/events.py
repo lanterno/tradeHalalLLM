@@ -99,8 +99,12 @@ def new_event(
     payload: dict[str, Any] | None = None,
     causation: Event | None = None,
     correlation_id: UUID | None = None,
+    ts: datetime | None = None,
 ) -> Event:
     """Construct an :class:`Event`, stamping ``id`` and ``ts`` from the clock.
+
+    ``ts`` overrides the clock for an observation whose event time is known
+    and earlier than its ingestion (a headline's publish time).
 
     When ``causation`` is supplied, the new event inherits its
     ``correlation_id`` (continuing the causal chain) and records it as
@@ -113,7 +117,7 @@ def new_event(
     return Event(
         id=uuid4(),
         type=type,
-        ts=clock.now(),
+        ts=ts if ts is not None else clock.now(),
         source=source,
         asset=asset,
         payload=payload or {},

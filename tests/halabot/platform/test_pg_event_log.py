@@ -100,5 +100,30 @@ async def test_bus_durably_persists_then_replays(halabot_engine):
     assert [x.id for x in replayed] == [e.id]  # durably persisted
 
 
+@pytest.mark.asyncio
+async def test_replay_pages_and_holds_no_connection_while_the_consumer_works(halabot_engine):
+    # The replay used to stream one cursor while bootstrap interpreted each
+    # event, leaving the connection idle in transaction for the whole replay.
+    log = PgEventLog(halabot_engine, replay_page=2)
+    written = []
+    for minute in (3, 1, 1, 2, 4):  # two events share a ts: the (ts, id) key orders them
+        e = new_event(
+            _at(minute),
+            EventType.OBSERVATION_NEWS,
+            source="finnhub",
+            asset="NVDA",
+            payload={"headline": "h", "url": f"u{len(written)}"},
+        )
+        await log.append(e)
+        written.append(e)
+    pool = halabot_engine.sync_engine.pool
+    seen: list[Event] = []
+    async for event in log.replay():
+        assert pool.checkedout() == 0  # nothing held between fetches
+        seen.append(event)
+    expected = sorted(written, key=lambda e: (e.ts, e.id))
+    assert [e.id for e in seen] == [e.id for e in expected]
+
+
 async def _record(sink: list, e: Event) -> None:
     sink.append(e)

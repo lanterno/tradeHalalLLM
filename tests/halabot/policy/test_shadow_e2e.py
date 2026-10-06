@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -12,6 +12,7 @@ from halabot.platform.bus import InProcessEventBus
 from halabot.platform.clock import FakeClock
 from halabot.platform.event_log import InMemoryEventLog
 from halabot.platform.events import Event, EventType, new_event
+from halabot.platform.session import is_regular_session
 from halabot.policy.policy import Policy
 from halabot.policy.portfolio import ShadowPortfolio
 from halabot.policy.shadow import ShadowPolicyRunner
@@ -172,3 +173,116 @@ async def test_runner_only_emits_policy_events_never_orders():
     assert EventType.ORDER_SUBMITTED not in kinds
     assert EventType.ORDER_FILLED not in kinds
     assert EventType.POLICY_TRADE_PROPOSED in kinds
+
+
+# ── when a hypothetical fill could happen ──
+SATURDAY = datetime(2026, 10, 3, 15, 0, tzinfo=UTC)
+MONDAY_OPEN = datetime(2026, 10, 5, 14, 0, tzinfo=UTC)  # 10:00 EDT
+
+
+class _History:
+    """The latest bar time per asset (one close each)."""
+
+    def __init__(self, latest: dict[str, datetime]):
+        self.latest = latest
+
+    def timestamped_closes(self, asset: str) -> list[tuple[datetime, float]]:
+        ts = self.latest.get(asset)
+        return [(ts, 100.0)] if ts is not None else []
+
+
+class _Prices:
+    def last_price(self, asset: str) -> float | None:
+        return 100.0
+
+
+async def _gated(clock, *, history=None, max_price_age=None):
+    store = InMemoryBeliefStore()
+    bus = InProcessEventBus(InMemoryEventLog())
+    runner = ShadowPolicyRunner(
+        bus=bus,
+        store=store,
+        policy=Policy(PolicyConfig()),
+        portfolio=ShadowPortfolio(),
+        risk_engine=BasicRiskEngine(),
+        clock=clock,
+        prices=_Prices(),
+        history=history,
+        session=is_regular_session,
+        max_price_age=max_price_age,
+    )
+    runner.start()
+    proposed: list[Event] = []
+    bus.subscribe({EventType.POLICY_TRADE_PROPOSED}, lambda e: _cap(proposed, e))
+    return store, bus, runner, proposed
+
+
+async def _update(bus, store, clock, belief):
+    await store.put(belief)
+    await bus.publish(new_event(clock, EventType.BELIEF_UPDATED, source="test", asset=belief.asset))
+
+
+@pytest.mark.asyncio
+async def test_no_proposal_while_the_market_is_closed():
+    # Weekend round trips at Friday's last close were booked as 0% losses.
+    clock = FakeClock(SATURDAY)
+    store, bus, runner, proposed = await _gated(clock)
+    await _update(bus, store, clock, _bullish())
+    assert proposed == [] and runner._portfolio.weight("NVDA") == 0.0
+    clock.set(MONDAY_OPEN)
+    await bus.publish(new_event(clock, EventType.SYSTEM_HEARTBEAT, source="heartbeat"))
+    assert [p.payload["side"] for p in proposed] == ["buy"]  # proposed again once it can fill
+
+
+@pytest.mark.asyncio
+async def test_stale_price_holds_the_proposal_until_a_fresh_bar():
+    clock = FakeClock(MONDAY_OPEN)
+    history = _History({"NVDA": MONDAY_OPEN - timedelta(hours=60)})  # Friday's last bar
+    store, bus, runner, proposed = await _gated(
+        clock, history=history, max_price_age=timedelta(hours=2)
+    )
+    await _update(bus, store, clock, _bullish())
+    assert proposed == []
+    history.latest["NVDA"] = MONDAY_OPEN - timedelta(hours=1)
+    await bus.publish(new_event(clock, EventType.SYSTEM_HEARTBEAT, source="heartbeat"))
+    assert [p.payload["side"] for p in proposed] == ["buy"]
+
+
+@pytest.mark.asyncio
+async def test_a_held_back_sell_holds_the_buys_of_its_rebalance():
+    clock = FakeClock(MONDAY_OPEN)
+    fresh = MONDAY_OPEN - timedelta(minutes=30)
+    history = _History({"NVDA": fresh, "MSFT": fresh})
+    store, bus, runner, proposed = await _gated(
+        clock, history=history, max_price_age=timedelta(hours=2)
+    )
+    await _update(bus, store, clock, _bullish())  # hold NVDA
+    assert runner._portfolio.weight("NVDA") > 0
+    history.latest["NVDA"] = MONDAY_OPEN - timedelta(hours=60)  # NVDA's price goes stale
+    await store.put(_bullish("MSFT"))
+    await _update(bus, store, clock, _bullish(conviction=0.0, direction=Direction.NEUTRAL))
+    assert [p.payload["side"] for p in proposed] == ["buy"]  # nothing after the first buy
+
+
+@pytest.mark.asyncio
+async def test_force_exit_waits_for_the_session():
+    clock = FakeClock(MONDAY_OPEN)
+    store, bus, runner, proposed = await _gated(clock)
+    await _update(bus, store, clock, _bullish())  # hold NVDA
+    clock.set(SATURDAY + timedelta(days=7))
+    await bus.publish(
+        new_event(
+            clock,
+            EventType.BELIEF_INVALIDATED,
+            source="belief.compliance",
+            asset="NVDA",
+            payload={"reason": "compliance_lapsed", "version": 2},
+        )
+    )
+    assert runner._portfolio.weight("NVDA") > 0  # nothing can fill on a Saturday
+    clock.set(MONDAY_OPEN + timedelta(days=7))
+    await store.put(_bullish(status="not_halal"))
+    await bus.publish(new_event(clock, EventType.SYSTEM_HEARTBEAT, source="heartbeat"))
+    sells = [p for p in proposed if p.payload["side"] == "sell"]
+    assert len(sells) == 1 and sells[0].payload["forced_exit"] is True
+    assert runner._portfolio.weight("NVDA") == 0.0

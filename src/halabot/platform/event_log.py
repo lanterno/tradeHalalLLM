@@ -86,8 +86,9 @@ class PgEventLog:
     :class:`InMemoryEventLog`, so the bus is agnostic to which is wired.
     """
 
-    def __init__(self, engine: AsyncEngine) -> None:
+    def __init__(self, engine: AsyncEngine, *, replay_page: int = 2000) -> None:
         self._engine = engine
+        self._page = replay_page
 
     async def append(self, event: Event) -> None:
         async with self._engine.begin() as conn:
@@ -114,21 +115,44 @@ class PgEventLog:
         types: set[EventType] | None = None,
         asset: str | None = None,
     ) -> AsyncIterator[Event]:
-        t = _event_log_table
-        stmt = sa.select(t).order_by(t.c.ts.asc())  # event-time order (INV-5)
-        if since is not None:
-            stmt = stmt.where(t.c.ts >= since)
-        if until is not None:
-            stmt = stmt.where(t.c.ts <= until)
-        if types is not None:
-            stmt = stmt.where(t.c.type.in_([str(x) for x in types]))
-        if asset is not None:
-            stmt = stmt.where(t.c.asset == asset)
+        """Stream matching events in event-time order, a page at a time.
 
-        async with self._engine.connect() as conn:
-            result = await conn.stream(stmt)
-            async for row in result:
+        Each page is read on its own short connection and released before any
+        event is yielded. The replay used to stream one server-side cursor
+        while the consumer worked: bootstrap interprets every event (Chronos
+        included) between fetches, so the connection sat "idle in transaction"
+        on an hb_event_log SELECT for the minutes the replay took, holding back
+        vacuum database-wide. Pages are keyed on (ts, id), which is total, so
+        no row is skipped or repeated at a page boundary.
+        """
+        t = _event_log_table
+        base = sa.select(t).order_by(t.c.ts.asc(), t.c.id.asc())  # event-time order (INV-5)
+        if since is not None:
+            base = base.where(t.c.ts >= since)
+        if until is not None:
+            base = base.where(t.c.ts <= until)
+        if types is not None:
+            base = base.where(t.c.type.in_([str(x) for x in types]))
+        if asset is not None:
+            base = base.where(t.c.asset == asset)
+
+        after: tuple[datetime, Any] | None = None
+        while True:
+            stmt = base.limit(self._page)
+            if after is not None:
+                last_ts, last_id = after
+                stmt = stmt.where(
+                    sa.tuple_(t.c.ts, t.c.id)
+                    > sa.tuple_(sa.literal(last_ts, t.c.ts.type), sa.literal(last_id, t.c.id.type))
+                )
+            async with self._engine.connect() as conn:
+                rows = (await conn.execute(stmt)).all()
+            for row in rows:
                 yield _row_to_event(row)
+            if len(rows) < self._page:
+                return
+            last = rows[-1]._mapping
+            after = (last["ts"], last["id"])
 
 
 def _row_to_event(row: sa.Row[Any]) -> Event:

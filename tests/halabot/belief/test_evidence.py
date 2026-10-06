@@ -51,6 +51,25 @@ def test_decay_continuous_calendar_uses_wall_clock():
     assert out[0].weight == 0.25  # two half-lives
 
 
+def test_decay_in_steps_equals_decay_once():
+    # A stored belief's weights are already decayed to its last update; the
+    # next pass must age them from there, not from each item's ts again (that
+    # compounded: 0.5 * 0.25 = 0.125 here instead of 0.25).
+    items = [_ev("news", 1.0, 1.0, ts=T0)]
+    once = decay(items, T0 + timedelta(minutes=120), halflife_min=60, calendar=CAL)
+    half = T0 + timedelta(minutes=60)
+    stepped = decay(items, half, halflife_min=60, calendar=CAL)
+    stepped = decay(stepped, T0 + timedelta(minutes=120), halflife_min=60, calendar=CAL, since=half)
+    assert stepped[0].weight == pytest.approx(once[0].weight) == pytest.approx(0.25)
+
+
+def test_decay_since_leaves_newer_items_aging_from_their_own_ts():
+    late = T0 + timedelta(minutes=90)
+    items = [_ev("news", 1.0, 1.0, ts=late)]
+    out = decay(items, T0 + timedelta(minutes=150), halflife_min=60, calendar=CAL, since=T0)
+    assert out[0].weight == pytest.approx(0.5)  # 60 minutes old, not 150
+
+
 def test_regular_hours_calendar_freezes_weekend():
     from halabot.belief.evidence import RegularHoursCalendar
 

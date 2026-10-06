@@ -20,6 +20,7 @@ from dataclasses import dataclass
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from halabot.platform.db import OUTCOME_COHORT
 from halabot.platform.db import open_position as _open_position
 from halabot.platform.db import outcome as _outcome
 
@@ -68,13 +69,17 @@ async def attribution(
     async with engine.connect() as conn:
         rows = (
             await conn.execute(
-                sa.select(_outcome.c.return_pct, _outcome.c.label, _outcome.c.entry_belief)
+                sa.select(_outcome.c.return_pct, _outcome.c.label, _outcome.c.entry_belief).where(
+                    _outcome.c.cohort == OUTCOME_COHORT
+                )
             )
         ).all()
         open_rows = (
             (
                 await conn.execute(
-                    sa.select(_open_position.c.unrealized_return_pct, _open_position.c.entry_belief)
+                    sa.select(
+                        _open_position.c.unrealized_return_pct, _open_position.c.entry_belief
+                    ).where(_open_position.c.cohort == OUTCOME_COHORT)
                 )
             ).all()
             if include_open
