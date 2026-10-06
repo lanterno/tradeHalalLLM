@@ -217,9 +217,11 @@ home-up:
 home-down:
     {{home_compose}} down
 
-# Rebuild the image the fleet runs
+# Rebuild the image the fleet runs, then drop build cache older than 3 days
+# (only the builder cache: never images, containers or volumes)
 home-build:
     {{home_compose}} build
+    docker builder prune -f --filter until=72h
 
 # Exit 0 only if every long-running container is running AND the API answers
 home-health:
