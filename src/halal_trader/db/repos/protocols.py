@@ -8,7 +8,7 @@ via duck typing).
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any, Protocol
 
 
@@ -55,7 +55,9 @@ class StockPnlRepo(Protocol):
     async def end_day(
         self, ending_equity: float, realized_pnl: float, trades_count: int
     ) -> None: ...
-    async def get_pnl_history(self, limit: int = ...) -> list[dict[str, Any]]: ...
+    async def get_pnl_history(
+        self, limit: int = ..., *, since: date | None = ...
+    ) -> list[dict[str, Any]]: ...
 
 
 class StockHalalCacheRepo(Protocol):

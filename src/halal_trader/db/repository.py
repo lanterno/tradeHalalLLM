@@ -8,7 +8,7 @@ New code should depend on the narrowest protocol it needs
 :attr:`Repository.bundle`).
 """
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -119,8 +119,10 @@ class Repository:
     async def end_day(self, ending_equity: float, realized_pnl: float, trades_count: int) -> None:
         await self._stock_pnl.end_day(ending_equity, realized_pnl, trades_count)
 
-    async def get_pnl_history(self, limit: int = 30) -> list[dict[str, Any]]:
-        return await self._stock_pnl.get_pnl_history(limit)
+    async def get_pnl_history(
+        self, limit: int = 30, *, since: date | None = None
+    ) -> list[dict[str, Any]]:
+        return await self._stock_pnl.get_pnl_history(limit, since=since)
 
     # ── Halal Cache (delegated to StockHalalCacheRepoImpl) ─────────
 

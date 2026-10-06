@@ -7,6 +7,7 @@ Protocol in ``protocols.py``.
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -58,8 +59,16 @@ class StockPnlRepoImpl:
             session.add(row)
             await session.commit()
 
-    async def get_pnl_history(self, limit: int = 30) -> list[dict[str, Any]]:
+    async def get_pnl_history(
+        self, limit: int = 30, *, since: date | None = None
+    ) -> list[dict[str, Any]]:
+        """The newest ``limit`` rows, newest first; with ``since``, only days
+        on or after it (a calendar window, where ``limit`` alone counts rows
+        and a 30-row window spanned June to October across idle months)."""
         async with AsyncSession(self._engine) as session:
-            statement = select(DailyPnl).order_by(col(DailyPnl.date).desc()).limit(limit)
+            statement = select(DailyPnl)
+            if since is not None:
+                statement = statement.where(col(DailyPnl.date) >= since.isoformat())
+            statement = statement.order_by(col(DailyPnl.date).desc()).limit(limit)
             results = await session.exec(statement)
             return [r.model_dump() for r in results.all()]

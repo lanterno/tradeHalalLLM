@@ -16,8 +16,7 @@ interface EquityCurveProps {
   /**
    * "equity" (default) plots the real account value (`ending_equity`) over
    * time — a mark-to-market equity curve. "cumulative" plots the running sum
-   * of realized P&L (the old behavior, used by the Analytics "Cumulative P&L"
-   * panel).
+   * of the daily equity change (closed days only).
    */
   mode?: "equity" | "cumulative";
 }
@@ -35,21 +34,23 @@ export function EquityCurve({ data, mode = "equity" }: EquityCurveProps) {
     // (e.g. non-trading days before the bot started) would flatten the curve.
     chartData = sorted
       .filter((d) => d.ending_equity != null && d.ending_equity > 0)
-      .map((d) => ({ date: d.date, value: d.ending_equity }));
+      .map((d) => ({ date: d.date, value: d.ending_equity as number }));
   } else {
     let cum = 0;
-    chartData = sorted.map((d) => {
-      cum += d.realized_pnl;
-      return { date: d.date, value: cum };
-    });
+    chartData = sorted
+      .filter((d) => d.equity_change != null)
+      .map((d) => {
+        cum += d.equity_change as number;
+        return { date: d.date, value: cum };
+      });
   }
 
-  const label = mode === "equity" ? "Account equity" : "Cumulative P&L";
+  const label = mode === "equity" ? "Account equity" : "Cumulative equity change";
 
   if (!chartData.length) {
     return (
       <p className="py-12 text-center text-sm text-muted">
-        {mode === "equity" ? "No equity history yet." : "No P&L data yet."}
+        {mode === "equity" ? "No equity history yet." : "No closed days in this window."}
       </p>
     );
   }

@@ -46,9 +46,13 @@ export interface DailyPnl {
   id: number;
   date: string;
   starting_equity: number;
-  ending_equity: number;
+  ending_equity: number | null;
+  /** Misnamed in the ledger: the writer stores the equity change, and some old
+   *  rows something else. Plot equity_change instead. */
   realized_pnl: number;
-  return_pct: number;
+  /** Ending minus starting equity; null while the day is open. */
+  equity_change: number | null;
+  return_pct: number | null;
   trades_count: number;
 }
 

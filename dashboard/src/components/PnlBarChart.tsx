@@ -17,11 +17,14 @@ interface PnlBarChartProps {
 }
 
 export function PnlBarChart({ data }: PnlBarChartProps) {
-  const sorted = data.slice().sort((a, b) => a.date.localeCompare(b.date));
+  // Closed days only: an open day has no ending equity, hence no change yet.
+  const sorted = data
+    .filter((d) => d.equity_change != null)
+    .sort((a, b) => a.date.localeCompare(b.date));
 
   if (!sorted.length) {
     return (
-      <p className="py-12 text-center text-sm text-muted">No P&L data yet.</p>
+      <p className="py-12 text-center text-sm text-muted">No closed days in this window.</p>
     );
   }
 
@@ -45,12 +48,12 @@ export function PnlBarChart({ data }: PnlBarChartProps) {
         />
         <Tooltip
           contentStyle={CHART_TOOLTIP}
-          formatter={(value) => [formatUsd(Number(value)), "Daily P&L"]}
+          formatter={(value) => [formatUsd(Number(value)), "Equity change"]}
           labelFormatter={(label) => formatDate(String(label))}
         />
-        <Bar dataKey="realized_pnl" radius={[3, 3, 0, 0]}>
+        <Bar dataKey="equity_change" radius={[3, 3, 0, 0]}>
           {sorted.map((entry, i) => (
-            <Cell key={i} fill={pnlFill(entry.realized_pnl)} fillOpacity={0.8} />
+            <Cell key={i} fill={pnlFill(entry.equity_change ?? 0)} fillOpacity={0.8} />
           ))}
         </Bar>
       </BarChart>

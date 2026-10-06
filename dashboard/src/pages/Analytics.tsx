@@ -9,15 +9,19 @@ import { SymbolBreakdown } from "../components/SymbolBreakdown";
 import { ErrorState } from "../components/ErrorState";
 import { formatUsd, formatPct, pnlColor } from "../lib/utils";
 
+// Calendar days back from today (New York), for both the closed trades and
+// the daily ledger.
 const RANGES = [
   { label: "7d", days: 7 },
   { label: "30d", days: 30 },
   { label: "90d", days: 90 },
-  { label: "All", days: 365 },
+  { label: "1y", days: 365 },
+  { label: "All", days: 3650 },
 ] as const;
 
 export default function Analytics() {
-  const [days, setDays] = useState(30);
+  // The day-trader is retired: a short window would mostly be empty.
+  const [days, setDays] = useState(90);
   const { data: stats, isLoading, isError, error, refetch } = useAnalytics(days);
   const {
     data: pnl,
@@ -41,8 +45,14 @@ export default function Analytics() {
 
   return (
     <div className="space-y-6 p-4 sm:p-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-white">Analytics</h1>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-bold text-white">Day-trader analytics</h1>
+          <p className="mt-1 max-w-2xl text-xs text-muted">
+            The retired intraday day-trader's record (its own paper account), kept as research. It opens
+            nothing new; the core portfolio is the product and has its own page.
+          </p>
+        </div>
         <div className="flex gap-1 rounded-lg border border-border bg-surface p-0.5">
           {RANGES.map((r) => (
             <button
@@ -74,9 +84,9 @@ export default function Analytics() {
           {/* KPI Cards */}
           <div className="grid grid-cols-2 gap-4 md:grid-cols-4 lg:grid-cols-5">
             <StatCard
-              label="Total Trades"
+              label="Closed trades"
               value={stats.total_trades}
-              sub={`${stats.wins}W / ${stats.losses}L`}
+              sub={`${stats.wins}W / ${stats.losses}L · last ${days} days`}
             />
             <StatCard
               label="Win Rate"
@@ -87,12 +97,13 @@ export default function Analytics() {
               }
             />
             <StatCard
-              label="Total P&L"
+              label="Closed-trade P&L"
               value={
                 <span className={pnlColor(stats.total_pnl)}>
                   {formatUsd(stats.total_pnl)}
                 </span>
               }
+              sub="realized, on round trips"
             />
             <StatCard
               label="Profit Factor"
@@ -155,9 +166,12 @@ export default function Analytics() {
           {/* Charts */}
           <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
             <div className="rounded-xl border border-border bg-surface p-4">
-              <h3 className="mb-4 text-sm font-medium uppercase tracking-wider text-muted">
-                Daily P&L
+              <h3 className="mb-1 text-sm font-medium uppercase tracking-wider text-muted">
+                Daily equity change
               </h3>
+              <p className="mb-4 text-xs text-muted">
+                Ending minus starting account equity: open positions' marks included, so not realized P&L.
+              </p>
               {pnlError ? (
                 <ErrorState compact error={pnlErr} onRetry={pnlRefetch} />
               ) : pnl ? (
@@ -165,9 +179,10 @@ export default function Analytics() {
               ) : null}
             </div>
             <div className="rounded-xl border border-border bg-surface p-4">
-              <h3 className="mb-4 text-sm font-medium uppercase tracking-wider text-muted">
-                Cumulative P&L
+              <h3 className="mb-1 text-sm font-medium uppercase tracking-wider text-muted">
+                Cumulative equity change
               </h3>
+              <p className="mb-4 text-xs text-muted">Summed over the closed days in the window.</p>
               {pnlError ? (
                 <ErrorState compact error={pnlErr} onRetry={pnlRefetch} />
               ) : pnl ? (
@@ -186,6 +201,7 @@ export default function Analytics() {
             <div className="rounded-xl border border-border bg-surface p-4">
               <h3 className="mb-4 text-sm font-medium uppercase tracking-wider text-muted">
                 P&L by Symbol
+                <span className="ml-1 normal-case tracking-normal">· its last 500 trades</span>
               </h3>
               {tradesError ? (
                 <ErrorState compact error={tradesErr} onRetry={tradesRefetch} />
