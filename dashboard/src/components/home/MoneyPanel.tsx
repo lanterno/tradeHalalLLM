@@ -52,8 +52,14 @@ function Account({ a, label }: { a: HomeAccount; label: string }) {
     <div className="rounded-xl border border-border bg-surface p-4">
       <div className="flex items-center justify-between gap-2">
         <p className="text-[11px] font-semibold uppercase tracking-wider text-muted">{a.label}</p>
-        <span className={cn("rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase", BADGE[a.status])}>
-          {a.status}
+        <span
+          className={cn(
+            "rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase",
+            BADGE[a.status] ?? BADGE.disabled,
+          )}
+        >
+          {/* The day-trader switched off is retired, not paused: nothing turns it back on. */}
+          {a.account === "paper" && a.status !== "active" ? "retired" : a.status}
         </span>
       </div>
       <p className="mt-1.5 text-[22px] font-bold tabular-nums text-white">{formatUsd(a.equity)}</p>

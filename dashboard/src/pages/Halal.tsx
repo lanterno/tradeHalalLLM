@@ -73,7 +73,7 @@ function AccountCard({ a }: { a: AccountCompliance }) {
       {a.non_halal_buys.length > 0 && (
         <details className="mt-3 text-xs">
           <summary className="cursor-pointer text-muted hover:text-white">
-            The {a.non_halal_buys_quarter} buy{a.non_halal_buys_quarter === 1 ? "" : "s"} ▾
+            The {a.non_halal_buys_quarter} buy{a.non_halal_buys_quarter === 1 ? "" : "s"}
           </summary>
           <div className="mt-2 overflow-x-auto">
             <table className="w-full min-w-[320px] tabular-nums">

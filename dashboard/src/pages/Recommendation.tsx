@@ -3,7 +3,7 @@ import {
   useRecommendationHistory,
   useRecommendationScorecard,
 } from "../hooks/useRecommendation";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { RecommendationCard } from "../components/RecommendationCard";
 import { StatCard } from "../components/StatCard";
 import { ErrorState } from "../components/ErrorState";
@@ -61,6 +61,20 @@ export default function Recommendation() {
     error: scError,
     refetch: scRefetch,
   } = useRecommendationScorecard();
+
+  // A day generated more than once: the newest row is the day's pick (what the
+  // scorecard scores); the older ones are shown dimmed.
+  const superseded = useMemo(() => {
+    const newest = new Map<string, number>();
+    for (const r of history ?? []) {
+      if (r.date && r.id != null && r.id > (newest.get(r.date) ?? -1)) newest.set(r.date, r.id);
+    }
+    return new Set(
+      (history ?? [])
+        .filter((r) => r.date && r.id != null && newest.get(r.date) !== r.id)
+        .map((r) => r.id as number),
+    );
+  }, [history]);
 
   return (
     <div className="space-y-6 p-4 sm:p-6">
@@ -248,9 +262,15 @@ export default function Recommendation() {
               </thead>
               <tbody>
                 {history.map((r) => (
-                  <tr key={r.id} className="border-t border-border align-top">
+                  <tr
+                    key={r.id}
+                    className={cn("border-t border-border align-top", superseded.has(r.id ?? -1) && "opacity-45")}
+                  >
                     <td className="py-2 pr-4 text-muted whitespace-nowrap">
                       {r.date}
+                      {superseded.has(r.id ?? -1) && (
+                        <span className="block text-[10px] uppercase tracking-wide">re-run, not scored</span>
+                      )}
                     </td>
                     <td className="py-2 pr-4 font-semibold text-accent">
                       {r.symbol}

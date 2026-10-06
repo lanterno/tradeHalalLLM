@@ -45,7 +45,7 @@ const NAV_GROUPS: { heading: string | null; note?: string; items: NavItem[] }[] 
   },
   {
     heading: "Research",
-    note: "advisory, never trades",
+    note: "advisory",
     items: [
       { to: "/recommendation", icon: Star, label: "Stock of the Day" },
       { to: "/beliefs", icon: Telescope, label: "Belief Board" },

@@ -6,7 +6,8 @@ import type { AccountPositions, Holding } from "../api/types";
 import { cn, formatDate, formatDuration, formatQty, formatTime, formatUsd, pnlColor } from "../lib/utils";
 
 const SHOWN = 15;
-const STALE_SECONDS = 15 * 60;
+// Snapshots stop outside the session; flag only marks older than a long weekend.
+const STALE_SECONDS = 3 * 86_400;
 
 function usd(v: number | null | undefined): string {
   return v == null ? "—" : formatUsd(v);

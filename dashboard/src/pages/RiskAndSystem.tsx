@@ -42,7 +42,7 @@ function CoreRiskPanel({ risk }: { risk: CoreRisk }) {
           sub={
             risk.peak_day
               ? `peak ${formatUsd(risk.peak_equity ?? 0)} on ${formatDate(risk.peak_day)}`
-              : `at its peak · ${risk.history_days ?? 0} days of history${
+              : `at its peak · ${risk.history_days ?? 0} day${risk.history_days === 1 ? "" : "s"} of history${
                   risk.history_from ? ` since ${formatDate(risk.history_from)}` : ""
                 }`
           }
@@ -270,7 +270,7 @@ export default function RiskAndSystem() {
       <section className="rounded-xl border border-border bg-surface p-4">
         <details open={risk.data?.day_trader_enabled === true}>
           <summary className="cursor-pointer text-sm font-medium uppercase tracking-wider text-muted">
-            Day-trader risk{risk.data?.day_trader_enabled === false ? " · retired" : ""} ▾
+            Day-trader risk{risk.data?.day_trader_enabled === false ? " · retired" : ""}
           </summary>
           <div className="mt-3">
             {risk.isError ? (
