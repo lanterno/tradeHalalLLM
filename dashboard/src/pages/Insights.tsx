@@ -3,15 +3,7 @@ import { ErrorState } from "../components/ErrorState";
 import { usePurification } from "../hooks/useInsights";
 import { formatUsd } from "../lib/utils";
 
-function EmptyTile({ label, message }: { label: string; message: string }) {
-  return (
-    <StatCard
-      label={label}
-      value={<span className="text-sm font-normal text-muted">—</span>}
-      sub={message}
-    />
-  );
-}
+const ACCOUNT: Record<string, string> = { core: "Core", paper: "Day-trader" };
 
 export default function Insights() {
   const {
@@ -21,6 +13,8 @@ export default function Insights() {
     refetch: purificationRefetch,
   } = usePurification();
 
+  const accounts = purification ? Object.entries(purification.by_account ?? {}) : [];
+
   return (
     <div className="space-y-6 p-4 sm:p-6">
       <div className="flex items-center justify-between">
@@ -28,23 +22,33 @@ export default function Insights() {
         <p className="text-xs text-muted">Auto-refresh every 5 min</p>
       </div>
 
-      {/* Purification owed on closed winning trades */}
+      {/* Purification still owed: the dividend ledger, both accounts */}
       <div className="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-4">
         {purificationIsError ? (
           <ErrorState compact error={purificationError} onRetry={purificationRefetch} />
         ) : purification ? (
           <StatCard
-            label="Purification Due"
+            label="Purification due"
             value={
-              <span className="text-white">{formatUsd(purification.total_usd)}</span>
+              <span className={purification.total_usd > 0 ? "text-warning" : "text-accent"}>
+                {formatUsd(purification.total_usd)}
+              </span>
             }
-            sub={`${purification.n_entries} entries · ${formatUsd(purification.disbursed_total_usd)} disbursed`}
+            sub={
+              [
+                ...accounts.map(([a, v]) => `${ACCOUNT[a] ?? a} ${formatUsd(v)}`),
+                `${formatUsd(purification.disbursed_total_usd)} given so far`,
+              ].join(" · ")
+            }
           />
         ) : (
-          <EmptyTile label="Purification Due" message="No closed wins yet" />
+          <StatCard
+            label="Purification due"
+            value={<span className="text-accent">{formatUsd(0)}</span>}
+            sub="No dividend has accrued purification yet"
+          />
         )}
       </div>
-
     </div>
   );
 }

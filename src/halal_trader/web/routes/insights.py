@@ -14,15 +14,62 @@ def register(app: FastAPI) -> None:
     async def api_purification(
         ctx: DashboardContext = Depends(get_ctx),
     ) -> JSONResponse:
+        """Purification still owed, by account and by symbol.
+
+        Reads the dividend ledger the research run keeps for both broker
+        accounts (``purification_accruals``) plus the older round-trip
+        ledger. It used to read only the round-trip ledger, which nothing
+        has written since the dividend ledger replaced it, and so said "no
+        closed wins yet" while dividends were owed.
+        """
+        from sqlalchemy import text
+
         from halal_trader.halal.round_trip_purification import (
             RoundTripLedger,
             outstanding_round_trip_due,
         )
 
+        async with ctx.engine.connect() as conn:
+            rows = (
+                await conn.execute(
+                    text(
+                        "SELECT account, symbol, amount, paid_at IS NOT NULL AS paid "
+                        "FROM purification_accruals WHERE account IN ('core', 'paper')"
+                    )
+                )
+            ).all()
         ledger = RoundTripLedger(engine=ctx.engine)
-        if await ledger.count() == 0:
+        legacy = await outstanding_round_trip_due(ledger) if await ledger.count() else None
+        if not rows and legacy is None:
             return JSONResponse({"available": False})
-        return JSONResponse({"available": True, **(await outstanding_round_trip_due(ledger))})
+
+        by_account: dict[str, float] = {}
+        by_symbol: dict[str, float] = {}
+        disbursed = 0.0
+        unpaid_entries = 0
+        for r in rows:
+            if r.paid:
+                disbursed += float(r.amount)
+                continue
+            unpaid_entries += 1
+            by_account[r.account] = by_account.get(r.account, 0.0) + float(r.amount)
+            by_symbol[r.symbol] = by_symbol.get(r.symbol, 0.0) + float(r.amount)
+        if legacy is not None:
+            by_account["paper"] = by_account.get("paper", 0.0) + legacy["total_usd"]
+            for symbol, amount in legacy["by_symbol"].items():
+                by_symbol[symbol] = by_symbol.get(symbol, 0.0) + amount
+            disbursed += legacy["disbursed_total_usd"]
+            unpaid_entries += legacy["n_entries"]
+        return JSONResponse(
+            {
+                "available": True,
+                "total_usd": round(sum(by_account.values()), 2),
+                "by_account": {a: round(v, 2) for a, v in by_account.items()},
+                "by_symbol": {s: round(v, 2) for s, v in by_symbol.items()},
+                "disbursed_total_usd": round(disbursed, 2),
+                "n_entries": unpaid_entries,
+            }
+        )
 
     @app.get("/api/insights/exceptions")
     async def api_exceptions(
