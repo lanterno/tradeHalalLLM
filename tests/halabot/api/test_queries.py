@@ -104,8 +104,12 @@ async def test_system_health_counts(halabot_engine):
     bus = InProcessEventBus(PgEventLog(halabot_engine))
     await bus.publish(new_event(FakeClock(T0), EventType.SYSTEM_HEARTBEAT, source="hb"))
     await _seed_belief(halabot_engine, "NVDA", 0.6)
+    await _seed_belief(halabot_engine, "NVDA", 0.7)  # a second version, same asset
+    await _seed_belief(halabot_engine, "AAPL", 0.5)
     health = await queries.system_health(halabot_engine)
     assert health["events"] >= 1
+    assert health["events_estimated"] is False  # a small table is counted exactly
     assert health["halted"] is False
-    # active_beliefs counts current beliefs (not the all-time target-change count).
-    assert health["active_beliefs"] == 1
+    assert health["last_event_ts"] == T0.isoformat()
+    # active_beliefs counts current beliefs (one per asset, not per version).
+    assert health["active_beliefs"] == 2

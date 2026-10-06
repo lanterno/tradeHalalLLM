@@ -142,19 +142,62 @@ async def conviction_history(
         ]
 
 
+# Above this many rows the planner's estimate stands in for count(*): an exact
+# count of hb_event_log (2.5M rows) took most of a 2 s health call.
+_EXACT_COUNT_BELOW = 100_000
+
+
+async def _row_count(conn: Any, table: sa.Table) -> tuple[int, bool]:
+    """(rows, estimated): ``pg_class.reltuples`` when the table is large and
+    analysed, an exact count otherwise (-1 means never analysed)."""
+    estimate = (
+        await conn.execute(
+            sa.text("SELECT reltuples::bigint FROM pg_class WHERE oid = to_regclass(:t)"),
+            {"t": table.name},
+        )
+    ).scalar()
+    if estimate is not None and estimate >= _EXACT_COUNT_BELOW:
+        return int(estimate), True
+    exact = (await conn.execute(sa.select(sa.func.count()).select_from(table))).scalar()
+    return int(exact or 0), False
+
+
 async def system_health(engine: AsyncEngine) -> dict[str, Any]:
     async with engine.connect() as conn:
-        n_events = (await conn.execute(sa.select(sa.func.count()).select_from(event_log))).scalar()
-        n_outcomes = (await conn.execute(sa.select(sa.func.count()).select_from(outcome))).scalar()
-        last_ts = (await conn.execute(sa.select(sa.func.max(event_log.c.ts)))).scalar()
-    # CURRENT active beliefs (latest version per asset) — not the all-time count
-    # of every asset that ever had a target change (which only grows).
-    active_beliefs = len(await PgBeliefStore(engine).all_active())
+        n_events, events_estimated = await _row_count(conn, event_log)
+        n_outcomes, _ = await _row_count(conn, outcome)
+        # max(ts) has no index of its own. Walk the (type, ts) index instead:
+        # each distinct type, then its newest ts, one index probe apiece.
+        last_ts = (
+            await conn.execute(
+                sa.text(
+                    "WITH RECURSIVE t AS (SELECT min(type) AS type FROM hb_event_log "
+                    "UNION ALL SELECT (SELECT min(type) FROM hb_event_log e "
+                    "WHERE e.type > t.type) FROM t WHERE t.type IS NOT NULL) "
+                    "SELECT max((SELECT max(ts) FROM hb_event_log e WHERE e.type = t.type)) "
+                    "FROM t WHERE t.type IS NOT NULL"
+                )
+            )
+        ).scalar()
+        # CURRENT active beliefs (latest version per asset): a count of the
+        # distinct assets, walked down the (asset, version) index one asset at
+        # a time rather than a DISTINCT ON over every stored version.
+        active_beliefs = (
+            await conn.execute(
+                sa.text(
+                    "WITH RECURSIVE a AS (SELECT min(asset) AS asset FROM hb_belief_state "
+                    "UNION ALL SELECT (SELECT min(asset) FROM hb_belief_state b "
+                    "WHERE b.asset > a.asset) FROM a WHERE a.asset IS NOT NULL) "
+                    "SELECT count(asset) FROM a"
+                )
+            )
+        ).scalar()
     halt = await get_halt(engine)
     return {
-        "events": int(n_events or 0),
-        "active_beliefs": active_beliefs,
-        "outcomes": int(n_outcomes or 0),
+        "events": n_events,
+        "events_estimated": events_estimated,
+        "active_beliefs": int(active_beliefs or 0),
+        "outcomes": n_outcomes,
         "last_event_ts": last_ts.isoformat() if last_ts else None,
         "halted": halt["halted"],
     }
