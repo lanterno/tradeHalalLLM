@@ -5,8 +5,12 @@ maintains a per-asset hypothetical position (VWAP entry), and on each
 reduce/close writes an ``hb_outcome`` row with the realized return and the
 entry-belief snapshot. Read-only and hypothetical — no broker, no orders.
 
-In-memory positions reset on restart (a half-open hypothetical position is
-dropped) — acceptable for the shadow; the durable record is the closed outcomes.
+``hb_open_position`` is the durable book: a row is written when a position
+opens and on every change, and :meth:`ShadowOutcomeTracker.restore` rebuilds
+the book from it at start-up, so a restart is not a trading decision. (It used
+to drop every open position, leaving orphan rows: QCOM open since June.) Each
+position and outcome carries the ``cohort`` that opened it; rows from another
+cohort are closed at start-up with reason ``restart``, at their last mark.
 """
 
 from __future__ import annotations
@@ -22,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from halabot.belief.store import BeliefStore
 from halabot.platform.bus import EventBus, Subscription
 from halabot.platform.clock import parse_iso
+from halabot.platform.db import OUTCOME_COHORT
 from halabot.platform.db import open_position as _open_position_table
 from halabot.platform.db import outcome as _outcome_table
 from halabot.platform.events import Event, EventType
@@ -42,6 +47,7 @@ class _Position:
     # open-position mark-to-market rows and the final closed outcome — so neither
     # the per-bar MTM nor the close re-reads the belief store.
     entry_belief: dict[str, object] | None = None
+    cohort: int | None = OUTCOME_COHORT
 
 
 class ShadowOutcomeTracker:
@@ -81,6 +87,54 @@ class ShadowOutcomeTracker:
             sub.unsubscribe()
         self._subs.clear()
 
+    async def restore(self) -> dict[str, float]:
+        """Rebuild the open book from ``hb_open_position``; return weight by asset.
+
+        Call once at start-up, before any proposal. Positions of the current
+        cohort are resumed as they were. Any other row is a position the engine
+        can no longer honestly carry (opened under rules that have since
+        changed): it is closed with reason ``restart`` at its last mark and
+        that time, under its own cohort, so it stays out of the current one.
+        """
+        t = _open_position_table
+        async with self._engine.connect() as conn:
+            rows = [dict(r._mapping) for r in await conn.execute(sa.select(t))]
+        held: dict[str, float] = {}
+        for row in rows:
+            asset = str(row["asset"])
+            pos = _Position(
+                weight=float(row["weight"]),
+                entry_vwap=float(row["entry_vwap"]),
+                open_ts=row["entry_ts"],
+                belief_version=int(row["belief_version"]),
+                entry_belief=row["entry_belief"],
+                cohort=row["cohort"],
+            )
+            if pos.cohort == OUTCOME_COHORT and pos.weight > _EPS:
+                self._positions[asset] = pos
+                held[asset] = pos.weight
+                continue
+            exit_price = float(row["last_price"])
+            await self._write_outcome(
+                asset=asset,
+                entry_ts=pos.open_ts,
+                exit_ts=row["updated_at"],
+                entry_price=pos.entry_vwap,
+                exit_price=exit_price,
+                closed_weight=pos.weight,
+                return_pct=_return(pos.entry_vwap, exit_price),
+                hold_seconds=max(0, int((row["updated_at"] - pos.open_ts).total_seconds())),
+                belief_version=pos.belief_version,
+                reason="restart",
+                entry_belief=pos.entry_belief,
+                cohort=pos.cohort,
+            )
+            await self._delete_open_position(asset)
+            logger.info("closed %s's open position from cohort %s at restart", asset, pos.cohort)
+        if held:
+            logger.info("resumed %d open shadow positions: %s", len(held), ", ".join(sorted(held)))
+        return held
+
     async def _on_proposal(self, event: Event) -> None:
         p = event.payload
         asset = event.asset
@@ -95,24 +149,30 @@ class ShadowOutcomeTracker:
         if delta > 0:  # buy / add → blend VWAP
             if pos is None or pos.weight <= _EPS:
                 entry_belief = await self._entry_belief_snapshot(asset, belief_version)
-                self._positions[asset] = _Position(
+                pos = _Position(
                     weight=delta,
                     entry_vwap=price,
                     open_ts=ts,
                     belief_version=belief_version,
                     entry_belief=entry_belief,
                 )
+                self._positions[asset] = pos
             else:
                 total = pos.weight + delta
                 pos.entry_vwap = (pos.entry_vwap * pos.weight + price * delta) / total
                 pos.weight = total
+            # The book is durable from the moment it changes, not from the
+            # first bar after: a restart in between used to lose the position.
+            await self._upsert_open_position(
+                asset, pos, float(price), _return(pos.entry_vwap, price), ts
+            )
             return
 
         # sell / reduce → realize on the closed portion
         if pos is None or pos.weight <= _EPS:
             return
         closed = min(abs(delta), pos.weight)
-        return_pct = (price - pos.entry_vwap) / pos.entry_vwap if pos.entry_vwap > 0 else 0.0
+        return_pct = _return(pos.entry_vwap, price)
         hold_seconds = max(0, int((ts - pos.open_ts).total_seconds()))
         await self._write_outcome(
             asset=asset,
@@ -126,12 +186,15 @@ class ShadowOutcomeTracker:
             belief_version=pos.belief_version,
             reason=str(p.get("reason", "")),
             entry_belief=pos.entry_belief,
+            cohort=pos.cohort,
         )
         self.closed_count += 1
         pos.weight -= closed
         if pos.weight <= _EPS:
             self._positions.pop(asset, None)
             await self._delete_open_position(asset)  # no longer held → drop the MTM row
+        else:
+            await self._upsert_open_position(asset, pos, float(price), return_pct, ts)
         if self._on_close is not None:
             try:
                 await self._on_close()
@@ -162,7 +225,7 @@ class ShadowOutcomeTracker:
         price = event.payload.get("c")
         if price is None or price <= 0:
             return
-        unrealized = (price - pos.entry_vwap) / pos.entry_vwap if pos.entry_vwap > 0 else 0.0
+        unrealized = _return(pos.entry_vwap, price)
         await self._upsert_open_position(asset, pos, float(price), unrealized, event.ts)
 
     async def _upsert_open_position(
@@ -180,6 +243,7 @@ class ShadowOutcomeTracker:
             "belief_version": pos.belief_version,
             "entry_belief": pos.entry_belief,
             "updated_at": ts,
+            "cohort": pos.cohort,
         }
         stmt = pg_insert(_open_position_table).values(**values)
         stmt = stmt.on_conflict_do_update(
@@ -209,6 +273,7 @@ class ShadowOutcomeTracker:
         belief_version: int,
         reason: str,
         entry_belief: dict[str, object] | None,
+        cohort: int | None,
     ) -> None:
         label = 1 if return_pct > self._win_threshold else 0
         async with self._engine.begin() as conn:
@@ -227,6 +292,7 @@ class ShadowOutcomeTracker:
                     label=label,
                     reason=reason,
                     created_at=datetime.now(UTC),
+                    cohort=cohort,
                 )
             )
 
@@ -245,3 +311,7 @@ class ShadowOutcomeTracker:
             "conviction_raw": b.conviction_raw,
             "sources": sorted({e.source for e in b.evidence}),
         }
+
+
+def _return(entry: float, price: float) -> float:
+    return (price - entry) / entry if entry > 0 else 0.0

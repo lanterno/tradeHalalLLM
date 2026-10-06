@@ -9,6 +9,7 @@ import sqlalchemy as sa
 
 from halabot.analysis.ab_report import ab_report
 from halabot.platform.clock import FakeClock
+from halabot.platform.db import OUTCOME_COHORT
 from halabot.platform.event_log import PgEventLog
 from halabot.platform.events import EventType, new_event
 
@@ -84,7 +85,9 @@ async def test_window_excludes_out_of_range(halabot_engine):
     assert rep.live_total == 1
 
 
-async def _seed_outcomes(engine, returns: list[tuple[str, float]], *, at: datetime):
+async def _seed_outcomes(
+    engine, returns: list[tuple[str, float]], *, at: datetime, cohort: int | None = OUTCOME_COHORT
+):
     from halabot.platform.db import outcome as o
 
     async with engine.begin() as conn:
@@ -104,6 +107,7 @@ async def _seed_outcomes(engine, returns: list[tuple[str, float]], *, at: dateti
                     label=1 if ret > 0.002 else 0,
                     reason="test",
                     created_at=at,
+                    cohort=cohort,
                 )
             )
 
@@ -118,6 +122,18 @@ async def test_report_includes_shadow_hypothetical_pnl(halabot_engine):
     assert rep.shadow_avg_return_pct == pytest.approx((0.10 + 0.05 - 0.04) / 3)
     assert rep.shadow_win_rate == pytest.approx(2 / 3)  # 2 of 3 above threshold
     assert rep.shadow_weighted_return == pytest.approx((0.10 + 0.05 - 0.04) * 0.1)
+
+
+@pytest.mark.asyncio
+async def test_report_reads_the_current_outcome_cohort_only(halabot_engine):
+    await _seed_outcomes(halabot_engine, [("NVDA", 0.10)], at=NOW)
+    await _seed_outcomes(halabot_engine, [("AVGO", 0.0), ("TXN", -0.2)], at=NOW, cohort=None)
+    rep = await ab_report(
+        halabot_engine, since=NOW - timedelta(hours=1), until=NOW + timedelta(hours=1)
+    )
+    assert rep.shadow_closed == 1
+    assert rep.shadow_win_rate == 1.0
+    assert rep.shadow_weighted_return == pytest.approx(0.10 * 0.1)
 
 
 @pytest.mark.asyncio

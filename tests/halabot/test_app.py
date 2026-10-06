@@ -11,10 +11,12 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import pytest
+import sqlalchemy as sa
 
 from halabot.app import build_engine
 from halabot.belief.schema import Direction
 from halabot.platform.clock import FakeClock
+from halabot.platform.db import OUTCOME_COHORT, open_position
 from halabot.platform.events import Event, EventType, new_event
 
 T0 = datetime(2026, 5, 28, 15, 0, tzinfo=UTC)  # 11:00 ET, a Thursday: the market is open
@@ -152,6 +154,30 @@ async def test_engine_coalesce_mode_forms_belief_end_to_end(halabot_engine):
         assert belief.conviction > 0.0
         assert engine.shadow.proposals_count >= 1
         assert proposed and proposed[0].payload["side"] == "buy"
+    finally:
+        await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_engine_resumes_the_shadow_book_after_a_restart(halabot_engine):
+    async with halabot_engine.begin() as conn:
+        await conn.execute(
+            sa.insert(open_position).values(
+                asset="NVDA",
+                entry_ts=T0,
+                entry_vwap=100.0,
+                weight=0.08,
+                last_price=101.0,
+                unrealized_return_pct=0.01,
+                belief_version=1,
+                entry_belief=None,
+                updated_at=T0,
+                cohort=OUTCOME_COHORT,
+            )
+        )
+    engine = await build_engine(db_engine=halabot_engine, clock=FakeClock(T0))
+    try:
+        assert engine.shadow._portfolio.weight("NVDA") == pytest.approx(0.08)
     finally:
         await engine.stop()
 

@@ -27,17 +27,21 @@ from halabot.conviction.calibrator import (
     _sigmoid,
     platt_fit,
 )
+from halabot.platform.db import OUTCOME_COHORT
 from halabot.platform.db import outcome as _outcome
 
 logger = logging.getLogger(__name__)
 
 
 async def load_calibration_samples(engine: AsyncEngine) -> list[CalibrationSample]:
-    """Entry-only (raw, won) samples ordered by close date (for walk-forward)."""
+    """Entry-only (raw, won) samples of the current cohort, ordered by close
+    date (for walk-forward)."""
     async with engine.connect() as conn:
         rows = (
             await conn.execute(
-                sa.select(_outcome.c.entry_belief, _outcome.c.label).order_by(_outcome.c.exit_ts)
+                sa.select(_outcome.c.entry_belief, _outcome.c.label)
+                .where(_outcome.c.cohort == OUTCOME_COHORT)
+                .order_by(_outcome.c.exit_ts)
             )
         ).all()
     samples: list[CalibrationSample] = []

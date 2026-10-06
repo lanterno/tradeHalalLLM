@@ -13,6 +13,7 @@ from halabot.learning.retrain import (
     load_calibration_samples,
     walk_forward_logloss,
 )
+from halabot.platform.db import OUTCOME_COHORT
 from halabot.platform.db import outcome as _outcome
 
 T0 = datetime(2026, 5, 28, 12, 0, tzinfo=UTC)
@@ -42,7 +43,9 @@ def test_walk_forward_fitted_beats_identity_on_separable_data():
     assert fitted_ll <= identity_ll  # calibration helps (or at least doesn't hurt)
 
 
-async def _insert_outcome(engine, *, raw: float, label: int, exit_ts: datetime):
+async def _insert_outcome(
+    engine, *, raw: float, label: int, exit_ts: datetime, cohort: int | None = OUTCOME_COHORT
+):
     async with engine.begin() as conn:
         await conn.execute(
             sa.insert(_outcome).values(
@@ -59,6 +62,7 @@ async def _insert_outcome(engine, *, raw: float, label: int, exit_ts: datetime):
                 label=label,
                 reason="test",
                 created_at=exit_ts,
+                cohort=cohort,
             )
         )
 
@@ -71,6 +75,17 @@ async def test_load_calibration_samples_reads_entry_raw(halabot_engine):
     assert len(samples) == 2
     assert samples[0].raw == pytest.approx(0.8) and samples[0].won is True
     assert samples[1].raw == pytest.approx(0.2) and samples[1].won is False
+
+
+@pytest.mark.asyncio
+async def test_calibration_reads_the_current_cohort_only(halabot_engine):
+    # Rows from before the cohort marker came from replayed bars and closed-
+    # market fills; they stay in hb_outcome as history but never train.
+    await _insert_outcome(halabot_engine, raw=0.9, label=0, exit_ts=T0, cohort=None)
+    await _insert_outcome(halabot_engine, raw=0.4, label=1, exit_ts=T0, cohort=OUTCOME_COHORT - 1)
+    await _insert_outcome(halabot_engine, raw=0.7, label=1, exit_ts=T0)
+    samples = await load_calibration_samples(halabot_engine)
+    assert [s.raw for s in samples] == [pytest.approx(0.7)]
 
 
 @pytest.mark.asyncio

@@ -341,6 +341,10 @@ async def build_engine(
     )
     conviction_writer = ConvictionScoreWriter(bus=bus, engine=db_engine)
     target_writer = TargetWeightWriter(bus=bus, engine=db_engine)
+    # Resume the shadow book where the last process left it (hb_open_position),
+    # so a restart neither drops open positions nor leaves their rows orphaned.
+    for asset, weight in (await outcomes.restore()).items():
+        shadow_book.set_weight(asset, weight)
     # Bootstrap warm-start (Appendix F): replay recent observations to warm
     # beliefs BEFORE subscribing to the live stream + starting the worker, so
     # replay completes in isolation and event_id dedup absorbs any overlap.

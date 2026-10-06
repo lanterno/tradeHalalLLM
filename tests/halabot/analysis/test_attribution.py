@@ -8,13 +8,14 @@ import pytest
 import sqlalchemy as sa
 
 from halabot.analysis.attribution import attribution
+from halabot.platform.db import OUTCOME_COHORT
 from halabot.platform.db import open_position as _open_position
 from halabot.platform.db import outcome as _outcome
 
 T0 = datetime(2026, 5, 28, 12, 0, tzinfo=UTC)
 
 
-async def _insert(engine, *, return_pct, label, regime, sources, i):
+async def _insert(engine, *, return_pct, label, regime, sources, i, cohort=OUTCOME_COHORT):
     async with engine.begin() as conn:
         await conn.execute(
             sa.insert(_outcome).values(
@@ -31,11 +32,12 @@ async def _insert(engine, *, return_pct, label, regime, sources, i):
                 label=label,
                 reason="test",
                 created_at=T0,
+                cohort=cohort,
             )
         )
 
 
-async def _insert_open(engine, *, asset, unrealized, regime, sources):
+async def _insert_open(engine, *, asset, unrealized, regime, sources, cohort=OUTCOME_COHORT):
     async with engine.begin() as conn:
         await conn.execute(
             sa.insert(_open_position).values(
@@ -48,6 +50,7 @@ async def _insert_open(engine, *, asset, unrealized, regime, sources):
                 belief_version=1,
                 entry_belief={"regime": regime, "sources": sources},
                 updated_at=T0,
+                cohort=cohort,
             )
         )
 
@@ -136,3 +139,21 @@ async def test_attribution_can_exclude_open(halabot_engine):
     attr = await attribution(halabot_engine, include_open=False)
     assert attr.open_count == 0
     assert all(b.key != "forecaster" for b in attr.by_source)  # open excluded
+
+
+@pytest.mark.asyncio
+async def test_attribution_reads_the_current_cohort_only(halabot_engine):
+    await _insert(
+        halabot_engine,
+        return_pct=0.0,
+        label=0,
+        regime="ranging",
+        sources=["news"],
+        i=0,
+        cohort=None,
+    )
+    await _insert_open(
+        halabot_engine, asset="QCOM", unrealized=0.1, regime="ranging", sources=["x"], cohort=None
+    )
+    attr = await attribution(halabot_engine)
+    assert attr.total == 0 and attr.open_count == 0
