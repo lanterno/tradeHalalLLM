@@ -164,7 +164,7 @@ def test_risk_state_unavailable_when_unset(client):
     assert r.status_code == 200
     # Whether the day-trader runs at all comes along, so a retired one's last
     # read can be shown as retired rather than stale.
-    assert r.json() == {"available": False, "day_trader_enabled": True}
+    assert r.json() == {"available": False, "day_trader_enabled": False}
 
 
 def test_risk_state_round_trips_cached_value(client, database_url):
@@ -352,7 +352,7 @@ def test_system_status_exposes_stocks_cadence(client):
     assert body["stocks_cycle_interval_seconds"] == 900
     assert "crypto_cycle_interval_seconds" not in body
     # Which strategies run, so the dashboard can ignore a retired one's beats.
-    assert body["day_trader_enabled"] is True and body["core_enabled"] is False
+    assert body["day_trader_enabled"] is False and body["core_enabled"] is False
 
 
 def test_core_config_lists_the_cores_parameters_and_no_secret(client, monkeypatch):
