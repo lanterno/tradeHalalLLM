@@ -52,6 +52,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from halal_trader.compliance.aaoifi import Fundamentals, ScreenResult, screen
 from halal_trader.compliance.sec import Company, Fact, SecClient
+from halal_trader.compliance.successors import lineage
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +65,7 @@ logger = logging.getLogger(__name__)
 #     of AAOIFI, and an index Shariah board's exclusion as a veto.
 # v8: the veto recognises holdings named in fund-administrator style.
 # v9: unreported interest income is estimated (cash and securities x 5%), not zero.
-METHOD = "aaoifi-sec-v9"
+METHOD = "aaoifi-sec-v10"
 UNMAPPED = "not an SEC registrant (or ticker not mapped)"
 _MIN_MONTHS = 12
 
@@ -78,6 +79,8 @@ _CASH_WIDE = "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents"
 _DILUTED_SHARES = "WeightedAverageNumberOfDilutedSharesOutstanding"
 _DEBT_EXTRA = ("ShortTermBorrowings", "CommercialPaper", "FinanceLeaseLiability")
 _CASH = "CashAndCashEquivalentsAtCarryingValue"
+_CASH_PLAIN = "Cash"  # SLB tags its cash only as this
+_BALANCE_SHARES = "CommonStockSharesOutstanding"  # balance-sheet count, one class only
 _RECEIVABLES = "AccountsReceivableNetCurrent"
 _SECURITIES = (
     "ShortTermInvestments",
@@ -134,13 +137,17 @@ def recent_quarter_instants(as_of: date, n: int = 5) -> list[str]:
 
 
 def _newest(frames: list[dict[int, Fact]], cik: int) -> float | None:
-    """The most recent value across frames (ordered newest period first)."""
-    best: Fact | None = None
-    for frame in frames:
-        fact = frame.get(cik)
-        if fact is not None and (best is None or fact.end > best.end):
-            best = fact
-    return best.val if best is not None else None
+    """The most recent value across frames (ordered newest period first),
+    from ``cik`` or, if it has none, its predecessor (compliance/successors.py)."""
+    for filer in lineage(cik):
+        best: Fact | None = None
+        for frame in frames:
+            fact = frame.get(filer)
+            if fact is not None and (best is None or fact.end > best.end):
+                best = fact
+        if best is not None:
+            return best.val
+    return None
 
 
 async def _instant(
@@ -185,6 +192,7 @@ async def gather(
             *_DEBT_EXTRA,
             _CASH,
             _CASH_WIDE,
+            _CASH_PLAIN,
             *_SECURITIES,
             _RECEIVABLES,
         )
@@ -193,6 +201,7 @@ async def gather(
     diluted = [
         await sec.frame("us-gaap", _DILUTED_SHARES, "shares", p.removesuffix("I")) for p in periods
     ]
+    balance_shares = [await sec.frame("us-gaap", _BALANCE_SHARES, "shares", p) for p in periods]
     annual = {c: await _annual(sec, c, as_of) for c in (*_INTEREST, *_REVENUE)}
     async with engine.connect() as conn:
         rows = await conn.execute(
@@ -278,6 +287,8 @@ async def gather(
         cash = v(_CASH)
         if cash is None:
             cash = v(_CASH_WIDE)
+        if cash is None:
+            cash = v(_CASH_PLAIN)
         securities = max((x for x in (v(s) for s in _SECURITIES) if x is not None), default=0.0)
         files_xbrl = cash is not None or _newest(shares, cik) is not None
         debt: float | None
@@ -295,7 +306,12 @@ async def gather(
             Fundamentals(
                 symbol=sym,
                 sic=sic,
-                shares_outstanding=share_count(_newest(shares, cik), _newest(diluted, cik)),
+                # The cover page's count, else the diluted average, else the
+                # balance sheet's (HSY tags the cover page per share class,
+                # which frames omit; the balance-sheet count is its common
+                # stock alone, so the market cap errs small: ratios fail closed).
+                shares_outstanding=share_count(_newest(shares, cik), _newest(diluted, cik))
+                or _newest(balance_shares, cik),
                 price=prices.get(sym),
                 interest_bearing_debt=debt,
                 cash_and_securities=(cash + securities) if cash is not None else None,

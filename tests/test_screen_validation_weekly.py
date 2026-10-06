@@ -53,6 +53,7 @@ async def test_agreement_is_stored_and_a_clean_screen_raises_nothing(engine: Asy
     beat = await _beat(engine)
     assert beat["agreement"] == 0.5
     assert beat["large_passes_no_etf_holds"] == []
+    assert beat["missing_data"] == []
 
 
 async def test_a_large_pass_no_etf_holds_is_reported(engine: AsyncEngine) -> None:

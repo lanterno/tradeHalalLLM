@@ -39,6 +39,23 @@ class Validation:
     def agreement(self) -> float:
         return self.agree / self.screened_etf_names if self.screened_etf_names else 0.0
 
+    @property
+    def missing_data(self) -> list[Verdict]:
+        """Names an ETF holds that we doubt only because a figure is missing.
+
+        Data, not judgement: a tag the screen does not read, or a company that
+        moved to a new SEC registrant (compliance/successors.py). Each one is
+        worth tracing, since it is otherwise left out of the core for no reason.
+        """
+        return [
+            v
+            for v in self.etf_held_we_doubt
+            if v.reasons
+            and all(r.startswith("not computable") for r in v.reasons)
+            # A foreign issuer is doubtful by policy (screen v4), not for want of data.
+            and not any("foreign issuer" in r for r in v.reasons)
+        ]
+
 
 def compare(
     verdicts: dict[str, Verdict], etf_tickers: set[str], *, large_cap: float = 50e9

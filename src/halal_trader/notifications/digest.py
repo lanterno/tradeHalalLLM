@@ -100,6 +100,12 @@ async def build(engine: AsyncEngine, settings: Any, *, today: date) -> str:
             f"{validation.get('etf_names')} names; large passes neither holds: "
             f"{len(validation.get('large_passes_no_etf_holds') or [])}"
         )
+        missing = validation.get("missing_data") or []
+        if missing:
+            lines.append(
+                f"ETF-held names doubtful only for missing data ({len(missing)}): "
+                + ", ".join(missing[:10])
+            )
 
     from halal_trader.halal.aaoifi_summary import compute_aaoifi_summary
 

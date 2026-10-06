@@ -329,6 +329,7 @@ async def _validate_screen(engine: AsyncEngine, today: date) -> list[str]:
             "etf_names": v.screened_etf_names,
             "rejected_etf_names": len(v.etf_held_we_reject),
             "large_passes_no_etf_holds": suspects,
+            "missing_data": [x.symbol for x in v.missing_data],
         },
     )
     if suspects:

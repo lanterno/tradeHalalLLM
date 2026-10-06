@@ -58,3 +58,18 @@ def test_compare_reports_both_directions() -> None:
     assert [x.symbol for x in v.etf_held_we_doubt] == ["XOM"]
     assert v.etf_held_not_screened == ["TSLA"]
     assert [x.symbol for x in v.large_halal_not_in_etfs] == ["BIGCO"]
+
+
+def test_names_doubted_only_for_missing_data_are_listed() -> None:
+    verdicts = {
+        "GAP": Verdict("GAP", "doubtful", ["not computable: interest income / revenue"], 4e11),
+        "MIX": Verdict("MIX", "doubtful", ["not computable: x", "debt ratio 31% > 30%"], 1e11),
+        "ADR": Verdict(
+            "ADR",
+            "doubtful",
+            ["not computable: market cap (foreign issuer: ADR ratio unknown)"],
+            2e10,
+        ),
+    }
+    v = compare(verdicts, {"GAP", "MIX", "ADR"})
+    assert [x.symbol for x in v.missing_data] == ["GAP"]
