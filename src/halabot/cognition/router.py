@@ -92,7 +92,11 @@ class CognitionRouter:
         count = 0
         if self._updater is not None:
             self._updater.begin_replay()
-        async for event in self._bus.replay(since=since, until=until):
+        # Ask the log for observations only (ix_hb_event_type_ts serves it): the
+        # unfiltered read streamed ~1.3M events to use ~38k.
+        async for event in self._bus.replay(
+            since=since, until=until, types=set(_OBSERVATION_TYPES)
+        ):
             if event.type not in _OBSERVATION_TYPES or event.asset is None:
                 continue
             asset = event.asset
@@ -104,6 +108,11 @@ class CognitionRouter:
             warmed.add(asset)
             evidence: list[EvidenceItem] = []
             for itp in self._by_type.get(event.type, []):
+                # An interpreter that spends money per call (the LLM headline
+                # scorer) sits replay out: history is re-read on every restart,
+                # and the log keeps no score to reuse.
+                if not getattr(itp, "replay_safe", True):
+                    continue
                 try:
                     evidence.extend(await itp.interpret(event))
                 except Exception as exc:  # noqa: BLE001 — a bad interpreter yields no evidence

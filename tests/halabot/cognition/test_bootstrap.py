@@ -204,3 +204,73 @@ async def test_bootstrap_replays_each_bar_once_in_bar_order():
     now = clk.now() + timedelta(minutes=5)
     await router.bootstrap(since=T0, until=now, now=now)
     assert router._buffer.closes("NVDA") == [110.0, 111.0, 112.0, 113.0, 114.0, 115.0, 116.0]
+
+
+class _CountingLlmNews:
+    """Stands in for the LLM headline scorer: counts calls, scores nothing."""
+
+    consumes = frozenset({EventType.OBSERVATION_NEWS})
+    replay_safe = False
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def interpret(self, observation):
+        self.calls += 1
+        return []
+
+
+class _SpyLog(InMemoryEventLog):
+    def __init__(self) -> None:
+        super().__init__()
+        self.replay_types: list[object] = []
+
+    def replay(self, *, since=None, until=None, types=None, asset=None):
+        self.replay_types.append(types)
+        return super().replay(since=since, until=until, types=types, asset=asset)
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_reads_only_observations_and_spends_no_llm():
+    log = _SpyLog()
+    bus = InProcessEventBus(log)
+    buffer = BarBuffer()
+    llm_news = _CountingLlmNews()
+    updater = BeliefUpdater(
+        store=InMemoryBeliefStore(),
+        bus=bus,
+        clock=FakeClock(T0),
+        calendar=ContinuousCalendar(),
+        regime=EvidenceRegimeClassifier(),
+        levels=BarLevelEngine(buffer),
+        calibrator=IdentityCalibrator(),
+        thesis_writer=_NoThesis(),
+        prices=_BufferPrices(buffer),
+        positions=_NoPositions(),
+        llm=_OffLLM(),
+    )
+    router = CognitionRouter(bus=bus, updater=updater, buffer=buffer, interpreters=[llm_news])
+    clk = FakeClock(T0)
+    news = {"headline": "Chipmaker files 10-Q", "url": "http://x", "lexicon_polarity": None}
+    await bus.publish(
+        new_event(
+            clk, EventType.OBSERVATION_NEWS, source="finnhub-news", asset="NVDA", payload=news
+        )
+    )
+    now = T0 + timedelta(hours=1)
+    await router.bootstrap(since=T0, until=now, now=now)
+    assert llm_news.calls == 0  # history is not re-scored on every restart
+    assert log.replay_types == [
+        {EventType.OBSERVATION_BAR, EventType.OBSERVATION_NEWS, EventType.OBSERVATION_PRICE}
+    ]
+    router.start()
+    await bus.publish(
+        new_event(
+            clk,
+            EventType.OBSERVATION_NEWS,
+            source="finnhub-news",
+            asset="NVDA",
+            payload={**news, "url": "http://y"},
+        )
+    )
+    assert llm_news.calls == 1  # live headlines still are
