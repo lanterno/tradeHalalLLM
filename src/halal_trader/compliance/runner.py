@@ -78,6 +78,24 @@ Concept choices (each a judgment call, recorded here):
   Market cap = shares x the average price, else x the price. Adjusting
   for dividends within the window lowers past prices a little, so the
   average understates market cap and errs strict.
+* splits after a share count was filed: the price is today's, the count is
+  as of its filing, so each count is put on the price's basis
+  (``corporate_actions``, ``rescale``). A split shows in the stored bars as
+  a one-session jump in raw / adjusted close (adjusted bars carry every
+  split up to the day they were fetched), and that jump is the split ratio:
+  APH's 2:1 of 2026-09-03 and MNST's of 2026-08-11 halved their market caps
+  until v11, and KLAC's pre-split diluted count won the mis-scale guard
+  against its post-split cover page. A count is rescaled by the splits
+  after it was known: the cover page's count from its own date, the
+  financial statements' counts from the filing date (SEC.filed), since a
+  filing issued after a split restates them (KLAC's 10-K restated its
+  2025 balance-sheet count ten-fold). When the filing date is unknown only
+  reverse splits apply (fewer shares: strict). A jump that is no split
+  ratio (a spin-off, a large special dividend) leaves the count unknown
+  and the verdict doubtful until the next filing. An adjusted series that
+  jumps by a split ratio together with the raw one was fetched before the
+  split and never re-adjusted: its average mixes share bases, so that name
+  falls back to the spot price.
 """
 
 from __future__ import annotations
@@ -86,7 +104,8 @@ import json
 import logging
 import re
 from collections.abc import Callable, Sequence
-from datetime import date
+from dataclasses import dataclass, field
+from datetime import date, timedelta
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -335,6 +354,149 @@ async def _mapped_by_name(engine: AsyncEngine) -> dict[str, tuple[int, str]]:
     return await mapped_ciks(engine)
 
 
+# Ratios a split or reverse split is declared in. A one-session jump in raw /
+# adjusted close within SPLIT_TOLERANCE of one is a split; any other jump over
+# ADJUSTMENT_JUMP is an adjustment we cannot read (a spin-off, a big special
+# dividend). 5:4 and 4:3 are left out on purpose: rare as splits, and near
+# the size of a spin-off, where reading one as the other would add shares.
+_FORWARD = (1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 10.0, 15.0, 20.0, 25.0, 30.0, 40.0, 50.0)
+_REVERSE = (2, 3, 4, 5, 6, 8, 10, 12, 15, 20, 25, 30, 40, 50, 100)
+SPLIT_RATIOS = (*_FORWARD, *(1.0 / x for x in _REVERSE))
+SPLIT_TOLERANCE = 0.02
+ADJUSTMENT_JUMP = 1.2  # raw / adjusted moving more than this in a session is not a dividend
+_STALE_JUMP = 1.4  # an adjusted close moving this much in a session, raw / adjusted not at all
+
+
+def split_ratio(jump: float) -> float | None:
+    """The split ratio a one-session jump in raw / adjusted close is, or None."""
+    for ratio in SPLIT_RATIOS:
+        if abs(jump / ratio - 1.0) <= SPLIT_TOLERANCE:
+            return ratio
+    return None
+
+
+@dataclass(frozen=True, slots=True)
+class CorporateActions:
+    """What the stored bars say happened to each symbol's share basis.
+
+    ``splits``: symbol -> [(first session on the new basis, ratio or None)],
+    a ratio of new shares per old (2.0 for 2:1, 0.1 for 1:10), None for an
+    adjustment that is no split. ``stale``: symbol -> the session where the
+    adjusted series jumps by a split ratio with the raw one (never
+    re-adjusted after the split).
+    """
+
+    splits: dict[str, list[tuple[date, float | None]]] = field(default_factory=dict)
+    stale: dict[str, date] = field(default_factory=dict)
+
+
+async def corporate_actions(
+    engine: AsyncEngine, symbols: Sequence[str], since: date, through: date
+) -> CorporateActions:
+    """Splits and unreadable adjustments in (since, through], from raw vs adjusted bars."""
+    async with engine.connect() as conn:
+        rows = await conn.execute(
+            text(
+                """
+                WITH s AS (
+                    SELECT r.symbol, r.day, r.close AS raw, a.close AS adj,
+                           lag(r.close) OVER w AS raw_prev, lag(a.close) OVER w AS adj_prev
+                    FROM daily_bars r
+                    JOIN daily_bars a
+                      ON a.symbol = r.symbol AND a.day = r.day AND a.adjustment = 'all'
+                    WHERE r.adjustment = 'raw' AND r.symbol = ANY(:s)
+                      AND r.day >= :since AND r.day <= :through
+                    WINDOW w AS (PARTITION BY r.symbol ORDER BY r.day)
+                )
+                SELECT symbol, day, raw, adj, raw_prev, adj_prev FROM s
+                WHERE raw > 0 AND adj > 0 AND raw_prev > 0 AND adj_prev > 0
+                  AND (abs(ln((raw_prev / adj_prev) / (raw / adj))) > ln(:jump)
+                       OR abs(ln(adj_prev / adj)) > ln(:stale))
+                ORDER BY symbol, day
+                """
+            ),
+            {
+                "s": [s.upper() for s in symbols],
+                "since": since,
+                "through": through,
+                "jump": ADJUSTMENT_JUMP,
+                "stale": _STALE_JUMP,
+            },
+        )
+        found = CorporateActions()
+        for r in rows:
+            raw, adj, raw_prev, adj_prev = (
+                float(r.raw),
+                float(r.adj),
+                float(r.raw_prev),
+                float(r.adj_prev),
+            )
+            jump = (raw_prev / adj_prev) / (raw / adj)
+            if max(jump, 1.0 / jump) > ADJUSTMENT_JUMP:
+                found.splits.setdefault(r.symbol, []).append((r.day, split_ratio(jump)))
+                continue
+            # Raw / adjusted held still while the adjusted close fell by a
+            # forward-split ratio: the adjusted bars before this day were
+            # fetched before a split and never re-adjusted (or the stock
+            # really halved; either way the spot price is the safer basis).
+            fell = adj_prev / adj
+            if fell > 1.0 and split_ratio(fell) is not None:
+                found.stale.setdefault(r.symbol, r.day)
+    return found
+
+
+def rescale(
+    fact: Fact | None,
+    actions: list[tuple[date, float | None]],
+    *,
+    known: date | None,
+    through: date,
+) -> tuple[float | None, str | None]:
+    """A share count put on the basis of ``through``, or (None, why) if it cannot be.
+
+    ``known``: the date from which the count reflects every split (the cover
+    page's date, or the filing date of a financial statement); None when the
+    filing date is unknown, and then only reverse splits apply.
+    """
+    if fact is None:
+        return None, None
+    factor = 1.0
+    for day, ratio in actions:
+        if day <= (known or fact.end) or day > through:
+            continue
+        if ratio is None:
+            return None, (
+                f"share count (an adjustment on {day} that is no split: "
+                "spin-off or special dividend?)"
+            )
+        factor *= ratio if known is not None else min(ratio, 1.0)
+    return fact.val * factor, None
+
+
+class _Rebase:
+    """One company's share counts, each put on the basis of the price day."""
+
+    def __init__(
+        self,
+        sec: SecClient,
+        cik: int,
+        actions: list[tuple[date, float | None]],
+        through: date,
+    ) -> None:
+        self.sec, self.cik, self.actions, self.through = sec, cik, actions, through
+        self.issues: list[str] = []
+
+    def count(self, frames: list[dict[int, Fact]], *, cover: bool = False) -> float | None:
+        fact = _newest_fact(frames, self.cik)
+        if fact is None or not self.actions:
+            return fact.val if fact is not None else None
+        known = fact.end if cover else self.sec.filed(fact.accn)
+        value, issue = rescale(fact, self.actions, known=known, through=self.through)
+        if issue is not None and issue not in self.issues:
+            self.issues.append(issue)
+        return value
+
+
 Audit = dict[str, dict[str, float | None]]
 
 
@@ -431,6 +593,17 @@ async def gather(
         for sym, avg in adjusted_averages.items()
         if sym in prices and adjusted_now.get(sym)
     }
+    # The window covers the 36-month average and every share fact read
+    # (five quarters back, plus the cover page's lag).
+    actions = await corporate_actions(engine, symbols, as_of - timedelta(days=3 * 366), as_of)
+    for sym, day in actions.stale.items():
+        if averages.pop(sym, None) is not None:
+            logger.warning(
+                "halal screen: %s adjusted bars jump with the raw ones on %s (fetched before "
+                "a split?): spot price used; re-fetch its adjusted bars",
+                sym,
+                day,
+            )
 
     out: list[Fundamentals] = []
     meta: dict[str, tuple[int | None, str]] = {}
@@ -475,6 +648,24 @@ async def gather(
             debt = 0.0  # tags no debt at all; interest expense is the check (aaoifi)
         interest = next((x for x in yearly(_INTEREST) if x is not None), None)
         revenue = next((x for x in yearly(_REVENUE) if x is not None), None)
+        # Each share count on the basis of the price it multiplies (see the
+        # module docstring): the cover page's from its own date, the
+        # statements' from their filing date.
+        on_basis = _Rebase(
+            sec,
+            cik,
+            actions.splits.get(sym, []),
+            priced[sym][0] if sym in priced else as_of,
+        )
+        # The cover page's count, else the diluted average, else the balance
+        # sheet's (HSY tags the cover page per share class, which frames
+        # omit; the balance-sheet count is its common stock alone, so the
+        # market cap errs small: ratios fail closed).
+        share_total = share_count(
+            on_basis.count(shares, cover=True), on_basis.count(diluted)
+        ) or on_basis.count(balance_shares)
+        issues = on_basis.issues
+        cover_fact = _newest_fact(shares, cik)
         audit[sym] = {
             **readings,
             "interest_expense": _largest(*yearly(_INTEREST_EXPENSE)),
@@ -482,17 +673,13 @@ async def gather(
             "loans_receivable": _largest(*(v(c) for c in _LOANS_HELD)),
             "total_assets": v(_ASSETS),
             "receivables": _largest(*(v(c) for c in _RECEIVABLES)),
+            "shares_as_filed": cover_fact.val if cover_fact is not None else None,
         }
         out.append(
             Fundamentals(
                 symbol=sym,
                 sic=sic,
-                # The cover page's count, else the diluted average, else the
-                # balance sheet's (HSY tags the cover page per share class,
-                # which frames omit; the balance-sheet count is its common
-                # stock alone, so the market cap errs small: ratios fail closed).
-                shares_outstanding=share_count(_newest(shares, cik), _newest(diluted, cik))
-                or _newest(balance_shares, cik),
+                shares_outstanding=share_total,
                 price=prices.get(sym),
                 interest_bearing_debt=debt,
                 cash_and_securities=(cash + securities) if cash is not None else None,
@@ -506,6 +693,7 @@ async def gather(
                 lender_income=audit[sym]["lender_income"],
                 loans_receivable=audit[sym]["loans_receivable"],
                 total_assets=audit[sym]["total_assets"],
+                data_issues=tuple(issues) if share_total is None else (),
             )
         )
     mapped = sum(1 for cik, _ in meta.values() if cik is not None)
