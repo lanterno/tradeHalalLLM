@@ -13,6 +13,7 @@ from halabot.platform.event_log import PgEventLog
 from halabot.platform.events import Event, EventType, new_event
 
 CLOCK = FakeClock(datetime(2026, 5, 28, 12, 0, tzinfo=UTC))
+LATE = FakeClock(datetime(2026, 5, 28, 20, 0, tzinfo=UTC))  # after the hourly test bars closed
 
 
 def _rows(*closes):
@@ -132,7 +133,7 @@ async def test_resumes_after_the_logged_watermark():
     # A restart used to publish the whole fetch window again as live bars.
     mcp = _HourlyMCP([(13, 1.0), (14, 2.0), (15, 3.0)])
     marks = InMemoryBarWatermark({"NVDA": datetime(2026, 5, 28, 14, 0, tzinfo=UTC)})
-    src = AlpacaBarSource(mcp, await _universe(["NVDA"]), CLOCK, interval_s=0, watermark=marks)
+    src = AlpacaBarSource(mcp, await _universe(["NVDA"]), LATE, interval_s=0, watermark=marks)
     sink: list[Event] = []
     emit = await _emit_to(sink)
     await src.poll_once(emit)
@@ -142,9 +143,28 @@ async def test_resumes_after_the_logged_watermark():
 
 
 @pytest.mark.asyncio
+async def test_a_forming_bar_waits_until_it_is_final():
+    # Alpaca returns the forming bar too; published early, its partial close,
+    # high, low and volume stood for the whole bar forever after.
+    clock = FakeClock(datetime(2026, 5, 28, 15, 10, tzinfo=UTC))
+    mcp = _HourlyMCP([(13, 1.0), (14, 2.0), (15, 3.0)])
+    src = AlpacaBarSource(mcp, await _universe(["NVDA"]), clock, interval_s=0)
+    sink: list[Event] = []
+    emit = await _emit_to(sink)
+    await src.poll_once(emit)
+    # 14:00 closed at 15:00 but the delayed feed may still be filling it in.
+    assert [e.payload["c"] for e in sink] == [1.0]
+    clock.set(datetime(2026, 5, 28, 15, 16, tzinfo=UTC) + timedelta(hours=1))
+    mcp.rows[2]["c"] = 3.5  # the 15:00 bar's final close
+    await src.poll_once(emit)
+    assert [e.payload["c"] for e in sink] == [1.0, 2.0, 3.5]
+    assert sink[-1].payload["interval_s"] == 3600.0
+
+
+@pytest.mark.asyncio
 async def test_emits_bars_oldest_first():
     mcp = _HourlyMCP([(15, 3.0), (13, 1.0), (14, 2.0)])
-    src = AlpacaBarSource(mcp, await _universe(["NVDA"]), CLOCK, interval_s=0)
+    src = AlpacaBarSource(mcp, await _universe(["NVDA"]), LATE, interval_s=0)
     sink: list[Event] = []
     await src.poll_once(await _emit_to(sink))
     assert [e.payload["c"] for e in sink] == [1.0, 2.0, 3.0]

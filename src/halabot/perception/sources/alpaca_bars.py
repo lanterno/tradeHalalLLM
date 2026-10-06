@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from halabot.perception.poll import PollingSource
@@ -40,6 +40,7 @@ class AlpacaBarSource(PollingSource):
         interval_s: float = 900.0,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         watermark: BarWatermark | None = None,
+        settle_s: float = 900.0,
     ) -> None:
         super().__init__("alpaca-bars", interval_s=interval_s, sleep=sleep)
         self._mcp = mcp
@@ -51,6 +52,7 @@ class AlpacaBarSource(PollingSource):
         self._interval_s = interval.total_seconds() if interval is not None else None
         self._watermark = watermark
         self._marks: dict[str, datetime] = {}  # newest emitted bar time per asset
+        self._settle_s = settle_s
 
     async def _prime(self) -> None:
         first = not self._primed
@@ -79,12 +81,29 @@ class AlpacaBarSource(PollingSource):
                 ts = _bar_time(bar)
                 if mark is not None and ts is not None and ts <= mark:
                     continue  # already published (by this process or the last one)
+                if ts is not None and not self._complete(ts):
+                    continue  # still forming: published once, when final
                 fresh.append((ts, bar))
             # Oldest first: the buffer only accepts a bar newer than its last.
             if all(ts is not None for ts, _ in fresh):
                 fresh.sort(key=lambda pair: pair[0] or datetime.min.replace(tzinfo=UTC))
             out.extend({"_asset": sym, **bar} for _, bar in fresh)
         return out
+
+    def _complete(self, bar_start: datetime) -> bool:
+        """Has this bar closed, and has the feed had time to fill it in?
+
+        Alpaca returns the forming bar too. Each bar is published once (the
+        mark moves past it), so a forming bar's partial close, high, low and
+        volume used to stand for the whole bar: 895 of the 987 bars logged in
+        the five days to 2026-10-06 were first seen under an hour after they
+        opened. ``settle_s`` covers the feed's delay (the newest bar the
+        shadow ever saw was 15 minutes old: the delayed SIP feed).
+        """
+        if self._interval_s is None:
+            return True
+        end = bar_start + timedelta(seconds=self._interval_s + self._settle_s)
+        return end <= self._clock.now()
 
     def emitted(self, raw: dict[str, Any]) -> None:
         ts = _bar_time(raw)
