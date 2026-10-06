@@ -166,6 +166,24 @@ class BeliefUpdater:
                 )
             )
 
+    def _advance(self, b: BeliefState, now: datetime) -> None:
+        """Move ``b.last_updated`` forward to ``now`` for a non-evidence write.
+
+        Evidence weights are kept current as of ``last_updated`` (the next
+        update decays them from there), so moving the clock without decaying
+        them would skip that stretch of decay; and the clock never moves back.
+        """
+        if b.last_updated is not None and now <= b.last_updated:
+            return
+        b.evidence = decay(
+            b.evidence,
+            now,
+            halflife_min=self.config.evidence_decay_halflife_min,
+            calendar=self.calendar,
+            since=b.last_updated,
+        )
+        b.last_updated = now
+
     async def set_compliance(
         self,
         asset: str,
@@ -191,7 +209,7 @@ class BeliefUpdater:
         if verdict.transient_error and b.halal is not None and not b.halal.transient_error:
             return b  # keep the good prior verdict (INV-2)
         b.halal = verdict
-        b.last_updated = now
+        self._advance(b, now)
         prev_version = b.version
         version = await self.store.put(b)
         b.version = version
@@ -268,7 +286,7 @@ class BeliefUpdater:
         kept.append(catalyst)
         kept.sort(key=lambda c: c.scheduled_for)
         b.catalysts_pending = kept
-        b.last_updated = now
+        self._advance(b, now)
         prev_version = b.version
         version = await self.store.put(b)
         b.version = version
@@ -316,14 +334,16 @@ class BeliefUpdater:
             now = b.last_updated
         prev = deepcopy(b)  # ★ snapshot BEFORE mutation (R-11)
 
-        # 1. decay (trading-time) + merge (event_id dedup)
+        # 1. decay (trading-time) + merge (event_id dedup). Stored weights are
+        #    already decayed to last_updated, so they age from there; fresh
+        #    items age from their own ts (an older headline arrives weaker).
+        #    Afterwards every weight is current as of `now`.
+        halflife = self.config.evidence_decay_halflife_min
         b.evidence = decay(
-            b.evidence,
-            now,
-            halflife_min=self.config.evidence_decay_halflife_min,
-            calendar=self.calendar,
+            b.evidence, now, halflife_min=halflife, calendar=self.calendar, since=b.last_updated
         )
-        b.evidence = merge(b.evidence, items)
+        fresh = decay(items, now, halflife_min=halflife, calendar=self.calendar)
+        b.evidence = merge(b.evidence, fresh)
 
         # 2. deterministic fields — one `signed` source for direction + conviction
         signed = weighted_sum(b.evidence)

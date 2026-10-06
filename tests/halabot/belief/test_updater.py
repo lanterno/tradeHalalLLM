@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from halabot.belief.evidence import ContinuousCalendar
-from halabot.belief.schema import EvidenceItem, Levels, Regime
+from halabot.belief.schema import ComplianceVerdict, EvidenceItem, Levels, Regime
 from halabot.belief.store import InMemoryBeliefStore, PgBeliefStore
 from halabot.belief.updater import BeliefUpdater, UpdaterConfig
 from halabot.conviction.raw import IdentityCalibrator
@@ -444,6 +444,41 @@ async def test_prewindow_thesis_does_not_starve_catalyst_refresh():
     await updater.set_catalyst("NVDA", _cat("CPI", T0 + timedelta(minutes=45), impact=0.9), T0)
     await updater.apply_evidence("NVDA", [], T0 + timedelta(minutes=20))  # in-window
     assert thesis.calls == baseline + 1
+
+
+@pytest.mark.asyncio
+async def test_repeated_decay_passes_do_not_compound():
+    updater, _, _ = _build(
+        llm=FakeLLM(available=False), config=UpdaterConfig(evidence_decay_halflife_min=60)
+    )
+    await updater.apply_evidence("NVDA", [_ev(0.5, ts=T0)], T0)
+    for m in (15, 30, 45, 60, 75, 90, 105, 120):  # a heartbeat every 15 minutes
+        b = await updater.apply_evidence("NVDA", [], T0 + timedelta(minutes=m))
+    assert b.evidence[0].weight == pytest.approx(0.25)  # two half-lives, no more
+
+
+@pytest.mark.asyncio
+async def test_a_compliance_write_in_between_loses_no_decay():
+    # set_compliance moves last_updated, which is where the next pass decays
+    # from; it must bring the weights along, or that stretch is never decayed.
+    updater, _, _ = _build(
+        llm=FakeLLM(available=False), config=UpdaterConfig(evidence_decay_halflife_min=60)
+    )
+    await updater.apply_evidence("NVDA", [_ev(0.5, ts=T0)], T0)
+    await updater.set_compliance(
+        "NVDA", ComplianceVerdict("NVDA", "halal"), T0 + timedelta(minutes=30)
+    )
+    b = await updater.apply_evidence("NVDA", [], T0 + timedelta(minutes=60))
+    assert b.evidence[0].weight == pytest.approx(0.5)
+
+
+@pytest.mark.asyncio
+async def test_an_older_item_arrives_already_decayed():
+    updater, _, _ = _build(
+        llm=FakeLLM(available=False), config=UpdaterConfig(evidence_decay_halflife_min=60)
+    )
+    b = await updater.apply_evidence("NVDA", [_ev(0.5, ts=T0)], T0 + timedelta(minutes=60))
+    assert b.evidence[0].weight == pytest.approx(0.5)  # an hour old on arrival
 
 
 class _ClosedMarket:
