@@ -1,9 +1,13 @@
 """Gather fundamentals from SEC and the price store, screen, persist.
 
 One screening run = one ``as_of`` date. Results go to
-``halal_screen_results`` keyed (as_of, symbol), so every run is kept: the
-screening history is point-in-time, and a backtest can ask what the screen
-said on a given day instead of using today's verdicts on yesterday's data.
+``halal_screen_results`` keyed (as_of, symbol, method), so every run is
+kept: the screening history is point-in-time, and a backtest can ask what
+the screen said on a given day instead of using today's verdicts on
+yesterday's data. A re-screen under a newer method adds rows beside the old
+ones (an order that cited a screen can still be audited against what it
+said); readers take the newest method through the ``halal_screen_current``
+view. Re-running the same method for the same date replaces its own rows.
 
 Concept choices (each a judgment call, recorded here):
 
@@ -44,6 +48,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections.abc import Sequence
 from datetime import date
 
@@ -104,6 +109,13 @@ _REVENUE = (
     "RevenueFromContractWithCustomerIncludingAssessedTax",
     "SalesRevenueNet",
 )
+
+
+def method_rank(method: str) -> int | None:
+    """The version number of a method name ("aaoifi-sec-v11" -> 11), as the SQL
+    function ``halal_screen_method_rank`` reads it; None when it has none."""
+    match = re.search(r"-v([0-9]+)$", method)
+    return int(match.group(1)) if match else None
 
 
 SHARE_CONFLICT = 3.0  # cover-page and diluted counts further apart than this: a units error
@@ -366,10 +378,10 @@ async def run_screen(
                         verdict, reasons, metrics, method, screened_at)
                     VALUES (:as_of, :symbol, :cik, :sic_desc, :verdict, CAST(:reasons AS JSONB),
                         CAST(:metrics AS JSONB), :method, now())
-                    ON CONFLICT (as_of, symbol) DO UPDATE SET cik = EXCLUDED.cik,
+                    ON CONFLICT (as_of, symbol, method) DO UPDATE SET cik = EXCLUDED.cik,
                         sic_description = EXCLUDED.sic_description, verdict = EXCLUDED.verdict,
                         reasons = EXCLUDED.reasons, metrics = EXCLUDED.metrics,
-                        method = EXCLUDED.method, screened_at = EXCLUDED.screened_at
+                        screened_at = EXCLUDED.screened_at
                     """
                 ),
                 {

@@ -76,7 +76,7 @@ async def impure_ratio(
             await conn.execute(
                 text(
                     "SELECT as_of, (metrics->>'impure_income_ratio')::float AS r "
-                    "FROM halal_screen_results WHERE symbol = :s AND as_of <= :d "
+                    "FROM halal_screen_current WHERE symbol = :s AND as_of <= :d "
                     "ORDER BY as_of DESC LIMIT 1"
                 ),
                 {"s": symbol, "d": day},

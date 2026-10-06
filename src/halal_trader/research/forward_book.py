@@ -130,7 +130,7 @@ async def _screen_caps(
         rows = await conn.execute(
             text(
                 "SELECT symbol, cik, (metrics->>'price')::float AS p, "
-                "(metrics->>'shares_outstanding')::float AS sh FROM halal_screen_results "
+                "(metrics->>'shares_outstanding')::float AS sh FROM halal_screen_current "
                 "WHERE as_of = :a AND verdict = 'halal'"
             ),
             {"a": as_of},
@@ -194,7 +194,7 @@ async def _halal_as_of(engine: AsyncEngine, day: date) -> set[str] | None:
         if as_of is None:
             return None
         rows = await conn.execute(
-            text("SELECT symbol FROM halal_screen_results WHERE as_of = :a AND verdict = 'halal'"),
+            text("SELECT symbol FROM halal_screen_current WHERE as_of = :a AND verdict = 'halal'"),
             {"a": as_of},
         )
         return {r.symbol for r in rows}

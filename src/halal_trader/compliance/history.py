@@ -25,7 +25,7 @@ from datetime import date
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from halal_trader.compliance.runner import METHOD, run_screen
+from halal_trader.compliance.runner import METHOD, method_rank, run_screen
 from halal_trader.compliance.sec import SecClient
 from halal_trader.data.store import BENCHMARKS
 from halal_trader.data.universe import universe_at
@@ -69,18 +69,21 @@ async def screen_history(
 
 
 async def rescreen_stale(sec: SecClient, engine: AsyncEngine) -> dict[date, int]:
-    """Re-screen every stored verdict made under an older method.
+    """Re-screen every stored verdict whose newest method is older than this one.
 
-    Returns as_of -> names re-screened. Resumable: a re-screened row carries
-    the current method and is skipped next time.
+    Returns as_of -> names re-screened. The older verdicts stay stored
+    beside the new ones (the key includes the method). Resumable: a
+    re-screened name has a current-method row and is skipped next time; a
+    process running an older method than one already stored re-screens nothing.
     """
     async with engine.connect() as conn:
         rows = await conn.execute(
             text(
-                "SELECT as_of, array_agg(symbol) AS symbols FROM halal_screen_results "
-                "WHERE method <> :m GROUP BY as_of ORDER BY as_of"
+                "SELECT as_of, array_agg(symbol) AS symbols FROM halal_screen_current "
+                "WHERE coalesce(halal_screen_method_rank(method), -1) < :rank "
+                "GROUP BY as_of ORDER BY as_of"
             ),
-            {"m": METHOD},
+            {"rank": method_rank(METHOD)},
         )
         todo = [(r.as_of, list(r.symbols)) for r in rows]
     out: dict[date, int] = {}

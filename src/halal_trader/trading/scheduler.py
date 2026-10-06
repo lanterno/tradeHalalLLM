@@ -653,7 +653,7 @@ class TradingBot:
         async with self._engine.connect() as conn:
             rows = await conn.execute(
                 text(
-                    "SELECT symbol FROM halal_screen_results WHERE verdict = 'halal' "
+                    "SELECT symbol FROM halal_screen_current WHERE verdict = 'halal' "
                     "AND as_of = (SELECT max(as_of) FROM halal_screen_results) "
                     "ORDER BY (metrics->>'market_cap')::float DESC NULLS LAST LIMIT :n"
                 ),

@@ -80,7 +80,7 @@ def factor_backtest_cmd(top: int, cost_bps: float, since: Any, pit: bool, univer
                     r.symbol
                     for r in await conn.execute(
                         text(
-                            "SELECT symbol FROM halal_screen_results WHERE verdict = 'halal' "
+                            "SELECT symbol FROM halal_screen_current WHERE verdict = 'halal' "
                             "AND as_of = (SELECT max(as_of) FROM halal_screen_results)"
                         )
                     )

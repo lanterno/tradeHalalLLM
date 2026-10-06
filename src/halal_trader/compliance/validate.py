@@ -98,7 +98,7 @@ async def weekly_check(engine: Any, today: Any) -> Validation:
         rows = await conn.execute(
             text(
                 "SELECT symbol, verdict, reasons, metrics->>'market_cap' AS mc "
-                "FROM halal_screen_results "
+                "FROM halal_screen_current "
                 "WHERE as_of = (SELECT max(as_of) FROM halal_screen_results WHERE as_of <= :d)"
             ),
             {"d": today},
