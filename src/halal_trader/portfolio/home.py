@@ -202,9 +202,11 @@ async def build(
     from halal_trader.compliance.purification import paper_positions
     from halal_trader.compliance.sectors import sector_of
     from halal_trader.portfolio import readiness as gate
+    from halal_trader.portfolio.core_account import core_account
     from halal_trader.portfolio.core_executor import monthly_due
     from halal_trader.portfolio.snapshots import BENCHMARKS
 
+    core_name = core_account(settings.core.paper)  # "core" on paper, "core-live" live
     now = now or datetime.now(UTC)
     today = now.astimezone(MARKET_TZ).date()
     async with engine.connect() as conn:
@@ -241,20 +243,23 @@ async def build(
                 {"a": screen_as_of},
             )
         }
+        # Broker accounts only: a forward book's accruals ("book:*") are per a
+        # notional $10,000 that nobody holds, so nothing is set aside for them.
         unpaid = (
             await conn.execute(
                 text(
                     "SELECT coalesce(sum(amount), 0) FROM purification_accruals "
-                    "WHERE paid_at IS NULL"
+                    "WHERE paid_at IS NULL AND account NOT LIKE 'book:%'"
                 )
             )
         ).scalar()
         last_run = (
             await conn.execute(
                 text(
-                    "SELECT equity, cash, run_on FROM core_runs WHERE executed "
+                    "SELECT equity, cash, run_on FROM core_runs WHERE executed AND account = :a "
                     "ORDER BY recorded_at DESC LIMIT 1"
-                )
+                ),
+                {"a": core_name},
             )
         ).first()
 
@@ -285,7 +290,7 @@ async def build(
     # ── accounts ──
     stocks = settings.stocks
     meta = {
-        "core": (
+        core_name: (
             "Core portfolio",
             "active" if settings.core.enabled else "disabled",
             settings.core.paper,
@@ -308,7 +313,7 @@ async def build(
             equity, cash = hist[-1][1], None
             prev = hist[-2][1] if len(hist) > 1 else None
             positions, as_of, source = [], hist[-1][0].isoformat(), "ledger"
-        elif account == "core" and last_run is not None:
+        elif account == core_name and last_run is not None:
             # The run's figures predate its own orders: equity only, no cash split.
             equity, cash, prev = float(last_run.equity), None, None
             positions, as_of, source = [], last_run.run_on.isoformat(), "run"
@@ -351,8 +356,8 @@ async def build(
     base = series[0]["equity"] if series else None
 
     # ── the core portfolio ──
-    core_snap = snaps.get("core")
-    core_equity = next((a["equity"] for a in accounts if a["account"] == "core"), None)
+    core_snap = snaps.get(core_name)
+    core_equity = next((a["equity"] for a in accounts if a["account"] == core_name), None)
     if core_snap is not None and core_snap.positions:
         held = [
             {
@@ -363,7 +368,7 @@ async def build(
             for p in core_snap.positions
         ]
     else:  # before the first snapshot: the ledger's shares at the last close
-        shares = await paper_positions(engine, today + timedelta(days=1), "core")
+        shares = await paper_positions(engine, today + timedelta(days=1), core_name)
         async with engine.connect() as conn:
             last_close = {
                 r.symbol: float(r.close)
@@ -416,15 +421,19 @@ async def build(
         hawl = z.parse_hawl(hawl_hijri)
         _, last_hawl = z.hawl_period(hawl, today)
         _, next_hawl = z.hawl_period(hawl, date.fromordinal(last_hawl.toordinal() + 360))
-        now_due = await z.assess(engine, "core", period_start=last_hawl, hawl_date=today)
+        now_due = await z.assess(engine, core_name, period_start=last_hawl, hawl_date=today)
         zakat = {
             "amount": round(now_due.amount, 2),
             "chosen": now_due.chosen,
+            # Valued today, before the hawl: what would be due if the year
+            # ended now, not what is owed. The hawl day's assessment is.
+            "estimate": today != last_hawl,
+            "as_of": today.isoformat(),
             "next_hawl": next_hawl.isoformat(),
             "next_hawl_hijri": z.hijri_label(next_hawl),
         }
     ready = await gate.check(engine, today=today)
-    monthly_done = not await monthly_due(engine, today)
+    monthly_done = not await monthly_due(engine, today, core_name)
     trading_month, trading_left = trading_days_in_month(today)
     horizon = today + timedelta(days=400)
     holidays = sorted(d for d in US_MARKET_HOLIDAYS if today <= d <= horizon)
