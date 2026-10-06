@@ -116,12 +116,17 @@ def create_app() -> Any:
 
     app = FastAPI(title="Halal Trader Dashboard", version="0.3.0", lifespan=lifespan)
 
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+    # The built SPA is served from this origin and needs no CORS. The Vite
+    # dev server (`npm run dev`, :5173) does; WEB_CORS_DEV_ORIGINS opens it on
+    # a developer's machine, never by default -- any page on :5173 could
+    # otherwise read the API cross-origin.
+    if get_settings().web.cors_dev_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
 
     # The container healthcheck and the home stack's probe poll /api/health*
     # constantly; their access-log lines drowned everything else.

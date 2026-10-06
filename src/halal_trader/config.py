@@ -393,6 +393,9 @@ class WebSettings(BaseSettings):
     # How often the web's watchdog (web/watchdog.py) checks every process's
     # and daily job's heartbeat and alerts on Telegram. 0 disables it.
     watchdog_interval_seconds: int = Field(default=300, ge=0)
+    # Allow the Vite dev server's origins (localhost:5173) through CORS.
+    # Only for `npm run dev` against a local API; the built SPA is same-origin.
+    cors_dev_origins: bool = Field(default=False)
 
 
 # ── Top-level Settings ─────────────────────────────────────────

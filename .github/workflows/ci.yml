@@ -59,6 +59,18 @@ jobs:
       - name: Install dependencies (dev + all extras)
         run: uv sync --locked --extra dev --extra all
 
+      # Known vulnerabilities in the locked dependencies, and in the broker
+      # server's frozen closure baked into the image. Advisory for now: the
+      # lock carries open advisories, and a new one must not block every push
+      # until an upgrade exists. Read the step's output.
+      - name: Dependency audit (pip-audit, advisory)
+        if: success() || failure()
+        continue-on-error: true
+        run: |
+          uv export --frozen --all-extras --no-hashes --no-emit-project -o "$RUNNER_TEMP/requirements.txt"
+          uvx pip-audit --disable-pip --no-deps -r "$RUNNER_TEMP/requirements.txt"
+          uvx pip-audit --disable-pip --no-deps -r infra/alpaca-mcp-server.txt
+
       - name: Lint
         if: success() || failure()
         run: uv run ruff check src/ tests/
