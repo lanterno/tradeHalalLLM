@@ -1,5 +1,13 @@
 import { useQuery } from "@tanstack/react-query";
-import { fetchHealth, fetchSystemStatus, fetchConfig } from "../api/system";
+import { fetchHealth, fetchSystemStatus, fetchConfig, fetchCoreConfig } from "../api/system";
+
+export function useCoreConfig() {
+  return useQuery({
+    queryKey: ["config", "core"],
+    queryFn: fetchCoreConfig,
+    staleTime: 300_000,
+  });
+}
 
 export function useHealth() {
   return useQuery({

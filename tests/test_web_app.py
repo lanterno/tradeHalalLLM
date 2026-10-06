@@ -355,6 +355,17 @@ def test_system_status_exposes_stocks_cadence(client):
     assert body["day_trader_enabled"] is True and body["core_enabled"] is False
 
 
+def test_core_config_lists_the_cores_parameters_and_no_secret(client, monkeypatch):
+    from halal_trader.config import get_settings
+
+    monkeypatch.setattr(get_settings().core, "alpaca_secret_key", "sk-secret-value")
+    body = client.get("/api/system/core-config").json()
+    assert body["core_enabled"] is False and body["core_paper"] is True
+    assert body["core_top_n"] == 100 and body["core_rebalance_band"] == 0.25
+    assert body["core_trades_at_et"] == "15:40" and body["core_keys_set"] is False
+    assert "sk-secret-value" not in str(body)
+
+
 def test_system_status_classifier_health_null_without_reactor(client):
     """Dashboard-only process (no co-hosted bot) → no reactor
     available → classifier_health is None, not missing."""

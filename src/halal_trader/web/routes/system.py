@@ -120,6 +120,30 @@ def register(app: FastAPI) -> None:
             }
         )
 
+    @app.get("/api/system/core-config")
+    async def api_core_config(ctx: DashboardContext = Depends(get_ctx)) -> JSONResponse:
+        """The core portfolio's parameters for the System page: its settings
+        (never its keys) and the rule constants it trades by."""
+        from halal_trader.portfolio import core_executor, strict_core
+        from halal_trader.portfolio.home import CORE_TRADE
+
+        core = ctx.settings.core
+        return JSONResponse(
+            {
+                "core_enabled": core.enabled,
+                "core_paper": core.paper,
+                "core_keys_set": bool(core.alpaca_api_key and core.alpaca_secret_key),
+                "core_top_n": core.top_n,
+                "core_rebalance_band": strict_core.BAND,
+                "core_band_floor": strict_core.BAND_FLOOR,
+                "core_min_trade_usd": core_executor.MIN_TRADE,
+                "core_cash_buffer": core_executor.CASH_BUFFER,
+                "core_max_screen_age_days": core_executor.MAX_SCREEN_AGE.days,
+                "core_trades_at_et": CORE_TRADE.strftime("%H:%M"),
+                "day_trader_enabled": ctx.settings.stocks.day_trader_enabled,
+            }
+        )
+
     @app.get("/api/system/halt")
     async def api_get_halt(ctx: DashboardContext = Depends(get_ctx)) -> JSONResponse:
         from halal_trader.core.halt import get_status
