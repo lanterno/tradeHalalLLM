@@ -3,10 +3,30 @@ import {
   useRecommendationHistory,
   useRecommendationScorecard,
 } from "../hooks/useRecommendation";
+import { useState } from "react";
 import { RecommendationCard } from "../components/RecommendationCard";
 import { StatCard } from "../components/StatCard";
 import { ErrorState } from "../components/ErrorState";
-import { formatUsd, formatPct } from "../lib/utils";
+import { VerdictBadge } from "../components/PickVerdict";
+import { verdictSummary } from "../lib/scorecard";
+import { cn, formatUsd, formatPct } from "../lib/utils";
+
+/** A history row's thesis: two lines, the rest on a click. */
+function Thesis({ text }: { text?: string }) {
+  const [open, setOpen] = useState(false);
+  if (!text) return <>—</>;
+  return (
+    <button
+      type="button"
+      onClick={() => setOpen(!open)}
+      aria-expanded={open}
+      title={open ? "Collapse" : "Show the whole thesis"}
+      className={cn("min-w-48 text-left hover:text-white", !open && "line-clamp-2")}
+    >
+      {text}
+    </button>
+  );
+}
 
 function usd(v?: number | null) {
   return typeof v === "number" ? formatUsd(v) : "—";
@@ -63,11 +83,31 @@ export default function Recommendation() {
         </div>
       ) : null}
 
-      {/* Honest track record (forward returns vs halal benchmark) */}
-      {sc?.available && sc.sufficient === false ? (
-        <div className="rounded-xl border border-border bg-surface p-3 text-xs text-muted">
-          ⚠ Track record is a thin sample ({sc.n_scored} scored picks) — needs
-          ≥{sc.min_samples ?? 20} for the rates below to be trustworthy.
+      {/* The verdict first: the record decides whether the pick is worth reading. */}
+      {sc ? (
+        <div
+          className={cn(
+            "flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-xl border bg-surface p-3 text-xs text-muted",
+            sc.verdict === "negative" ? "border-loss/30" : "border-border",
+          )}
+        >
+          <VerdictBadge verdict={sc.verdict} />
+          <span>{verdictSummary(sc)}</span>
+          {sc.verdict === "negative" && (
+            <span className="text-loss">The record argues against acting on the pick.</span>
+          )}
+          {sc.conviction_mode && sc.conviction_mode.n > 1 && (
+            <span className="basis-full">
+              Conviction was {sc.conviction_mode.value.toFixed(2)} on {sc.conviction_mode.n} of{" "}
+              {sc.conviction_mode.of} days, so it carries little information.
+            </span>
+          )}
+          {sc.n_duplicates ? (
+            <span className="basis-full">
+              One pick per day: {sc.n_duplicates} re-generated row{sc.n_duplicates === 1 ? "" : "s"} below
+              {sc.n_duplicates === 1 ? " is" : " are"} left out of every figure (the newest of the day counts).
+            </span>
+          ) : null}
         </div>
       ) : null}
       {sc?.available ? (
@@ -224,7 +264,9 @@ export default function Recommendation() {
                     <td className={`py-2 pr-4 ${pctColor(r.fwd_return_5d)}`}>
                       {pct(r.fwd_return_5d)}
                     </td>
-                    <td className="max-w-md py-2 text-muted">{r.thesis}</td>
+                    <td className="max-w-md py-2 text-muted">
+                      <Thesis text={r.thesis} />
+                    </td>
                   </tr>
                 ))}
               </tbody>

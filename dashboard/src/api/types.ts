@@ -116,13 +116,39 @@ export interface HealthStatus {
   version: string;
   /** The bot's own heartbeat verdict: the real "is it running?". */
   bot_alive?: boolean;
-  bot?: Record<string, { stale?: boolean; age_seconds?: number; reason?: string | null }>;
+  bot?: Record<
+    string,
+    {
+      stale?: boolean;
+      age_seconds?: number;
+      reason?: string | null;
+      // "disabled": the component is switched off on purpose (e.g. the retired
+      // day-trader's cycle), so its old beat is not a fault.
+      status?: string;
+    }
+  >;
 }
 
-/** Bot alive and no component's heartbeat stale: what "healthy" means. */
-export function staleComponents(h: HealthStatus): string[] {
+/** The day-trader's cycle beat; it stops for good when the day-trader is retired. */
+export const DAY_TRADER_CYCLE = "stock.cycle";
+
+/**
+ * Components whose heartbeat is stale for real: bot alive and none of these is
+ * what "healthy" means. A component the backend reports as disabled is skipped,
+ * and so is the day-trader's cycle while the day-trader is switched off (an
+ * older backend reports that beat as plainly stale).
+ */
+export function staleComponents(
+  h: HealthStatus,
+  opts: { dayTraderEnabled?: boolean } = {},
+): string[] {
   return Object.entries(h.bot ?? {})
-    .filter(([name, b]) => !name.startsWith("_") && b.stale)
+    .filter(([name, b]) => {
+      if (name.startsWith("_") || !b.stale) return false;
+      if (b.status === "disabled") return false;
+      if (name === DAY_TRADER_CYCLE && opts.dayTraderEnabled === false) return false;
+      return true;
+    })
     .map(([name]) => name);
 }
 
@@ -131,6 +157,8 @@ export interface SystemStatus {
   last_cycle: string | null;
   stocks_cycle_interval_seconds: number;
   uptime_seconds: number | null;
+  day_trader_enabled?: boolean;
+  core_enabled?: boolean;
 }
 
 export interface AppConfig {
@@ -278,8 +306,14 @@ export interface StockOfTheDay {
 // Aggregate track record for the daily recommendation (forward returns).
 export interface RecommendationScorecard {
   available: boolean;
+  /** Days with a pick (one per day: a re-generated day counts once). */
   n_total: number;
   n_scored: number;
+  n_duplicates?: number;
+  /** The record in a word; "negative" while picks lag the benchmark or IC < 0. */
+  verdict?: "negative" | "unproven" | "positive";
+  conviction_ic?: number | null;
+  conviction_mode?: { value: number; n: number; of: number } | null;
   sufficient?: boolean;
   min_samples?: number;
   hit_rate_5d?: number;

@@ -1,14 +1,16 @@
 import { Link } from "react-router-dom";
 import { useHome } from "../hooks/useHome";
-import { useHealth } from "../hooks/useSystem";
+import { useHealth, useSystemStatus } from "../hooks/useSystem";
 import { useAnalytics } from "../hooks/useAnalytics";
-import { useStockOfTheDay } from "../hooks/useRecommendation";
+import { useRecommendationScorecard, useStockOfTheDay } from "../hooks/useRecommendation";
 import { ErrorState } from "../components/ErrorState";
+import { VerdictBadge } from "../components/PickVerdict";
+import { verdictSummary } from "../lib/scorecard";
 import { MarketPanel } from "../components/home/MarketPanel";
 import { MoneyPanel } from "../components/home/MoneyPanel";
 import { PortfolioPanel } from "../components/home/PortfolioPanel";
 import { GatePanel, UpcomingPanel } from "../components/home/PlanPanels";
-import { cn, formatPct, formatUsd, pnlColor } from "../lib/utils";
+import { cn, formatDate, formatPct, formatUsd, pnlColor, todayET } from "../lib/utils";
 import { staleComponents, type HealthStatus } from "../api/types";
 
 const HIJRI_MONTHS = [
@@ -38,35 +40,67 @@ function Badge({ ok, children }: { ok: boolean | "paper"; children: React.ReactN
   );
 }
 
-function HealthBadge({ health }: { health: HealthStatus }) {
-  const stale = staleComponents(health);
+function HealthBadge({ health, dayTraderEnabled }: { health: HealthStatus; dayTraderEnabled?: boolean }) {
+  const stale = staleComponents(health, { dayTraderEnabled });
   if (!health.bot_alive) return <Badge ok={false}>Bot not reporting</Badge>;
   if (stale.length) return <Badge ok={false}>Stale: {stale.join(", ")}</Badge>;
   return <Badge ok>All systems healthy</Badge>;
 }
 
+/**
+ * The advisory pick, always beside its own record. Kept on the page rather than
+ * hidden while the record is negative: hiding it would also hide that the
+ * experiment is still running (and spending) with nothing to show for it; the
+ * verdict says plainly not to act on it.
+ */
 function StockOfTheDay() {
   const { data: pick } = useStockOfTheDay();
+  const { data: sc } = useRecommendationScorecard();
+  const stale = pick?.date ? pick.date !== todayET() : false;
+  const negative = sc?.verdict === "negative";
+  const mode = sc?.conviction_mode;
   return (
     <div className="rounded-xl border border-border bg-surface p-4">
-      <h2 className="mb-3 flex items-baseline justify-between text-xs font-semibold uppercase tracking-widest text-muted">
+      <h2 className="mb-3 flex items-baseline justify-between gap-2 text-xs font-semibold uppercase tracking-widest text-muted">
         Stock of the day
         <Link to="/recommendation" className="text-xs font-normal normal-case tracking-normal hover:text-white">
           advisory · never traded →
         </Link>
       </h2>
       {pick?.available && pick.symbol ? (
-        <div className="flex items-center gap-3.5">
-          <span className="text-[22px] font-bold text-white">{pick.symbol}</span>
-          <div className="min-w-0">
-            <p className="text-sm text-white">
-              Conviction {pick.conviction !== undefined ? pick.conviction.toFixed(2) : "—"}
-            </p>
-            <p className="line-clamp-2 text-xs text-muted">{pick.thesis}</p>
+        <>
+          <div className="flex items-center gap-3.5">
+            <span className={cn("text-[22px] font-bold", negative ? "text-muted line-through decoration-loss/60" : "text-white")}>
+              {pick.symbol}
+            </span>
+            <div className="min-w-0">
+              <p className="flex flex-wrap items-center gap-x-2 text-sm text-white">
+                <span>{pick.date ? `Picked ${formatDate(pick.date)}` : "Undated pick"}</span>
+                {stale && (
+                  <span className="rounded border border-warning/35 px-1.5 text-[10px] font-semibold uppercase tracking-wide text-warning">
+                    stale
+                  </span>
+                )}
+              </p>
+              <p className="text-xs text-muted">
+                Conviction {pick.conviction !== undefined ? pick.conviction.toFixed(2) : "—"}
+                {mode && mode.n > 1 && mode.value === Math.round((pick.conviction ?? -1) * 100) / 100
+                  ? ` (the same ${mode.value.toFixed(2)} on ${mode.n} of ${mode.of} days)`
+                  : ""}
+              </p>
+              {!negative && <p className="line-clamp-2 text-xs text-muted">{pick.thesis}</p>}
+            </div>
           </div>
-        </div>
+          {sc && (
+            <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-border pt-3 text-xs text-muted">
+              <VerdictBadge verdict={sc.verdict} />
+              <span>{verdictSummary(sc)}</span>
+              {negative && <span className="text-loss">Do not act on it.</span>}
+            </div>
+          )}
+        </>
       ) : (
-        <p className="text-sm text-muted">No pick today.</p>
+        <p className="text-sm text-muted">No pick yet.</p>
       )}
     </div>
   );
@@ -78,13 +112,13 @@ function DayTraderRecord() {
     <div className="rounded-xl border border-border bg-surface p-4">
       <details>
         <summary className="flex cursor-pointer list-none items-baseline justify-between text-xs font-semibold uppercase tracking-widest text-muted">
-          Day-trader record
-          <span className="text-xs font-normal normal-case tracking-normal">30 days · tap to expand ▾</span>
+          Day-trader record (retired)
+          <span className="text-xs font-normal normal-case tracking-normal">closed in the last 30 days ▾</span>
         </summary>
         {stats ? (
           <div className="mt-3 grid gap-0.5 text-xs text-muted">
             <div className="flex justify-between">
-              <span>P&amp;L</span>
+              <span>Closed-trade P&amp;L</span>
               <b className={cn("font-medium tabular-nums", pnlColor(stats.total_pnl))}>{formatUsd(stats.total_pnl)}</b>
             </div>
             <div className="flex justify-between">
@@ -109,6 +143,14 @@ function DayTraderRecord() {
 export default function Dashboard() {
   const { data, isLoading, isError, error, refetch } = useHome();
   const { data: health } = useHealth();
+  const { data: status, isError: statusError } = useSystemStatus();
+  // Whether the day-trader runs: the backend says so directly; the home
+  // payload's account status is the fallback for an older backend.
+  const paper = data?.accounts.find((a) => a.account === "paper");
+  const dayTraderEnabled = status?.day_trader_enabled ?? (paper ? paper.status === "active" : undefined);
+  // Wait for that answer before judging staleness, so a retired day-trader's
+  // old cycle beat never flashes the badge red on load.
+  const healthReady = health && (status || statusError || data);
   const todayLong = new Date().toLocaleDateString("en-GB", {
     weekday: "long",
     day: "numeric",
@@ -128,7 +170,7 @@ export default function Dashboard() {
         </div>
         <div className="flex flex-wrap gap-2">
           {data && data.accounts.every((a) => a.paper) && <Badge ok="paper">Paper money</Badge>}
-          {health && <HealthBadge health={health} />}
+          {healthReady && <HealthBadge health={health} dayTraderEnabled={dayTraderEnabled} />}
         </div>
       </div>
 

@@ -56,6 +56,11 @@ export function formatTime(
   return `${(opts.seconds ? ET_DATETIME_SECONDS : ET_DATETIME).format(d)} ET`;
 }
 
+/** Today's date in New York, "YYYY-MM-DD": the market's day, not the browser's. */
+export function todayET(now: Date = new Date()): string {
+  return now.toLocaleDateString("en-CA", { timeZone: MARKET_TZ });
+}
+
 /** A span in its two largest units: "3d 15h", "2h 5m", "40s". */
 export function formatDuration(ms: number): string {
   const s = Math.max(0, Math.floor(ms / 1000));

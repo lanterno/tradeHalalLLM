@@ -111,6 +111,10 @@ def register(app: FastAPI) -> None:
                 "last_cycle": ctx.runtime.last_cycle
                 or (cycle_beat["beat_at"] if cycle_beat else None),
                 "stocks_cycle_interval_seconds": ctx.settings.stocks.trading_interval_minutes * 60,
+                # Which strategies run: a retired day-trader beats no cycles,
+                # so the dashboard must not read its old cycle beat as stale.
+                "day_trader_enabled": ctx.settings.stocks.day_trader_enabled,
+                "core_enabled": ctx.settings.core.enabled,
                 "classifier_health": classifier_health,
                 "uptime_seconds": uptime,
             }
