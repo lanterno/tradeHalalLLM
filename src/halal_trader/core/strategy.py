@@ -187,7 +187,7 @@ class BaseStrategy:
                         f"Cycles degrade to no-action plans until topped up.",
                     )
                 except Exception as alert_err:  # noqa: BLE001 — alerting must never break the cycle
-                    logger.warning("quota alert failed to send: %s", alert_err)
+                    logger.warning("quota alert failed to send: %r", alert_err)
             else:
                 await self._alert_on_persistent_failure(e)
             return make_empty(str(e))
@@ -216,7 +216,7 @@ class BaseStrategy:
                 "Every cycle is a no-action plan until it recovers.",
             )
         except Exception as alert_err:  # noqa: BLE001 — alerting must never break the cycle
-            logger.warning("failure alert failed to send: %s", alert_err)
+            logger.warning("failure alert failed to send: %r", alert_err)
 
     async def _validate_with_repair(
         self,
@@ -238,7 +238,7 @@ class BaseStrategy:
             return validate(raw), raw, False
         except (ValidationError, ValueError, TypeError) as schema_err:
             logger.warning(
-                "%s LLM output failed schema validation — attempting one repair pass: %s",
+                "%s LLM output failed schema validation — attempting one repair pass: %r",
                 log_prefix,
                 schema_err,
             )
@@ -253,7 +253,7 @@ class BaseStrategy:
                 # *original* validation error since that's the actionable
                 # signal; the repair-call failure is logged separately.
                 logger.warning(
-                    "%s schema-repair call failed (%s); falling back to empty plan",
+                    "%s schema-repair call failed (%r); falling back to empty plan",
                     log_prefix,
                     repair_err,
                 )

@@ -241,7 +241,7 @@ class FedSpeakFetcher:
         try:
             speeches = await self._fetch_rss()
         except Exception as exc:  # noqa: BLE001
-            logger.debug("fed-speak RSS fetch failed: %s", exc)
+            logger.debug("fed-speak RSS fetch failed: %r", exc)
             return aggregate_signal([])
         self._cache = _CacheEntry(fetched_at=time.monotonic(), speeches=speeches)
         return aggregate_signal(speeches)

@@ -132,7 +132,7 @@ class StockPositionMonitor:
             except asyncio.CancelledError:
                 break
             except Exception as e:  # noqa: BLE001 — never let monitor crash the bot
-                logger.warning("Stock monitor loop error: %s", e)
+                logger.warning("Stock monitor loop error: %r", e)
 
             try:
                 await asyncio.sleep(self._check_interval)
@@ -152,7 +152,7 @@ class StockPositionMonitor:
         try:
             snap = await self._mcp.get_stock_snapshot(symbol)
         except Exception as e:
-            logger.debug("Snapshot fetch failed for %s: %s", symbol, e)
+            logger.debug("Snapshot fetch failed for %s: %r", symbol, e)
             return None
         return _extract_last_price(snap, symbol)
 
@@ -185,7 +185,7 @@ class StockPositionMonitor:
                 try:
                     await self._repo.update_stock_trade_stop_loss(trade.id, fixed)
                 except Exception as e:  # noqa: BLE001 — best-effort; use fixed value regardless
-                    logger.debug("stop-loss repair DB update failed for %s: %s", trade.symbol, e)
+                    logger.debug("stop-loss repair DB update failed for %s: %r", trade.symbol, e)
                 trade.stop_loss = fixed
                 # Not an exit — the repaired stop now sits below price; fall
                 # through so the trailing stop can manage from here.
@@ -262,7 +262,7 @@ class StockPositionMonitor:
                 timeframe=self._trend_break_timeframe,
             )
         except Exception as exc:  # noqa: BLE001
-            logger.debug("trend-break bars fetch failed for %s: %s", symbol, exc)
+            logger.debug("trend-break bars fetch failed for %s: %r", symbol, exc)
             return None
         klines = bars_to_klines(raw)
         closes = [float(k.close) for k in klines if getattr(k, "close", None)]
@@ -325,7 +325,7 @@ class StockPositionMonitor:
         try:
             positions = await self._mcp.get_all_positions()
         except Exception as e:  # noqa: BLE001 — broker flake → skip, don't sell blind
-            logger.warning("get_all_positions failed during %s exit lookup: %s", symbol, e)
+            logger.warning("get_all_positions failed during %s exit lookup: %r", symbol, e)
             return None
         wanted = symbol.upper()
         for pos in positions:
@@ -359,7 +359,7 @@ class StockPositionMonitor:
                 time_in_force="day",
             )
         except Exception as e:
-            logger.warning("Stock exit failed for %s (%s): %s", trade.symbol, reason, e)
+            logger.warning("Stock exit failed for %s (%s): %r", trade.symbol, reason, e)
             return None
         return result if isinstance(result, dict) else {"_raw": result}
 
@@ -441,7 +441,7 @@ class StockPositionMonitor:
             )
         except Exception as e:  # noqa: BLE001 — ledger row is best-effort
             logger.warning(
-                "Failed to record monitor-exit SELL row for %s (%s): %s",
+                "Failed to record monitor-exit SELL row for %s (%s): %r",
                 trade.symbol,
                 reason,
                 e,
@@ -509,7 +509,7 @@ class StockPositionMonitor:
             try:
                 await self._mcp.cancel_order(trade.symbol, conflict_id)
             except Exception as e:  # noqa: BLE001
-                logger.warning("cancel_order(%s) failed for %s: %s", conflict_id, trade.symbol, e)
+                logger.warning("cancel_order(%s) failed for %s: %r", conflict_id, trade.symbol, e)
                 return
             result = await self._place_exit_order(trade, reason, sell_qty)
             if result is None:
@@ -548,7 +548,7 @@ class StockPositionMonitor:
                     market="stocks",
                 )
             except Exception as e:  # noqa: BLE001
-                logger.debug("notify_sl_tp failed for %s: %s", trade.symbol, e)
+                logger.debug("notify_sl_tp failed for %s: %r", trade.symbol, e)
 
         if self._close_recorders is not None:
             try:
@@ -587,7 +587,7 @@ class StockPositionMonitor:
                     self._close_recorders,
                 )
             except Exception as e:  # noqa: BLE001
-                logger.debug("stocks post-close recorder failed: %s", e)
+                logger.debug("stocks post-close recorder failed: %r", e)
 
 
 __all__ = ["StockPositionMonitor", "_extract_last_price"]

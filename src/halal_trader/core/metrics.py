@@ -83,7 +83,7 @@ def _ensure_metrics() -> dict[str, Any]:
             labelnames=("topic",),
         )
     except Exception as exc:  # noqa: BLE001
-        logger.debug("prometheus_client unavailable: %s", exc)
+        logger.debug("prometheus_client unavailable: %r", exc)
         _metrics["_disabled"] = True
     return _metrics
 
@@ -127,5 +127,5 @@ def render_prometheus_text() -> bytes:
         out: bytes = generate_latest(REGISTRY)
         return out
     except Exception as exc:  # noqa: BLE001
-        logger.debug("prometheus_client unavailable: %s", exc)
+        logger.debug("prometheus_client unavailable: %r", exc)
         return b""

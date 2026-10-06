@@ -30,6 +30,7 @@ the gap is visible in the alert message itself.
 | `llm.circuit_breaker` | PAGE | [llm-circuit-breaker.md](llm-circuit-breaker.md) |
 | `db.connection_lost` | PAGE | [db-connection-lost.md](db-connection-lost.md) |
 | `halal.screener.stale` | WARN | [halal-screener-stale.md](halal-screener-stale.md) |
+| Watchdog "… stopped" (`web/watchdog.py`) | PAGE / WARN | [watchdog-stopped.md](watchdog-stopped.md) |
 
 ## Operations playbooks
 
@@ -39,6 +40,7 @@ runs on cadence:
 | Playbook | When to run |
 |---|---|
 | [backups-and-pitr.md](backups-and-pitr.md) | After a DB failure (post-stabilisation), or quarterly for the restore drill |
+| [rotate-postgres-password.md](rotate-postgres-password.md) | Once per deployment (the default is public), and after any suspected leak |
 
 For the alert routing model, see
 [`src/halal_trader/core/alert_router.py`](../../src/halal_trader/core/alert_router.py).

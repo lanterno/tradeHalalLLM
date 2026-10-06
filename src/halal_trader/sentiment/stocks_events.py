@@ -98,7 +98,7 @@ class FinnhubNewsSource:
                 resp.raise_for_status()
                 data = resp.json()
             except Exception as exc:  # noqa: BLE001
-                logger.debug("Finnhub news fetch failed for %s: %s", symbol, exc)
+                logger.debug("Finnhub news fetch failed for %s: %r", symbol, exc)
                 data = []
             for item in data if isinstance(data, list) else []:
                 out.append((symbol, {**item, "feed": "finnhub"}))
@@ -159,7 +159,7 @@ class FallbackNewsSource:
             return await self._primary.fetch(symbols)
         except Exception as exc:  # noqa: BLE001
             logger.warning(
-                "%s news failed (%s); falling back for %d trading symbols",
+                "%s news failed (%r); falling back for %d trading symbols",
                 self._primary.name,
                 exc,
                 len(self._fallback_symbols),
@@ -393,7 +393,7 @@ class StockNewsEventReactor:
         try:
             raw = json.loads(self._state_path.read_text())
         except (OSError, ValueError) as exc:
-            logger.warning("reactor state unreadable (%s) — starting fresh", exc)
+            logger.warning("reactor state unreadable (%r) — starting fresh", exc)
             return
         seen = raw.get("seen", [])
         self._seen = {
@@ -427,7 +427,7 @@ class StockNewsEventReactor:
             tmp.replace(self._state_path)
             self._state_dirty = False
         except OSError as exc:
-            logger.debug("reactor state save failed: %s", exc)
+            logger.debug("reactor state save failed: %r", exc)
 
     async def stop(self) -> None:
         """External cancel — sets the flag; the in-flight poll exits on
@@ -447,7 +447,7 @@ class StockNewsEventReactor:
                 try:
                     halted = await self._halt_check()
                 except Exception as exc:  # noqa: BLE001 — halt read flaked → proceed
-                    logger.debug("reactor halt check failed: %s — proceeding", exc)
+                    logger.debug("reactor halt check failed: %r — proceeding", exc)
                     halted = False
                 if halted:
                     logger.debug("reactor sweep skipped — kill-switch engaged")
@@ -491,7 +491,7 @@ class StockNewsEventReactor:
                         try:
                             await cb(event)
                         except Exception as exc:  # noqa: BLE001
-                            logger.error("StockNewsEvent callback failed: %s", exc)
+                            logger.error("StockNewsEvent callback failed: %r", exc)
                 # Persist after each full sweep so an unclean exit
                 # (SIGKILL, watchdog restart) still keeps most of the
                 # dedup + cooldown state. ``_save_state`` is a no-op when
@@ -500,7 +500,7 @@ class StockNewsEventReactor:
             except asyncio.CancelledError:
                 break
             except Exception as exc:  # noqa: BLE001
-                logger.error("StockNewsEventReactor poll error: %s", exc)
+                logger.error("StockNewsEventReactor poll error: %r", exc)
 
             await asyncio.sleep(self._poll_interval)
 
@@ -512,7 +512,7 @@ class StockNewsEventReactor:
         try:
             names = await self._observe_provider()
         except Exception as exc:  # noqa: BLE001 -- keep the last list
-            logger.debug("observe list unavailable: %s", exc)
+            logger.debug("observe list unavailable: %r", exc)
             return
         self._observe = {n.upper() for n in names} - set(self._symbols)
         self._observe_loaded_at = time.monotonic()
@@ -525,7 +525,7 @@ class StockNewsEventReactor:
         try:
             items = await self._source.fetch([*self._symbols, *sorted(self._observe)])
         except Exception as exc:  # noqa: BLE001
-            logger.warning("news fetch failed (%s): %s", self._source.name, exc)
+            logger.warning("news fetch failed (%s): %r", self._source.name, exc)
             items = []
         out: list[StockNewsEvent] = []
         for sym, item in items:
@@ -600,7 +600,7 @@ class StockNewsEventReactor:
                 symbol=symbol, headline=title, summary=summary, published_at=published
             )
         except Exception as exc:  # noqa: BLE001
-            logger.warning("classifier failed for %s '%s': %s", symbol, title[:60], exc)
+            logger.warning("classifier failed for %s '%s': %r", symbol, title[:60], exc)
             self._pending.append(record)
             return None
         scorer = str(getattr(self._classifier, "scorer_id", type(self._classifier).__name__))
@@ -803,7 +803,7 @@ class GPTHeadlineClassifier:
                 severity="critical",
             )
         except Exception as exc:  # noqa: BLE001
-            logger.debug("AlertSink notify failed: %s", exc)
+            logger.debug("AlertSink notify failed: %r", exc)
 
     @property
     def scorer_id(self) -> str:
@@ -849,7 +849,7 @@ class GPTHeadlineClassifier:
             if _is_quota_exhausted(exc):
                 await self._trip_quota_breaker(symbol=symbol, headline=headline)
             else:
-                logger.debug("LLM classify failed for %s: %s", symbol, exc)
+                logger.debug("LLM classify failed for %s: %r", symbol, exc)
             return HeadlineClassification(score=0.0, scored=False)
         # Success path: roll up per-provider usage from the LLM's
         # ``last_usage`` if the provider populated it (every BaseLLM

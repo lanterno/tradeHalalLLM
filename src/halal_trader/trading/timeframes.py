@@ -54,6 +54,6 @@ class StockTimeframeAnalyzer(TimeframeAnalyzer):
         try:
             bars = await self._broker.get_stock_bars(pair, days=days, timeframe=interval)
         except Exception as exc:  # noqa: BLE001
-            logger.debug("Alpaca bars fetch failed for %s @ %s: %s", pair, interval, exc)
+            logger.debug("Alpaca bars fetch failed for %s @ %s: %r", pair, interval, exc)
             return []
         return bars_to_klines(bars)

@@ -176,7 +176,7 @@ class StockTradeSelfReview:
                     )
                     self._apply_to_strategy()
         except Exception as e:
-            logger.debug("Failed to load strategy adjustments from DB: %s", e)
+            logger.debug("Failed to load strategy adjustments from DB: %r", e)
 
     @property
     def active_adjustments(self) -> dict[str, float]:
@@ -300,7 +300,7 @@ Analyze these trades and execution failures, and suggest improvements.
                         reasoning=obs_text[:500],
                     )
                 except Exception as exc:  # noqa: BLE001
-                    logger.debug("Failed to persist observation: %s", exc)
+                    logger.debug("Failed to persist observation: %r", exc)
 
             self._apply_adjustments(result)
             self._exec_failures.clear()
@@ -328,7 +328,7 @@ Analyze these trades and execution failures, and suggest improvements.
                     extra={"event": "llm.insufficient_quota"},
                 )
             else:
-                logger.error("Self-review failed: %s", e)
+                logger.error("Self-review failed: %r", e)
             return ReviewResult()
 
     # ── Helpers ──────────────────────────────────────────────────

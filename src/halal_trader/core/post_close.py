@@ -96,7 +96,7 @@ async def record_close(event: CloseEvent, recorders: CloseRecorders) -> dict[str
             )
             summary["rag_added"] = True
         except Exception as exc:  # noqa: BLE001
-            logger.debug("rag store add failed: %s", exc)
+            logger.debug("rag store add failed: %r", exc)
 
     # Round-trip purification.
     if (
@@ -119,6 +119,6 @@ async def record_close(event: CloseEvent, recorders: CloseRecorders) -> dict[str
             if entry is not None:
                 summary["purification_due_usd"] = entry.purification_due_usd
         except Exception as exc:  # noqa: BLE001
-            logger.debug("purification recorder failed: %s", exc)
+            logger.debug("purification recorder failed: %r", exc)
 
     return summary

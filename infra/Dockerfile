@@ -85,24 +85,28 @@ RUN uv venv --python /usr/local/bin/python3 /opt/alpaca-mcp \
     && /opt/alpaca-mcp/bin/python -c "import alpaca_mcp_server"
 # mcp/client.py finds it at this path (BAKED_SERVER); no env var needed.
 
-COPY --from=builder /app /app
-
-# Drop the built SPA into the runtime image where web/app.py looks for it
-# (../../../dashboard/dist relative to web/app.py → /app/dashboard/dist).
-COPY --from=spa-builder /spa/dist /app/dashboard/dist
-
 # Non-root user so a container escape doesn't land you on root.
 # We need a real home dir for `uvx` to write its cache when launching
 # the Alpaca MCP subprocess — bot otherwise crashes on stocks startup.
-#
-# /app/logs and /app/data are declared + owned by `trader` here so that when
-# the compose `trader-logs`/`trader-data` named volumes mount over them, Docker
-# seeds the (empty) volumes with `trader` ownership. Without these dirs existing
-# in the image, a fresh named volume is created root-owned and the non-root
-# process hits `PermissionError` on the first log write (crash-loops on start).
-RUN useradd --create-home --uid 1000 trader \
-    && mkdir -p /app/logs /app/data \
-    && chown -R trader:trader /app /home/trader
+RUN useradd --create-home --uid 1000 trader
+
+# --chown on the COPY, not a `chown -R /app` afterwards: a recursive chown
+# rewrites every file into a second layer, which duplicated the whole venv
+# (a 1.38 GB layer).
+COPY --from=builder --chown=trader:trader /app /app
+
+# Drop the built SPA into the runtime image where web/app.py looks for it
+# (../../../dashboard/dist relative to web/app.py → /app/dashboard/dist).
+COPY --from=spa-builder --chown=trader:trader /spa/dist /app/dashboard/dist
+
+# /app itself stays writable (the bot's PID file lives there). /app/logs and
+# /app/data are declared + owned by `trader` here so that when the compose
+# `trader-logs`/`trader-data` named volumes mount over them, Docker seeds the
+# (empty) volumes with `trader` ownership. Without these dirs existing in the
+# image, a fresh named volume is created root-owned and the non-root process
+# hits `PermissionError` on the first log write (crash-loops on start).
+RUN mkdir -p /app/logs /app/data \
+    && chown trader:trader /app /app/logs /app/data
 USER trader
 ENV HOME=/home/trader \
     UV_CACHE_DIR=/home/trader/.cache/uv

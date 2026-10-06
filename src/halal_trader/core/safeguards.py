@@ -161,7 +161,7 @@ class LiveModeChecker:
                     set_by="LiveModeChecker",
                 )
             except Exception as e:
-                logger.error("Failed to engage kill-switch from safeguard: %s", e)
+                logger.error("Failed to engage kill-switch from safeguard: %r", e)
 
         if alerts is not None:
             await alerts.notify(

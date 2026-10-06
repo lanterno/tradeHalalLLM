@@ -48,6 +48,21 @@ async def test_observe_mode_alerts_once_and_never_blocks(engine: AsyncEngine) ->
     assert kinds == ["llm.budget_warning", "llm.budget_exhausted"]
 
 
+async def test_a_daily_alert_is_not_repeated_by_a_restart_or_the_other_process(
+    engine: AsyncEngine,
+) -> None:
+    first = AsyncMock()
+    await SpendMeter(engine, consumer="stock", cap_usd=1, alert=first).record(Decimal("0.85"))
+    assert [c.args[0] for c in first.await_args_list] == ["llm.budget_warning"]
+
+    restarted, shadow = AsyncMock(), AsyncMock()  # same pool ("live"), new processes
+    await SpendMeter(engine, consumer="stock", cap_usd=1, alert=restarted).record(Decimal("0.01"))
+    await SpendMeter(engine, consumer="shadow", cap_usd=1, alert=shadow).record(Decimal("0.01"))
+
+    restarted.assert_not_awaited()
+    shadow.assert_not_awaited()
+
+
 async def test_enforce_mode_refuses_calls_until_the_next_utc_day(
     engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
 ) -> None:

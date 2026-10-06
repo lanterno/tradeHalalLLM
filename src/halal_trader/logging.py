@@ -62,6 +62,34 @@ class ThirdPartyConsoleFilter(logging.Filter):
         return True
 
 
+class HealthAccessFilter(logging.Filter):
+    """Drop uvicorn's access-log lines for the health endpoints.
+
+    The container healthcheck and the home stack's probe poll /api/health*
+    every few seconds; those lines were most of the web's log. Errors still
+    show: only 2xx/3xx answers are dropped.
+    """
+
+    PATH_PREFIX = "/api/health"
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        # uvicorn.access: (client_addr, method, full_path, http_version, status_code)
+        if not (isinstance(args, tuple) and len(args) >= 5):
+            return True
+        path, status = args[2], args[4]
+        if not (isinstance(path, str) and path.startswith(self.PATH_PREFIX)):
+            return True
+        return not (isinstance(status, int) and status < 400)
+
+
+def install_health_access_filter() -> None:
+    """Attach :class:`HealthAccessFilter` to uvicorn's access logger (idempotent)."""
+    access = logging.getLogger("uvicorn.access")
+    if not any(isinstance(f, HealthAccessFilter) for f in access.filters):
+        access.addFilter(HealthAccessFilter())
+
+
 def setup_logging(settings: Settings, *, cli_log_level: str | None = None) -> None:
     """Configure dual-output logging: Rich console + JSON rotating log files.
 

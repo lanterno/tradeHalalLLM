@@ -36,3 +36,7 @@ LLM_CHAIN_BACKOFF: Final[str] = "llm.chain.backoff"
 
 # ── Risk / Reconciliation ──────────────────────────────────────
 RECONCILE_DRIFT: Final[str] = "reconcile.drift"
+
+# ── Scheduler ───────────────────────────────────────────────────
+# A daily job whose scheduled run a restart skipped, run late on startup.
+JOB_CATCH_UP: Final[str] = "scheduler.catch_up"

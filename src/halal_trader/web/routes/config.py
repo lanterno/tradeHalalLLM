@@ -45,7 +45,24 @@ def register(app: FastAPI) -> None:
 # ── Schema introspection ───────────────────────────────────────
 
 
-_SECRET_HINTS = ("api_key", "secret", "token", "client_id", "chat_id")
+# Substrings of an env name that make it a secret: masked in the UI, and its
+# default never sent (DATABASE_URL's default carries the repo-default
+# Postgres password). Webhook URLs are bearer credentials; LIVE_MODE_
+# CONFIRMATION is the live-trading arming token; EDGAR's user agent names a
+# real contact.
+_SECRET_HINTS = (
+    "api_key",
+    "secret",
+    "token",
+    "client_id",
+    "chat_id",
+    "password",
+    "database_url",
+    "dsn",
+    "webhook",
+    "confirmation",
+    "user_agent",
+)
 
 
 def _walk_settings_schema(model: type[BaseSettings]) -> list[dict[str, Any]]:
@@ -62,14 +79,15 @@ def _walk_settings_schema(model: type[BaseSettings]) -> list[dict[str, Any]]:
             if isinstance(field.validation_alias, str)
             else (own_prefix + name).upper()
         )
+        secret = any(h in env_name.lower() for h in _SECRET_HINTS)
         out.append(
             {
                 "env_name": env_name,
                 "owner": model.__name__,
                 "type": _type_name(field.annotation),
-                "default": _default_value(field),
+                "default": None if secret else _default_value(field),
                 "description": field.description or "",
-                "secret": any(h in env_name.lower() for h in _SECRET_HINTS),
+                "secret": secret,
             }
         )
     return out

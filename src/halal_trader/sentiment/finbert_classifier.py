@@ -71,7 +71,7 @@ class FinBERTHeadlineClassifier:
             self._pipeline = self._loader(self._model_name)
         except Exception as exc:  # noqa: BLE001 — any load failure → degrade
             self._load_failed = True
-            logger.warning("FinBERT unavailable (%s) — headline classifier returns neutral", exc)
+            logger.warning("FinBERT unavailable (%r) — headline classifier returns neutral", exc)
 
     scorer_id = "finbert"
 
@@ -91,7 +91,7 @@ class FinBERTHeadlineClassifier:
             # transformers pipelines are blocking → run off the event loop.
             result = await asyncio.to_thread(self._pipeline, text[:_MAX_CHARS])
         except Exception as exc:  # noqa: BLE001 — inference failure → no fire
-            logger.debug("FinBERT classify failed for %s: %s", symbol, exc)
+            logger.debug("FinBERT classify failed for %s: %r", symbol, exc)
             return HeadlineClassification(score=0.0, scored=False)
         label, conf = _parse(result)
         # Bullish momentum-impact only: positive → confidence, else 0.

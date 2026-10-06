@@ -7,23 +7,29 @@ import logging
 import os
 import signal
 from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
-from sqlalchemy.ext.asyncio import AsyncEngine
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from halal_trader.config import get_settings
 from halal_trader.core import events
 from halal_trader.core.heartbeat import (
+    DAILY_JOBS,
+    RECOMMENDATION,
     RESEARCH,
     STOCK_CYCLE,
+    STOCK_EOD,
     STOCK_LEDGER,
     STOCK_MONITOR,
     STOCK_PROCESS,
+    Beat,
     beat,
+    read_beats,
+    scheduled_at,
 )
 from halal_trader.core.llm import create_llm
 from halal_trader.db.models import init_db
@@ -56,21 +62,86 @@ _TRADING_LOCK_KEY = 0x48414C414C53544B
 
 _PID_FILE = Path("halal_trader.pid")
 
+_RECOMMEND_RETRY_AFTER = timedelta(minutes=15)
+# The core trades at 15:40 ET with market orders; a catch-up run after a
+# restart must leave them time to fill before the close.
+_CORE_TRADE_AT = time(15, 40)
+_CORE_CATCH_UP_CUTOFF = timedelta(minutes=5)
+# Daily jobs older than this are not caught up: their moment has passed.
+_CATCH_UP_HORIZON = timedelta(days=4)
+
+
+def plan_catch_up(
+    now: datetime,
+    beats: dict[str, Beat],
+    *,
+    core_due: bool,
+) -> list[tuple[str, date]]:
+    """The daily jobs a bot starting at ``now`` missed and may still run.
+
+    The scheduler's job store is in memory, so a restart near a job's time
+    silently skipped it (~30 restarts in 4.5 days, 2026-10). Each job's last
+    success is its heartbeat; each job has its own "too late" rule:
+
+    * ``recommend`` (09:05) and ``end_of_day`` (15:50, 12:50 on early-close
+      days) -- today's run, and only while the session is still open: an
+      end-of-day flatten after the close would queue market orders for the
+      next open.
+    * ``core_trade`` (15:40) -- today's, only if ``core_due`` (enabled, keyed
+      and not yet run today) and at least 5 minutes before the close, so its
+      market orders can fill.
+    * ``sync_broker_ledger`` (16:30) and ``research_daily`` (20:30) -- the
+      newest missed trading day within a few days, run for THAT day.
+
+    Returns ``(job, day)`` pairs, in the order to run them.
+    """
+    et = now.astimezone(MARKET_TZ)
+    today = et.date()
+    plan: list[tuple[str, date]] = []
+    trading_today = is_trading_day(today)
+    close = datetime.combine(today, effective_close_time(today), MARKET_TZ)
+
+    def missed(component: str, at: datetime) -> bool:
+        b = beats.get(component)
+        return b is None or b.beat_at < at
+
+    if trading_today and now < close:
+        rec_at = scheduled_at(DAILY_JOBS[RECOMMENDATION], today)
+        if now >= rec_at and missed(RECOMMENDATION, rec_at):
+            plan.append(("recommend", today))
+        core_at = datetime.combine(today, _CORE_TRADE_AT, MARKET_TZ)
+        if core_due and core_at <= now < close - _CORE_CATCH_UP_CUTOFF:
+            plan.append(("core_trade", today))
+        eod_at = scheduled_at(DAILY_JOBS[STOCK_EOD], today)
+        if now >= eod_at and missed(STOCK_EOD, eod_at):
+            plan.append(("end_of_day", today))
+
+    for component, job in ((STOCK_LEDGER, "sync_broker_ledger"), (RESEARCH, "research_daily")):
+        day = today
+        while today - day <= _CATCH_UP_HORIZON:
+            if is_trading_day(day):
+                at = scheduled_at(DAILY_JOBS[component], day)
+                if at <= now:
+                    if missed(component, at):
+                        plan.append((job, day))
+                    break
+            day -= timedelta(days=1)
+    return plan
+
 
 def _zoya_for(settings: Any) -> ZoyaClient | None:
-    """The Zoya client the halal screen may trust, or None for the default list.
+    """The Zoya client the halal screen may consult as a veto, or None.
 
-    Zoya's SANDBOX returns randomised verdicts, so it must not decide what is
-    halal (operator decision 2026-10-01): with a sandbox key the bot screens
-    from the curated AAOIFI default list, as with no key at all, until the
-    in-house screen (plan 3.2) or a production key replaces it.
+    Zoya's SANDBOX returns randomised verdicts, so it must not decide anything
+    (operator decision 2026-10-01): with a sandbox key, as with none, the
+    strict in-house screen alone decides (halal/cache.py, halal/strict.py).
     """
     if not settings.zoya.api_key:
         return None
     if settings.zoya.use_sandbox:
         logger.warning(
             "Zoya key is a SANDBOX key: its verdicts are random, so they are ignored; "
-            "screening from the curated AAOIFI default list instead"
+            "the strict in-house screen alone decides"
         )
         return None
     return ZoyaClient(api_key=settings.zoya.api_key, use_sandbox=False)
@@ -95,8 +166,16 @@ class TradingBot:
         # ``_create_components``, run by the pre-market ``recommend`` job.
         # Never trades.
         self._recommendation: Any | None = None
-        self.scheduler = AsyncIOScheduler()
+        # Defaults for every job: a job delayed past its time (a busy event
+        # loop) still runs once rather than being dropped or run twice. Each
+        # job may widen its own grace. A restart skips jobs regardless -- the
+        # job store is in memory -- which _catch_up_missed_jobs handles.
+        self.scheduler = AsyncIOScheduler(
+            job_defaults={"coalesce": True, "max_instances": 1, "misfire_grace_time": 300}
+        )
         self._lock_file: int | None = None
+        # The session holding the database trading lock (_acquire_trading_lock).
+        self._trading_lock_conn: AsyncConnection | None = None
         # Lazy-built in ``_create_components``; closed in ``shutdown``.
         self._stocks_news: Any | None = None
         # Stocks-side self-review — wired in ``_create_components`` and
@@ -176,7 +255,14 @@ class TradingBot:
         llm = create_llm(self.settings)
 
         # Halal screener
-        self.screener = HalalScreener(repo, _zoya_for(self.settings))
+        # The strict in-house screen decides (fails closed when stale). Its
+        # universe is rebuilt now, so the reactor's watchlist below and the
+        # shadow (which reads the same cache) never start from an old one.
+        self.screener = HalalScreener(repo, _zoya_for(self.settings), engine=self._engine)
+        try:
+            await self.screener.ensure_cache(force=True)
+        except Exception as exc:  # noqa: BLE001 -- pre-market retries; the gate reads the screen
+            logger.warning("halal universe refresh at startup failed: %r", exc)
 
         # Strategy & executor
         strategy = TradingStrategy(
@@ -361,7 +447,7 @@ class TradingBot:
                 watchlist = await self.screener.get_halal_symbols()
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
-                    "halal symbols unavailable for reactor watchlist (%s) — reactor disabled",
+                    "halal symbols unavailable for reactor watchlist (%r) — reactor disabled",
                     exc,
                 )
                 watchlist = []
@@ -476,15 +562,18 @@ class TradingBot:
         from halal_trader.recommendation.engine import DailyRecommendationEngine
 
         self._recommendation = DailyRecommendationEngine(
-            broker=self.broker, repo=self._repo, settings=self.settings
+            broker=self.broker, repo=self._repo, settings=self.settings, engine=self._engine
         )
 
         logger.info("Trading bot initialized successfully")
 
-    async def recommend(self) -> None:
+    async def recommend(self, *, is_retry: bool = False) -> None:
         """Pre-market job: generate the advisory halal stock-of-the-day.
 
         Best-effort and non-fatal — a failure here must never affect trading.
+        A failed run is retried once, 15 minutes later (on 2026-10-05 one
+        transient failure left the day without a pick); only a failed retry
+        alerts.
         """
         now = now_eastern()
         if not is_trading_day(now.date()):
@@ -493,6 +582,7 @@ class TradingBot:
             return
         try:
             rec = await self._recommendation.generate()
+            await beat(self._engine, RECOMMENDATION, {"symbol": rec.get("symbol")})
             logger.info(
                 "Daily recommendation ready: %s (conviction %.2f)",
                 rec.get("symbol"),
@@ -536,9 +626,22 @@ class TradingBot:
                         market="stocks",
                     )
         except Exception as exc:  # noqa: BLE001 — advisory; never break the bot
-            logger.warning("Daily recommendation generation failed: %s", exc)
+            logger.warning("Daily recommendation generation failed: %r", exc)
+            if not is_retry and self.scheduler.running:
+                from apscheduler.triggers.date import DateTrigger
+
+                self.scheduler.add_job(
+                    self.recommend,
+                    DateTrigger(run_date=datetime.now(UTC) + _RECOMMEND_RETRY_AFTER),
+                    kwargs={"is_retry": True},
+                    id="daily_recommendation_retry",
+                    replace_existing=True,
+                    misfire_grace_time=900,
+                )
+                logger.info("Daily recommendation: retrying in %s", _RECOMMEND_RETRY_AFTER)
+                return
             if self._alerts is not None:
-                await self._alerts.notify("recommendation.failed", str(exc)[:300], market="stocks")
+                await self._alerts.notify("recommendation.failed", repr(exc)[:300], market="stocks")
 
     def _get_cycle_service(self) -> TradingCycleService:
         _, _, _, cs = self._require_initialized()
@@ -547,10 +650,7 @@ class TradingBot:
     async def _prune_audit_log(self) -> None:
         """Delete ``web_actions`` rows older than the retention window.
 
-        A retention of ``0`` disables the prune. Nothing calls this yet, so
-        ``WEB_AUDIT_RETENTION_DAYS`` is not enforced; wiring it into
-        ``end_of_day`` is an operator decision (the first run deletes the
-        whole backlog past the window).
+        Run by ``end_of_day``. A retention of ``0`` disables the prune.
         """
         retention = int(getattr(self.settings.web, "audit_retention_days", 0) or 0)
         if retention <= 0 or self._bundle is None:
@@ -562,7 +662,7 @@ class TradingBot:
             if deleted:
                 logger.info("Pruned %d web_actions row(s) older than %d days", deleted, retention)
         except Exception as exc:  # noqa: BLE001
-            logger.warning("web_actions prune failed: %s", exc)
+            logger.warning("web_actions prune failed: %r", exc)
 
     # ── PID Lock ─────────────────────────────────────────────────
 
@@ -633,7 +733,7 @@ class TradingBot:
             try:
                 await self._stocks_news.close()
             except Exception as exc:  # noqa: BLE001
-                logger.debug("Stock news collector close failed: %s", exc)
+                logger.debug("Stock news collector close failed: %r", exc)
         await self._broker_client.disconnect()
         self._release_lock()
         await self._release_trading_lock()
@@ -732,7 +832,7 @@ class TradingBot:
             if await is_halted(self._engine):
                 return None, "Observation only — kill-switch engaged"
         except Exception as exc:  # noqa: BLE001
-            logger.debug("reactor entry halt check failed: %s", exc)
+            logger.debug("reactor entry halt check failed: %r", exc)
             return None, "Observation only — halt state unknown"
 
         # Only trade a live session — the reactor polls around the clock.
@@ -741,7 +841,7 @@ class TradingBot:
             if not getattr(clock, "is_open", False):
                 return None, "Observation only — market closed"
         except Exception as exc:  # noqa: BLE001
-            logger.debug("reactor entry market-clock check failed: %s", exc)
+            logger.debug("reactor entry market-clock check failed: %r", exc)
             return None, "Observation only — market state unknown"
 
         # The same entry gates the scheduled cycle applies, which this path
@@ -777,7 +877,7 @@ class TradingBot:
                 positions=positions,
             )
         except Exception as exc:  # noqa: BLE001
-            logger.error("reactor entry execution failed for %s: %s", event.symbol, exc)
+            logger.error("reactor entry execution failed for %s: %r", event.symbol, exc)
             return None, "Entry attempt errored — see logs"
 
         status = str(result.get("status", ""))
@@ -878,7 +978,7 @@ class TradingBot:
                         [d.get("date", d) if isinstance(d, dict) else d for d in next_days],
                     )
             except Exception as e:
-                logger.debug("Could not fetch market calendar: %s", e)
+                logger.debug("Could not fetch market calendar: %r", e)
 
             # Refresh halal stock cache
             await screener.ensure_cache()
@@ -888,11 +988,11 @@ class TradingBot:
 
             logger.info("Pre-market routine complete")
         except Exception as e:
-            logger.error("Pre-market routine failed: %s", e)
+            logger.error("Pre-market routine failed: %r", e)
             if self._alerts is not None:
                 await self._alerts.notify(
                     "stock.pre_market.failed",
-                    f"{type(e).__name__}: {e}",
+                    repr(e),
                     market="stocks",
                     severity="error",
                 )
@@ -912,7 +1012,7 @@ class TradingBot:
                     logger.info("Consecutive stock losses detected — triggering self-review")
                     await self._self_review.review(lookback_days=1)
             except Exception as exc:  # noqa: BLE001
-                logger.debug("Stocks self-review trigger check failed: %s", exc)
+                logger.debug("Stocks self-review trigger check failed: %r", exc)
 
         await cycle_service.run_cycle()
         # The cycle's latest risk read rides along with its heartbeat: that is
@@ -920,13 +1020,14 @@ class TradingBot:
         risk = getattr(cycle_service, "last_risk_snapshot", None)
         await beat(self._engine, STOCK_CYCLE, {"risk": risk} if risk else None)
 
-    async def sync_broker_ledger(self) -> None:
+    async def sync_broker_ledger(self, *, day: date | None = None) -> None:
         """After-close job: copy Alpaca's record into the ledger and check ours.
 
         The broker's fills and equity are the books of truth
-        (execution/ledger.py). Today's fills are reconciled against the fills
-        this bot recorded; any difference alerts, because a fill the bot does
-        not know about is a position it is not managing.
+        (execution/ledger.py). The day's fills (``day``, default today; a
+        catch-up run after a restart passes the day it missed) are reconciled
+        against the fills this bot recorded; any difference alerts, because a
+        fill the bot does not know about is a position it is not managing.
         """
         from halal_trader.execution.alpaca_rest import AlpacaRestClient
         from halal_trader.execution.ledger import reconcile_fills, sync_broker_ledger
@@ -938,7 +1039,7 @@ class TradingBot:
         try:
             client = AlpacaRestClient(alpaca.api_key, alpaca.secret_key, paper=alpaca.paper_trade)
         except ValueError as exc:
-            logger.warning("broker ledger sync skipped: %s", exc)
+            logger.warning("broker ledger sync skipped: %r", exc)
             return
         try:
             await sync_broker_ledger(self._engine, client)
@@ -953,7 +1054,7 @@ class TradingBot:
                     )
                 finally:
                     await core_client.aclose()
-            rec = await reconcile_fills(self._engine, today_eastern())
+            rec = await reconcile_fills(self._engine, day or today_eastern())
         except Exception as exc:  # noqa: BLE001 -- the job must not take the bot down
             logger.error("broker ledger sync failed: %r", exc)
             await self._alerts.notify("ledger.sync_failed", repr(exc)[:500])
@@ -971,19 +1072,21 @@ class TradingBot:
         logger.warning("broker ledger drift on %s: %s", rec.day, "; ".join(lines))
         await self._alerts.notify("ledger.fill_drift", f"{rec.day}: " + "; ".join(lines))
 
-    async def research_daily(self) -> None:
+    async def research_daily(self, *, day: date | None = None) -> None:
         """Evening job: top up bars, re-screen weekly, advance the forward books.
 
         Research only -- nothing here places an order. It runs after the
         extended session so the day's bars are final, and any failure is
-        alerted and contained.
+        alerted and contained. ``day`` defaults to today; a catch-up run after
+        a restart passes the trading day whose run was missed, so the books
+        never advance into a session that has not happened.
         """
         from halal_trader.research.daily import run_research
 
         if self._engine is None:
             return
         try:
-            run = await run_research(self._engine, self.settings, today=today_eastern())
+            run = await run_research(self._engine, self.settings, today=day or today_eastern())
         except Exception as exc:  # noqa: BLE001 -- the job must not take the bot down
             logger.error("research run failed: %r", exc)
             await self._alerts.notify("research.failed", repr(exc)[:500])
@@ -1118,9 +1221,8 @@ class TradingBot:
         """
         from halal_trader.execution.alpaca_broker import AlpacaRestBroker
 
-        accounts = [
-            ("day-trader", self.settings.alpaca.api_key, self.settings.alpaca.secret_key, True)
-        ]
+        alpaca = self.settings.alpaca
+        accounts = [("day-trader", alpaca.api_key, alpaca.secret_key, alpaca.paper_trade)]
         core = self.settings.core
         if core.alpaca_api_key and core.alpaca_secret_key:
             accounts.append(("core", core.alpaca_api_key, core.alpaca_secret_key, core.paper))
@@ -1316,7 +1418,7 @@ class TradingBot:
                             summary["llm_calls"] = int(row[0] or 0)
                             summary["llm_cost_usd"] = float(row[1] or 0.0)
                 except Exception as exc:
-                    logger.debug("Failed to enrich stocks daily summary with LLM cost: %s", exc)
+                    logger.debug("Failed to enrich stocks daily summary with LLM cost: %r", exc)
 
             # Classifier telemetry (cumulative since process start) —
             # surfaces reactor classify volume + cost so we can answer
@@ -1350,9 +1452,12 @@ class TradingBot:
                                     severity="critical",
                                 )
                     except Exception as exc:  # noqa: BLE001
-                        logger.debug("classifier telemetry roll-up failed: %s", exc)
+                        logger.debug("classifier telemetry roll-up failed: %r", exc)
 
             logger.info("Day summary: %s", summary)
+            # The flatten and the day's P&L are done: what the watchdog and a
+            # restarted bot's catch-up check for.
+            await beat(self._engine, STOCK_EOD, {"date": summary["date"]})
 
             # End-of-day self-review. Pulls
             # the day's closed round-trips, asks the LLM what patterns
@@ -1368,24 +1473,27 @@ class TradingBot:
                             "; ".join(review.observations[:3]),
                         )
                 except Exception as exc:
-                    logger.debug("Stocks self-review failed: %s", exc)
+                    logger.debug("Stocks self-review failed: %r", exc)
 
             # Send daily summary via Telegram.
             if self._notifier and self._notifier.enabled:
                 try:
                     await self._notifier.notify_daily_summary(summary or {})
                 except Exception as exc:
-                    logger.debug("Failed to send stocks daily summary: %s", exc)
+                    logger.debug("Failed to send stocks daily summary: %r", exc)
 
         except Exception as e:
-            logger.error("End of day routine failed: %s", e)
+            logger.error("End of day routine failed: %r", e)
             if self._alerts is not None:
                 await self._alerts.notify(
                     "stock.end_of_day.failed",
-                    f"{type(e).__name__}: {e}",
+                    repr(e),
                     market="stocks",
                     severity="error",
                 )
+        # Housekeeping, whatever happened above: the dashboard's mutation audit
+        # rows past WEB_AUDIT_RETENTION_DAYS.
+        await self._prune_audit_log()
 
     async def _early_close_eod(self) -> None:
         """End-of-day for early-close days (market closes at 1:00 PM ET).
@@ -1432,15 +1540,29 @@ class TradingBot:
         could trade one account at once (assessment infra-tooling#8). The
         database is the one thing every copy shares. Session-level advisory
         locks die with the connection, so a crashed bot cannot leave it stuck.
+
+        The connection is AUTOCOMMIT. A plain connection auto-begins a
+        transaction on its first statement, and this one is never committed:
+        the bot held a transaction open for its whole life (seen idle in
+        transaction for 10 h), which pins the database's xmin horizon so
+        vacuum reclaims nothing anywhere. A session-level advisory lock does
+        not need a transaction; it lives as long as the session.
         """
         from sqlalchemy import text
 
         if self._engine is None:
             return
         conn = await self._engine.connect()
-        got = (
-            await conn.execute(text("SELECT pg_try_advisory_lock(:k)"), {"k": _TRADING_LOCK_KEY})
-        ).scalar()
+        try:
+            conn = await conn.execution_options(isolation_level="AUTOCOMMIT")
+            got = (
+                await conn.execute(
+                    text("SELECT pg_try_advisory_lock(:k)"), {"k": _TRADING_LOCK_KEY}
+                )
+            ).scalar()
+        except BaseException:
+            await conn.close()
+            raise
         if not got:
             await conn.close()
             raise RuntimeError(
@@ -1449,6 +1571,67 @@ class TradingBot:
             )
         self._trading_lock_conn = conn
         logger.info("Acquired the database trading lock")
+
+    async def _holds_trading_lock(self) -> bool:
+        """Does this process's lock session still exist and still hold the lock?
+
+        False on any error: a dropped connection (a Postgres restart, a
+        network cut) took the session -- and with it the lock -- away.
+        """
+        from sqlalchemy import text
+
+        conn = getattr(self, "_trading_lock_conn", None)
+        if conn is None:
+            return False
+        try:
+            held = (
+                await conn.execute(
+                    text(
+                        "SELECT EXISTS (SELECT 1 FROM pg_locks WHERE locktype = 'advisory' "
+                        "AND granted AND pid = pg_backend_pid() "
+                        "AND ((classid::bigint << 32) | objid::bigint) = :k)"
+                    ),
+                    {"k": _TRADING_LOCK_KEY},
+                )
+            ).scalar()
+        except Exception as exc:  # noqa: BLE001 -- any failure means "not proven held"
+            logger.warning("trading lock check failed: %r", exc)
+            return False
+        return bool(held)
+
+    async def _ensure_trading_lock(self) -> None:
+        """Keep the single-instance guarantee from lapsing silently.
+
+        Called from the run loop. If the lock's session is gone, take the
+        lock again on a fresh connection; if that fails -- another bot took
+        it meanwhile, or the database is still down -- raise, so the process
+        exits and docker restarts it into the normal startup path, which
+        refuses to run beside another bot.
+        """
+        if self._engine is None or await self._holds_trading_lock():
+            return
+        logger.error("the database trading lock was lost -- re-acquiring it")
+        stale = getattr(self, "_trading_lock_conn", None)
+        self._trading_lock_conn = None
+        if stale is not None:
+            try:
+                await stale.invalidate()
+            except Exception as exc:  # noqa: BLE001 -- it is already broken
+                logger.debug("dropping the lost lock connection failed: %r", exc)
+        try:
+            await self._acquire_trading_lock()
+        except Exception as exc:
+            try:
+                await self._alerts.notify(
+                    "stock.trading_lock_lost",
+                    f"The stock bot lost its database trading lock and could not take it back "
+                    f"({exc!r}); it is exiting so docker restarts it.",
+                    severity="critical",
+                )
+            except Exception as alert_err:  # noqa: BLE001
+                logger.warning("lock-loss alert failed: %r", alert_err)
+            raise RuntimeError(f"trading lock lost and not re-acquired: {exc!r}") from exc
+        logger.warning("re-acquired the database trading lock")
 
     async def _release_trading_lock(self) -> None:
         conn = getattr(self, "_trading_lock_conn", None)
@@ -1465,6 +1648,66 @@ class TradingBot:
         except Exception as exc:  # noqa: BLE001 -- drop the session; that frees the lock too
             logger.debug("trading lock release failed (%r); invalidating the connection", exc)
             await conn.invalidate()
+
+    async def _core_due_today(self, today: date) -> bool:
+        """Is the core enabled, keyed, and without a run (or an order) today?"""
+        from sqlalchemy import text
+
+        core = self.settings.core
+        if self._engine is None or not (
+            core.enabled and core.alpaca_api_key and core.alpaca_secret_key
+        ):
+            return False
+        async with self._engine.connect() as conn:
+            ran = (
+                await conn.execute(
+                    text(
+                        "SELECT EXISTS (SELECT 1 FROM core_runs WHERE run_on = :d AND executed) "
+                        "OR EXISTS (SELECT 1 FROM core_orders WHERE "
+                        "(submitted_at AT TIME ZONE 'America/New_York')::date = :d)"
+                    ),
+                    {"d": today},
+                )
+            ).scalar()
+        return not ran
+
+    async def _catch_up_missed_jobs(self, now: datetime | None = None) -> list[tuple[str, date]]:
+        """Queue every daily job this (re)start missed and may still run (plan_catch_up).
+
+        Each runs as a one-off scheduler job, so startup is not held up and
+        the scheduler's one-instance rule still applies. Returns the plan.
+        """
+        if self._engine is None:
+            return []
+        now = now or datetime.now(UTC)
+        try:
+            beats = await read_beats(self._engine)
+            core_due = await self._core_due_today(now.astimezone(MARKET_TZ).date())
+        except Exception as exc:  # noqa: BLE001 -- the scheduled runs still happen
+            logger.warning("missed-job catch-up skipped: %r", exc)
+            return []
+        plan = plan_catch_up(now, beats, core_due=core_due)
+        for job, day in plan:
+            func = getattr(self, job)
+            kwargs: dict[str, Any] = (
+                {"day": day} if job in ("sync_broker_ledger", "research_daily") else {}
+            )
+            self.scheduler.add_job(
+                func,
+                "date",
+                run_date=now,
+                kwargs=kwargs,
+                id=f"catch_up_{job}",
+                replace_existing=True,
+                misfire_grace_time=600,
+            )
+            logger.warning(
+                "catching up %s for %s (its scheduled run was missed)",
+                job,
+                day,
+                extra={"event": events.JOB_CATCH_UP, "job": job},
+            )
+        return plan
 
     async def run_once(self) -> None:
         """One pre-market check and one trading cycle, then exit.
@@ -1742,16 +1985,22 @@ class TradingBot:
             try:
                 await self.pre_market()
             except Exception as e:
-                logger.warning("Startup pre-market failed (will retry at scheduled time): %s", e)
+                logger.warning("Startup pre-market failed (will retry at scheduled time): %r", e)
+
+            # Then any daily job this (re)start skipped and may still run.
+            await self._catch_up_missed_jobs()
 
             # Keep running until interrupted
             # The run loop doubles as the process heartbeat: every 60 s it
             # records that the bot is alive, so a hung or dead process shows
-            # up as a stale stock.process row in /api/health/bot.
+            # up as a stale stock.process row in /api/health/bot. It also
+            # checks the single-instance lock is still held (raises if it was
+            # lost and cannot be taken back, so docker restarts the bot).
             loop = asyncio.get_running_loop()
             last_beat = float("-inf")
             while self._running:
                 if loop.time() - last_beat >= 60:
+                    await self._ensure_trading_lock()
                     await beat(self._engine, STOCK_PROCESS)
                     last_beat = loop.time()
                 await asyncio.sleep(1)

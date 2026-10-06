@@ -120,6 +120,10 @@ class HalalSettings(BaseSettings):
     # Mid-cycle refresh threshold — if the cache is older than this when
     # the cycle starts, refresh it inline before screening any symbols.
     midcycle_refresh_hours: int = Field(default=4)
+    # The day-trader's and the reactor's universe (and the shadow's, which
+    # reads the same cache): this many of the largest names the strict
+    # in-house screen passes, by market cap.
+    universe_size: int = Field(default=20, ge=1, le=500)
 
 
 # ── LLM (GLM-5.2 only) ─────────────────────────────────────────
@@ -272,14 +276,15 @@ class StockSettings(BaseSettings):
     # News-momentum reactor: entry execution ("fast in").
     # When enabled, a high-confidence scored catalyst places a real
     # paper BUY — gated on news+price-up confluence — instead of just
-    # logging/notifying. Enabled by default on paper; flip to False to
-    # return the reactor to observation-only.
-    reactor_entries_enabled: bool = Field(default=True)
+    # logging/notifying. Off by default since the day-trader's retirement
+    # (2026-10-04): the reactor still scores and records news.
+    reactor_entries_enabled: bool = Field(default=False)
     # The LLM day-trader's 15-minute cycles. False retires the strategy without
     # the kill-switch (which stops every strategy, the core included): no cycle
     # is scheduled, while the position monitor still manages open positions'
-    # exits and the end-of-day flatten still runs.
-    day_trader_enabled: bool = Field(default=True)
+    # exits and the end-of-day flatten still runs. Off by default: retired
+    # 2026-10-04 (+2.5%/yr against SPUS's 18.6%).
+    day_trader_enabled: bool = Field(default=False)
     # Reactor entries are reactive / higher-variance than scheduled
     # cycle entries, so they're sized at a FRACTION of the normal
     # per-position cap (0.5 = half of ``max_position_pct``) to cap
@@ -363,7 +368,9 @@ class LogSettings(BaseSettings):
     model_config = SettingsConfigDict(**_BASE_CONFIG, env_prefix="LOG_")
     level: str = Field(default="INFO")
     dir: Path = Field(default=Path("logs"))
-    file_level: str = Field(default="DEBUG")
+    # INFO: the bot at DEBUG rotated its 10 MB log ~5x a session, pushing
+    # the last useful lines out of reach. LOG_FILE_LEVEL=DEBUG to dig.
+    file_level: str = Field(default="INFO")
     max_bytes: int = Field(default=10_485_760)
     backup_count: int = Field(default=5)
 
@@ -386,9 +393,15 @@ class WebSettings(BaseSettings):
     # Forced confirmation for destructive ops can be turned off in tests
     # so the runner doesn't have to forge headers — never disable in prod.
     require_confirmation: bool = Field(default=True)
-    # Days to keep mutation-audit rows in ``web_actions``. The daily
-    # bot-end hook prunes anything older. 0 disables the prune.
+    # Days to keep mutation-audit rows in ``web_actions``. The bot's
+    # end-of-day job prunes anything older. 0 disables the prune.
     audit_retention_days: int = Field(default=90)
+    # How often the web's watchdog (web/watchdog.py) checks every process's
+    # and daily job's heartbeat and alerts on Telegram. 0 disables it.
+    watchdog_interval_seconds: int = Field(default=300, ge=0)
+    # Allow the Vite dev server's origins (localhost:5173) through CORS.
+    # Only for `npm run dev` against a local API; the built SPA is same-origin.
+    cors_dev_origins: bool = Field(default=False)
 
 
 # ── Top-level Settings ─────────────────────────────────────────

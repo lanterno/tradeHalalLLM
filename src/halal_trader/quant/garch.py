@@ -182,7 +182,7 @@ def garch_fhs_path_extremes(
         )
         sims = fc.simulations.values  # (1, n_sims, horizon), log-returns ×100
     except Exception as exc:  # noqa: BLE001 — fits explode on gappy series
-        logger.debug("GARCH fit/forecast failed: %s", exc)
+        logger.debug("GARCH fit/forecast failed: %r", exc)
         return None
     if sims is None:
         return None

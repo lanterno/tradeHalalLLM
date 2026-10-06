@@ -182,7 +182,7 @@ def load_artifact(path: Path = DEFAULT_ARTIFACT_PATH) -> CalibrationArtifact | N
     except FileNotFoundError:
         return None
     except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
-        logger.warning("band calibration at %s unreadable: %s", path, exc)
+        logger.warning("band calibration at %s unreadable: %r", path, exc)
         return None
 
 

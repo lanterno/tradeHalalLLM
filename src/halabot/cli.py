@@ -78,6 +78,7 @@ async def _run_shadow(
     from halabot.platform.config import get_settings as get_hb_settings
     from halabot.platform.supervisor import Supervisor, heartbeat_loop
     from halal_trader.config import get_settings
+    from halal_trader.core.heartbeat import SHADOW_PROCESS, beat_forever
     from halal_trader.db.models import init_db
     from halal_trader.db.repository import Repository
     from halal_trader.mcp.client import AlpacaMCPClient
@@ -207,6 +208,9 @@ async def _run_shadow(
             # passage of time even with no new data; supervised so a transient
             # publish failure restarts it rather than silently stopping decay.
             heartbeat.spawn("heartbeat", lambda: heartbeat_loop(engine.bus, clock, interval))
+            # Cross-process liveness (shadow.process): the web's watchdog and the
+            # container healthcheck read it.
+            heartbeat.spawn("process-beat", lambda: beat_forever(ht_engine, SHADOW_PROCESS))
             click.echo(f"shadow running (poll/heartbeat every {interval:.0f}s) — Ctrl-C to stop")
             try:
                 stop = asyncio.Event()

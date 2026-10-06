@@ -169,8 +169,15 @@ def test_bot_liveness_verdict(beats: dict, cycles_due: bool, alive: bool) -> Non
 
 
 def test_a_hung_cycle_during_market_hours_is_a_dead_bot(
-    client: TestClient, database_url: str, market_open: dict[str, bool]
+    client: TestClient,
+    database_url: str,
+    market_open: dict[str, bool],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    import halal_trader.config as config
+
+    monkeypatch.setenv("DAY_TRADER_ENABLED", "true")  # retired by default since 2026-10
+    monkeypatch.setattr(config, "_settings", None)
     market_open["open"] = True
     _beat_now(database_url, STOCK_PROCESS)  # the process is turning...
     _beat_now(database_url, STOCK_CYCLE, minutes_ago=60)  # ...but no cycle for an hour
@@ -182,3 +189,19 @@ def test_a_hung_cycle_during_market_hours_is_a_dead_bot(
 
     _beat_now(database_url, STOCK_CYCLE)
     assert client.get("/api/health/bot").status_code == 200
+
+
+def test_a_retired_day_traders_cycle_reports_disabled_not_stale(
+    client: TestClient, database_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import halal_trader.config as config
+
+    monkeypatch.setenv("DAY_TRADER_ENABLED", "false")
+    monkeypatch.setattr(config, "_settings", None)
+    _beat_now(database_url, STOCK_PROCESS)
+    _beat_now(database_url, STOCK_CYCLE, minutes_ago=60 * 24 * 4)  # retired days ago
+
+    cycle = client.get("/api/health").json()["bot"][STOCK_CYCLE]
+
+    assert cycle["status"] == "disabled"
+    assert cycle["stale"] is False

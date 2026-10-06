@@ -109,7 +109,7 @@ class StockNewsCollector:
             try:
                 out.extend(await self._fetch_one(sym))
             except Exception as exc:  # noqa: BLE001
-                logger.debug("Yahoo news fetch failed for %s: %s", sym, exc)
+                logger.debug("Yahoo news fetch failed for %s: %r", sym, exc)
         # Newest first so the LLM prompt's ``limit=6`` truncates the
         # oldest. ``published_at`` is an ISO 8601 string from Yahoo;
         # lexical sort is correct.
@@ -138,7 +138,7 @@ class StockNewsCollector:
             r.raise_for_status()
             data = r.json()
         except Exception as exc:  # noqa: BLE001
-            logger.debug("Yahoo news request failed for %s: %s", sym, exc)
+            logger.debug("Yahoo news request failed for %s: %r", sym, exc)
             self._consecutive_failures += 1
             if not self._circuit_open and self._consecutive_failures >= _BREAKER_THRESHOLD:
                 self._circuit_open = True
@@ -207,7 +207,7 @@ class FinnhubNewsCollector:
             try:
                 out.extend(await self._fetch_one(sym))
             except Exception as exc:  # noqa: BLE001
-                logger.debug("Finnhub news fetch failed for %s: %s", sym, exc)
+                logger.debug("Finnhub news fetch failed for %s: %r", sym, exc)
         out.sort(key=lambda e: e.published_at, reverse=True)
         return out
 
@@ -236,7 +236,7 @@ class FinnhubNewsCollector:
             r.raise_for_status()
             data = r.json()
         except Exception as exc:  # noqa: BLE001
-            logger.debug("Finnhub news request failed for %s: %s", sym, exc)
+            logger.debug("Finnhub news request failed for %s: %r", sym, exc)
             self._consecutive_failures += 1
             if not self._circuit_open and self._consecutive_failures >= _BREAKER_THRESHOLD:
                 self._circuit_open = True

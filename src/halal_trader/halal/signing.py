@@ -150,7 +150,7 @@ def verify_receipt(signed: SignedReceipt) -> bool:
         pub.verify(sig, canonical_payload_bytes(signed.receipt.payload))
         return True
     except Exception as exc:  # noqa: BLE001
-        logger.debug("verify_receipt failed: %s", exc)
+        logger.debug("verify_receipt failed: %r", exc)
         return False
 
 

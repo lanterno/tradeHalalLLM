@@ -77,7 +77,7 @@ class TelegramNotifier:
                 return False
             return False
         except Exception as e:
-            logger.warning("Telegram send failed: %s", e)
+            logger.warning("Telegram send failed: %r", e)
             return False
 
     async def notify_trade(

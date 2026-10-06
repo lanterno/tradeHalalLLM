@@ -18,7 +18,7 @@ async def _bot_liveness(ctx: DashboardContext) -> tuple[bool, dict[str, Any] | N
     The web runs in its own container, so this is the only honest answer it
     can give. ``(False, None)`` when the heartbeats cannot be read at all.
     """
-    from halal_trader.core.heartbeat import bot_liveness, read_beats
+    from halal_trader.core.heartbeat import assess, bot_liveness, describe, read_beats
     from halal_trader.market_hours import is_market_open_local, now_eastern
 
     try:
@@ -26,25 +26,16 @@ async def _bot_liveness(ctx: DashboardContext) -> tuple[bool, dict[str, Any] | N
     except Exception:  # noqa: BLE001 -- health must answer even when the DB can't
         return False, None
     now = datetime.now(UTC)
-    components = {
-        name: {
-            "beat_at": b.beat_at.isoformat(),
-            "age_seconds": round(b.age(now).total_seconds(), 1),
-            "stale": b.is_stale(now),
-            "detail": b.detail,
-        }
-        for name, b in beats.items()
-    }
     # Cycles are due once the session has run long enough for one to finish
     # (the first runs at 09:30 ET; allow until 10:00 before judging).
-    # A retired day-trader (DAY_TRADER_ENABLED=false) runs no cycles, so none is due.
+    # A retired day-trader (DAY_TRADER_ENABLED=false) runs no cycles, so none
+    # is due, and its stock.cycle row reports status "disabled", never stale.
     from halal_trader.config import get_settings
 
-    cycles_due = (
-        get_settings().stocks.day_trader_enabled
-        and is_market_open_local()
-        and now_eastern().time() >= time(10, 0)
-    )
+    day_trader = get_settings().stocks.day_trader_enabled
+    cycles_due = day_trader and is_market_open_local() and now_eastern().time() >= time(10, 0)
+    statuses = assess(beats, now=now, cycles_due=cycles_due, day_trader_enabled=day_trader)
+    components: dict[str, Any] = describe(beats, statuses, now=now)
     alive, reason = bot_liveness(beats, now=now, cycles_due=cycles_due)
     components["_verdict"] = {"alive": alive, "reason": reason, "cycles_due": cycles_due}
     return alive, components

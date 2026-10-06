@@ -172,7 +172,7 @@ class Tracer:
             try:
                 exp.export(span)
             except Exception as exc:  # noqa: BLE001
-                logger.warning("span exporter failed: %s", exc)
+                logger.warning("span exporter failed: %r", exc)
 
     @contextmanager
     def span(self, name: str, **attrs: Any) -> Iterator[Span]:

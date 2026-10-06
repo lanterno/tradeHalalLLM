@@ -14,7 +14,7 @@ from halal_trader.trading.scheduler import TradingBot
 def _bot(core_keys: bool) -> TradingBot:
     bot = TradingBot.__new__(TradingBot)
     bot.settings = SimpleNamespace(
-        alpaca=SimpleNamespace(api_key="dk", secret_key="ds"),
+        alpaca=SimpleNamespace(api_key="dk", secret_key="ds", paper_trade=True),
         core=SimpleNamespace(
             alpaca_api_key="ck" if core_keys else "",
             alpaca_secret_key="cs" if core_keys else "",

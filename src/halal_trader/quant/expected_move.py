@@ -221,7 +221,7 @@ async def fetch_expected_move(
             strike_price_lte=spot * 1.1,
         )
     except Exception as exc:  # noqa: BLE001 — advisory; options outage is non-fatal
-        logger.debug("expected move: chain fetch failed for %s: %s", symbol, exc)
+        logger.debug("expected move: chain fetch failed for %s: %r", symbol, exc)
         return None
     snaps = chain.get("snapshots", {}) if isinstance(chain, dict) else {}
     if not isinstance(snaps, dict) or not snaps:

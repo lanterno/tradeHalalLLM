@@ -130,3 +130,19 @@ def test_metrics_endpoint_returns_text(client):
     assert r.headers["content-type"].startswith("text/plain")
     assert "halal_trader_bot_running 1" in r.text
     assert "halal_trader_llm_cost_today_usd 0.42" in r.text
+
+
+async def test_bot_running_comes_from_the_heartbeat(engine):
+    from datetime import UTC, datetime, timedelta
+
+    from halal_trader.core.heartbeat import STOCK_PROCESS, beat
+    from halal_trader.web.prometheus import bot_alive
+
+    assert await bot_alive(engine) is False  # the web never runs the bot in-process
+    await beat(engine, STOCK_PROCESS)
+    assert await bot_alive(engine) is True
+    await beat(engine, STOCK_PROCESS, now=datetime.now(UTC) - timedelta(minutes=10))
+    assert await bot_alive(engine) is False
+
+    snaps = collect_default_snapshots(RuntimeView(bot_running=False), bot_running=True)
+    assert next(s for s in snaps if s.name == "halal_trader_bot_running").value == 1.0

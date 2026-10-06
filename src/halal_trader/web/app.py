@@ -11,6 +11,8 @@ Each route takes its dependencies via ``Depends(get_ctx)`` (see
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
@@ -18,7 +20,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from halal_trader.config import get_settings
+from sqlalchemy.ext.asyncio import AsyncEngine
+
+from halal_trader.config import Settings, get_settings
 from halal_trader.core.context import DashboardContext, RuntimeView
 from halal_trader.core.event_bus import EventBus
 from halal_trader.db.models import init_db
@@ -46,6 +50,33 @@ def _resolve_static(dist_root: Path, full_path: str) -> Path | None:
     return None
 
 
+def _start_watchdog(
+    engine: AsyncEngine, settings: Settings
+) -> tuple[asyncio.Task[None] | None, Any]:
+    """Spawn the fleet watchdog (web/watchdog.py) unless it is switched off."""
+    interval = settings.web.watchdog_interval_seconds
+    if interval <= 0:
+        return None, None
+    from halal_trader.notifications.telegram import TelegramNotifier
+    from halal_trader.web import watchdog
+
+    notifier = TelegramNotifier(
+        bot_token=settings.telegram.bot_token, chat_id=settings.telegram.chat_id
+    )
+    if not notifier.enabled:
+        logger.warning("watchdog: Telegram is not configured, so it can only log")
+    task = asyncio.create_task(
+        watchdog.run(
+            engine,
+            notifier,
+            day_trader_enabled=settings.stocks.day_trader_enabled,
+            interval_s=float(interval),
+        ),
+        name="fleet-watchdog",
+    )
+    return task, notifier
+
+
 def create_app() -> Any:
     """Create and configure the FastAPI application."""
     from fastapi import FastAPI, Request
@@ -71,17 +102,37 @@ def create_app() -> Any:
             runtime=runtime,
         )
         _app.state.ctx = ctx
-        yield
-        await engine.dispose()
+        watchdog_task, notifier = _start_watchdog(engine, settings)
+        try:
+            yield
+        finally:
+            if watchdog_task is not None:
+                watchdog_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await watchdog_task
+            if notifier is not None:
+                await notifier.close()
+            await engine.dispose()
 
     app = FastAPI(title="Halal Trader Dashboard", version="0.3.0", lifespan=lifespan)
 
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+    # The built SPA is served from this origin and needs no CORS. The Vite
+    # dev server (`npm run dev`, :5173) does; WEB_CORS_DEV_ORIGINS opens it on
+    # a developer's machine, never by default -- any page on :5173 could
+    # otherwise read the API cross-origin.
+    if get_settings().web.cors_dev_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
+
+    # The container healthcheck and the home stack's probe poll /api/health*
+    # constantly; their access-log lines drowned everything else.
+    from halal_trader.logging import install_health_access_filter
+
+    install_health_access_filter()
 
     # Middleware execution is LIFO — the LAST registered runs FIRST
     # on inbound. To get the documented flow

@@ -16,6 +16,51 @@
 # Optional Prometheus + Grafana sidecars are commented out — uncomment
 # when an operator actually wants the dashboards. They scrape the
 # /metrics endpoint exposed by the web service.
+#
+# ── Secrets: one .env for the operator, only what each process reads ──
+# Every app service loads ../.env (env_file), and its `environment:` --
+# which wins over env_file -- blanks the secrets that process never reads,
+# so a compromise of the dashboard or the shadow does not hand over the
+# core account's broker keys. Which process reads what (checked 2026-10-06):
+#
+#   trader-stocks  everything except WEB_API_TOKEN
+#   trader-shadow  ALPACA_* (bars via the MCP server), GLM_*, FINNHUB, FRED
+#   trader-web     WEB_API_TOKEN, TELEGRAM_* (the watchdog), ALPACA_* and
+#                  GLM_* (the dashboard's "generate recommendation" button)
+#   trader-migrate nothing but the database
+#
+# A new secret a process does not need goes into its blank list here.
+#
+# POSTGRES_PASSWORD: read from the shell or from the repo's .env -- the
+# justfile passes `--env-file .env` -- with the dev default as a fallback.
+# DATABASE_URL is built from it for every container, so it is the one value
+# to set. Changing it on an existing volume also needs ALTER USER (Postgres
+# only reads POSTGRES_PASSWORD when it creates the database).
+
+x-database-url: &database-url
+  # Inside the compose network the services reach Postgres at its service
+  # name and internal port, whatever the host's own DATABASE_URL says.
+  DATABASE_URL: postgresql+asyncpg://trader:${POSTGRES_PASSWORD:-trader-dev-only}@postgres:5432/halal_trader
+  POSTGRES_PASSWORD: ""
+
+# Read by nothing at all: the crypto-era and never-built integrations' keys.
+x-unused-keys: &unused-keys
+  BINANCE_API_KEY: ""
+  BINANCE_SECRET_KEY: ""
+  COINGECKO_API_KEY: ""
+  CRYPTOPANIC_API_KEY: ""
+  ETHERSCAN_API_KEY: ""
+  REDDIT_CLIENT_ID: ""
+  REDDIT_CLIENT_SECRET: ""
+  SLACK_WEBHOOK_URL: ""
+  DISCORD_WEBHOOK_URL: ""
+
+# The core portfolio's account (it trades real money once CORE_PAPER=false)
+# and the live-mode arming token: only trader-stocks reads them.
+x-core-keys: &no-core-keys
+  CORE_ALPACA_API_KEY: ""
+  CORE_ALPACA_SECRET_KEY: ""
+  LIVE_MODE_CONFIRMATION: ""
 
 services:
   postgres:
@@ -25,7 +70,8 @@ services:
     environment:
       POSTGRES_DB: halal_trader
       POSTGRES_USER: trader
-      # Override in .env for prod; sane default for local dev.
+      # Set POSTGRES_PASSWORD in .env (see the secrets note above); the
+      # default is for a fresh local checkout only.
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-trader-dev-only}
     ports:
       - "5433:5432"
@@ -50,7 +96,17 @@ services:
     env_file:
       - ../.env
     environment:
-      DATABASE_URL: postgresql+asyncpg://trader:${POSTGRES_PASSWORD:-trader-dev-only}@postgres:5432/halal_trader
+      <<: [*database-url, *unused-keys, *no-core-keys]
+      ALPACA_API_KEY: ""
+      ALPACA_SECRET_KEY: ""
+      GLM_API_KEY: ""
+      GLM_FALLBACK_API_KEY: ""
+      FINNHUB_API_KEY: ""
+      FRED_API_KEY: ""
+      ZOYA_API_KEY: ""
+      TELEGRAM_BOT_TOKEN: ""
+      TELEGRAM_CHAT_ID: ""
+      WEB_API_TOKEN: ""
     command: ["halal-trader", "db", "migrate"]
     depends_on:
       postgres:
@@ -62,10 +118,9 @@ services:
     restart: unless-stopped
     env_file:
       - ../.env
-    # Override the host's DATABASE_URL — inside the compose network the
-    # bot reaches Postgres at the service hostname on its internal port.
     environment:
-      DATABASE_URL: postgresql+asyncpg://trader:${POSTGRES_PASSWORD:-trader-dev-only}@postgres:5432/halal_trader
+      <<: [*database-url, *unused-keys]
+      WEB_API_TOKEN: ""
     volumes:
       - trader-data:/app/data
       - trader-logs:/app/logs
@@ -76,6 +131,15 @@ services:
     # monitor/reactor and close the broker before docker sends SIGKILL.
     init: true
     stop_grace_period: 30s
+    # "unhealthy" in `docker ps` when the run loop stops beating (it beats
+    # every 60 s), not only when the process exits. Docker does not restart
+    # on it; the web's watchdog is what alerts.
+    healthcheck:
+      test: ["CMD", "python", "-m", "halal_trader.core.healthcheck", "stock.process", "180"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 180s
     depends_on:
       trader-migrate:
         condition: service_completed_successfully
@@ -92,7 +156,12 @@ services:
     env_file:
       - ../.env
     environment:
-      DATABASE_URL: postgresql+asyncpg://trader:${POSTGRES_PASSWORD:-trader-dev-only}@postgres:5432/halal_trader
+      <<: [*database-url, *unused-keys, *no-core-keys]
+      WEB_API_TOKEN: ""
+      TELEGRAM_BOT_TOKEN: ""
+      TELEGRAM_CHAT_ID: ""
+      # Only `--rescreen-compliance` reads it, and the command below omits it.
+      ZOYA_API_KEY: ""
     volumes:
       - trader-data:/app/data
       - trader-logs:/app/logs
@@ -103,6 +172,13 @@ services:
     # monitor/reactor and close the broker before docker sends SIGKILL.
     init: true
     stop_grace_period: 30s
+    # The shadow beats shadow.process every 60 s from its event loop.
+    healthcheck:
+      test: ["CMD", "python", "-m", "halal_trader.core.healthcheck", "shadow.process", "180"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 300s
     depends_on:
       trader-migrate:
         condition: service_completed_successfully
@@ -114,7 +190,10 @@ services:
     env_file:
       - ../.env
     environment:
-      DATABASE_URL: postgresql+asyncpg://trader:${POSTGRES_PASSWORD:-trader-dev-only}@postgres:5432/halal_trader
+      <<: [*database-url, *unused-keys, *no-core-keys]
+      FINNHUB_API_KEY: ""
+      FRED_API_KEY: ""
+      ZOYA_API_KEY: ""
     ports:
       - "8082:8082"
     volumes:
