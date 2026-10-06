@@ -174,7 +174,9 @@ class ShadowPolicyRunner:
         if not proposals:
             return proposals
         if self._session is not None and not self._session(now):
-            logger.info("SHADOW holding %d proposal(s): market closed", len(proposals))
+            # DEBUG: overnight news re-proposes the same held trades on every
+            # belief update; at INFO that is a line per headline until the open.
+            logger.debug("SHADOW holding %d proposal(s): market closed", len(proposals))
             return []
         stale = {p.asset for p in proposals if not self._price_is_fresh(p.asset, now)}
         if not stale:
