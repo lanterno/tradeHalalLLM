@@ -314,13 +314,15 @@ async def _backup_health(engine: AsyncEngine) -> list[str]:
 
 
 async def _validate_screen(engine: AsyncEngine, today: date) -> list[str]:
-    """After a weekly screen: agreement with SPUS/HLAL, kept for the digest; a large
-    pass neither ETF holds is reported (under the strict option it should not happen)."""
+    """After a weekly screen: agreement with SPUS/HLAL, kept for the digest. Reported:
+    a large pass neither ETF holds (under the strict option it should not happen),
+    and any pass whose interest expense implies debt over the limit."""
     from halal_trader.compliance.validate import weekly_check
     from halal_trader.core.heartbeat import beat
 
     v = await weekly_check(engine, today)
     suspects = [x.symbol for x in v.large_halal_not_in_etfs]
+    implied = [x.symbol for x in v.implied_debt_suspects]
     await beat(
         engine,
         "screen.validation",
@@ -328,13 +330,21 @@ async def _validate_screen(engine: AsyncEngine, today: date) -> list[str]:
             "agreement": round(v.agreement, 3),
             "etf_names": v.screened_etf_names,
             "rejected_etf_names": len(v.etf_held_we_reject),
+            "rejected_by": {kind: len(items) for kind, items in v.rejected_by_kind.items()},
             "large_passes_no_etf_holds": suspects,
+            "implied_debt_suspects": implied,
             "missing_data": [x.symbol for x in v.missing_data],
         },
     )
+    errors = []
     if suspects:
-        return [f"screen: passes large names no halal ETF holds: {', '.join(suspects[:8])}"]
-    return []
+        errors.append(f"screen: passes large names no halal ETF holds: {', '.join(suspects[:8])}")
+    if implied:
+        errors.append(
+            "screen: passes whose interest expense implies debt over 30% of market cap: "
+            f"{', '.join(implied[:8])}"
+        )
+    return errors
 
 
 async def _core_holdings(engine: AsyncEngine) -> set[str]:
