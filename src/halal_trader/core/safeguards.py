@@ -5,13 +5,13 @@ the highest-impact "real money" mistake to guard against. This module
 adds a friction layer:
 
 1. ``check_live_mode_token(settings)`` — called at scheduler startup. If
-   the bot is configured for live trading (testnet/paper flag off) the
+   the bot is configured for live trading (paper flag off) the
    ``LIVE_MODE_CONFIRMATION`` env var must match
    ``"I-UNDERSTAND-REAL-MONEY-<today>"`` for today's date in UTC,
    otherwise startup raises ``LiveModeError`` with the exact token to
    set.
-2. ``LiveModeChecker.assert_safe(...)`` — called from the first cycle of
-   each market in live mode. Checks (a) account balance ≤
+2. ``LiveModeChecker.assert_safe(...)`` — called from every trading
+   cycle in live mode. Checks (a) account balance ≤
    ``max_account_balance_usd``, (b) max single-order notional ≤
    ``max_single_order_usd``, (c) ``daily_loss_limit`` ≤
    ``live_mode_max_daily_loss_pct`` (a hard floor that cannot be
@@ -66,7 +66,7 @@ def check_live_mode_token(settings: Settings, *, market: str, now: datetime | No
         f"Refusing to start the {market} bot in LIVE mode without today's "
         f"confirmation token.\n\n"
         f"Set LIVE_MODE_CONFIRMATION={expected!s} (matches today's UTC date)\n"
-        f"or set the testnet/paper flag back to true.\n\n"
+        f"or set the paper flag back to true.\n\n"
         f"Got: {actual!r}"
     )
 
@@ -100,8 +100,8 @@ class LiveModeChecker:
         self,
         *,
         account_balance: float,
-        engine: "AsyncEngine | None" = None,
-        alerts: "AlertSink | None" = None,
+        engine: AsyncEngine | None = None,
+        alerts: AlertSink | None = None,
     ) -> bool:
         """Run live-mode invariants. Returns ``True`` when safe.
 

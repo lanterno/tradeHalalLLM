@@ -1,7 +1,7 @@
 """Purification ledger repository — Sharia obligations from haram dividends.
 
-Wave D extraction. Records per-trade purification amounts owed and the
-running outstanding/paid totals the operator settles. The matching
+Records per-trade purification amounts owed and the running
+outstanding/paid totals the operator settles. The matching
 ``PurificationRepo`` Protocol lives in ``protocols.py``.
 """
 

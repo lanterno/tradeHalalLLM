@@ -1,11 +1,10 @@
-"""Base strategy — shared LLM analysis orchestration for all markets."""
+"""Base strategy — the LLM analysis call behind :class:`TradingStrategy`."""
 
 from __future__ import annotations
 
 import json
 import logging
 import time
-from abc import ABC
 from typing import Any
 
 from pydantic import ValidationError
@@ -35,11 +34,12 @@ _REPAIR_INSTRUCTION = (
 )
 
 
-class BaseStrategy(ABC):
-    """Extract the shared LLM → validate → record → return flow.
+class BaseStrategy:
+    """The LLM → validate → record → return flow.
 
-    Subclasses implement prompt building and plan validation;
-    the orchestration (timing, audit trail, error handling) lives here.
+    The subclass builds the prompts and supplies plan validation; the
+    orchestration (tool call, schema repair, decision audit row, failure
+    alerting) lives here.
     """
 
     def __init__(
@@ -61,8 +61,7 @@ class BaseStrategy(ABC):
         self._daily_return_target = daily_return_target
         self._max_simultaneous_positions = max_simultaneous_positions
         # Optional operator alerter (AlertSink) — attached by the
-        # composition root after construction (mirrors BaseLLM.attach_bus;
-        # the crypto root builds its AlertSink after the strategy).
+        # composition root after construction.
         self._alert_sink: Any | None = None
 
     def attach_alert_sink(self, sink: Any) -> None:
@@ -89,7 +88,7 @@ class BaseStrategy(ABC):
         prompt_version: str | None = None,
         tool: Any = None,
     ) -> Any:
-        """Core analysis loop shared by all strategy subclasses.
+        """Run one LLM analysis call and return the validated plan.
 
         *validate*: ``callable(raw_dict) -> plan``
         *make_empty*: ``callable(error_msg) -> empty_plan``
@@ -98,7 +97,7 @@ class BaseStrategy(ABC):
         *prompt_version*: ``"name@hash"`` short form from the prompt registry,
             persisted on the LlmDecision row so each decision is replayable
             against the exact template that produced it.
-        *tool* (Wave E): when provided AND ``llm.supports_tool_use`` is
+        *tool*: when provided AND ``llm.supports_tool_use`` is
             True, take the native tool-use path: the provider validates
             the schema before returning, schema-repair becomes a no-op,
             and output-token cost drops because the model doesn't emit
@@ -179,7 +178,7 @@ class BaseStrategy(ABC):
                 # Credit exhaustion is non-transient: without a top-up
                 # every subsequent cycle degrades to a no-action plan.
                 # AlertSink rate-limits per error_type (15-min window),
-                # so 15-min/60s cycle cadences can't spam Telegram.
+                # so the cycle cadence can't spam Telegram.
                 try:
                     await self._alert_sink.notify(
                         "llm.quota_exhausted",
@@ -270,7 +269,7 @@ class BaseStrategy(ABC):
         system_prompt: str,
         tool: Any,
     ) -> dict[str, Any]:
-        """Wave E tool-use call: invoke ``tool`` and return its args dict.
+        """Tool-use call: invoke ``tool`` and return its args dict.
 
         The provider enforces the JSONSchema before returning, so the
         result is structurally valid (Pydantic validation still runs
@@ -304,7 +303,7 @@ class BaseStrategy(ABC):
         return args
 
     def _on_llm_success(self) -> None:
-        """Hook for subclasses to react to a successful LLM call (e.g. reset counters)."""
+        """Reset the consecutive-failure counter after a successful LLM call."""
         if getattr(self, "_consecutive_failures", 0) >= _FAILURE_ALERT_THRESHOLD:
             logger.warning(
                 "strategy LLM recovered after %d consecutive failures", self._consecutive_failures
@@ -312,7 +311,7 @@ class BaseStrategy(ABC):
         self._consecutive_failures = 0
 
     def _on_llm_failure(self, error: Exception, elapsed_ms: int, prefix: str) -> None:
-        """Hook for subclasses to react to a failed LLM call (e.g. circuit breaker)."""
+        """Log a failed LLM call."""
         # The type matters: a timeout's message is empty, so `%s` alone logged nothing.
         logger.error(
             "%s analysis failed after %dms: %s: %s", prefix, elapsed_ms, type(error).__name__, error

@@ -50,8 +50,7 @@ class Trade(SQLModel, table=True):
     # Halal audit FK — links to the screening decision that gated this trade.
     halal_screening_id: int | None = Field(default=None, foreign_key="halal_screenings.id")
 
-    # SL/TP + close lifecycle — mirrors CryptoTrade so the shared
-    # monitor/analytics surface can treat both asset classes uniformly.
+    # SL/TP + close lifecycle, read by the position monitor and analytics.
     stop_loss: float | None = None
     target_price: float | None = None
 
@@ -70,13 +69,12 @@ class Trade(SQLModel, table=True):
     exit_reason: str | None = None
     closed_at: datetime | None = Field(default=None, sa_type=sa.DateTime(timezone=True))
 
-    # Paper-vs-live divergence — both sides record realized slippage
-    # (signed, in fraction of price) so the operator can sanity-check
-    # the backtester's assumptions against live fills.
+    # Realized slippage (signed, in fraction of price) so the operator can
+    # sanity-check the backtester's assumptions against fills. Only
+    # paper_slippage_pct is written today; live_slippage_pct and
+    # predicted_slippage_pct (a slippage-model forecast) have no writer.
     paper_slippage_pct: float | None = None
     live_slippage_pct: float | None = None
-    # Wave G: replay-fitted slippage prediction stamped at fill time.
-    # See CryptoTrade.predicted_slippage_pct.
     predicted_slippage_pct: float | None = None
 
 
@@ -129,7 +127,7 @@ class LlmDecision(SQLModel, table=True):
 
     # Cost / cache attribution. Lets us cap daily spend, measure cache
     # hit rate, and replay any decision against its exact prompt version.
-    prompt_version: str | None = None  # registry "name@hash", e.g. "crypto.strategy.system@abc123"
+    prompt_version: str | None = None  # registry "name@hash", e.g. "trading.strategy.system@abc123"
     input_tokens: int | None = None
     output_tokens: int | None = None
     cache_read_tokens: int | None = None
@@ -145,6 +143,9 @@ class LlmDecision(SQLModel, table=True):
 
 
 # ── Crypto Tables ──────────────────────────────────────────────
+# Crypto trading was abandoned on 2026-10-01. Nothing writes these tables;
+# the models stay so the schema matches the migrations until an
+# operator-gated migration drops them.
 
 
 class CryptoTrade(SQLModel, table=True):
@@ -181,13 +182,9 @@ class CryptoTrade(SQLModel, table=True):
     # Halal audit FK — links to the screening decision that gated this trade.
     halal_screening_id: int | None = Field(default=None, foreign_key="halal_screenings.id")
 
-    # Paper-vs-live divergence — same fields as Trade.
+    # Same slippage fields as Trade.
     paper_slippage_pct: float | None = None
     live_slippage_pct: float | None = None
-    # Wave G: replay-fitted slippage prediction stamped at fill time.
-    # The backtester reads the same model so backtest and live converge;
-    # this column lets us score the model's calibration after the fact
-    # (predicted vs realised live_slippage_pct).
     predicted_slippage_pct: float | None = None
 
 
@@ -229,7 +226,7 @@ class IndicatorSnapshot(SQLModel, table=True):
 
     id: int | None = Field(default=None, primary_key=True)
     trade_id: int = Field(index=True)
-    pair: str
+    pair: str  # the stock symbol (column named for the crypto bot)
     timestamp: datetime = Field(
         default_factory=lambda: datetime.now(UTC), sa_type=sa.DateTime(timezone=True)
     )
@@ -270,7 +267,7 @@ class ReconciliationLog(SQLModel, table=True):
     timestamp: datetime = Field(
         default_factory=lambda: datetime.now(UTC), sa_type=sa.DateTime(timezone=True)
     )
-    market: str  # 'stocks' | 'crypto'
+    market: str  # 'stocks' ('crypto' on rows from before 2026-10-01)
     symbol: str  # asset/ticker affected
     db_quantity: float
     broker_quantity: float
@@ -389,12 +386,11 @@ class QuantTrial(SQLModel, table=True):
 
 
 class RuntimeConfig(SQLModel, table=True):
-    """Runtime overlay for ``Settings`` knobs.
+    """Runtime overlay for ``Settings`` knobs — never wired up.
 
-    The bot reads these on each cycle as an overlay over the .env-derived
-    values, so an operator can tune ``CRYPTO_MAX_POSITION_PCT`` from the
-    dashboard and see the effect on the next tick — no restart required.
-    Removing a row reverts to the .env value.
+    Meant as an operator-set overlay over the .env-derived values. Nothing
+    reads or writes it (its repository was removed as dead code on
+    2026-10-06); the model stays so the schema matches the migrations.
     """
 
     __tablename__ = "runtime_config"
@@ -410,11 +406,10 @@ class RuntimeConfig(SQLModel, table=True):
 
 
 class PairPause(SQLModel, table=True):
-    """Per-pair operator pause toggle.
+    """Per-pair operator pause toggle from the crypto bot.
 
-    The cycle's tradeable-pair filter excludes any symbol present here.
-    One row per paused pair; deleting the row resumes it. Audit fields
-    (set_by, set_at, reason) are kept for the activity feed.
+    Nothing reads or writes it since crypto trading was abandoned on
+    2026-10-01; the model stays so the schema matches the migrations.
     """
 
     __tablename__ = "pair_pauses"
@@ -495,8 +490,8 @@ class HalalScreening(SQLModel, table=True):
         default_factory=lambda: datetime.now(UTC), sa_type=sa.DateTime(timezone=True)
     )
     symbol: str = Field(index=True)
-    asset_class: str  # 'stock' | 'crypto'
-    source: str  # 'zoya' | 'coingecko_rules' | 'override' | 'cache' | …
+    asset_class: str  # 'stock' ('crypto' on rows from before 2026-10-01)
+    source: str  # 'zoya' | 'override' | 'cache' | … ('coingecko_rules' on old crypto rows)
     decision: str  # 'halal' | 'not_halal' | 'doubtful'
     criteria: dict | None = Field(
         default=None, sa_column=sa.Column("criteria", JSONB, nullable=True)
@@ -711,10 +706,9 @@ class MlArtefact(SQLModel, table=True):
     deleted on 2026-10-01; the model stays so the schema matches the
     migrations.
 
-    Wave K replaces ``models/*.pkl`` with this table so the bot's
-    state replicates with the DB and rolls back atomically alongside
-    the schema. Each row is one (name, version); the highest version
-    for a name was the live one.
+    It replaced ``models/*.pkl`` so the bot's state replicated with the
+    DB and rolled back atomically alongside the schema. Each row is one
+    (name, version); the highest version for a name was the live one.
 
     The payload stores either a sklearn pickle (BYTEA) or a small
     JSON blob (slippage model, calibration curve), keyed by

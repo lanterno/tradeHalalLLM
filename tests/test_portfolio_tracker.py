@@ -1,20 +1,21 @@
-"""Tests for :class:`BasePortfolioTracker`'s template methods.
+"""Tests for :class:`PortfolioTracker`'s daily P&L methods.
 
-The crypto and stock portfolio trackers both inherit from this class
-but only the broker-specific subclasses are exercised in DB-backed
-tests. The template methods themselves (P&L math, halt threshold,
-day-end summary shape) are pure once the abstract hooks are mocked.
+The broker/DB-backed path is exercised in
+``tests/invariants/test_daily_loss_limit_survives_restarts.py``. The P&L
+math, halt threshold and day-end summary shape are pure once the broker
+and repo accessors are stubbed.
 """
 
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 
-from halal_trader.core.portfolio import BasePortfolioTracker
+from halal_trader.trading.portfolio import PortfolioTracker
 
 
-class _StubPortfolio(BasePortfolioTracker):
-    """Minimal subclass that records what each hook saw."""
+class _StubPortfolio(PortfolioTracker):
+    """Tracker whose broker/DB accessors record what they saw."""
 
     def __init__(
         self,
@@ -23,13 +24,13 @@ class _StubPortfolio(BasePortfolioTracker):
         trades: list[dict] | None = None,
         daily_loss_limit: float = 0.05,
     ) -> None:
-        super().__init__(daily_loss_limit=daily_loss_limit)
+        super().__init__(MagicMock(), MagicMock(), daily_loss_limit=daily_loss_limit)
         self._equity = equity
         self._trades = trades or []
         self.persisted_start: float | None = None
         self.persisted_end: tuple[float, float, int] | None = None
 
-    async def _get_equity(self, **_kwargs: Any) -> float:
+    async def _get_equity(self) -> float:
         return self._equity
 
     async def _get_today_trades(self) -> list[dict[str, Any]]:

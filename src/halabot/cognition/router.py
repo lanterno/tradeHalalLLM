@@ -76,10 +76,6 @@ class CognitionRouter:
             sub.unsubscribe()
         self._subs.clear()
 
-    @property
-    def known_assets(self) -> frozenset[str]:
-        return frozenset(self._known_assets)
-
     async def bootstrap(self, *, since: datetime, until: datetime, now: datetime) -> frozenset[str]:
         """Warm beliefs by replaying ``observation.*`` from the event log (Appendix F).
 

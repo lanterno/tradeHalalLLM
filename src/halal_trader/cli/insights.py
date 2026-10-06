@@ -213,7 +213,7 @@ def exceptions_cmd(status: str) -> None:
 @click.argument("asset_class", type=click.Choice(["stock"]))
 @click.argument("trade_id", type=int)
 def explain_cmd(asset_class: str, trade_id: int) -> None:
-    """Render the halal-compliance explanation for one trade (Wave L)."""
+    """Render the halal-compliance explanation for one trade."""
 
     async def _run() -> None:
         from halal_trader.config import get_settings

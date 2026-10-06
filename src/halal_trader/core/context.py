@@ -64,9 +64,9 @@ class DashboardContext:
     long-lived deps; ``runtime`` is the only place that mutates.
     """
 
-    engine: "AsyncEngine"
-    repo: "Repository"
-    analytics: "PerformanceAnalytics"
-    settings: "Settings"
-    bus: "EventBus"
+    engine: AsyncEngine
+    repo: Repository
+    analytics: PerformanceAnalytics
+    settings: Settings
+    bus: EventBus
     runtime: RuntimeView

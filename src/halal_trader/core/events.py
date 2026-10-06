@@ -23,27 +23,16 @@ BAND_COVERAGE_DRIFT: Final[str] = "band.coverage_drift"
 # ── Trades ──────────────────────────────────────────────────────
 TRADE_BUY_PLACED: Final[str] = "trade.buy.placed"
 TRADE_SELL_PLACED: Final[str] = "trade.sell.placed"
-TRADE_REJECTED: Final[str] = "trade.rejected"
 # A BUY refused at the order boundary because the symbol is not (provably)
 # halal -- the screen said no, or could not be read (fail closed).
 HALAL_GATE_REJECTED: Final[str] = "trade.rejected.halal"
 TRADE_FILL_PARTIAL: Final[str] = "trade.fill.partial"
-TRADE_FILLED: Final[str] = "trade.filled"
 TRADE_EXIT_SL: Final[str] = "trade.exit.stop_loss"
 TRADE_EXIT_TP: Final[str] = "trade.exit.take_profit"
-TRADE_EXIT_FORCED: Final[str] = "trade.exit.forced"
 
 # ── LLM ─────────────────────────────────────────────────────────
 LLM_CALL_COMPLETE: Final[str] = "llm.call.complete"
-LLM_CALL_FAILED: Final[str] = "llm.call.failed"
-LLM_FALLBACK_TRIGGERED: Final[str] = "llm.fallback.triggered"
 LLM_CHAIN_BACKOFF: Final[str] = "llm.chain.backoff"
 
 # ── Risk / Reconciliation ──────────────────────────────────────
-RISK_HALT: Final[str] = "risk.halt"
 RECONCILE_DRIFT: Final[str] = "reconcile.drift"
-
-# ── Operational ────────────────────────────────────────────────
-HALT_SET: Final[str] = "halt.set"
-HALT_CLEARED: Final[str] = "halt.cleared"
-NEWS_EVENT: Final[str] = "news.event"

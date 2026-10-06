@@ -1,12 +1,9 @@
-"""Wave D wiring tests — Repository.bundle + RepoBundle entrypoint.
+"""Wiring tests — Repository.bundle + RepoBundle entrypoint.
 
-The per-table mini-repos and ``RepoBundle.from_engine`` were shipped
-in round-4/5. This commit added ``Repository.bundle`` so legacy callers
-can migrate one site at a time without restructuring downstream
-consumers. These tests pin:
+These tests pin:
 
 * The ``Repository.bundle`` accessor returns the *same* mini-repo
-  instances the legacy delegators forward to.
+  instances the ``Repository`` delegators forward to.
 * The bundle's per-table fields satisfy their Protocol shapes.
 * ``RepoBundle.from_engine`` constructs an independent bundle (no
   Repository required).
@@ -27,10 +24,10 @@ class _FakeEngine:
 
 
 def test_repository_bundle_returns_same_impls_as_delegators() -> None:
-    """The legacy ``Repository`` already constructs the mini-repos in
-    ``__init__``. The new ``.bundle`` property must expose the same
-    instances, not fresh copies — otherwise mutable state (caches,
-    counters) would diverge between paths."""
+    """``Repository`` builds its mini-repos in ``__init__``. The
+    ``.bundle`` property must expose the same instances, not fresh
+    copies — otherwise mutable state (caches, counters) would diverge
+    between paths."""
     from halal_trader.db.repository import Repository
 
     repo = Repository(_FakeEngine())  # type: ignore[arg-type]
@@ -39,7 +36,6 @@ def test_repository_bundle_returns_same_impls_as_delegators() -> None:
     assert bundle.stock_pnl is repo._stock_pnl
     assert bundle.stock_halal_cache is repo._stock_halal_cache
     assert bundle.halal_screening is repo._halal_screening
-    assert bundle.runtime_config is repo._runtime_config
     assert bundle.web_audit is repo._web_audit
     assert bundle.indicator_snapshots is repo._indicator_snapshots
     assert bundle.llm_decisions is repo._llm_decisions
@@ -71,7 +67,6 @@ def test_from_engine_builds_full_bundle_without_repository() -> None:
         "stock_pnl",
         "stock_halal_cache",
         "halal_screening",
-        "runtime_config",
         "web_audit",
         "indicator_snapshots",
         "llm_decisions",

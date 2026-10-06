@@ -93,9 +93,9 @@ class TelegramNotifier:
     ) -> None:
         """Send a trade execution alert.
 
-        ``market`` tags which bot fired ("crypto"/"stocks"); ``order_id``
+        ``market`` tags which strategy fired (e.g. "stocks"); ``order_id``
         is included tail-truncated for cross-referencing with the
-        exchange's order book.
+        broker's order book.
         """
         emoji = "\U0001f7e2" if side.lower() == "buy" else "\U0001f534"
         notional = quantity * price
@@ -152,7 +152,7 @@ class TelegramNotifier:
           realized_pnl / total_pnl, trades_count, win_rate,
           best_pair / best_pair_pnl, worst_pair / worst_pair_pnl,
           llm_cost_usd, llm_calls, cycles_count, cycles_failed,
-          market (e.g. "crypto" / "stocks"), date (YYYY-MM-DD).
+          market (e.g. "stocks"), date (YYYY-MM-DD).
         """
         pnl = stats.get("realized_pnl", stats.get("total_pnl", 0))
         emoji = "\U0001f4c8" if pnl >= 0 else "\U0001f4c9"
@@ -220,25 +220,6 @@ class TelegramNotifier:
         msg = f"{emoji} <b>{prefix}{label}: {html.escape(error_type)}</b>\n{html.escape(details)}\n"
         await self.send(msg)
 
-    async def notify_buzz(
-        self,
-        pair: str,
-        buzz_score: float,
-        sentiment: float,
-        *,
-        market: str = "",
-    ) -> None:
-        """Send a high buzz alert for a pair."""
-        direction = "bullish" if sentiment > 0 else ("bearish" if sentiment < 0 else "neutral")
-        prefix = f"[{market}] " if market else ""
-        msg = (
-            f"\U0001f525 <b>{prefix}High Buzz Alert</b> {pair}\n"
-            f"Buzz: {buzz_score:.1f}\u00d7 normal\n"
-            f"Sentiment: {sentiment:+.2f} ({direction})\n"
-            f"Reddit is talking about this coin \u2014 check for opportunities."
-        )
-        await self.send(msg)
-
 
 class AlertSink:
     """Rate-limited error alerter on top of TelegramNotifier.
@@ -287,7 +268,7 @@ class AlertSink:
         """Send a Telegram alert, deduped by ``error_type`` within the window.
 
         ``market`` and ``severity`` are passed through to the notifier so
-        operators see ``[crypto] CRITICAL:`` style headers. ``severity``
+        operators see ``[stocks] CRITICAL:`` style headers. ``severity``
         ∈ {"warning","error","critical"}; use "critical" sparingly for
         operator-must-act cases.
 

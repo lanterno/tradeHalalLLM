@@ -1,11 +1,8 @@
 """Tests for the stocks-side :class:`StockTradeSelfReview`.
 
-Mirrors ``test_self_improve_*.py`` on the crypto side. The
-asset-agnostic orchestration (cooldown, exec-failure tracking,
-prompt assembly, parse/clamp/apply) is exercised by the crypto
-suite against the base class; this file pins the stocks-specific
-bits: knob menu shape, repo wiring, prompt asset label, and the
-stocks-only ``daily_loss_limit`` knob clamping correctly.
+Pins the knob menu shape, repo wiring, prompt asset label, the
+``daily_loss_limit`` knob clamping correctly, and that knobs outside
+the menu (e.g. leftover crypto rows) are dropped.
 """
 
 from __future__ import annotations
@@ -14,15 +11,12 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from halal_trader.core.self_improve import (
-    ReviewResult,
-    StrategyAdjustment,
-    TradeSelfReviewBase,
-)
 from halal_trader.trading.self_improve import (
     _STOCK_SAFE_BOUNDS,
     _STOCK_STRATEGY_PARAM_MAP,
+    ReviewResult,
     StockTradeSelfReview,
+    StrategyAdjustment,
 )
 
 
@@ -74,16 +68,9 @@ def test_class_attrs_match_stocks_menu():
     assert set(_STOCK_SAFE_BOUNDS) == {"max_position_pct", "daily_loss_limit"}
     assert set(_STOCK_STRATEGY_PARAM_MAP) == {"max_position_pct", "daily_loss_limit"}
     # Strategy attribute names match the leading-underscore convention
-    # the base class's setattr loop expects.
+    # the setattr loop in ``_apply_to_strategy`` expects.
     assert _STOCK_STRATEGY_PARAM_MAP["max_position_pct"] == "_max_position_pct"
     assert _STOCK_STRATEGY_PARAM_MAP["daily_loss_limit"] == "_daily_loss_limit"
-
-
-def test_subclass_inherits_base_orchestration():
-    """Sanity: the stocks subclass is-a base class. The asset-agnostic
-    methods (load_from_db, format_adjustments_for_prompt, etc.) live
-    on the base; this is the pin that they remain reachable."""
-    assert issubclass(StockTradeSelfReview, TradeSelfReviewBase)
 
 
 def test_system_prompt_mentions_stock_trading():
@@ -142,10 +129,8 @@ async def test_load_from_db_filters_to_stocks_safe_bounds():
 
 @pytest.mark.asyncio
 async def test_review_clamps_max_position_pct_to_stocks_bounds():
-    """LLM suggests an out-of-bounds value; ``_parse_review`` clamps
-    to the stocks-side (0.05, 0.30) window — NOT the crypto window
-    (0.10, 0.30). Subtle: a 0.07 suggestion is valid for stocks
-    (in [0.05, 0.30]) but would clamp to 0.10 on the crypto side."""
+    """LLM suggests out-of-bounds values; ``_parse_review`` clamps each
+    to its knob's window in ``_STOCK_SAFE_BOUNDS``."""
     trades_response = [
         {
             "pair": "AAPL",
@@ -190,7 +175,7 @@ async def test_review_clamps_max_position_pct_to_stocks_bounds():
 @pytest.mark.asyncio
 async def test_review_drops_crypto_only_knobs_silently():
     """LLM (perhaps confused by a stale prompt) emits crypto knobs
-    on a stocks review. The base's ``param not in _SAFE_BOUNDS``
+    on a stocks review. The ``param not in _SAFE_BOUNDS``
     guard drops them — must not appear in persisted adjustments,
     must not be applied to the strategy."""
     strategy = MagicMock(spec=["_max_position_pct", "_daily_loss_limit"])
@@ -277,9 +262,8 @@ async def test_review_mutates_strategy_max_position_pct():
 
 
 def test_format_adjustments_uses_stocks_friendly_labels():
-    """Active adjustments render as plain ``- key: value`` lines.
-    Same surface as crypto (the base class owns this), but pinning
-    here to catch a future refactor that breaks the contract."""
+    """Active adjustments render as plain ``- key: value`` lines;
+    pinned to catch a future refactor that breaks the contract."""
     review, *_ = _review()
     review._active_adjustments = {"max_position_pct": 0.18, "daily_loss_limit": 0.015}
     review._pairs_to_avoid = ["GME"]
@@ -292,10 +276,7 @@ def test_format_adjustments_uses_stocks_friendly_labels():
 # ── Misc smoke ────────────────────────────────────────────────
 
 
-def test_dataclasses_reachable_from_core():
-    """Pin: the dataclasses moved to ``core.self_improve`` but the
-    crypto module re-exports them for back-compat. Stocks tests
-    can import either path; canonicalise on ``core`` for new code."""
+def test_result_dataclasses_construct_with_defaults():
     assert ReviewResult().observations == []
     assert (
         StrategyAdjustment(parameter="x", old_value=None, new_value=0.1, reasoning="").parameter

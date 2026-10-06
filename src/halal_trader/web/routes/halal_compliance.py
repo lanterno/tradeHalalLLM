@@ -1,9 +1,8 @@
 """GET /api/halal/compliance — AAOIFI summary tile data.
 
-Round-4 wave 2.E: returns the AAOIFI compliance summary in a shape
-the dashboard tile renders. Read-only; reads from
-``halal_screenings``, ``trades``, ``crypto_trades``,
-``purification_entries``, and ``round_trip_purification``.
+Returns the AAOIFI compliance summary in the shape the dashboard tile
+renders. Read-only; see ``halal/aaoifi_summary.py`` for the tables it
+reads.
 """
 
 from __future__ import annotations

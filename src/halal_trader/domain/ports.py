@@ -68,9 +68,3 @@ class ComplianceScreener(Protocol):
     async def is_halal(self, symbol: str) -> bool: ...
     async def get_halal_symbols(self) -> list[str]: ...
     async def filter_halal(self, symbols: list[str]) -> list[str]: ...
-
-
-# NOTE: ``TradeRepository`` previously lived here as a 120-line structural
-# Protocol shadowing every method on ``db.repository.Repository``. It had
-# exactly one implementation, no test seam value, and added drift hazard.
-# Code now annotates ``Repository`` directly.

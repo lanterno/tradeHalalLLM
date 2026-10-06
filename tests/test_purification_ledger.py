@@ -40,7 +40,7 @@ async def _fill(engine, i: int, symbol: str, side: str, qty: float, when: str) -
 
 
 async def _screen(engine, symbol: str, as_of: date, ratio: float | None) -> None:
-    metrics = "{}" if ratio is None else '{"impure_income_ratio": %f}' % ratio
+    metrics = "{}" if ratio is None else f'{{"impure_income_ratio": {ratio:f}}}'
     async with engine.begin() as conn:
         await conn.execute(
             text(

@@ -41,7 +41,7 @@ async def _capture(
 
     try:
         await asyncio.wait_for(_drain(), timeout=timeout)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         pass
     return captured
 
@@ -158,7 +158,7 @@ async def test_bus_subscriber_can_filter_by_trade_glob() -> None:
     await bus.publish("trade.exit.stop_loss", {"trade_id": 1})
     try:
         await asyncio.wait_for(sub_task, timeout=0.5)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         pass
     topics = [e.topic for e in captured]
     assert "trade.buy.placed" in topics

@@ -51,11 +51,11 @@ def test_enabled_false_when_empty():
 async def test_notify_trade_buy_uses_green_emoji():
     n = _notifier()
     with patch.object(n, "send", new=AsyncMock()) as mock_send:
-        await n.notify_trade(pair="BTCUSDT", side="buy", quantity=0.001, price=42_000.0)
+        await n.notify_trade(pair="AAPL", side="buy", quantity=10, price=4_200.0)
         msg = mock_send.await_args.args[0]
     assert "BUY" in msg
-    assert "BTCUSDT" in msg
-    assert "42,000" in msg or "42000" in msg
+    assert "AAPL" in msg
+    assert "4,200" in msg or "4200" in msg
     # green circle for buy
     assert "\U0001f7e2" in msg
 
@@ -64,7 +64,7 @@ async def test_notify_trade_buy_uses_green_emoji():
 async def test_notify_trade_sell_uses_red_emoji():
     n = _notifier()
     with patch.object(n, "send", new=AsyncMock()) as mock_send:
-        await n.notify_trade(pair="ETHUSDT", side="sell", quantity=0.5, price=2500.0)
+        await n.notify_trade(pair="MSFT", side="sell", quantity=5, price=250.0)
         msg = mock_send.await_args.args[0]
     assert "SELL" in msg
     # red circle for sell
@@ -78,10 +78,10 @@ async def test_notify_trade_truncates_long_reasoning():
     long_reason = "x" * 500
     with patch.object(n, "send", new=AsyncMock()) as mock_send:
         await n.notify_trade(
-            pair="BTCUSDT",
+            pair="AAPL",
             side="buy",
-            quantity=0.001,
-            price=42_000.0,
+            quantity=10,
+            price=200.0,
             reasoning=long_reason,
         )
         msg = mock_send.await_args.args[0]
@@ -98,7 +98,7 @@ async def test_notify_sl_tp_take_profit_uses_check_emoji():
     n = _notifier()
     with patch.object(n, "send", new=AsyncMock()) as mock_send:
         await n.notify_sl_tp(
-            pair="BTCUSDT",
+            pair="AAPL",
             exit_reason="take_profit",
             entry_price=40_000.0,
             exit_price=42_000.0,
@@ -115,7 +115,7 @@ async def test_notify_sl_tp_stop_loss_uses_x_emoji():
     n = _notifier()
     with patch.object(n, "send", new=AsyncMock()) as mock_send:
         await n.notify_sl_tp(
-            pair="BTCUSDT",
+            pair="AAPL",
             exit_reason="stop_loss",
             entry_price=40_000.0,
             exit_price=39_000.0,
@@ -145,7 +145,7 @@ async def test_notify_daily_summary_renders_required_keys():
 
 @pytest.mark.asyncio
 async def test_notify_daily_summary_falls_back_to_total_pnl_key():
-    """The crypto + stocks `record_day_end` summary uses `realized_pnl`,
+    """The stocks `record_day_end` summary uses `realized_pnl`,
     but older callers may pass `total_pnl` — accept both."""
     n = _notifier()
     with patch.object(n, "send", new=AsyncMock()) as mock_send:
@@ -166,43 +166,6 @@ async def test_notify_daily_summary_omits_best_pair_when_missing():
     assert "Worst:" not in msg
 
 
-# ── notify_buzz ───────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_notify_buzz_renders_direction_label():
-    n = _notifier()
-    with patch.object(n, "send", new=AsyncMock()) as mock_send:
-        await n.notify_buzz(pair="DOGEUSDT", buzz_score=4.2, sentiment=0.6)
-        msg = mock_send.await_args.args[0]
-    assert "DOGEUSDT" in msg
-    assert "bullish" in msg
-    # "4.2× normal" — multiplication sign is the polished unicode form.
-    assert "4.2" in msg
-    assert "normal" in msg
-
-
-@pytest.mark.asyncio
-async def test_notify_buzz_includes_market_prefix():
-    """For consistency with notify_trade / notify_sl_tp / notify_error,
-    a market= kwarg renders as the [market] prefix."""
-    n = _notifier()
-    with patch.object(n, "send", new=AsyncMock()) as mock_send:
-        await n.notify_buzz(pair="DOGEUSDT", buzz_score=3.5, sentiment=0.2, market="crypto")
-        msg = mock_send.await_args.args[0]
-    assert "[crypto]" in msg
-    assert "High Buzz Alert" in msg
-
-
-@pytest.mark.asyncio
-async def test_notify_buzz_negative_sentiment_renders_bearish():
-    n = _notifier()
-    with patch.object(n, "send", new=AsyncMock()) as mock_send:
-        await n.notify_buzz(pair="DOGEUSDT", buzz_score=3.0, sentiment=-0.4)
-        msg = mock_send.await_args.args[0]
-    assert "bearish" in msg
-
-
 # ── notify_error ──────────────────────────────────────────────
 
 
@@ -213,7 +176,7 @@ async def test_notify_error_truncates_long_details():
     Total payload still stays bounded (head 300 + ellipsis + tail 180)."""
     n = _notifier()
     with patch.object(n, "send", new=AsyncMock()) as mock_send:
-        await n.notify_error("crypto.cycle.failed", "x" * 1_500)
+        await n.notify_error("stock.cycle.failed", "x" * 1_500)
         msg = mock_send.await_args.args[0]
     # The full 1500-char details should NOT be present (truncation fired).
     assert "x" * 1500 not in msg
@@ -231,17 +194,17 @@ async def test_notify_trade_includes_market_and_notional():
     n = _notifier()
     with patch.object(n, "send", new=AsyncMock()) as mock_send:
         await n.notify_trade(
-            pair="BTCUSDT",
+            pair="AAPL",
             side="buy",
-            quantity=0.05,
-            price=50_000.0,
-            market="crypto",
+            quantity=5,
+            price=500.0,
+            market="stocks",
             order_id="1234567890",
         )
         msg = mock_send.await_args.args[0]
-    assert "[crypto]" in msg
+    assert "[stocks]" in msg
     assert "BUY" in msg
-    # Notional = 0.05 × 50,000 = $2,500
+    # Notional = 5 × 500 = $2,500
     assert "$2,500" in msg
     # Order ID tail-truncated
     assert "67890" in msg
@@ -252,17 +215,17 @@ async def test_notify_sl_tp_includes_pct_pnl_and_hold_time():
     n = _notifier()
     with patch.object(n, "send", new=AsyncMock()) as mock_send:
         await n.notify_sl_tp(
-            pair="BTCUSDT",
+            pair="AAPL",
             exit_reason="stop_loss",
             entry_price=50_000.0,
             exit_price=49_000.0,
             pnl=-100.0,
             quantity=0.1,
             hold_minutes=42.0,
-            market="crypto",
+            market="stocks",
         )
         msg = mock_send.await_args.args[0]
-    assert "[crypto]" in msg
+    assert "[stocks]" in msg
     assert "Stop-Loss" in msg
     # Pct PnL = (49000-50000)/50000 = -2.00%
     assert "-2.00%" in msg
@@ -274,7 +237,7 @@ async def test_notify_sl_tp_renders_hold_in_hours_when_long():
     n = _notifier()
     with patch.object(n, "send", new=AsyncMock()) as mock_send:
         await n.notify_sl_tp(
-            pair="BTCUSDT",
+            pair="AAPL",
             exit_reason="take_profit",
             entry_price=50_000.0,
             exit_price=51_000.0,
@@ -298,11 +261,11 @@ async def test_notify_daily_summary_includes_llm_cost_when_provided():
                 "llm_cost_usd": 12.45,
                 "llm_calls": 96,
                 "cycles_count": 480,
-                "market": "crypto",
+                "market": "stocks",
             }
         )
         msg = mock_send.await_args.args[0]
-    assert "crypto" in msg
+    assert "stocks" in msg
     assert "$12.45" in msg
     assert "96 calls" in msg
     assert "Cycles: 480" in msg
@@ -315,7 +278,7 @@ async def test_notify_error_critical_severity_uses_distinct_emoji():
         await n.notify_error(
             "llm.insufficient_quota",
             "Account out of credits",
-            market="crypto",
+            market="stocks",
             severity="critical",
         )
         msg = mock_send.await_args.args[0]
@@ -323,7 +286,7 @@ async def test_notify_error_critical_severity_uses_distinct_emoji():
     # exact emoji because terminal/encoding can split it into a surrogate
     # pair that doesn't compare equal to the literal codepoint.
     assert "CRITICAL" in msg
-    assert "[crypto]" in msg
+    assert "[stocks]" in msg
     assert "llm.insufficient_quota" in msg
 
 

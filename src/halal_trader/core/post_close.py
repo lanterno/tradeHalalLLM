@@ -37,7 +37,7 @@ class CloseEvent:
     """Minimum data needed by every post-close recorder."""
 
     trade_id: str
-    symbol: str  # 'BTCUSDT' for crypto, 'AAPL' for stocks
+    symbol: str
     side: str  # 'buy' or 'sell' — almost always 'buy' for closing entries
     entry_price: float
     exit_price: float

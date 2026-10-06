@@ -1,4 +1,4 @@
-"""Wave B stage classes — each owns one prompt-context block.
+"""Cycle stage classes — each owns one prompt-context block.
 
 A ``CycleStage`` takes a :class:`CycleState`, mutates one or two
 fields, returns the state. The cycle service holds an ordered list of
@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 
 class CycleStage(Protocol):
-    """Protocol every Wave B stage class satisfies."""
+    """Protocol every stage class satisfies."""
 
     name: str
 
@@ -218,7 +218,7 @@ class FetchStockNewsStage:
             from halal_trader.sentiment.feed import format_news_for_prompt
 
             events = await self._news_collector.fetch_for_symbols(list(state.halal_pairs))
-            state.news_text = format_news_for_prompt(events, pair_filter=state.halal_pairs)
+            state.news_text = format_news_for_prompt(events, symbol_filter=state.halal_pairs)
         except Exception as exc:  # noqa: BLE001
             logger.debug("Stock news fetch failed: %s", exc)
             state.news_text = ""

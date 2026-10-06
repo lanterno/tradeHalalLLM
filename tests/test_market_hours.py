@@ -7,7 +7,7 @@ holidays or skips half-days entirely.
 
 from __future__ import annotations
 
-from datetime import date, time, timedelta, timezone
+from datetime import UTC, date, time, timedelta
 
 from halal_trader.market_hours import (
     EARLY_CLOSE,
@@ -92,7 +92,7 @@ def test_holiday_close_time_falls_through_to_regular():
 def test_trading_day_start_returns_midnight_et_in_utc():
     """May 5 2026 midnight ET (EDT, UTC-4) → 04:00 UTC same day."""
     out = trading_day_start_utc(date(2026, 5, 5))
-    assert out.tzinfo == timezone.utc
+    assert out.tzinfo == UTC
     assert out.hour == 4  # midnight ET = 4:00 UTC during EDT
 
 

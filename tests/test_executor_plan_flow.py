@@ -1,28 +1,35 @@
-"""Tests for :class:`BaseExecutor`'s shared sells-first-then-buys flow.
+"""Tests for :meth:`TradeExecutor.execute_plan`'s sells-first-then-buys flow.
 
-The two concrete executors (``CryptoExecutor`` and ``TradeExecutor``)
-inherit the orchestration: sell every sell decision first, then run
-buys until ``max_simultaneous_positions`` is hit. Each subclass is
-exercised in DB-backed tests; this file locks the orchestration
-contract using a stub.
+Sell every sell decision first, then run buys until
+``max_simultaneous_positions`` is hit. The per-order paths are exercised
+elsewhere; this file locks the orchestration contract with the order
+methods stubbed out.
 """
 
 from typing import Any
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from halal_trader.core.executor import BaseExecutor
+from halal_trader.domain.models import TradeAction, TradeDecision, TradingPlan
+from halal_trader.trading.executor import TradeExecutor
 
 
-class _Decision:
-    """Minimal decision shape — name + side."""
+def _decision(symbol: str, action: str) -> TradeDecision:
+    return TradeDecision(
+        action=TradeAction.BUY if action == "buy" else TradeAction.SELL,
+        symbol=symbol,
+        quantity=1,
+        confidence=0.8,
+        reasoning="t",
+    )
 
-    def __init__(self, symbol: str, action: str) -> None:
-        self.symbol = symbol
-        self.action = action
+
+def _plan(*decisions: TradeDecision) -> TradingPlan:
+    return TradingPlan(decisions=list(decisions))
 
 
-class _StubExecutor(BaseExecutor):
+class _StubExecutor(TradeExecutor):
     """Records call order so tests can assert sells-before-buys."""
 
     def __init__(
@@ -32,22 +39,16 @@ class _StubExecutor(BaseExecutor):
         max_simultaneous_positions: int = 5,
         buy_status: str = "filled",
     ) -> None:
+        broker = MagicMock()
+        broker.get_all_positions = AsyncMock(return_value=[object()] * open_positions)
         super().__init__(
+            broker,
+            MagicMock(),
             max_position_pct=0.1,
             max_simultaneous_positions=max_simultaneous_positions,
         )
-        self._open = open_positions
         self._buy_status = buy_status
         self.call_log: list[str] = []
-
-    def _get_sells(self, plan: Any) -> list[Any]:
-        return [d for d in plan if d.action == "sell"]
-
-    def _get_buys(self, plan: Any) -> list[Any]:
-        return [d for d in plan if d.action == "buy"]
-
-    async def _get_current_position_count(self, **_kwargs: Any) -> int:
-        return self._open
 
     async def _execute_buy(self, decision: Any, **_kwargs: Any) -> dict[str, Any]:
         self.call_log.append(f"buy:{decision.symbol}")
@@ -69,14 +70,14 @@ class _StubExecutor(BaseExecutor):
 @pytest.mark.asyncio
 async def test_executes_sells_before_buys_regardless_of_plan_order():
     """Sells always run first — frees up cash and a position slot."""
-    plan = [
-        _Decision("AAPL", "buy"),
-        _Decision("MSFT", "sell"),
-        _Decision("GOOG", "buy"),
-        _Decision("NVDA", "sell"),
-    ]
+    plan = _plan(
+        _decision("AAPL", "buy"),
+        _decision("MSFT", "sell"),
+        _decision("GOOG", "buy"),
+        _decision("NVDA", "sell"),
+    )
     e = _StubExecutor()
-    await e._execute_plan_common(plan)
+    await e.execute_plan(plan)
     # Both sells must come before either buy.
     sells_at = [i for i, c in enumerate(e.call_log) if c.startswith("sell:")]
     buys_at = [i for i, c in enumerate(e.call_log) if c.startswith("buy:")]
@@ -88,9 +89,9 @@ async def test_buys_stop_at_max_simultaneous_positions():
     """When the position cap is hit mid-plan, remaining buys are
     rejected with a 'max positions reached' reason — they don't
     silently drop, so the operator can see what was skipped."""
-    plan = [_Decision(f"S{i}", "buy") for i in range(5)]
+    plan = _plan(*(_decision(f"S{i}", "buy") for i in range(5)))
     e = _StubExecutor(open_positions=3, max_simultaneous_positions=4)
-    results = await e._execute_plan_common(plan)
+    results = await e.execute_plan(plan)
     # Only one buy should have actually executed (3 → 4 = cap hit).
     executed = [r for r in results if r["status"] == "filled"]
     rejected = [r for r in results if r["status"] == "rejected"]
@@ -102,7 +103,7 @@ async def test_buys_stop_at_max_simultaneous_positions():
 @pytest.mark.asyncio
 async def test_open_count_increments_only_on_filled_or_submitted_buys():
     """A rejected buy doesn't take a position slot."""
-    plan = [_Decision("S1", "buy"), _Decision("S2", "buy")]
+    plan = _plan(_decision("S1", "buy"), _decision("S2", "buy"))
     # Buys "succeed" but with an unrecognised status — should NOT count
     # toward the cap.
     e = _StubExecutor(
@@ -110,7 +111,7 @@ async def test_open_count_increments_only_on_filled_or_submitted_buys():
         max_simultaneous_positions=5,
         buy_status="rejected",  # not in {submitted, filled}
     )
-    results = await e._execute_plan_common(plan)
+    results = await e.execute_plan(plan)
     # Both buys executed (cap was 5, started at 4, neither incremented)
     assert all(r["status"] == "rejected" for r in results)
     assert len(e.call_log) == 2  # both buys ran
@@ -119,24 +120,21 @@ async def test_open_count_increments_only_on_filled_or_submitted_buys():
 @pytest.mark.asyncio
 async def test_empty_plan_returns_empty_results():
     e = _StubExecutor()
-    results = await e._execute_plan_common([])
+    results = await e.execute_plan(_plan())
     assert results == []
     assert e.call_log == []
 
 
 @pytest.mark.asyncio
-async def test_sell_only_plan_does_not_call_position_count():
-    """Pure sell-off (e.g. EOD) shouldn't need to know open count."""
-    plan = [_Decision("AAPL", "sell"), _Decision("MSFT", "sell")]
+async def test_sell_only_plan_still_reads_position_count():
+    """The flow reads the open-position count before the buys loop
+    *unconditionally*, even for a pure sell-off (e.g. EOD). If we want to
+    optimise it later we'd need to skip when buys is empty; for now lock
+    the current behaviour."""
+    plan = _plan(_decision("AAPL", "sell"), _decision("MSFT", "sell"))
+    e = _StubExecutor()
+    e._broker.get_all_positions = AsyncMock(side_effect=AssertionError("count read"))  # type: ignore[method-assign]
 
-    class _NoCountExecutor(_StubExecutor):
-        async def _get_current_position_count(self, **_kwargs: Any) -> int:
-            raise AssertionError("must not be called for sell-only plan")
-
-    e = _NoCountExecutor()
-    # The base flow always calls _get_current_position_count before
-    # the buys loop — so this test actually pins that the call happens
-    # *unconditionally*. If we want to optimise it later we'd need to
-    # skip when buys is empty; for now lock the current behaviour.
     with pytest.raises(AssertionError):
-        await e._execute_plan_common(plan)
+        await e.execute_plan(plan)
+    assert e.call_log == ["sell:AAPL", "sell:MSFT"]

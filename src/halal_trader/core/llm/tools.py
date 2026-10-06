@@ -1,10 +1,9 @@
 """Typed JSONSchema tool definitions for LLM tool-use calls.
 
-Wave E switches the strategy LLM call from "ask for a JSON blob and
-schema-repair on retry" to native provider tool use. The model emits
-a structured ``submit_decisions`` call with arguments validated by the
-schema; the SDK returns a Python dict and we materialise the
-TradingPlan from it.
+The strategy LLM call uses native provider tool use rather than "ask for
+a JSON blob and schema-repair on retry". The model emits a structured
+``submit_decisions`` call with arguments validated by the schema; the SDK
+returns a Python dict and we materialise the TradingPlan from it.
 
 The tools are encoded in a provider-agnostic ``Tool`` dataclass and
 projected onto the OpenAI-compatible API shape (``for_openai``), which
@@ -58,7 +57,7 @@ _DECISION_SCHEMA: dict[str, Any] = {
             "enum": ["buy", "sell", "hold"],
             "description": "Trade direction.",
         },
-        "symbol": {"type": "string", "description": "Trading pair, e.g. 'BTCUSDT'"},
+        "symbol": {"type": "string", "description": "Stock symbol, e.g. 'AAPL'"},
         "quantity": {
             "type": "number",
             "description": "Absolute order quantity in base-asset units (e.g. BTC, not USDT).",

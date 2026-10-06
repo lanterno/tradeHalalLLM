@@ -25,8 +25,8 @@ def test_render_includes_llm_histogram() -> None:
 
 
 def test_render_includes_broker_histogram_with_error_label() -> None:
-    observe_broker_call(broker="binance", method="place_order", ms=85.0, error=False)
-    observe_broker_call(broker="binance", method="place_order", ms=200.0, error=True)
+    observe_broker_call(broker="alpaca", method="place_order", ms=85.0, error=False)
+    observe_broker_call(broker="alpaca", method="place_order", ms=200.0, error=True)
     text = render_prometheus_text().decode("utf-8")
     assert 'error="0"' in text
     assert 'error="1"' in text

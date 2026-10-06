@@ -126,11 +126,6 @@ class FedSpeakSignal:
     most_hawkish_quote: str = ""
     most_dovish_quote: str = ""
 
-    @property
-    def stance(self) -> str:
-        """Human-readable stance label."""
-        return self.label
-
 
 # ── Scorer ───────────────────────────────────────────────────────
 

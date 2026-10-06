@@ -1,7 +1,7 @@
 """Tests for the pure helpers in :mod:`core.reconcile`.
 
-The full ``reconcile_crypto`` / ``reconcile_stocks`` flows hit the
-broker + DB and live in DB-backed tests. The drift-math helpers and
+The full ``reconcile_stocks`` flow hits the broker + DB and lives in
+DB-backed tests. The drift-math helpers and
 the report dataclasses are pure and are what the operator's alert
 text + dashboard summary actually render from.
 """
@@ -51,8 +51,8 @@ def test_summarize_empty_returns_header_only():
 def test_summarize_renders_drift_per_row():
     drifts = [
         Drift(
-            market="crypto",
-            symbol="BTCUSDT",
+            market="stocks",
+            symbol="AAPL",
             db_quantity=0.5,
             broker_quantity=0.45,
             drift_pct=0.1,
@@ -60,8 +60,8 @@ def test_summarize_renders_drift_per_row():
         )
     ]
     out = _summarize_drifts(drifts)
-    assert "BTCUSDT" in out
-    assert "crypto" in out
+    assert "AAPL" in out
+    assert "stocks" in out
     assert "10.0%" in out
     assert "$2500" in out
 
@@ -89,7 +89,7 @@ def test_summarize_caps_at_five_drifts():
 def test_summarize_omits_dollar_when_no_usd_estimate():
     drifts = [
         Drift(
-            market="crypto",
+            market="stocks",
             symbol="X",
             db_quantity=1.0,
             broker_quantity=2.0,
@@ -106,7 +106,7 @@ def test_summarize_omits_dollar_when_no_usd_estimate():
 
 
 def test_report_has_drift_false_when_empty():
-    r = ReconcileReport(market="crypto")
+    r = ReconcileReport(market="stocks")
     assert r.has_drift is False
 
 

@@ -5,7 +5,7 @@ helper becomes a no-op. The dashboard's ``/metrics`` endpoint also
 exposes the gauge-shaped snapshots from ``web/prometheus.py``; this
 module is the histogram side.
 
-Histograms exposed (Wave J):
+Histograms exposed:
 
 * ``halal_trader_stage_latency_ms`` — labels ``stage``, ``error``;
   per-stage cycle latency including failed runs.

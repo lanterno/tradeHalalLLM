@@ -53,7 +53,6 @@ _GUIDE_RANGE = re.compile(
     rf"(?P<low>{_NUM})(?:\s?-\s?(?P<high>{_NUM}))?\s+vs\.?\s+(?P<est>{_NUM})\s+Est",
     re.IGNORECASE,
 )
-_GUIDE_PERIOD_LATE = re.compile(rf"\b{_PERIOD}\b", re.IGNORECASE)
 
 
 def money(text: str) -> float | None:

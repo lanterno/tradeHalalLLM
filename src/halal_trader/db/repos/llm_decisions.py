@@ -1,8 +1,8 @@
 """LLM decision audit repository — every prompt/response and cost row.
 
-Wave D extraction. Records token counts + cost per call so the
-dashboard can plot daily spend, and stashes the raw response for
-post-hoc inspection of any cycle. Matching protocol in ``protocols.py``.
+Records token counts + cost per call so the dashboard can plot daily
+spend, and stashes the raw response for post-hoc inspection of any
+cycle. Matching protocol in ``protocols.py``.
 """
 
 from __future__ import annotations

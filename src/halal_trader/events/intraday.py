@@ -180,17 +180,16 @@ async def run(engine: AsyncEngine, market: Any, headlines: list[Headline]) -> li
             continue
         same = (c / e - 1) - (sc / se - 1) - cost
         i = sessions.index(day)
-
-        def later(k: int) -> float | None:
-            if i + k >= len(sessions):
-                return None
-            d = sessions[i + k]
+        later: list[float | None] = []
+        for k in (1, 5):
+            d = sessions[i + k] if i + k < len(sessions) else None
             p, q = closes.get(h.symbol, {}).get(d), closes["SPY"].get(d)
             if not p or not q or not _PLAUSIBLE[0] < p / e < _PLAUSIBLE[1]:
-                return None
-            return (p / e - 1) - (q / se - 1) - cost
+                later.append(None)
+            else:
+                later.append((p / e - 1) - (q / se - 1) - cost)
 
-        out.append(Outcome(h, same, later(1), later(5)))
+        out.append(Outcome(h, same, later[0], later[1]))
         if n % 250 == 0:
             logger.info("intraday study: %d/%d headlines", n, len(headlines))
     return out

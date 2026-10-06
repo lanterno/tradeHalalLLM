@@ -1,8 +1,9 @@
-"""Typed event payload schemas (REARCHITECTURE Appendix A).
+"""Event payload contracts (REARCHITECTURE Appendix A).
 
-Payloads travel as plain dicts on :class:`Event`; these TypedDicts document and
-type the shape each ``EventType`` carries. Ingress events (observations,
-compliance) are validated at the bus boundary: a payload missing required keys
+Payloads travel as plain dicts on :class:`Event`; ``REQUIRED_KEYS`` is the
+contract each ingress ``EventType`` must meet, and the perception sources are
+the reference for the full shape. Ingress events (observations, compliance)
+are validated at the bus boundary: a payload missing required keys
 is logged with its type and dropped, never dispatched (fail-closed — INV-4).
 Internal events (belief/policy/order) are produced by trusted engine code and
 are not key-validated here.

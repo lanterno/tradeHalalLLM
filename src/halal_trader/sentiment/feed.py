@@ -8,7 +8,7 @@ the configured collector and passes them through
 
 from __future__ import annotations
 
-from typing import Sequence
+from collections.abc import Sequence
 
 from halal_trader.sentiment.events import NewsEvent
 
@@ -16,11 +16,11 @@ _SENTIMENT_GLYPH = {"positive": "▲", "negative": "▼", "neutral": "·"}
 
 
 def format_news_for_prompt(
-    events: Sequence[NewsEvent], *, limit: int = 6, pair_filter: Sequence[str] | None = None
+    events: Sequence[NewsEvent], *, limit: int = 6, symbol_filter: Sequence[str] | None = None
 ) -> str:
     """Render up to ``limit`` events as a compact bullet list for the LLM.
 
-    ``pair_filter`` (optional) restricts to events whose ``affected_pairs``
+    ``symbol_filter`` (optional) restricts to events whose ``symbols``
     overlaps the filter — useful when the universe is small and we want
     to avoid burning tokens on irrelevant headlines.
 
@@ -30,12 +30,10 @@ def format_news_for_prompt(
     if not events:
         return ""
 
-    if pair_filter:
-        pf = {p.upper() for p in pair_filter}
+    if symbol_filter:
+        sf = {s.upper() for s in symbol_filter}
         events = [
-            e
-            for e in events
-            if not e.affected_pairs or pf.intersection(p.upper() for p in e.affected_pairs)
+            e for e in events if not e.symbols or sf.intersection(s.upper() for s in e.symbols)
         ]
         if not events:
             return ""
@@ -49,8 +47,8 @@ def format_news_for_prompt(
     for ev in chosen:
         glyph = _SENTIMENT_GLYPH.get(ev.sentiment.lower(), "·")
         importance = ev.importance.upper() if ev.importance != "normal" else ""
-        pairs = f" [{','.join(p.upper() for p in ev.affected_pairs)}]" if ev.affected_pairs else ""
+        tags = f" [{','.join(s.upper() for s in ev.symbols)}]" if ev.symbols else ""
         head = f"{glyph} {ev.title}".strip()
-        meta = " ".join(filter(None, [importance, pairs.strip(), f"({ev.source})"]))
+        meta = " ".join(filter(None, [importance, tags.strip(), f"({ev.source})"]))
         lines.append(f"  - {head} — {meta}".rstrip())
     return "\n".join(lines)

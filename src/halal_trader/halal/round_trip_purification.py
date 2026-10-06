@@ -96,22 +96,6 @@ def compute_round_trip_purification(
 # ── Ledger ───────────────────────────────────────────────────────
 
 
-def _row_to_entry(row: RoundTripPurificationRow) -> RoundTripEntry:
-    return RoundTripEntry(
-        entry_id=row.entry_id,
-        symbol=row.symbol,
-        gain_amount_usd=row.gain_amount_usd,
-        impure_ratio=row.impure_ratio,
-        purification_due_usd=row.purification_due_usd,
-        timestamp=row.timestamp.isoformat() if row.timestamp else "",
-        source_ref=row.source_ref,
-        note=row.note,
-        disbursed=row.disbursed,
-        disbursed_at=row.disbursed_at.isoformat() if row.disbursed_at else None,
-        disbursed_to=row.disbursed_to,
-    )
-
-
 def _parse_ts(raw: str) -> datetime:
     if not raw:
         return datetime.now(UTC)
@@ -129,7 +113,7 @@ class RoundTripLedger:
     engine: AsyncEngine
 
     @property
-    def _sm(self) -> "async_sessionmaker[Any]":
+    def _sm(self) -> async_sessionmaker[Any]:
         return async_sessionmaker(self.engine, expire_on_commit=False)
 
     async def record(self, entry: RoundTripEntry) -> bool:
@@ -215,11 +199,6 @@ class RoundTripLedger:
         for r in rows:
             out[r.symbol] = out.get(r.symbol, 0.0) + r.purification_due_usd
         return out
-
-    async def all_entries(self) -> list[RoundTripEntry]:
-        async with self._sm() as s:
-            rows = (await s.execute(select(RoundTripPurificationRow))).scalars().all()
-            return [_row_to_entry(r) for r in rows]
 
     async def count(self) -> int:
         from sqlalchemy import func

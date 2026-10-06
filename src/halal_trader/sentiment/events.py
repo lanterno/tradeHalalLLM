@@ -19,5 +19,5 @@ class NewsEvent:
     url: str
     published_at: str
     sentiment: str
-    affected_pairs: list[str] = field(default_factory=list)
+    symbols: list[str] = field(default_factory=list)
     importance: str = "normal"  # "normal", "hot", "breaking"

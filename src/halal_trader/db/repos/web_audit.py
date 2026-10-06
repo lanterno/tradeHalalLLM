@@ -1,10 +1,5 @@
 """Web audit repository — pending/completed audit rows for dashboard mutations.
 
-First mini-repo extracted from the monolithic ``Repository`` class as
-part of Wave D of ``docs/cleanup_roadmap.md``. Each table's data access
-moves into its own ≤80-line module; the existing ``Repository`` class
-delegates to these so call sites can migrate incrementally.
-
 The matching ``WebAuditRepo`` Protocol lives in ``protocols.py``.
 """
 

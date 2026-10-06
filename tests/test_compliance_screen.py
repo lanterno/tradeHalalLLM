@@ -188,7 +188,7 @@ async def test_a_run_screens_and_stores_point_in_time_verdicts(engine: AsyncEngi
             )
         ).all()
     assert [r[0] for r in rows] == ["BANK", "NODEBT", "SOFT", "ZZZZ"]
-    assert float(dict((r[0], r[2]) for r in rows)["SOFT"]) == pytest.approx(0.05)
+    assert float({r[0]: r[2] for r in rows}["SOFT"]) == pytest.approx(0.05)
 
 
 async def test_a_run_uses_the_36_month_average_when_there_is_a_year_of_history(

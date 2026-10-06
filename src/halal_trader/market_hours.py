@@ -16,7 +16,7 @@ Design decisions
 
 from __future__ import annotations
 
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 # ── Constants ────────────────────────────────────────────────────
@@ -174,7 +174,7 @@ def trading_day_start_utc(d: date) -> datetime:
     Useful for DB queries: ``WHERE timestamp >= trading_day_start_utc(d)``.
     """
     midnight_et = datetime.combine(d, time.min, tzinfo=MARKET_TZ)
-    return midnight_et.astimezone(timezone.utc)
+    return midnight_et.astimezone(UTC)
 
 
 def trading_day_end_utc(d: date) -> datetime:
@@ -183,4 +183,4 @@ def trading_day_end_utc(d: date) -> datetime:
     Useful for DB queries: ``WHERE timestamp < trading_day_end_utc(d)``.
     """
     next_midnight_et = datetime.combine(d + timedelta(days=1), time.min, tzinfo=MARKET_TZ)
-    return next_midnight_et.astimezone(timezone.utc)
+    return next_midnight_et.astimezone(UTC)

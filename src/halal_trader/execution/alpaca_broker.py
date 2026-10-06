@@ -218,15 +218,14 @@ class AlpacaRestBroker:
         strike_price_lte: float | None = None,
         limit: int = 200,
     ) -> Any:
+        optional = {
+            "expiration_date_gte": expiration_date_gte,
+            "expiration_date_lte": expiration_date_lte,
+            "strike_price_gte": strike_price_gte,
+            "strike_price_lte": strike_price_lte,
+        }
         params: dict[str, Any] = {"feed": feed, "limit": limit}
-        for key, value in (
-            ("expiration_date_gte", expiration_date_gte),
-            ("expiration_date_lte", expiration_date_lte),
-            ("strike_price_gte", strike_price_gte),
-            ("strike_price_lte", strike_price_lte),
-        ):
-            if value is not None:
-                params[key] = value
+        params.update({k: v for k, v in optional.items() if v is not None})
         return await self._request(
             "GET", f"{DATA_URL}/v1beta1/options/snapshots/{underlying}", params=params
         )

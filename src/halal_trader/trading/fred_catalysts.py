@@ -121,7 +121,7 @@ class FREDReleaseCalendarSource:
                 rel = str(c.extra.get("release", "")) or c.kind
                 seen.append((rel, c.timestamp))
             # Cache stores per-symbol Catalysts; collapse to unique (release, ts).
-            unique: dict[tuple[str, datetime], None] = {(r, t): None for r, t in seen}
+            unique: dict[tuple[str, datetime], None] = dict.fromkeys(seen)
             return list(unique.keys())
 
         out: list[tuple[str, datetime]] = []

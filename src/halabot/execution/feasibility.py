@@ -17,7 +17,7 @@ from dataclasses import dataclass
 @dataclass(frozen=True)
 class FeasibilityConfig:
     min_notional_usd: float = 50.0
-    lot_step: float = 1.0  # 1 = whole shares (stocks); fractional for crypto
+    lot_step: float = 1.0  # 1 = whole shares; < 1 for fractional shares
     min_qty: float = 0.0
 
 

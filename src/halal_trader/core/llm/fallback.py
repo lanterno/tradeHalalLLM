@@ -160,10 +160,10 @@ class FallbackLLM(BaseLLM):
         self,
         prompt: str,
         *,
-        tools: "list[Any]",
+        tools: list[Any],
         system: str | None = None,
         force_tool: str | None = None,
-    ) -> "list[Any]":
+    ) -> list[Any]:
         """Delegate to each provider's generate_tool_call.
 
         Providers without native tool-use inherit the

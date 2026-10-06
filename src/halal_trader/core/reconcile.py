@@ -13,9 +13,10 @@ the UI / via ``halt --close-all`` or accept the discrepancy.
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any, Iterable
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
@@ -170,7 +171,7 @@ async def reconcile_stocks(
     engine: AsyncEngine,
     broker: Any,
     threshold_pct: float = DEFAULT_DRIFT_THRESHOLD,
-    alerts: "AlertSink | None" = None,
+    alerts: AlertSink | None = None,
     settlement_grace: timedelta = _STOCKS_SETTLEMENT_GRACE,
 ) -> ReconcileReport:
     """Compare aggregate filled-quantity per ticker against broker positions.
@@ -241,7 +242,7 @@ async def reconcile_stocks(
 async def _persist_and_alert(
     engine: AsyncEngine,
     report: ReconcileReport,
-    alerts: "AlertSink | None",
+    alerts: AlertSink | None,
 ) -> None:
     if not report.drifts:
         logger.debug(
@@ -287,8 +288,8 @@ async def _persist_and_alert(
         is_untracked_broker_balance = drift.db_quantity == 0.0 and drift.broker_quantity > 0.0
         if is_untracked_broker_balance:
             # Aggregate into a single summary line at the end of the pass
-            # instead of one INFO log per asset (testnet has 50+ faucet
-            # assets → 50 lines per reconcile pass → console spam).
+            # instead of one INFO log per symbol (an account holding many
+            # positions the bot never opened would spam every pass).
             untracked_count += 1
             untracked_usd += drift.drift_usd or 0.0
             continue
@@ -326,8 +327,8 @@ async def _persist_and_alert(
             )
         )
 
-    # Single summary line for untracked broker balances — replaces the
-    # per-asset INFO spam (was 50+ lines per pass on testnet).
+    # Single summary line for untracked broker balances — replaces
+    # per-symbol INFO spam.
     if untracked_count:
         logger.info(
             "Reconcile: %d untracked broker balance(s) totaling ~$%.2f (informational)",

@@ -114,16 +114,16 @@ def test_summarize_tf_handles_error_payload(analyzer):
 
 def test_format_for_prompt_labels_alignment_buckets():
     results = {
-        "BTCUSDT": {"alignment_score": 0.5, "per_tf": {"1h": "RSI=55"}, "support_resistance": []},
-        "ETHUSDT": {"alignment_score": -0.5, "per_tf": {}, "support_resistance": []},
-        "SOLUSDT": {"alignment_score": 0.0, "per_tf": {}, "support_resistance": []},
+        "AAPL": {"alignment_score": 0.5, "per_tf": {"1h": "RSI=55"}, "support_resistance": []},
+        "MSFT": {"alignment_score": -0.5, "per_tf": {}, "support_resistance": []},
+        "NVDA": {"alignment_score": 0.0, "per_tf": {}, "support_resistance": []},
     }
     text = format_timeframes_for_prompt(results)
     assert "BULLISH" in text
     assert "BEARISH" in text
     assert "MIXED" in text
     # Sorted alphabetically by symbol so output is deterministic for caching.
-    assert text.find("BTCUSDT") < text.find("ETHUSDT") < text.find("SOLUSDT")
+    assert text.find("AAPL") < text.find("MSFT") < text.find("NVDA")
 
 
 def test_format_for_prompt_handles_empty():

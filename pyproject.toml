@@ -27,8 +27,7 @@ dependencies = [
     # Timezone data (required on minimal/WSL systems without system tzdata)
     "tzdata",
     "uvicorn>=0.40.0",
-    # uvicorn's WebSocket transport (the dashboard's /ws/cycle stream). It used
-    # to arrive transitively through python-binance; declare it now.
+    # uvicorn's WebSocket transport (the dashboard's /ws/cycle stream).
     "websockets",
     "fastapi>=0.135.1",
     "asyncpg>=0.31.0",
@@ -83,9 +82,24 @@ target-version = "py314"
 line-length = 100
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "W"]
+select = ["E", "F", "I", "W", "UP", "B", "C4", "PIE", "PERF"]
+# B905: zip(strict=) would turn a silent length mismatch into a crash on a
+# live path; adding it is a behaviour change, made case by case, not by lint.
+ignore = [
+    "B905",
+    "UP042",  # StrEnum changes what str(member) prints
+    "UP047",  # PEP 695 generics: churn without a reader benefit yet
+    "C408",  # dict(a=1) reads fine and is common in fixtures
+    "PERF401",  # loop-and-append is often the clearer form
+]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI/Typer dependency markers are evaluated once by design.
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Query", "fastapi.Header", "fastapi.Path", "fastapi.Body"]
 
 [tool.ruff.lint.per-file-ignores]
+# pytest.raises(Exception) is deliberate where any failure is the contract.
+"tests/**" = ["B017"]
 "src/halal_trader/web/app.py" = ["E501"]
 # Email renderer has a multi-line HTML template f-string where
 # wrapping each inline-styled tag would hurt readability without
@@ -101,11 +115,6 @@ filterwarnings = [
     # coroutines never get awaited because the access never escalated to a
     # call. These are mock-plumbing artifacts in tests, not production bugs.
     "ignore:coroutine 'AsyncMockMixin\\._execute_mock_call' was never awaited:RuntimeWarning",
-    # python-binance 1.0.36 imports ``websockets.WebSocketClientProtocol`` and
-    # ``websockets.legacy``, both deprecated by the websockets library. Not
-    # our bug to fix; filter so the warning summary stays usable.
-    "ignore:websockets\\.WebSocketClientProtocol is deprecated:DeprecationWarning",
-    "ignore:websockets\\.legacy is deprecated.*:DeprecationWarning",
 ]
 
 [tool.coverage.run]
@@ -154,6 +163,9 @@ files = [
     # Already strict-clean when measured on 2026-10-01; gated so they stay so.
     "src/halal_trader/quant",
     "src/halal_trader/mcp",
+    # Folded out of core/ (the stock/crypto base classes); strict-clean.
+    "src/halal_trader/trading/portfolio.py",
+    "src/halal_trader/trading/self_improve.py",
 ]
 ignore_missing_imports = true
 warn_redundant_casts = true

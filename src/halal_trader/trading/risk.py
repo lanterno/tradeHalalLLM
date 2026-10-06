@@ -1,17 +1,13 @@
 """Stock portfolio-risk adapter — feeds Alpaca bars to the shared risk engine.
 
-The crypto engine ( :class:`portfolio.risk.PortfolioRiskEngine` ) is already
+The engine (:class:`portfolio.risk.PortfolioRiskEngine`) is
 broker-agnostic: it just needs a ``klines_by_symbol`` mapping plus
 indicator + position context. This module wires Alpaca bars into that
 engine; bar-shape coercion and indicator computation live in
-:mod:`halal_trader.trading.bars`.
-
-Round-4 wave 0.C moved the risk knobs (``atr_baseline``,
+:mod:`halal_trader.trading.bars`. The risk knobs (``atr_baseline``,
 ``max_portfolio_heat_pct``, ``max_drawdown_pct``,
-``high_correlation_threshold``, ``correlation_reduction_factor``) onto
-:class:`StockSettings` so stocks + crypto can be tuned independently
-(daily equity bars vs. 1-minute crypto klines have very different
-volatility regimes).
+``high_correlation_threshold``, ``correlation_reduction_factor``) live on
+:class:`StockSettings`.
 """
 
 from __future__ import annotations
@@ -23,14 +19,9 @@ from typing import Any
 from halal_trader.config import Settings
 from halal_trader.domain.models import Position
 from halal_trader.portfolio.risk import PortfolioRiskEngine, PortfolioRiskState
-from halal_trader.trading.bars import bars_to_klines, compute_indicators_by_symbol
+from halal_trader.trading.bars import compute_indicators_by_symbol
 
 logger = logging.getLogger(__name__)
-
-
-# Backwards-compatible alias — the helper now lives in trading.bars but
-# a few call sites still import this private name.
-_bars_to_klines = bars_to_klines
 
 
 @dataclass

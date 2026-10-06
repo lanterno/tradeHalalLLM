@@ -89,7 +89,7 @@ async def test_indicator_interpreter_silent_without_history():
 
 # ── RsiInterpreter ──
 def _fill(buf, asset, closes):
-    for i, c in enumerate(closes):
+    for c in closes:
         buf.append(asset, Bar(o=c, h=c + 1, low=c - 1, c=c, v=1.0, ts=T0))
 
 

@@ -1,4 +1,4 @@
-"""Halal-compliance CLI (Wave L) — operator-side explainer.
+"""Halal-compliance CLI — operator-side explainer.
 
 Mirrors the dashboard's ``/api/halal/explain/{trade_id}`` endpoint for
 terminal use. Pulls the trade + its screening receipt and renders the

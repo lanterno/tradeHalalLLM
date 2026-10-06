@@ -42,8 +42,6 @@ class _StubLLM(BaseLLM):
 class _NoopStrategy(BaseStrategy):
     """Concrete BaseStrategy so we can drive ``_run_llm_analysis`` directly."""
 
-    pass
-
 
 def _strategy(llm: BaseLLM, repo: Repository) -> _NoopStrategy:
     return _NoopStrategy(

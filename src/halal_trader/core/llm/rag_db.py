@@ -43,7 +43,7 @@ class DBRationaleStore:
     capacity: int = 10_000
 
     @property
-    def _sm(self) -> "async_sessionmaker[Any]":
+    def _sm(self) -> async_sessionmaker[Any]:
         return async_sessionmaker(self.engine, expire_on_commit=False)
 
     async def size(self) -> int:
@@ -62,7 +62,6 @@ class DBRationaleStore:
         outcome_pnl_pct: float,
         setup_type: str | None = None,
         timestamp: str = "",
-        tags: Iterable[str] | None = None,
     ) -> RationaleRowDC:
         """Embed + persist one rationale. Idempotent on ``trade_id``."""
         async with self._sm() as s:

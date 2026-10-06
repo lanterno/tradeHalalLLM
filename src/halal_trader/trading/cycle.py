@@ -63,7 +63,7 @@ class TradingCycleService(BaseCycleService):
         # separate process, so the scheduler publishes this in the cycle
         # heartbeat's detail (core/heartbeat.py) rather than in memory.
         self.last_risk_snapshot: dict[str, Any] | None = None
-        # Optional StockCatalystFeed (Phase 3.5) — gives the LLM live news,
+        # Optional StockCatalystFeed — gives the LLM live news,
         # earnings, insider activity. Cycle proceeds normally if absent.
         self._catalyst_feed = catalyst_feed
         # Optional multi-timeframe analyzer — pulls hourly/daily/weekly
@@ -72,10 +72,10 @@ class TradingCycleService(BaseCycleService):
         # Optional Telegram notifier — fires `notify_trade` on filled
         # buys/sells so the operator gets a Telegram alert per fill.
         self._notifier = notifier
-        # Stocks-side parity (round-7 follow-up): rolling-window
-        # performance summary + active self-improve adjustments. The
-        # analytics impl just needs ``compute_stats`` + ``format_for_prompt``
-        # (``portfolio.analytics.PerformanceAnalytics`` satisfies);
+        # Rolling-window performance summary + active self-improve
+        # adjustments. The analytics impl just needs ``compute_stats`` +
+        # ``format_for_prompt`` (``portfolio.analytics.PerformanceAnalytics``
+        # satisfies);
         # ``self_review`` just needs ``format_adjustments_for_prompt()``.
         # Both default to None — stage emits an empty block.
         self._analytics = analytics
@@ -155,7 +155,7 @@ class TradingCycleService(BaseCycleService):
         snapshots, bars = await self._fetch_market_data(halal_symbols)
         today_pnl = await self._portfolio.get_current_pnl()
 
-        # ── Wave B: drive a single CycleState through the stage list ──
+        # ── Drive a single CycleState through the stage list ──
         from halal_trader.core.cycle_pipeline import CycleState, run_stages
         from halal_trader.core.cycle_stages import (
             BuildActiveAdjustmentsStage,

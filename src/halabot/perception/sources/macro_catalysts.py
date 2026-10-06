@@ -50,7 +50,7 @@ _KIND_IMPACT: dict[str, float] = {
 }
 _DEFAULT_IMPACT = 0.5
 
-# MacroObservation.kind spelling (schemas/observations.py) is uppercase.
+# Catalyst.kind spelling (belief/schema.py) is uppercase.
 _KIND_NAMES: dict[str, str] = {
     "fomc": "FOMC",
     "cpi": "CPI",
@@ -136,7 +136,7 @@ class MacroCatalystSource(PollingSource):
                 "expected_impact": _KIND_IMPACT.get(kind_raw, _DEFAULT_IMPACT),
                 "actual": None,
                 "consensus": None,
-                # Not part of the MacroObservation contract, but carried so
+                # Not a required macro key (schemas.REQUIRED_KEYS), but carried so
                 # the belief's Catalyst.detail stays human-readable.
                 "detail": str(getattr(raw, "title", "") or "")[:200],
             },

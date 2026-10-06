@@ -60,7 +60,7 @@ class BufferPriceSource:
     A real, free price feed for the invalidation check: the latest bar close.
     Returns None for an asset with no bars yet (no spurious invalidation)."""
 
-    def __init__(self, buffer: "BarBuffer") -> None:
+    def __init__(self, buffer: BarBuffer) -> None:
         self._buffer = buffer
 
     def last_price(self, asset: str) -> float | None:

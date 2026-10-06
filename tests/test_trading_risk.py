@@ -24,11 +24,8 @@ def _series(start: float, n: int, step: float) -> list[dict]:
 def _settings() -> Settings:
     """Settings stub for the stocks-side risk adapter.
 
-    Round-4 wave 0.C moved the risk knobs from CryptoSettings to
-    StockSettings — pydantic's `extra="ignore"` swallowed the legacy
-    `crypto_*` kwargs silently before, so the test was using defaults
-    by accident. Now we construct StockSettings explicitly with the
-    intended values."""
+    StockSettings is built explicitly: pydantic's `extra="ignore"` would
+    swallow a misnamed kwarg and leave the test on defaults."""
     from halal_trader.config import StockSettings
 
     return Settings(

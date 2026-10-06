@@ -40,7 +40,7 @@ def register(app: FastAPI) -> None:
 
     @app.websocket("/ws/cycle")
     async def ws_cycle(websocket: WebSocket, topic: str = "*") -> None:
-        """Wave I — stream structured cycle events to the dashboard.
+        """Stream structured cycle events to the dashboard.
 
         Subscribers see ``cycle.start``, ``cycle.stage.start``,
         ``cycle.stage.end``, ``cycle.complete``, ``cycle.failed``,

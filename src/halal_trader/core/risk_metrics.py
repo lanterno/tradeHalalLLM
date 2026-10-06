@@ -1,10 +1,10 @@
 """Tail-risk metrics: Value-at-Risk and Conditional VaR (Expected Shortfall).
 
 Variance and Sharpe describe the middle of the distribution; they say little
-about how bad the bad days get. For a fat-tailed book (crypto especially) the
-tail is what blows up an account. VaR is the loss you only exceed ``alpha`` of
-the time; CVaR (Expected Shortfall) is the *average* loss in that worst-``alpha``
-tail — a coherent risk measure and a better budget than variance.
+about how bad the bad days get. For a fat-tailed book the tail is what blows up
+an account. VaR is the loss you only exceed ``alpha`` of the time; CVaR
+(Expected Shortfall) is the *average* loss in that worst-``alpha`` tail — a
+coherent risk measure and a better budget than variance.
 
 Pure functions (numpy only). Returns are signed fractions; VaR/CVaR come back
 **negative** for a losing tail (e.g. -0.04 = a 4% expected shortfall).

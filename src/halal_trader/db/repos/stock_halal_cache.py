@@ -1,8 +1,7 @@
 """Stock halal-screening cache repository.
 
-Wave D extraction. Reads and writes the ``halal_cache`` table —
-symbol → compliance verdict from Zoya/AAOIFI.
-Matching ``StockHalalCacheRepo`` Protocol in ``protocols.py``.
+Reads and writes the ``halal_cache`` table — symbol → compliance
+verdict from Zoya/AAOIFI. Matching ``StockHalalCacheRepo`` Protocol in ``protocols.py``.
 """
 
 from __future__ import annotations

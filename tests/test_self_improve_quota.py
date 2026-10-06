@@ -1,4 +1,4 @@
-"""Tests for `TradeSelfReviewBase.review()`'s insufficient_quota handling.
+"""Tests for `StockTradeSelfReview.review()`'s insufficient_quota handling.
 
 The 1-hour backoff fix from 4db7e21 keeps the bot from re-attempting the
 LLM every 5 min when the provider account is out of credits. This pins
@@ -61,7 +61,7 @@ async def test_insufficient_quota_pushes_next_review_an_hour_out():
     # such that should_trigger_review returns False right away even
     # if a trigger condition fires.
     now = time.monotonic()
-    assert review._last_review_time > now + review._review_cooldown
+    assert review._last_review_time > now + review._REVIEW_COOLDOWN_SECONDS
 
 
 @pytest.mark.asyncio

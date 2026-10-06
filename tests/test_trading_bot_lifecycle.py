@@ -1,10 +1,8 @@
-"""Tests for :class:`BaseTradingBot._prune_audit_log` retention logic.
+"""Tests for :class:`TradingBot`'s audit-log prune and engine teardown.
 
-The shared bot lifecycle (init / run_once / shutdown) is exercised by
-the per-bot integration paths. The one piece worth direct coverage is
-the audit-log prune called from each bot's `_daily_end` — operators
-disable it by setting `WEB_AUDIT_RETENTION_DAYS=0`, and a runaway
-prune on a long-lived deployment shouldn't crash the bot.
+The prune's retention logic: operators disable it by setting
+`WEB_AUDIT_RETENTION_DAYS=0`, and a failing prune on a long-lived
+deployment shouldn't crash the bot.
 """
 
 from datetime import timedelta
@@ -12,31 +10,12 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from halal_trader.core.scheduler import BaseTradingBot
+from halal_trader.trading.scheduler import TradingBot
 
 
-class _StubBot(BaseTradingBot):
-    """Minimal bot that bypasses the real init path."""
-
-    async def _create_components(self) -> None:
-        return
-
-    async def _daily_start(self) -> None:
-        return
-
-    async def _daily_end(self) -> None:
-        return
-
-    def _get_cycle_service(self):
-        return MagicMock()
-
-    async def run(self) -> None:
-        return
-
-
-def _bot(*, retention: int = 7, bundle: object | None = None) -> _StubBot:
-    """Build a stub bot with audit retention overridden."""
-    bot = _StubBot.__new__(_StubBot)
+def _bot(*, retention: int = 7, bundle: object | None = None) -> TradingBot:
+    """Build a bot that bypasses the real init path, audit retention overridden."""
+    bot = TradingBot.__new__(TradingBot)
     bot._engine = None
     bot._running = False
     bot._repo = None
@@ -46,6 +25,18 @@ def _bot(*, retention: int = 7, bundle: object | None = None) -> _StubBot:
     settings = MagicMock()
     settings.web = web
     bot.settings = settings
+    return bot
+
+
+def _shutdown_ready(bot: TradingBot) -> TradingBot:
+    """Stub every resource ``shutdown`` touches besides the engine."""
+    bot.scheduler = MagicMock(running=False)
+    bot._news_reactor_task = None
+    bot._monitor_task = None
+    bot._stocks_news = None
+    bot._broker_client = MagicMock(disconnect=AsyncMock())
+    bot._lock_file = None
+    bot._release_trading_lock = AsyncMock()  # type: ignore[method-assign]
     return bot
 
 
@@ -96,7 +87,7 @@ async def test_prune_handles_negative_retention_as_disabled():
 
 @pytest.mark.asyncio
 async def test_shutdown_disposes_engine_and_clears():
-    bot = _bot()
+    bot = _shutdown_ready(_bot())
     engine = MagicMock()
     engine.dispose = AsyncMock()
     bot._engine = engine
@@ -110,7 +101,7 @@ async def test_shutdown_disposes_engine_and_clears():
 @pytest.mark.asyncio
 async def test_shutdown_no_op_when_not_initialized():
     """`shutdown` is safe to call even if init never ran."""
-    bot = _bot()
+    bot = _shutdown_ready(_bot())
     bot._engine = None
     await bot.shutdown()  # must not raise
     assert bot._engine is None

@@ -44,7 +44,7 @@ def register(app: FastAPI) -> None:
             return JSONResponse({"configured": False, "source": z.SOURCE})
         hawl = z.parse_hawl(hawl_hijri)
         today = today_eastern()
-        last_start, last_hawl = z.hawl_period(hawl, today)
+        _, last_hawl = z.hawl_period(hawl, today)
         # The next hawl: the one on or before a day a lunar year ahead.
         _, next_hawl = z.hawl_period(hawl, date.fromordinal(last_hawl.toordinal() + 360))
         accounts = []

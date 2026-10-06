@@ -2,10 +2,8 @@
 "fast in, slow out" momentum-entry pipeline (operator memory:
 strategy-fast-in-slow-out).
 
-Tests focus on the dedup + classify + threshold logic since the
-network layer is identical to the existing Finnhub news collector
-and the supervised lifecycle is identical to the crypto reactor —
-both covered elsewhere.
+Tests focus on the dedup + classify + threshold logic; the network
+layer is the Finnhub news collector's, covered elsewhere.
 """
 
 from __future__ import annotations

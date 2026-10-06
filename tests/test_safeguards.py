@@ -76,7 +76,7 @@ def test_is_live_mode_true_when_paper_off():
     assert is_live_mode(_settings(alpaca_paper_trade=True), market="stocks") is False
 
 
-def test_is_live_mode_rejects_crypto_market():
+def test_is_live_mode_rejects_unknown_market():
     with pytest.raises(ValueError):
         is_live_mode(_settings(), market="crypto")
 

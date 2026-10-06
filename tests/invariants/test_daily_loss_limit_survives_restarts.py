@@ -72,7 +72,7 @@ async def test_a_missed_pre_market_still_gets_a_baseline(engine: AsyncEngine) ->
 async def test_a_baseline_from_yesterday_is_never_reused(
     engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import halal_trader.core.portfolio as core_portfolio
+    import halal_trader.trading.portfolio as trading_portfolio
 
     tracker = _tracker(engine, 100_000.0)
     await tracker.record_day_start()
@@ -92,4 +92,4 @@ async def test_a_baseline_from_yesterday_is_never_reused(
     await tracker.get_current_pnl()
 
     assert calls == ["record_day_start"]
-    assert tracker._starting_date == core_portfolio.today_eastern()
+    assert tracker._starting_date == trading_portfolio.today_eastern()

@@ -38,7 +38,7 @@ def register(app: FastAPI) -> None:
         asset_class: str = "stock",
         ctx: DashboardContext = Depends(get_ctx),
     ) -> JSONResponse:
-        """Wave L — operator-readable Sharia-compliance explanation.
+        """Operator-readable Sharia-compliance explanation.
 
         Pulls the trade + its ``halal_screenings`` receipt and renders
         the criteria blob as Markdown with citations to

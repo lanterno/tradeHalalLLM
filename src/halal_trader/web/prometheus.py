@@ -8,12 +8,12 @@ hand keeps deployment dependency-free.
 Exposed metrics (all snapshot-style — Prometheus scrapes; we don't
 push):
 
+* ``halal_trader_bot_running`` — 1 / 0 liveness flag
+* ``halal_trader_drawdown_pct`` — current drawdown from peak
+* ``halal_trader_portfolio_heat_pct`` — unrealized P&L / equity
 * ``halal_trader_cycle_latency_ms`` — last cycle's elapsed time
 * ``halal_trader_llm_cost_today_usd`` — running spend total
-* ``halal_trader_llm_cache_read_ratio`` — cache_read / total input
 * ``halal_trader_open_positions`` — count per asset class
-* ``halal_trader_drawdown_pct`` — current drawdown from peak
-* ``halal_trader_bot_running`` — 1 / 0 liveness flag
 
 Each metric has a ``HELP`` + ``TYPE`` header per Prometheus convention.
 """
@@ -69,7 +69,7 @@ def _format_value(value: float) -> str:
     return f"{value:g}"
 
 
-def collect_default_snapshots(runtime: "RuntimeView") -> list[MetricSnapshot]:
+def collect_default_snapshots(runtime: RuntimeView) -> list[MetricSnapshot]:
     """Pull standard halal-trader metrics out of the dashboard runtime view.
 
     Populated by the cycle, monitor, and analytics surfaces. Absent
@@ -88,7 +88,7 @@ def collect_default_snapshots(runtime: "RuntimeView") -> list[MetricSnapshot]:
 
     risk = runtime.risk_state or {}
     if isinstance(risk, dict):
-        # Discriminate crypto vs stocks pushes — see :class:`CycleState`.
+        # Labelled with the market that pushed the snapshot, "unknown" if absent.
         market_label = {"market": str(risk.get("market", "unknown"))}
         if "drawdown_pct" in risk and risk["drawdown_pct"] is not None:
             out.append(

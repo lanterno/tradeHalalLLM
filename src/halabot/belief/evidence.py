@@ -5,8 +5,8 @@ B.1/B.2). Two correctness fixes from the spec review are baked in here:
 
 * **Trading-time decay (R-09):** evidence ages by *trading* minutes, not
   wall-clock, via an injectable :class:`Calendar`. A weekend/overnight gap must
-  not annihilate evidence and force a Monday-open mass exit. For 24/7 venues
-  the :class:`ContinuousCalendar` makes trading-time == wall-clock.
+  not annihilate evidence and force a Monday-open mass exit. The
+  :class:`ContinuousCalendar` makes trading-time == wall-clock instead.
 * **event_id dedup in merge (R, idempotency):** an at-least-once redelivery or
   a bootstrap-replay overlap must not double-count the same evidence.
 """
@@ -36,8 +36,8 @@ class Calendar(Protocol):
 
 
 class ContinuousCalendar:
-    """24/7 calendar — trading-time equals wall-clock (crypto, or the
-    ``evidence_decay_trading_time=False`` setting)."""
+    """24/7 calendar — trading-time equals wall-clock (the
+    ``evidence_decay_trading_time=False`` setting, or ``backtest --continuous``)."""
 
     def minutes_between(self, start: datetime, end: datetime) -> float:
         return max(0.0, (end - start).total_seconds() / 60.0)

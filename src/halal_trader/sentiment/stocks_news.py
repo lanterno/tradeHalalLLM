@@ -286,8 +286,8 @@ def _parse_finnhub_payload(symbol: str, payload: Any, *, limit: int) -> list[New
                 published_at=published,
                 sentiment=classify_headline(clean_title),
                 # Without this the prompt could not say which ticker a
-                # headline is about, and pair_filter passed everything.
-                affected_pairs=[symbol.upper()],
+                # headline is about, and symbol_filter passed everything.
+                symbols=[symbol.upper()],
             )
         )
     return out
@@ -323,7 +323,7 @@ def _parse_news_payload(symbol: str, payload: dict[str, Any]) -> list[NewsEvent]
                 url=link,
                 published_at=published,
                 sentiment=classify_headline(clean_title),
-                affected_pairs=[symbol],
+                symbols=[symbol],
                 importance="normal",
             )
         )

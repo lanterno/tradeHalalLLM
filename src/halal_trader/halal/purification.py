@@ -1,10 +1,10 @@
-"""Dividend purification ledger.
+"""Dividend purification calculator behind the admin form.
 
 Many Shariah-screened stocks still pay incidental haram revenue
 (typically a small interest-bearing investment portfolio). The standard
 practice is **purification**: estimate the haram portion of the
 dividend you receive and donate that fraction to charity. This module
-provides the data model + math for tracking those obligations.
+provides the data model + math for one such obligation.
 
 Inputs:
 
@@ -22,7 +22,7 @@ ex-date and the holdings from the broker ledger.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 
@@ -39,11 +39,6 @@ class PurificationEntry:
     purification_usd: Decimal
     received_at: datetime
     notes: str = ""
-    paid_at: datetime | None = None  # set when the operator records the donation
-
-    @property
-    def is_outstanding(self) -> bool:
-        return self.paid_at is None
 
 
 def compute_purification(
@@ -74,47 +69,3 @@ def compute_purification(
         received_at=received_at or datetime.now(UTC),
         notes=notes,
     )
-
-
-@dataclass
-class PurificationLedger:
-    """In-memory append-only ledger of purification obligations.
-
-    Persistence (DB table + Alembic migration) lands in 3.6b. Today this
-    is operator-side bookkeeping that surfaces in CLI exports — the
-    crucial property is that *no obligation can be silently discarded*,
-    only marked paid.
-    """
-
-    entries: list[PurificationEntry] = field(default_factory=list)
-
-    def record(self, entry: PurificationEntry) -> None:
-        self.entries.append(entry)
-
-    def outstanding_total(self) -> Decimal:
-        total = Decimal("0")
-        for e in self.entries:
-            if e.is_outstanding:
-                total += e.purification_usd
-        return quantize_usd(total)
-
-    def paid_total(self) -> Decimal:
-        total = Decimal("0")
-        for e in self.entries:
-            if not e.is_outstanding:
-                total += e.purification_usd
-        return quantize_usd(total)
-
-    def mark_paid(self, index: int, paid_at: datetime | None = None) -> None:
-        if not 0 <= index < len(self.entries):
-            raise IndexError(f"no purification entry at index {index}")
-        old = self.entries[index]
-        self.entries[index] = PurificationEntry(
-            symbol=old.symbol,
-            dividend_usd=old.dividend_usd,
-            haram_pct=old.haram_pct,
-            purification_usd=old.purification_usd,
-            received_at=old.received_at,
-            notes=old.notes,
-            paid_at=paid_at or datetime.now(UTC),
-        )

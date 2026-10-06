@@ -1,8 +1,8 @@
 """Ed25519 signing for halal compliance receipts.
 
-Round-4 wave 2.A: cryptographically sign each `Receipt` so the
-operator can prove to a scholar / auditor that "trade X was screened
-by criteria Y at timestamp Z" without trusting our codebase.
+Cryptographically sign each `Receipt` so the operator can prove to a
+scholar / auditor that "trade X was screened by criteria Y at timestamp
+Z" without trusting our codebase.
 
 Properties of the signing scheme:
 
@@ -28,8 +28,6 @@ Key management:
 * If neither file exists at first call, :func:`get_or_create_signer`
   generates a fresh keypair and writes both files. Permissions on
   the private key are set to 0600.
-* For Round-4 wave 3 (multi-user), each user gets their own keypair
-  rooted at `data_dir/users/<user_id>/halal_signing.key`.
 """
 
 from __future__ import annotations

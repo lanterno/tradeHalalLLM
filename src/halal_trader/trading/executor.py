@@ -5,7 +5,6 @@ from datetime import UTC, datetime
 from typing import Any
 
 from halal_trader.core import events
-from halal_trader.core.executor import BaseExecutor
 from halal_trader.core.fills import confirm_alpaca
 from halal_trader.core.long_only import clamp_sell_to_long
 from halal_trader.db.repos import TradeRepo
@@ -156,7 +155,7 @@ def _accepted_closes(result: Any) -> set[str]:
     return set()
 
 
-class TradeExecutor(BaseExecutor):
+class TradeExecutor:
     """Executes stock trading decisions via the broker."""
 
     def __init__(
@@ -177,10 +176,8 @@ class TradeExecutor(BaseExecutor):
         reactor_hold_overnight: bool = True,
         screener: ComplianceScreener | None = None,
     ) -> None:
-        super().__init__(
-            max_position_pct=max_position_pct,
-            max_simultaneous_positions=max_simultaneous_positions,
-        )
+        self._max_position_pct = max_position_pct
+        self._max_simultaneous_positions = max_simultaneous_positions
         self._repo = repo
         self._broker = broker
         # The halal gate at the order boundary. Every BUY -- LLM cycle and
@@ -267,7 +264,7 @@ class TradeExecutor(BaseExecutor):
         """
         symbol = symbol.upper()
         # Max-simultaneous-positions cap. The cycle enforces it in
-        # _execute_plan_common; the reactor enters outside the cycle and
+        # execute_plan; the reactor enters outside the cycle and
         # used to skip it. Adding to a name already held does not open a
         # new position, so only a NEW name counts against the cap.
         held = {str(getattr(p, "symbol", "")).upper() for p in (positions or [])}
@@ -386,15 +383,46 @@ class TradeExecutor(BaseExecutor):
     ) -> list[dict[str, Any]]:
         """Execute all decisions in a TradingPlan, returning execution results.
 
+        Sells run first (they free cash and a position slot), then buys
+        until ``max_simultaneous_positions`` is reached; a buy past the cap
+        is reported as rejected rather than silently dropped.
+
         ``bars`` is the per-symbol bar payload from the cycle. When passed,
         every successful BUY records a stock-side IndicatorSnapshot.
         ``positions`` (current open positions) feeds the
         sector-rotation halal cap.
         """
-        return await self._execute_plan_common(plan, bars=bars or {}, positions=positions or [])
+        bars = bars or {}
+        positions = positions or []
+        results: list[dict[str, Any]] = []
 
-    def _get_sells(self, plan: Any) -> list[Any]:
-        return plan.sells
+        for decision in plan.sells:
+            results.append(await self._execute_sell(decision, bars=bars, positions=positions))
+
+        open_count = len(await self._broker.get_all_positions())
+
+        for decision in self._get_buys(plan):
+            if open_count >= self._max_simultaneous_positions:
+                msg = (
+                    f"Max simultaneous positions ({self._max_simultaneous_positions}) "
+                    f"reached — skipping BUY {decision.symbol}"
+                )
+                logger.warning(msg)
+                results.append(
+                    {
+                        "symbol": decision.symbol,
+                        "action": "buy",
+                        "status": "rejected",
+                        "reason": msg,
+                    }
+                )
+                continue
+            result = await self._execute_buy(decision, bars=bars, positions=positions)
+            if result.get("status") in ("submitted", "filled"):
+                open_count += 1
+            results.append(result)
+
+        return results
 
     def _get_buys(self, plan: Any) -> list[Any]:
         """Buy decisions, with duplicate same-symbol orders merged into one.
@@ -426,10 +454,6 @@ class TradeExecutor(BaseExecutor):
                 merged[sym] = b
                 order.append(sym)
         return [merged[s] for s in order]
-
-    async def _get_current_position_count(self, **_kwargs: Any) -> int:
-        current_positions = await self._broker.get_all_positions()
-        return len(current_positions)
 
     async def _execute_buy(self, decision: Any, **kwargs: Any) -> dict[str, Any]:
         """Execute a buy order."""

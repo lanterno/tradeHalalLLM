@@ -71,8 +71,8 @@ def test_observability_filter_attaches_only_set_ids():
 
 
 def test_observability_filter_attaches_service_when_set():
-    """set_service() tags every record so the shared stock/crypto log file
-    can be filtered by which bot emitted each line. It's a process-wide
+    """set_service() tags every record so combined logs can be filtered
+    by which process emitted each line. It's a process-wide
     global (not a ContextVar) so the tag survives into APScheduler job
     contexts / worker threads where the cycle records are actually emitted."""
     from halal_trader.core.observability import set_service

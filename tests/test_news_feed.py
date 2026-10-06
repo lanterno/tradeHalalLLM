@@ -6,14 +6,14 @@ from halal_trader.sentiment.events import NewsEvent
 from halal_trader.sentiment.feed import format_news_for_prompt
 
 
-def _ev(title="x", sentiment="neutral", pairs=None, importance="normal", source="cp"):
+def _ev(title="x", sentiment="neutral", symbols=None, importance="normal", source="cp"):
     return NewsEvent(
         title=title,
         source=source,
         url=f"http://example.com/{title}",
         published_at="2026-04-26T12:00:00",
         sentiment=sentiment,
-        affected_pairs=pairs or [],
+        symbols=symbols or [],
         importance=importance,
     )
 
@@ -24,48 +24,48 @@ def test_format_empty_returns_empty_string():
 
 def test_format_basic_bullets_with_glyphs():
     events = [
-        _ev(title="ETF approved", sentiment="positive", source="Bloomberg"),
-        _ev(title="Exchange hacked", sentiment="negative", source="Reuters"),
+        _ev(title="Earnings beat", sentiment="positive", source="Bloomberg"),
+        _ev(title="Guidance cut", sentiment="negative", source="Reuters"),
     ]
     text = format_news_for_prompt(events)
     assert "▲" in text  # positive glyph
     assert "▼" in text  # negative glyph
-    assert "ETF approved" in text
+    assert "Earnings beat" in text
     assert "Bloomberg" in text
 
 
-def test_format_emits_importance_and_pairs():
+def test_format_emits_importance_and_symbols():
     ev = _ev(
         title="SEC enforcement action",
         sentiment="negative",
         importance="breaking",
-        pairs=["BTCUSDT", "ETHUSDT"],
+        symbols=["AAPL", "MSFT"],
     )
     text = format_news_for_prompt([ev])
     assert "BREAKING" in text
-    assert "BTCUSDT" in text
-    assert "ETHUSDT" in text
+    assert "AAPL" in text
+    assert "MSFT" in text
 
 
-def test_format_filter_by_pair():
+def test_format_filter_by_symbol():
     events = [
-        _ev(title="BTC news", pairs=["BTCUSDT"]),
-        _ev(title="DOGE meme rally", pairs=["DOGEUSDT"]),
+        _ev(title="AAPL news", symbols=["AAPL"]),
+        _ev(title="TSLA rally", symbols=["TSLA"]),
     ]
-    text = format_news_for_prompt(events, pair_filter=["BTCUSDT"])
-    assert "BTC news" in text
-    assert "DOGE" not in text
+    text = format_news_for_prompt(events, symbol_filter=["AAPL"])
+    assert "AAPL news" in text
+    assert "TSLA" not in text
 
 
 def test_format_filter_keeps_unscoped_events():
-    """Events without affected_pairs are general-market — keep them."""
+    """Events without symbols are general-market — keep them."""
     events = [
-        _ev(title="Macro: Fed cuts rates", pairs=[]),
-        _ev(title="DOGE rally", pairs=["DOGEUSDT"]),
+        _ev(title="Macro: Fed cuts rates", symbols=[]),
+        _ev(title="TSLA rally", symbols=["TSLA"]),
     ]
-    text = format_news_for_prompt(events, pair_filter=["BTCUSDT"])
+    text = format_news_for_prompt(events, symbol_filter=["AAPL"])
     assert "Macro" in text
-    assert "DOGE" not in text
+    assert "TSLA" not in text
 
 
 def test_format_respects_limit():
@@ -77,6 +77,6 @@ def test_format_respects_limit():
     assert "e0" not in text
 
 
-def test_pair_filter_with_no_matches_returns_empty():
-    events = [_ev(title="DOGE", pairs=["DOGEUSDT"])]
-    assert format_news_for_prompt(events, pair_filter=["BTCUSDT"]) == ""
+def test_symbol_filter_with_no_matches_returns_empty():
+    events = [_ev(title="TSLA", symbols=["TSLA"])]
+    assert format_news_for_prompt(events, symbol_filter=["AAPL"]) == ""

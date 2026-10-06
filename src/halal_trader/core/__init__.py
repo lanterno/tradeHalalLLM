@@ -1,1 +1,1 @@
-"""Shared base classes for stock and crypto trading subsystems."""
+"""Shared infrastructure for the trading bot: cycle template, kill-switch, reconcile, fills, LLM."""

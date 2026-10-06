@@ -4,8 +4,8 @@ N *consecutive* unexpected order errors on one asset open a per-asset breaker fo
 a cooldown, quarantining a malfunctioning symbol (bad filter, venue glitch)
 instead of letting the continuous target loop retry it forever. The count is by
 consecutive failures (any success resets it), NOT a sliding time window. Clean
-rejections (bad quantity / insufficient funds — Binance -1013 / -2010) are NOT
-breaker trips; they're expected outcomes that reset nothing.
+rejections (bad quantity / insufficient funds) are NOT breaker trips; they're
+expected outcomes that reset nothing.
 
 Clock-injected: callers pass ``now`` so the cooldown expiry is deterministic.
 """

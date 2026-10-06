@@ -1,8 +1,8 @@
 """Stock trades repository.
 
-Wave D extraction. Owns the ``trades`` table — order intents, fills,
-exits — used by the stock executor + monitor + reconcile loop. The
-matching ``TradeRepo`` Protocol lives in ``protocols.py``.
+Owns the ``trades`` table — order intents, fills, exits — used by the
+stock executor + monitor + reconcile loop. The matching ``TradeRepo``
+Protocol lives in ``protocols.py``.
 """
 
 from __future__ import annotations
@@ -175,8 +175,7 @@ class TradeRepoImpl:
         exit_price: float,
         exit_reason: str,
     ) -> int:
-        """Mark all open BUYs for ``symbol`` as closed (mirrors the crypto
-        ``close_open_crypto_trades_for_pair`` helper).
+        """Mark all open BUYs for ``symbol`` as closed.
 
         Called from the executor's ``_execute_sell`` so an LLM-initiated
         SELL doesn't just record a SELL row but also stamps ``closed_at``

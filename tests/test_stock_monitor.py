@@ -487,7 +487,7 @@ async def test_exit_skipped_when_position_lookup_flakes(engine):
 
 async def test_exit_calls_notifier_when_wired(engine):
     """An SL/TP exit fires `notify_sl_tp` so the operator gets the same
-    Telegram alert the crypto monitor already sends."""
+    Telegram alert."""
     repo = Repository(engine)
     try:
         tid = await repo.record_trade(

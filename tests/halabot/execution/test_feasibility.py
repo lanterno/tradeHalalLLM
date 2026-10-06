@@ -29,7 +29,7 @@ def test_buy_that_rounds_to_zero_rejected():
     assert not f.ok
 
 
-def test_fractional_lot_step_for_crypto():
+def test_fractional_lot_step():
     cfg = FeasibilityConfig(min_notional_usd=50.0, lot_step=0.001)
     f = feasible_buy(100.0, 30_000.0, buying_power=10_000.0, cfg=cfg)
     assert f.ok and f.quantity > 0 and f.notional_usd >= 50.0

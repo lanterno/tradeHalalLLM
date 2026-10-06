@@ -1,7 +1,7 @@
 """Tests for ``trading.timeframes.StockTimeframeAnalyzer``.
 
 The Alpaca-fetch adapter delegates the alignment / S-R / summary math
-to the crypto base class; the only stock-specific surface is the
+to the shared ``TimeframeAnalyzer``; the only stock-specific surface is the
 ``_fetch_klines`` override (interval + days mapping → Alpaca bars →
 ``Kline`` list).
 """

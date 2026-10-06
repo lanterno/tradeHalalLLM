@@ -227,7 +227,7 @@ def compare_band_sources(
         z = _har_z_from(prior, horizon, target)
         if z is None:
             continue
-        w_rows = [r for r in list(windows[k])]
+        w_rows = list(windows[k])
         bands = {
             "atr": [(r.close - r.atr * sqrt_h, r.close + r.atr * sqrt_h) for r in w_rows],
             "har_cal": [

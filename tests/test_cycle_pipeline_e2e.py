@@ -9,7 +9,7 @@ We don't drive a real cycle here — just the stage list.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -55,7 +55,7 @@ async def test_full_stage_pipeline_populates_every_text_field():
                 symbol="AAPL",
                 kind="news",
                 title="AAPL beats earnings",
-                timestamp=datetime.now(timezone.utc),
+                timestamp=datetime.now(UTC),
                 sentiment="positive",
                 source="Bloomberg",
             )

@@ -99,8 +99,8 @@ def material_shift(
         return True  # regime flip
     if band_index(prev.conviction_raw) != band_index(new_raw):
         return True  # crossed a raw-conviction band edge
-    # Catalyst-driven refresh (live since 2026-07-03 — MacroCatalystSource
-    # populates catalysts_pending via the router's macro side-channel).
+    # Catalyst-driven refresh (MacroCatalystSource populates
+    # catalysts_pending via the router's macro side-channel).
     # Throttled to ONE refresh per catalyst window: without this, every
     # heartbeat decay-pass during the ±30min imminence window fanned out
     # an LLM call per asset (adversarial review, 2026-07-03). A thesis

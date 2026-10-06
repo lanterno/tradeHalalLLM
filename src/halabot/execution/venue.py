@@ -1,8 +1,8 @@
 """Venue port + value types + an in-memory fake (REARCHITECTURE L6).
 
-The :class:`Venue` Protocol is the seam every broker adapter implements (Alpaca
-for stocks, Binance dormant per fork 2). Cycle/execution code depends only on
-this surface, so swapping venues never touches the executor. :class:`FakeVenue`
+The :class:`Venue` Protocol is the seam a broker adapter implements (Alpaca, for
+stocks). Cycle/execution code depends only on this surface, so the adapter never
+leaks into the executor. :class:`FakeVenue`
 is a deterministic in-memory venue for tests and the dormant default — it never
 talks to a network.
 
@@ -21,7 +21,7 @@ Side = Literal["buy", "sell"]
 
 class VenueError(RuntimeError):
     """A venue/transport failure. Carries an optional broker error code so the
-    executor can classify rejections (-1013/-2010) vs breaker-tripping errors."""
+    executor can classify clean rejections vs breaker-tripping errors."""
 
     def __init__(self, message: str, *, code: int | None = None, rejection: bool = False) -> None:
         super().__init__(message)

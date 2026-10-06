@@ -7,6 +7,6 @@ spec; this package is built strangler-fig alongside the legacy
 ``halal_trader`` package and shares its Postgres + config until the
 legacy transactional pipeline is decommissioned (migration Phase 6).
 
-Constraints (unchanged): paper/testnet only — never real money; halal
+Constraints (unchanged): paper only — never real money; halal
 compliance is non-negotiable.
 """

@@ -6,8 +6,8 @@
 
 * `now_eastern` — wall-clock in US/Eastern (the single source of
   truth every cycle uses to ask "is the market open right now?").
-* `today_eastern` — bare date in US/Eastern (used by the daily
-  rollover check in `crypto/scheduler.py`).
+* `today_eastern` — bare date in US/Eastern (the trading day every
+  daily job and P&L row keys on).
 * `is_market_open_local` — combines `is_trading_day` + the open
   window. Pre-filter for the broker's authoritative `get_clock()`.
 """

@@ -89,7 +89,6 @@ class ShadowPolicyRunner:
         self._last_target: dict[str, float] = {}  # for target_changed dedup
         self.proposals_count = 0  # for the A/B (proposed trades over a session)
         self.last_proposals: list[TradeProposal] = []
-        self.last_rejections: list[tuple[str, str]] = []  # (asset, gate reason) last cycle
 
     def start(self) -> None:
         self._subs.append(self._bus.subscribe({EventType.BELIEF_UPDATED}, self._on_belief))
@@ -253,7 +252,6 @@ class ShadowPolicyRunner:
             market_risk_off=self._market_is_risk_off(),
             on_reject=lambda asset, reason: rejections.append((asset, reason)),
         )
-        self.last_rejections = rejections
         if rejections:
             # Gated buys are otherwise invisible — log a per-cycle summary by reason
             # so the operator can SEE the gates (e.g. the market-regime gate) work.

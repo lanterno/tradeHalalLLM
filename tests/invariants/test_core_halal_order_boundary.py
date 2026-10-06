@@ -60,7 +60,7 @@ async def _screen(
                     "s": s,
                     "c": i + 1,
                     "v": v,
-                    "m": '{"price": %f, "shares_outstanding": %f}' % (p, sh),
+                    "m": f'{{"price": {p:f}, "shares_outstanding": {sh:f}}}',
                 }
                 for i, (s, (v, p, sh)) in enumerate(rows.items())
             ],

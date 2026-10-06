@@ -41,9 +41,9 @@ class TestPerformanceStats:
 
     async def test_all_wins(self):
         trips = [
-            _make_rt("BTCUSDT", 10.0, 0.01, closed_at="2025-01-01T12:00:00"),
-            _make_rt("ETHUSDT", 5.0, 0.005, closed_at="2025-01-01T12:05:00"),
-            _make_rt("BTCUSDT", 8.0, 0.008, closed_at="2025-01-01T12:10:00"),
+            _make_rt("AAPL", 10.0, 0.01, closed_at="2025-01-01T12:00:00"),
+            _make_rt("MSFT", 5.0, 0.005, closed_at="2025-01-01T12:05:00"),
+            _make_rt("AAPL", 8.0, 0.008, closed_at="2025-01-01T12:10:00"),
         ]
         analytics = PerformanceAnalytics(FakeRepo(trips))
         stats = await analytics.compute_stats()
@@ -57,10 +57,10 @@ class TestPerformanceStats:
 
     async def test_mixed_results(self):
         trips = [
-            _make_rt("BTCUSDT", 10.0, 0.02, closed_at="2025-01-01T12:00:00"),
-            _make_rt("ETHUSDT", -3.0, -0.01, closed_at="2025-01-01T12:05:00"),
-            _make_rt("BTCUSDT", -7.0, -0.015, closed_at="2025-01-01T12:10:00"),
-            _make_rt("SOLUSDT", 5.0, 0.01, closed_at="2025-01-01T12:15:00"),
+            _make_rt("AAPL", 10.0, 0.02, closed_at="2025-01-01T12:00:00"),
+            _make_rt("MSFT", -3.0, -0.01, closed_at="2025-01-01T12:05:00"),
+            _make_rt("AAPL", -7.0, -0.015, closed_at="2025-01-01T12:10:00"),
+            _make_rt("NVDA", 5.0, 0.01, closed_at="2025-01-01T12:15:00"),
         ]
         analytics = PerformanceAnalytics(FakeRepo(trips))
         stats = await analytics.compute_stats()
@@ -76,17 +76,17 @@ class TestPerformanceStats:
 
     async def test_best_worst_pair(self):
         trips = [
-            _make_rt("BTCUSDT", 20.0, 0.02, closed_at="2025-01-01T12:00:00"),
-            _make_rt("ETHUSDT", -5.0, -0.01, closed_at="2025-01-01T12:05:00"),
-            _make_rt("BTCUSDT", -2.0, -0.005, closed_at="2025-01-01T12:10:00"),
-            _make_rt("SOLUSDT", -10.0, -0.03, closed_at="2025-01-01T12:15:00"),
+            _make_rt("AAPL", 20.0, 0.02, closed_at="2025-01-01T12:00:00"),
+            _make_rt("MSFT", -5.0, -0.01, closed_at="2025-01-01T12:05:00"),
+            _make_rt("AAPL", -2.0, -0.005, closed_at="2025-01-01T12:10:00"),
+            _make_rt("NVDA", -10.0, -0.03, closed_at="2025-01-01T12:15:00"),
         ]
         analytics = PerformanceAnalytics(FakeRepo(trips))
         stats = await analytics.compute_stats()
 
-        assert stats.best_pair == "BTCUSDT"
+        assert stats.best_pair == "AAPL"
         assert stats.best_pair_pnl == pytest.approx(18.0)
-        assert stats.worst_pair == "SOLUSDT"
+        assert stats.worst_pair == "NVDA"
         assert stats.worst_pair_pnl == pytest.approx(-10.0)
 
     async def test_exit_reasons(self):
@@ -95,10 +95,10 @@ class TestPerformanceStats:
         t3 = "2025-01-01T12:10:00"
         t4 = "2025-01-01T12:15:00"
         trips = [
-            _make_rt("BTCUSDT", 10, 0.01, exit_reason="take_profit", closed_at=t1),
-            _make_rt("ETHUSDT", -3, -0.01, exit_reason="stop_loss", closed_at=t2),
-            _make_rt("BTCUSDT", 5, 0.005, exit_reason="take_profit", closed_at=t3),
-            _make_rt("SOLUSDT", -2, -0.005, exit_reason="llm_sell", closed_at=t4),
+            _make_rt("AAPL", 10, 0.01, exit_reason="take_profit", closed_at=t1),
+            _make_rt("MSFT", -3, -0.01, exit_reason="stop_loss", closed_at=t2),
+            _make_rt("AAPL", 5, 0.005, exit_reason="take_profit", closed_at=t3),
+            _make_rt("NVDA", -2, -0.005, exit_reason="llm_sell", closed_at=t4),
         ]
         analytics = PerformanceAnalytics(FakeRepo(trips))
         stats = await analytics.compute_stats()
@@ -109,8 +109,8 @@ class TestPerformanceStats:
 
     async def test_avg_hold_time(self):
         trips = [
-            _make_rt("BTCUSDT", 10, 0.01, duration_minutes=20, closed_at="2025-01-01T12:00:00"),
-            _make_rt("ETHUSDT", 5, 0.005, duration_minutes=40, closed_at="2025-01-01T12:05:00"),
+            _make_rt("AAPL", 10, 0.01, duration_minutes=20, closed_at="2025-01-01T12:00:00"),
+            _make_rt("MSFT", 5, 0.005, duration_minutes=40, closed_at="2025-01-01T12:05:00"),
         ]
         analytics = PerformanceAnalytics(FakeRepo(trips))
         stats = await analytics.compute_stats()
@@ -198,12 +198,8 @@ class TestFormatForPrompt:
 
     async def test_includes_key_fields(self):
         trips = [
-            _make_rt(
-                "BTCUSDT", 10, 0.01, exit_reason="take_profit", closed_at="2025-01-01T12:00:00"
-            ),
-            _make_rt(
-                "ETHUSDT", -3, -0.01, exit_reason="stop_loss", closed_at="2025-01-01T12:05:00"
-            ),
+            _make_rt("AAPL", 10, 0.01, exit_reason="take_profit", closed_at="2025-01-01T12:00:00"),
+            _make_rt("MSFT", -3, -0.01, exit_reason="stop_loss", closed_at="2025-01-01T12:05:00"),
         ]
         analytics = PerformanceAnalytics(FakeRepo(trips))
         stats = await analytics.compute_stats()
@@ -211,5 +207,5 @@ class TestFormatForPrompt:
 
         assert "Win rate" in text
         assert "Profit factor" in text
-        assert "BTCUSDT" in text
+        assert "AAPL" in text
         assert "take_profit" in text

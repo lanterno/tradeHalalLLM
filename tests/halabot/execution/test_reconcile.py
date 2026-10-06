@@ -69,7 +69,7 @@ async def test_reconciler_emits_events_for_actions():
         venue=venue,
         bus=bus,
         clock=FakeClock(T0),
-        db_net=lambda: {},  # DB knows nothing → import
+        db_net=dict,  # DB knows nothing → import
         owner_of=lambda a: "belief",
     )
     await rec.run_once()

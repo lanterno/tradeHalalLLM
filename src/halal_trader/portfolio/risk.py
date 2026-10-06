@@ -107,10 +107,6 @@ class PortfolioRiskEngine:
 
         return state
 
-    def get_adjusted_max_position_pct(self, symbol: str, state: PortfolioRiskState) -> float:
-        """Get the risk-adjusted max position % for a symbol."""
-        return state.adjusted_position_pcts.get(symbol, self._base_max_position_pct)
-
     def _compute_correlations(
         self, klines_by_symbol: dict[str, list[Kline]]
     ) -> dict[str, dict[str, float]]:

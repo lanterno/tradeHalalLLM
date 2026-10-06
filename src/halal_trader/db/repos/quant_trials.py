@@ -3,7 +3,7 @@
 Records every evaluated quant variant — including failures — so the
 Deflated Sharpe Ratio gets an honest trial count and every verdict has a
 durable home (docs/QUANT_PREDICTION_ROADMAP.md Phase 0). Deliberately NOT
-part of the legacy ``Repository`` facade: new code depends on the
+part of the flat ``Repository`` facade: new code depends on the
 narrowest repo it needs (the module docstring rule in ``db/repository.py``).
 """
 

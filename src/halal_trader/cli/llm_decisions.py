@@ -47,7 +47,7 @@ def llm_decisions() -> None:
 @click.option(
     "--prompt-version",
     default=None,
-    help="Filter by prompt registry id, e.g. 'crypto.strategy.system@abc123…'.",
+    help="Filter by prompt registry id, e.g. 'trading.strategy.system@abc123…'.",
 )
 @click.option(
     "--provider",

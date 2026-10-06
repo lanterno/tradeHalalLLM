@@ -17,9 +17,10 @@ filings) and ``fed_speak_adapter`` (Fed-speak drift).
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
-from typing import Any, Protocol, Sequence
+from datetime import UTC, datetime, timedelta
+from typing import Any, Protocol
 
 logger = logging.getLogger(__name__)
 
@@ -54,9 +55,6 @@ class StockCatalystFeed:
 
     def __init__(self, sources: Sequence[CatalystSource] | None = None) -> None:
         self._sources: list[CatalystSource] = list(sources or [])
-
-    def add_source(self, source: CatalystSource) -> None:
-        self._sources.append(source)
 
     async def fetch_all(self, symbols: Sequence[str]) -> list[Catalyst]:
         """Pull from every source, swallow per-source errors, return combined list."""
@@ -100,14 +98,14 @@ def format_catalysts_for_prompt(
     if not catalysts:
         return ""
 
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=max_age_hours)
+    cutoff = datetime.now(UTC) - timedelta(hours=max_age_hours)
     sym_set = {s.upper() for s in symbols} if symbols else None
 
     fresh: list[Catalyst] = []
     for c in catalysts:
         ts = c.timestamp
         if ts.tzinfo is None:
-            ts = ts.replace(tzinfo=timezone.utc)
+            ts = ts.replace(tzinfo=UTC)
         if ts < cutoff:
             continue
         if sym_set and c.symbol.upper() not in sym_set:

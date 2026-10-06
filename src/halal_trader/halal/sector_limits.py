@@ -14,8 +14,8 @@ still trade them but they share the unknown-sector cap.
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from typing import Iterable, Mapping
 
 # Sectors that are NOT subject to the per-sector cap. The halal stocks
 # universe is structurally heavy on US large-cap Technology (most of

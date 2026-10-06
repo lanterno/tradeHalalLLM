@@ -31,12 +31,12 @@ async def _seed(database_url: str) -> None:
                     "ts": datetime(2026, 4, 26, 12, 0, 0, tzinfo=UTC),
                     "prov": "anthropic",
                     "model": "claude-opus-4-7",
-                    "summ": "crypto cycle: analyzed 10 pairs",
+                    "summ": "stock cycle: analyzed 10 symbols",
                     "raw": '{"decisions":[]}',
                     "parsed": '{"buys":1,"sells":0,"holds":9}',
-                    "syms": '["BTCUSDT","ETHUSDT"]',
+                    "syms": '["AAPL","MSFT"]',
                     "ms": 1234,
-                    "pv": "crypto.strategy.system@abc123",
+                    "pv": "trading.strategy.system@abc123",
                     "it": 1500,
                     "ot": 200,
                     "crt": 500,
@@ -107,8 +107,8 @@ def test_show_prints_full_record(cli_db):
     result = runner.invoke(cli, ["llm-decisions", "show", str(rid)])
     assert result.exit_code == 0, result.output
     assert "anthropic" in result.output
-    assert "crypto.strategy.system@abc123" in result.output
-    assert "BTCUSDT" in result.output
+    assert "trading.strategy.system@abc123" in result.output
+    assert "AAPL" in result.output
     assert "$0.0234" in result.output
 
 

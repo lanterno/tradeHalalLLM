@@ -14,9 +14,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, Callable
+from typing import Any
 
 from halal_trader.core import events
 from halal_trader.domain.status import TradeStatus
@@ -55,7 +56,7 @@ _TERMINAL_STATES = {
 
 
 async def confirm_alpaca(
-    poll: Callable[[], "asyncio.Future[dict[str, Any]] | dict[str, Any]"],
+    poll: Callable[[], asyncio.Future[dict[str, Any]] | dict[str, Any]],
     *,
     order_id: str,
     submitted_at: datetime,

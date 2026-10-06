@@ -60,10 +60,10 @@ def test_collector_emits_bot_running():
 
 
 def test_collector_emits_open_positions_per_asset():
-    rt = RuntimeView(open_positions_by_asset={"crypto": [{}, {}, {}], "stock": [{}]})
+    rt = RuntimeView(open_positions_by_asset={"stock": [{}, {}, {}], "etf": [{}]})
     snaps = collect_default_snapshots(rt)
     by_label = {s.labels["asset_class"]: s.value for s in snaps if s.labels}
-    assert by_label == {"crypto": 3, "stock": 1}
+    assert by_label == {"stock": 3, "etf": 1}
 
 
 def test_collector_skips_none_drawdown():
@@ -77,9 +77,8 @@ def test_collector_skips_none_drawdown():
 
 
 def test_collector_labels_risk_metrics_with_market():
-    """The crypto/stocks discriminator on ``risk_state`` flows through
-    to a Prometheus ``market="…"`` label so dashboards can graph the
-    two bots' heat / drawdown separately."""
+    """The ``market`` key on ``risk_state`` flows through to a
+    Prometheus ``market="…"`` label."""
     rt = RuntimeView(
         risk_state={
             "market": "stocks",
@@ -114,8 +113,7 @@ def client(tmp_path, monkeypatch, database_url):
     Depending on ``database_url`` (provided by ``tests/conftest.py``)
     ensures the test DB is created + migrated before
     ``web_app.create_app()`` runs its lifespan, which calls
-    ``init_db()`` and validates the schema is at head. The Wave A
-    ``app_state`` shim is gone, so no clear() is needed.
+    ``init_db()`` and validates the schema is at head.
     """
     monkeypatch.setenv("LOG_DIR", str(tmp_path / "logs"))
     app = web_app.create_app()

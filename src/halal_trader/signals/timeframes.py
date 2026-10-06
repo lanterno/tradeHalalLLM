@@ -28,35 +28,35 @@ class TimeframeAnalyzer:
         self._broker = broker
         self._cache: dict[str, tuple[float, dict[str, Any]]] = {}
 
-    async def analyze(self, pairs: list[str]) -> dict[str, dict[str, Any]]:
-        """Compute multi-timeframe indicators for all pairs.
+    async def analyze(self, symbols: list[str]) -> dict[str, dict[str, Any]]:
+        """Compute multi-timeframe indicators for every symbol.
 
-        Returns dict[pair, {alignment_score, per_tf_summary, support_resistance}].
+        Returns dict[symbol, {alignment_score, per_tf_summary, support_resistance}].
         """
         results: dict[str, dict[str, Any]] = {}
 
-        for pair in pairs:
+        for symbol in symbols:
             try:
-                tf_data = await self._fetch_all_timeframes(pair)
+                tf_data = await self._fetch_all_timeframes(symbol)
                 alignment = self._compute_alignment(tf_data)
                 sr_levels = self._compute_support_resistance(tf_data)
 
-                results[pair] = {
+                results[symbol] = {
                     "alignment_score": alignment,
                     "per_tf": {tf: self._summarize_tf(ind) for tf, ind in tf_data.items()},
                     "support_resistance": sr_levels,
                 }
             except Exception as e:
-                logger.debug("Multi-timeframe analysis failed for %s: %s", pair, e)
+                logger.debug("Multi-timeframe analysis failed for %s: %s", symbol, e)
 
         return results
 
-    async def _fetch_all_timeframes(self, pair: str) -> dict[str, dict[str, Any]]:
+    async def _fetch_all_timeframes(self, symbol: str) -> dict[str, dict[str, Any]]:
         """Fetch klines and compute indicators for each higher timeframe."""
         tf_indicators: dict[str, dict[str, Any]] = {}
 
         for interval, ttl in self._timeframes:
-            cache_key = f"{pair}:{interval}"
+            cache_key = f"{symbol}:{interval}"
             now = time.monotonic()
 
             cached = self._cache.get(cache_key)
@@ -65,17 +65,17 @@ class TimeframeAnalyzer:
                 continue
 
             try:
-                klines = await self._fetch_klines(pair, interval, limit=100)
+                klines = await self._fetch_klines(symbol, interval, limit=100)
                 if len(klines) >= 20:
                     indicators = compute_all(klines)
                     tf_indicators[interval] = indicators
                     self._cache[cache_key] = (now, indicators)
             except Exception as e:
-                logger.debug("Failed to get %s klines for %s: %s", interval, pair, e)
+                logger.debug("Failed to get %s klines for %s: %s", interval, symbol, e)
 
         return tf_indicators
 
-    async def _fetch_klines(self, pair: str, interval: str, *, limit: int) -> list[Any]:
+    async def _fetch_klines(self, symbol: str, interval: str, *, limit: int) -> list[Any]:
         """Hook — return ``Kline``-shaped objects for the given timeframe."""
         raise NotImplementedError
 
@@ -85,7 +85,7 @@ class TimeframeAnalyzer:
             return 0.0
 
         scores = []
-        for _tf, ind in tf_data.items():
+        for ind in tf_data.values():
             if "error" in ind:
                 continue
             tf_score = 0.0
@@ -206,10 +206,10 @@ def format_timeframes_for_prompt(tf_results: dict[str, dict[str, Any]]) -> str:
         return "No multi-timeframe data available."
 
     lines = []
-    for pair, data in sorted(tf_results.items()):
+    for symbol, data in sorted(tf_results.items()):
         alignment = data.get("alignment_score", 0)
         direction = "BULLISH" if alignment > 0.3 else ("BEARISH" if alignment < -0.3 else "MIXED")
-        lines.append(f"  {pair}: Trend Alignment={alignment:+.2f} ({direction})")
+        lines.append(f"  {symbol}: Trend Alignment={alignment:+.2f} ({direction})")
 
         per_tf = data.get("per_tf", {})
         for tf, summary in per_tf.items():

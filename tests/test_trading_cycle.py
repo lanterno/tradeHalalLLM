@@ -1,7 +1,6 @@
 """Tests for TradingCycleService — orchestration + halt threading.
 
-Mirrors ``test_crypto_cycle.py`` for the stocks side. Focuses on the
-small contracts that don't need a Postgres engine:
+Focuses on the small contracts that don't need a Postgres engine:
 
 * ``_should_halt`` delegates to the portfolio tracker
 * ``_pre_cycle_checks`` short-circuits when the market is closed

@@ -127,17 +127,15 @@ def test_env_stocks_example_exists():
 
 def test_stocks_example_documents_every_settings_field():
     """The stocks-only starter template should be a complete reference
-    — every leaf in ``Settings`` must be documented, even the crypto-side
-    fields (kept at the bottom under "NOT USED for stocks"). Otherwise
-    operators copying ``.env.stocks.example → .env`` would silently lose
-    a knob they later wanted to flip on.
+    — every leaf in ``Settings`` must be documented. Otherwise operators
+    copying ``.env.stocks.example → .env`` would silently lose a knob
+    they later wanted to flip on.
     """
     documented = _env_keys(ENV_STOCKS_EXAMPLE)
     missing = [name for name in _LEAF_NAMES if name not in documented]
     assert not missing, (
         f"Settings fields missing from .env.stocks.example: {sorted(missing)}. "
-        f"Add a line `{missing[0]}=<default>` (probably under the "
-        f"NOT USED section if it's crypto-side)."
+        f"Add a line `{missing[0]}=<default>` with a # comment."
     )
 
 

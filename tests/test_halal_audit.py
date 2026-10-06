@@ -3,10 +3,19 @@
 import json
 from datetime import UTC, datetime
 
-from halal_trader.db.models import CryptoTrade, HalalScreening, Trade
+import pytest
+
+from halal_trader.db.models import HalalScreening, Trade
 from halal_trader.db.repository import Repository
 from halal_trader.halal import audit
 from halal_trader.halal.audit import Receipt, build_receipt
+
+
+async def test_export_refuses_a_non_stock_asset_class(engine):
+    with pytest.raises(ValueError):
+        await audit.export_receipt(engine, trade_id=1, asset_class="crypto")
+    with pytest.raises(ValueError):
+        await audit.export_for_symbol(engine, symbol="AAPL", asset_class="crypto")
 
 
 async def test_export_receipt_returns_none_for_unknown_trade(engine):
@@ -91,20 +100,6 @@ def _stock_trade(**overrides) -> Trade:
     return Trade(**base)
 
 
-def _crypto_trade(**overrides) -> CryptoTrade:
-    base = dict(
-        id=2,
-        pair="BTCUSDT",
-        side="buy",
-        quantity=0.001,
-        price=42_000.0,
-        timestamp=datetime(2026, 5, 1, 14, 30, tzinfo=UTC),
-        halal_screening_id=43,
-    )
-    base.update(overrides)
-    return CryptoTrade(**base)
-
-
 def _screening_obj(**overrides) -> HalalScreening:
     base = dict(
         id=42,
@@ -122,11 +117,6 @@ def _screening_obj(**overrides) -> HalalScreening:
 def test_build_receipt_marks_stock_when_given_trade():
     receipt = build_receipt(_stock_trade(), _screening_obj())
     assert receipt.payload["asset_class"] == "stock"
-
-
-def test_build_receipt_marks_crypto_when_given_crypto_trade():
-    receipt = build_receipt(_crypto_trade(), _screening_obj(symbol="BTCUSDT"))
-    assert receipt.payload["asset_class"] == "crypto"
 
 
 def test_build_receipt_marks_unattested_without_screening():

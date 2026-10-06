@@ -1,9 +1,9 @@
 """Halal screening audit trail repository.
 
-Wave D extraction. One row per screening decision; each ``Trade`` /
-``CryptoTrade`` carries the row id via ``halal_screening_id`` so every
-fill is provably linked to the compliance call that gated it. The
-matching ``HalalScreeningRepo`` Protocol lives in ``protocols.py``.
+One row per screening decision; a ``Trade`` carries the row id via
+``halal_screening_id`` so a fill can be linked to the compliance call
+that gated it. The matching ``HalalScreeningRepo`` Protocol lives in
+``protocols.py``.
 """
 
 from __future__ import annotations

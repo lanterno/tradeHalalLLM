@@ -1,12 +1,9 @@
 """Alpaca bars → ``Kline`` adapter + indicator helper.
 
-Promoted from a private helper in ``trading/risk.py`` so it's reusable
-from the cycle, snapshot recorder, backtest harness, and any future
-regime/timeframe/ML stages that want indicators on stock bars.
-
-The crypto cycle ingests ``Kline`` objects (Binance shape); this module
-coerces Alpaca's ``get_stock_bars`` response into the same shape so
-the shared indicator + risk + regime infrastructure runs unchanged.
+Shared by the cycle, the snapshot recorder and any stage that wants
+indicators on stock bars. The indicator + risk infrastructure takes
+``Kline`` objects; this module coerces Alpaca's ``get_stock_bars``
+response into that shape.
 """
 
 from __future__ import annotations

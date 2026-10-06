@@ -37,7 +37,7 @@ def test_parse_news_payload_maps_yahoo_shape_to_news_event():
     assert ev.title == "AAPL beats Q4 expectations"
     assert ev.source == "Reuters"
     assert ev.url == "https://news.example/aapl-q4"
-    assert ev.affected_pairs == ["AAPL"]
+    assert ev.symbols == ["AAPL"]
     # "beats" is in the positive lexicon — the per-headline classifier
     # picks it up and overrides the legacy hardcoded "neutral".
     assert ev.sentiment == "positive"
@@ -126,7 +126,7 @@ async def test_fetch_for_symbols_sorts_newest_first(monkeypatch):
                     url="u",
                     published_at="2024-01-01T00:00:00+00:00",
                     sentiment="neutral",
-                    affected_pairs=["AAPL"],
+                    symbols=["AAPL"],
                 )
             ],
             "MSFT": [
@@ -136,7 +136,7 @@ async def test_fetch_for_symbols_sorts_newest_first(monkeypatch):
                     url="u",
                     published_at="2024-06-01T00:00:00+00:00",
                     sentiment="neutral",
-                    affected_pairs=["MSFT"],
+                    symbols=["MSFT"],
                 )
             ],
         }.get(symbol, [])
@@ -162,7 +162,7 @@ async def test_fetch_for_symbols_swallows_per_symbol_failure(monkeypatch):
                 url="u",
                 published_at="2024-06-01T00:00:00+00:00",
                 sentiment="neutral",
-                affected_pairs=[symbol],
+                symbols=[symbol],
             )
         ]
 
@@ -210,7 +210,7 @@ async def test_fetch_stock_news_stage_renders_events():
                 url="u",
                 published_at="2024-06-01T00:00:00+00:00",
                 sentiment="positive",
-                affected_pairs=["AAPL"],
+                symbols=["AAPL"],
                 importance="hot",
             )
         ]
@@ -263,4 +263,4 @@ def test_the_prompt_gets_the_newest_headlines_tagged_with_their_ticker() -> None
     assert "news 0h ago" in block and "news 1h ago" in block
     assert "news 4h ago" not in block  # the stalest are the ones dropped
     assert "[AAPL]" in block and "[MSFT]" in block
-    assert format_news_for_prompt(events, limit=10, pair_filter=["AAPL"]).count("[MSFT]") == 0
+    assert format_news_for_prompt(events, limit=10, symbol_filter=["AAPL"]).count("[MSFT]") == 0

@@ -17,8 +17,8 @@ A single global :data:`tracer` is exposed; callers do::
     from halal_trader.core.tracing import tracer
 
     async def run_cycle(...):
-        with tracer.span("cycle.fetch_klines", pair_count=len(pairs)) as sp:
-            sp.set_attr("source", "websocket")
+        with tracer.span("cycle.fetch_bars", symbol_count=len(symbols)) as sp:
+            sp.set_attr("source", "alpaca")
             ...
 """
 
@@ -41,7 +41,7 @@ from halal_trader.core.observability import (
 
 logger = logging.getLogger(__name__)
 
-_active_span_var: ContextVar["Span | None"] = ContextVar("_active_span", default=None)
+_active_span_var: ContextVar[Span | None] = ContextVar("_active_span", default=None)
 
 
 # ── Span ──────────────────────────────────────────────────────────
@@ -152,12 +152,6 @@ class Tracer:
     def __init__(self, exporters: list[SpanExporter] | None = None) -> None:
         self._exporters = list(exporters or [LogSpanExporter()])
 
-    def add_exporter(self, exporter: SpanExporter) -> None:
-        self._exporters.append(exporter)
-
-    def set_exporters(self, exporters: list[SpanExporter]) -> None:
-        self._exporters = list(exporters)
-
     def _new_span(self, name: str, attrs: Mapping[str, Any]) -> Span:
         parent = _active_span_var.get()
         return Span(
@@ -194,7 +188,7 @@ class Tracer:
             _active_span_var.reset(token)
             self._close(sp, err)
 
-    def aspan(self, name: str, **attrs: Any) -> "AsyncSpanContext":
+    def aspan(self, name: str, **attrs: Any) -> AsyncSpanContext:
         """Async context manager equivalent to :meth:`span`."""
         return AsyncSpanContext(self, name, attrs)
 
@@ -215,7 +209,7 @@ class AsyncSpanContext:
         self._span = sp
         return sp
 
-    async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+    async def __aexit__(self, _exc_type: Any, exc: Any, _tb: Any) -> None:
         assert self._span is not None
         _active_span_var.reset(self._token)
         self._tracer._close(self._span, exc)

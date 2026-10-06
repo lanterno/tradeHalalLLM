@@ -1,9 +1,8 @@
 """Intra-cycle stock position monitor — enforces SL/TP between LLM cycles.
 
-The crypto cycle runs every 60s; the stock cycle runs every 15 minutes.
-Without a monitor, a stock position can breach its stop and bleed out
-for a full quarter-hour before the next analysis fires. This module
-fills that gap:
+The stock cycle runs every 15 minutes. Without a monitor, a stock position
+can breach its stop and bleed out for a full quarter-hour before the next
+analysis fires. This module fills that gap:
 
 * Polls open stock positions every ``check_interval`` seconds.
 * Pulls the latest snapshot from Alpaca (via the same MCP client the
@@ -90,18 +89,11 @@ class StockPositionMonitor:
         # Optional post-close fan-out (core.post_close.record_close).
         self._close_recorders = close_recorders
         # Optional Telegram notifier — fires `notify_sl_tp` on each
-        # SL/TP exit (parity with the crypto position monitor).
+        # SL/TP exit.
         self._notifier = notifier
         self._running = False
-        self._task: asyncio.Task[None] | None = None
         # Per-trade-id high water mark for trailing-stop ratchet.
         self._high_water: dict[int, float] = {}
-
-    async def start(self) -> None:
-        """Legacy entry point — kept for tests. Bot prefers :meth:`run`."""
-        self._running = True
-        self._task = asyncio.create_task(self._run_loop(), name="stock-position-monitor")
-        logger.info("Stock position monitor started (check every %.0fs)", self._check_interval)
 
     async def run(self) -> None:
         """Supervisor entry point — runs the SL/TP loop until cancelled."""
@@ -113,14 +105,8 @@ class StockPositionMonitor:
             self._running = False
 
     async def stop(self) -> None:
+        """Ask :meth:`run` to exit; the scheduler cancels its task."""
         self._running = False
-        if self._task:
-            self._task.cancel()
-            try:
-                await self._task
-            except asyncio.CancelledError:
-                pass
-            self._task = None
         logger.info("Stock position monitor stopped")
 
     async def _run_loop(self) -> None:

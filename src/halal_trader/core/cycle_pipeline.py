@@ -1,4 +1,4 @@
-"""Wave B cycle-pipeline primitives.
+"""Cycle-pipeline primitives.
 
 Three building blocks the stock cycle is built on:
 
@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from halal_trader.core.cycle_stages import CycleStage  # noqa: F401
+    from halal_trader.core.cycle_stages import CycleStage
     from halal_trader.core.event_bus import EventBus
 
 logger = logging.getLogger(__name__)
@@ -48,7 +48,7 @@ class StageOutcome:
 
 @dataclass
 class CycleState:
-    """Per-cycle data carrier — the carrier the Wave B stage list mutates.
+    """Per-cycle data carrier — the carrier the stage list mutates.
 
     ``TradingCycleService._run_cycle_impl`` builds a fresh ``CycleState``
     each cycle, run a list of :class:`CycleStage` instances against it
@@ -99,12 +99,12 @@ class CycleState:
 
 
 async def run_stages(
-    state: "CycleState",
-    stages: "list[Any]",
+    state: CycleState,
+    stages: list[CycleStage],
     *,
-    bus: "EventBus | None" = None,
+    bus: EventBus | None = None,
     stop_on_halt: bool = False,
-) -> "CycleState":
+) -> CycleState:
     """Drive a stage list against ``state``, wrapping each in instrumentation.
 
     Each :class:`CycleStage` runs inside the existing ``stage(bus, name)``
@@ -131,7 +131,7 @@ async def run_stages(
 
 @contextlib.asynccontextmanager
 async def stage(
-    bus: "EventBus | None",
+    bus: EventBus | None,
     name: str,
     *,
     swallow: bool = True,
@@ -171,7 +171,7 @@ async def stage(
         logger.debug("cycle stage %r failed (swallowed): %s", name, exc)
     finally:
         outcome.elapsed_ms = (time.monotonic() - t0) * 1000.0
-        # Histogram (Wave J wires the actual prometheus_client metric).
+        # Prometheus histogram (no-op without prometheus_client).
         try:
             from halal_trader.core.metrics import observe_stage_latency
 

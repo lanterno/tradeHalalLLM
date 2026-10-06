@@ -8,6 +8,7 @@ state-mutation contract.
 
 from __future__ import annotations
 
+from datetime import UTC
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -145,7 +146,7 @@ async def test_catalysts_stage_no_symbols_leaves_text_empty():
 
 @pytest.mark.asyncio
 async def test_catalysts_stage_calls_feed_and_formats():
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     from halal_trader.trading.catalysts import Catalyst
 
@@ -156,7 +157,7 @@ async def test_catalysts_stage_calls_feed_and_formats():
                 symbol="AAPL",
                 kind="news",
                 title="Apple beats Q1",
-                timestamp=datetime.now(timezone.utc),
+                timestamp=datetime.now(UTC),
                 sentiment="positive",
                 source="Bloomberg",
             )

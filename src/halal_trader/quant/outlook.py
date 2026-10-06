@@ -83,7 +83,7 @@ def build_outlook(
     *,
     horizons: tuple[int, ...] = DEFAULT_HORIZONS,
     atr: float | None = None,
-    calibration: "CalibrationArtifact | None" = None,
+    calibration: CalibrationArtifact | None = None,
 ) -> PriceOutlook | None:
     """Build the outlook from ascending daily OHLC arrays.
 

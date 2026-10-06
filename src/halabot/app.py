@@ -209,8 +209,8 @@ async def build_engine(
     # outcomes and calls fit(); identity until then (cold-start safe).
     calibrator = FittedCalibrator(min_samples=s.conviction.min_samples_to_calibrate)
     # Trading-time decay (R-09): stocks use RTH minutes so a Friday-close belief
-    # doesn't decay over the weekend (→ Monday mass-exit). Continuous = 24/7 venues
-    # or evidence_decay_trading_time=False.
+    # doesn't decay over the weekend (→ Monday mass-exit). Continuous (wall-clock)
+    # only when evidence_decay_trading_time=False.
     calendar = (
         RegularHoursCalendar() if s.belief.evidence_decay_trading_time else ContinuousCalendar()
     )

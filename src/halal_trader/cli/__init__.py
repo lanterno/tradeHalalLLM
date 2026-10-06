@@ -90,7 +90,7 @@ cli.add_command(ledger_cmd.ledger)
 cli.add_command(broker_cmd.broker)
 
 # ── Reconciliation ─────────────────────────────────────────────
-# Now a Click group: `reconcile check {market}` + `reconcile fix-orphans`
+# `reconcile check [stocks]` + `reconcile fix-orphans` + `reconcile fix-drift`
 cli.add_command(reconcile_cmd.reconcile)
 
 # ── LLM Decision Audit ─────────────────────────────────────────
@@ -108,7 +108,7 @@ cli.add_command(recommend_cmd.recommend)
 # ── Quantitative range-model tools (advisory) ──────────────────
 cli.add_command(quant_cmd.quant)
 
-# ── Halal compliance explainer (Wave L) ────────────────────────
+# ── Halal compliance explainer ─────────────────────────────────
 cli.add_command(halal_cmd.halal_group)
 
 # ── Dead-man-switch watchdog (out-of-process via launchd) ──────

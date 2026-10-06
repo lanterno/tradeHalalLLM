@@ -14,12 +14,8 @@ from __future__ import annotations
 from decimal import ROUND_HALF_EVEN, Decimal
 from typing import Any
 
-# Quote currencies (USD, USDT) round to the cent. Crypto base quantities
-# round to 8 dp which covers BTC's smallest unit and is finer than every
-# Binance lotSize we currently trade. Override at call sites for venues
-# whose tick is coarser.
+# Money rounds to the cent.
 USD_QUANT = Decimal("0.01")
-QTY_QUANT = Decimal("0.00000001")
 
 
 def to_decimal(value: Any) -> Decimal:

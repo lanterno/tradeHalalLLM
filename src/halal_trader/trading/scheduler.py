@@ -7,13 +7,15 @@ import logging
 import os
 import signal
 from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
+from sqlalchemy.ext.asyncio import AsyncEngine
 
+from halal_trader.config import get_settings
 from halal_trader.core import events
 from halal_trader.core.heartbeat import (
     RESEARCH,
@@ -24,7 +26,9 @@ from halal_trader.core.heartbeat import (
     beat,
 )
 from halal_trader.core.llm import create_llm
-from halal_trader.core.scheduler import BaseTradingBot
+from halal_trader.db.models import init_db
+from halal_trader.db.repos import RepoBundle
+from halal_trader.db.repository import Repository
 from halal_trader.domain.ports import Broker, ComplianceScreener
 from halal_trader.domain.status import EntryType
 from halal_trader.execution.broker_factory import create_broker
@@ -72,11 +76,15 @@ def _zoya_for(settings: Any) -> ZoyaClient | None:
     return ZoyaClient(api_key=settings.zoya.api_key, use_sandbox=False)
 
 
-class TradingBot(BaseTradingBot):
+class TradingBot:
     """Composition root and scheduler — wires components and runs cron jobs."""
 
     def __init__(self) -> None:
-        super().__init__()
+        self.settings = get_settings()
+        self._running = False
+        self._engine: AsyncEngine | None = None
+        self._repo: Repository | None = None
+        self._bundle: RepoBundle | None = None
         self._broker_client = create_broker(self.settings)
         self.broker: Broker = self._broker_client
         self.screener: ComplianceScreener | None = None
@@ -97,11 +105,9 @@ class TradingBot(BaseTradingBot):
         self._self_review: Any | None = None
         # News-momentum reactor + background task — wired in
         # ``_create_components`` (when FINNHUB_API_KEY is set), spawned
-        # in ``run()``, cancelled in ``shutdown()``. Phase 2A foundation
-        # for the "fast in, slow out" pivot (memory:
-        # strategy-fast-in-slow-out): events fire callbacks but real
-        # trade execution stays in 2B once the operator has seen events
-        # flowing in production.
+        # in ``run()``, cancelled in ``shutdown()``. The "fast in" half of
+        # the fast-in/slow-out strategy; it places entries only when
+        # ``reactor_entries_enabled`` is on.
         self._news_reactor: Any | None = None
         self._news_reactor_task: asyncio.Task[None] | None = None
         # Intra-cycle SL/TP + trailing-stop monitor — runs between the
@@ -111,8 +117,18 @@ class TradingBot(BaseTradingBot):
         self._monitor: Any | None = None
         self._monitor_task: asyncio.Task[None] | None = None
 
+    async def initialize(self) -> None:
+        """Set up the database, then build every trading component."""
+        engine = await init_db(self.settings.database_url)
+        self._engine = engine
+        self._repo = Repository(engine)
+        # Typed per-table bundle — components can take narrow protocols
+        # instead of the full ``Repository``.
+        self._bundle = RepoBundle.from_engine(engine)
+        await self._create_components()
+
     async def _create_components(self) -> None:
-        """Create stock-specific trading components."""
+        """Create the trading components (broker, strategy, executor, etc.)."""
         logger.info("Initializing trading bot...")
 
         # Live-mode token check: refuse to start without a daily confirmation.
@@ -208,10 +224,10 @@ class TradingBot(BaseTradingBot):
 
         # Post-close fan-out: without this the stocks side never wrote the
         # rag_rationales store, so the retrieval corpus (setup→outcome
-        # memory; halabot slice-2 grounding + query_rag) stayed EMPTY while
-        # crypto was down (found 2026-07-03: store size 0 after weeks of
-        # stocks closes). Recording only — the monitor wraps record_close
-        # in try/except, so a recorder failure can never affect an exit.
+        # memory; halabot slice-2 grounding + query_rag) stayed EMPTY
+        # (found 2026-07-03: store size 0 after weeks of stocks closes).
+        # Recording only — the monitor wraps record_close in try/except,
+        # so a recorder failure can never affect an exit.
         close_recorders = None
         if self._engine is not None:
             from halal_trader.core.llm.rag_db import DBRationaleStore
@@ -279,7 +295,7 @@ class TradingBot(BaseTradingBot):
         from halal_trader.trading.self_improve import StockTradeSelfReview
 
         repo = self._repo
-        assert repo is not None  # populated by BaseTradingBot.initialize()
+        assert repo is not None  # populated by initialize()
         bundle = self._bundle
         assert bundle is not None  # built alongside repo by initialize()
         stocks_analytics = PerformanceAnalytics(repo)
@@ -528,12 +544,25 @@ class TradingBot(BaseTradingBot):
         _, _, _, cs = self._require_initialized()
         return cs
 
-    async def _daily_start(self) -> None:
-        await self.pre_market()
+    async def _prune_audit_log(self) -> None:
+        """Delete ``web_actions`` rows older than the retention window.
 
-    async def _daily_end(self) -> None:
-        await self.end_of_day()
-        await self._prune_audit_log()
+        A retention of ``0`` disables the prune. Nothing calls this yet, so
+        ``WEB_AUDIT_RETENTION_DAYS`` is not enforced; wiring it into
+        ``end_of_day`` is an operator decision (the first run deletes the
+        whole backlog past the window).
+        """
+        retention = int(getattr(self.settings.web, "audit_retention_days", 0) or 0)
+        if retention <= 0 or self._bundle is None:
+            return
+        try:
+            deleted = await self._bundle.web_audit.delete_old_web_actions(
+                older_than=timedelta(days=retention)
+            )
+            if deleted:
+                logger.info("Pruned %d web_actions row(s) older than %d days", deleted, retention)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("web_actions prune failed: %s", exc)
 
     # ── PID Lock ─────────────────────────────────────────────────
 
@@ -554,7 +583,7 @@ class TradingBot(BaseTradingBot):
             raise RuntimeError(
                 f"Another trading bot instance is already running (pid={other_pid}). "
                 f"Remove {_PID_FILE} if the previous instance crashed."
-            )
+            ) from None
 
     def _release_lock(self) -> None:
         """Release the PID file lock."""
@@ -608,7 +637,10 @@ class TradingBot(BaseTradingBot):
         await self._broker_client.disconnect()
         self._release_lock()
         await self._release_trading_lock()
-        await super().shutdown()
+        self._running = False
+        if self._engine is not None:
+            await self._engine.dispose()
+            self._engine = None
         logger.info("Trading bot shut down")
 
     async def _observe_symbols(self) -> list[str]:
@@ -1354,9 +1386,8 @@ class TradingBot(BaseTradingBot):
     async def run_once(self) -> None:
         """One pre-market check and one trading cycle, then exit.
 
-        Overrides the base template, which ran the daily END too: for stocks
-        that is the end-of-day routine, which flattens every position on the
-        account -- `halal-trader start --once` used as a smoke test would
+        Never the end-of-day routine: that flattens every position on the
+        account, so `halal-trader start --once` used as a smoke test would
         close the live bot's book. It also takes the single-instance lock, so
         it refuses to run beside a live bot rather than racing it.
         """

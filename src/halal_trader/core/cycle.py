@@ -1,4 +1,6 @@
-"""Base class for trading cycle services."""
+"""Base class for the trading cycle service."""
+
+from __future__ import annotations
 
 import logging
 import time
@@ -18,24 +20,24 @@ logger = logging.getLogger(__name__)
 
 
 class BaseCycleService(ABC):
-    """Thin base for stock and crypto trading cycle services.
+    """The run_cycle() template behind :class:`TradingCycleService`.
 
-    Provides the run_cycle() template: kill-switch → pre-checks →
-    halt check → market-specific work → post-cycle hook.  Subclasses
-    fill in the abstract hooks with their own data flows.
+    kill-switch → pre-checks → halt check → market-specific work →
+    post-cycle hook. Kept as a base so the gate order (the kill-switch
+    invariant) is pinned against stub cycles in tests.
     """
 
     def __init__(
         self,
-        alerts: "AlertSink | None" = None,
-        engine: "AsyncEngine | None" = None,
+        alerts: AlertSink | None = None,
+        engine: AsyncEngine | None = None,
     ) -> None:
         self._alerts = alerts
         # The engine is only needed for the kill-switch lookup. Tests that
         # exercise the cycle template can leave it None — the check skips.
         self._engine = engine
         # Subclasses may set ``self._bus`` to publish cycle / stage events.
-        self._bus: "EventBus | None" = None
+        self._bus: EventBus | None = None
 
     async def run_cycle(self) -> None:
         """Execute one complete trading cycle (template method)."""
@@ -134,10 +136,10 @@ class BaseCycleService(ABC):
         """Market-specific cycle logic: data gathering, analysis, execution."""
         ...
 
-    async def _post_cycle(self) -> None:
+    async def _post_cycle(self) -> None:  # noqa: B027 -- optional hook
         """Optional post-cycle hook (no-op by default)."""
 
-    async def _publish_event(self, topic: str, payload: "dict[str, object] | None" = None) -> None:
+    async def _publish_event(self, topic: str, payload: dict[str, object] | None = None) -> None:
         """Best-effort publish to ``self._bus`` if a bus is wired."""
         if self._bus is None:
             return

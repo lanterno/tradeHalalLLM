@@ -26,7 +26,7 @@ Two design choices:
 Public API:
     embedder = HashingEmbedder(dim=512)
     store = DBRationaleStore(engine, embedder=embedder)
-    await store.add(trade_id="t1", symbol="BTCUSDT", text="rsi 35 with bb lower",
+    await store.add(trade_id="t1", symbol="AAPL", text="rsi 35 with bb lower",
                     outcome_pnl_pct=0.012)
     hits = await store.query("similar regime here", k=5)
     text = format_rag_for_prompt(hits)

@@ -1,7 +1,7 @@
 """AAOIFI compliance summary — the dashboard tile data source.
 
-Round-4 wave 2.E: the operator's dashboard gets a "live AAOIFI
-compliance" tile. This module computes the rollup that powers it:
+The operator's dashboard has a "live AAOIFI compliance" tile. This
+module computes the rollup that powers it:
 
 * trades-this-quarter (and this-month / today)
 * screenings-by-decision (halal / doubtful / not_halal counts)
@@ -19,12 +19,15 @@ a typed dataclass the dashboard route serialises to JSON.
 Design choice: pure SQL aggregations, no Python-side per-row math.
 Keeps the tile fast even when the audit log has 100k+ rows.
 
-Halal-jurisprudence note: AAOIFI 2.4 (debt screening) and 5.4
-(financial-services screening) are referenced via the
-:mod:`halal.aaoifi_seed` documentation — this summary doesn't
-re-implement those rules; it counts decisions made by upstream
-screeners (Zoya, CoinGecko, manual overrides) that already encode
-the AAOIFI thresholds.
+Halal-jurisprudence note: this summary doesn't re-implement the AAOIFI
+ratio rules (``docs/halal_jurisprudence.md`` section 2); it counts
+decisions made by upstream screeners (Zoya, manual overrides) that
+already encode them.
+
+``crypto_trades`` is still counted: crypto trading stopped on 2026-10-01
+but its rows remain, and dropping them from the counts would change
+this quarter's figures. The count goes when the operator-gated
+migration drops that table.
 """
 
 from __future__ import annotations
@@ -141,7 +144,7 @@ def _today_start_utc(now: datetime) -> datetime:
 
 
 async def compute_aaoifi_summary(
-    engine: "AsyncEngine",
+    engine: AsyncEngine,
     *,
     now: datetime | None = None,
 ) -> AAOIFISummary:

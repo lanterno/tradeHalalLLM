@@ -1,7 +1,7 @@
 """Sharia-compliance explainer.
 
-Wave L — every trade is gated by a halal screener whose reasoning
-ends up as a JSONB criteria blob nobody looks at. This module turns
+Every trade is gated by a halal screener whose reasoning ends up as a
+JSONB criteria blob nobody looks at. This module turns
 the criteria back into operator-readable Markdown with citations to
 the project's jurisprudence reference (``docs/halal_jurisprudence.md``).
 
@@ -34,14 +34,14 @@ def explain_screening(receipt: dict[str, Any]) -> Explanation:
     (``halal/audit.py:export_receipt``) — at minimum it has:
 
     * ``screening.decision`` — "halal" / "not_halal" / "doubtful"
-    * ``screening.source`` — "zoya" / "coingecko_rules" / "override" / "cache"
+    * ``screening.source`` — e.g. "zoya" / "override" / "cache"
     * ``screening.criteria`` — the JSONB criteria dict the screener wrote
     * ``trade.symbol`` — what we traded
     """
     screening = receipt.get("screening") or {}
     trade = receipt.get("trade") or {}
 
-    symbol = trade.get("symbol") or trade.get("pair") or "?"
+    symbol = trade.get("symbol") or "?"
     decision = (screening.get("decision") or "doubtful").lower()
     source = screening.get("source") or "unknown"
     criteria = screening.get("criteria") or {}

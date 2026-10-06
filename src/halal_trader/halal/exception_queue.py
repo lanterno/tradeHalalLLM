@@ -73,7 +73,7 @@ class ExceptionQueue:
     engine: AsyncEngine
 
     @property
-    def _sm(self) -> "async_sessionmaker[Any]":
+    def _sm(self) -> async_sessionmaker[Any]:
         return async_sessionmaker(self.engine, expire_on_commit=False)
 
     @staticmethod

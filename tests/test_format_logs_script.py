@@ -46,7 +46,7 @@ def test_format_uses_last_12_chars_of_timestamp():
     # contract is "the last 12 chars", whatever they are.
     assert "12:34:56.789" not in out  # format is just slice, not parse
     # Specifically, last 12 of the full string:
-    assert out.startswith("9012+00:00 ") or out.startswith("12+00:00.789") or "+" in out
+    assert out.startswith(("9012+00:00 ", "12+00:00.789")) or "+" in out
 
 
 def test_format_short_timestamp_passes_through():
@@ -104,8 +104,7 @@ def test_format_includes_cycle_id_when_present():
 
 
 def test_format_falls_back_to_monitor_id_when_no_cycle():
-    """`monitor_id` is the fallback (per-trade exit ids in
-    `crypto/monitor.py` use this)."""
+    """`monitor_id` is the fallback (per-trade exit ids use this)."""
     out = _format({"level": "INFO", "monitor_id": "mon-xyz"})
     assert "[mon-xyz]" in out
 

@@ -49,7 +49,7 @@ class Subscription:
 
     types: frozenset[EventType]
     handler: Handler
-    _bus: "InProcessEventBus" = field(repr=False)
+    _bus: InProcessEventBus = field(repr=False)
     active: bool = True
 
     def unsubscribe(self) -> None:

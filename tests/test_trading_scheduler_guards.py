@@ -150,8 +150,7 @@ def test_require_initialized_does_not_mutate_state():
 @pytest.mark.asyncio
 async def test_trading_cycle_triggers_self_review_on_consecutive_losses():
     """When ``should_trigger_review()`` returns True, the cycle runs
-    an emergency review BEFORE calling ``cycle_service.run_cycle``.
-    Mirrors crypto's behavior at ``crypto/scheduler.py:451``."""
+    an emergency review BEFORE calling ``cycle_service.run_cycle``."""
     from unittest.mock import AsyncMock
 
     bot = TradingBot()

@@ -1,6 +1,6 @@
 """Strategy-adjustment repository — operator + LLM-driven knob changes.
 
-Wave D extraction. Records every change to tunable strategy parameters
+Records every change to tunable strategy parameters
 (``max_position_pct``, ``stop_loss_pct``, …) with the reasoning the
 self-improvement loop produced. The cycle reads the latest values on
 boot to apply persisted overrides. Matching ``StrategyAdjustmentRepo``

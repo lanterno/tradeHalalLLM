@@ -70,7 +70,7 @@ def _clean_json_body(raw: str) -> str:
 class BaseLLM(ABC):
     """Abstract base for all LLM providers."""
 
-    # Wave E: provider declares whether it speaks the SDK's native
+    # Provider declares whether it speaks the SDK's native
     # tool-use API. When True, the strategy uses
     # ``generate_tool_call(tool)`` and the SDK validates the schema for
     # us. When False, the strategy falls back to the ``generate_json``
@@ -89,7 +89,7 @@ class BaseLLM(ABC):
         self._daily_tokens: int = 0
         self._daily_reset_date: str = ""
         self._last_threshold_logged: int = 0
-        # Wave I: when wired, every successful LLM call emits
+        # When wired, every successful LLM call emits
         # ``llm.call.complete`` on the EventBus so /ws/cycle subscribers
         # see provider/model/elapsed/cost without polling the DB.
         # Stays None on standalone providers (CLI, tests, agent loops
@@ -148,7 +148,7 @@ class BaseLLM(ABC):
                 model=usage.model,
                 ms=float(usage.elapsed_ms),
             )
-        # Wave I: surface to /ws/cycle subscribers. Fire-and-forget;
+        # Surface to /ws/cycle subscribers. Fire-and-forget;
         # synchronous schedule so non-async providers can still call
         # _record_usage (the bus's ``publish`` is a coroutine, so we
         # need an event loop running — every provider call IS inside
@@ -195,10 +195,10 @@ class BaseLLM(ABC):
         self,
         prompt: str,
         *,
-        tools: "list[Any]",
+        tools: list[Any],
         system: str | None = None,
         force_tool: str | None = None,
-    ) -> "list[Any]":
+    ) -> list[Any]:
         """Provider-native tool-use call. Returns ToolCall instances.
 
         Default implementation falls back to ``generate_json`` and

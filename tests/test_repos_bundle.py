@@ -26,10 +26,3 @@ async def test_bundle_web_audit_helpers(engine) -> None:
     await bundle.web_audit.complete_web_action(aid, status_code=200)
     rows = await bundle.web_audit.get_recent_web_actions(limit=5)
     assert any(r["id"] == aid for r in rows)
-
-
-async def test_bundle_runtime_config_round_trip(engine) -> None:
-    bundle = RepoBundle.from_engine(engine)
-    await bundle.runtime_config.set_runtime_config("MAX_POSITION_PCT", 0.05)
-    cfg = await bundle.runtime_config.list_runtime_config()
-    assert cfg["MAX_POSITION_PCT"] == 0.05

@@ -1,17 +1,14 @@
 """Indicator-snapshot repository — features captured at trade entry.
 
-Wave D extraction. Each buy snapshots the indicator vector that drove
-the decision. Labelling and ``get_labeled_snapshots`` served the ML
-retrainer, deleted on 2026-10-01; nothing labels rows now. Matching
-protocol in ``protocols.py``.
+Each buy snapshots the indicator vector that drove the decision. The
+``label``/``return_pct`` columns served the ML retrainer, deleted on
+2026-10-01; nothing labels or reads rows back now. Matching protocol in
+``protocols.py``.
 """
 
 from __future__ import annotations
 
-from typing import Any
-
 from sqlalchemy.ext.asyncio import AsyncEngine
-from sqlmodel import col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from halal_trader.db.models import IndicatorSnapshot
@@ -49,28 +46,3 @@ class IndicatorSnapshotRepoImpl:
             await session.refresh(snap)
             assert snap.id is not None
             return snap.id
-
-    async def label_indicator_snapshot(self, trade_id: int, label: int, return_pct: float) -> None:
-        async with AsyncSession(self._engine) as session:
-            statement = select(IndicatorSnapshot).where(IndicatorSnapshot.trade_id == trade_id)
-            result = await session.exec(statement)
-            snap = result.first()
-            if snap:
-                snap.label = label
-                snap.return_pct = return_pct
-                session.add(snap)
-                await session.commit()
-
-    async def get_labeled_snapshots(self, min_samples: int = 50) -> list[dict[str, Any]]:
-        async with AsyncSession(self._engine) as session:
-            statement = (
-                select(IndicatorSnapshot)
-                .where(col(IndicatorSnapshot.label).is_not(None))
-                .order_by(col(IndicatorSnapshot.timestamp).desc())
-                .limit(5000)
-            )
-            results = await session.exec(statement)
-            rows = results.all()
-            if len(rows) < min_samples:
-                return []
-            return [r.model_dump() for r in rows]

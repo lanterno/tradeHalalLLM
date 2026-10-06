@@ -17,10 +17,9 @@ cycle_id_var: ContextVar[str] = ContextVar("cycle_id", default="")
 monitor_id_var: ContextVar[str] = ContextVar("monitor_id", default="")
 request_id_var: ContextVar[str] = ContextVar("request_id", default="")
 
-# Which bot owns this process — stock vs crypto. Set once at bot startup
-# (set_service) so the shared logs/halal_trader.log can be filtered by
-# service: the two bots share the file + the "halal_trader.core.cycle"
-# logger, so cycle.start/cycle.failed are otherwise indistinguishable.
+# Which process owns these log records. Set once at bot startup
+# (set_service) so records can be filtered by service wherever logs from
+# several processes end up side by side.
 # Deliberately a plain module global, NOT a ContextVar: it's process-wide
 # (one bot per process) and must be visible from APScheduler job contexts
 # and worker threads, which a ContextVar set in run() does not propagate to.

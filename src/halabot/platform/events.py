@@ -27,11 +27,8 @@ class EventType(StrEnum):
     OBSERVATION_BAR = "observation.bar"
     OBSERVATION_NEWS = "observation.news"
     OBSERVATION_MACRO = "observation.macro"
-    OBSERVATION_ONCHAIN = "observation.onchain"
-    OBSERVATION_SENTIMENT = "observation.sentiment"
     # ── belief ──
     BELIEF_UPDATED = "belief.updated"
-    BELIEF_THESIS_REFRESHED = "belief.thesis_refreshed"
     BELIEF_INVALIDATED = "belief.invalidated"
     # ── conviction / policy ──
     CONVICTION_SCORED = "conviction.scored"

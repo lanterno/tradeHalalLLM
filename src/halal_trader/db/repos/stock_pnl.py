@@ -1,9 +1,8 @@
 """Stock daily P&L repository.
 
-Wave D extraction. Mirrors :class:`PnlRepoImpl` (crypto) over the
-``daily_pnl`` table — one row per trading day with starting/ending
-equity and realized P&L. Matching ``StockPnlRepo`` Protocol in
-``protocols.py``.
+Owns the ``daily_pnl`` table — one row per trading day with
+starting/ending equity and realized P&L. Matching ``StockPnlRepo``
+Protocol in ``protocols.py``.
 """
 
 from __future__ import annotations

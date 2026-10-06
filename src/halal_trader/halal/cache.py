@@ -1,4 +1,4 @@
-"""Halal stock cache with SQLite persistence and Zoya API integration."""
+"""Halal stock cache: Zoya verdicts persisted in the database, with a default list fallback."""
 
 import logging
 

@@ -5,9 +5,8 @@ structured JSON receipt joining the trade row with its screening row.
 Use cases:
 
 * Compliance reporting (export to send to a scholar / auditor).
-* Operator self-audit ("show me every trade in BTC last month, with the
+* Operator self-audit ("show me every trade in AAPL last month, with the
   source that approved it").
-* Backstop for the post-trade purification ledger landing in Phase 3.
 
 The exporter intentionally returns plain dicts (not Pydantic models)
 because the downstream consumers — JSON exports, CLI tables — don't
@@ -26,7 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from halal_trader.db.models import CryptoTrade, HalalScreening, Trade
+from halal_trader.db.models import HalalScreening, Trade
 
 
 @dataclass(frozen=True)
@@ -39,7 +38,7 @@ class Receipt:
         return json.dumps(self.payload, indent=indent, default=str)
 
 
-def _serialize_trade(trade: Trade | CryptoTrade) -> dict[str, Any]:
+def _serialize_trade(trade: Trade) -> dict[str, Any]:
     data = trade.model_dump()
     for k, v in list(data.items()):
         if isinstance(v, datetime):
@@ -59,7 +58,7 @@ def _serialize_screening(screening: HalalScreening) -> dict[str, Any]:
     return data
 
 
-def build_receipt(trade: Trade | CryptoTrade, screening: HalalScreening | None) -> Receipt:
+def build_receipt(trade: Trade, screening: HalalScreening | None) -> Receipt:
     """Compose the trade + screening rows into a single audit receipt.
 
     ``screening`` may be ``None`` for legacy trades that pre-date the FK;
@@ -67,14 +66,20 @@ def build_receipt(trade: Trade | CryptoTrade, screening: HalalScreening | None) 
     flag those rows for manual review rather than silently treating them
     as compliant.
     """
-    asset_class = "crypto" if isinstance(trade, CryptoTrade) else "stock"
     payload: dict[str, Any] = {
-        "asset_class": asset_class,
+        "asset_class": "stock",
         "trade": _serialize_trade(trade),
         "screening": _serialize_screening(screening) if screening else None,
         "compliance_status": (screening.decision if screening else "unattested"),
     }
     return Receipt(payload=payload)
+
+
+def _check_asset_class(asset_class: str) -> None:
+    # Stocks are the only asset class traded; the parameter stays because the
+    # routes and CLI carry it in their paths and arguments.
+    if asset_class != "stock":
+        raise ValueError(f"asset_class must be 'stock'; got {asset_class!r}")
 
 
 async def export_receipt(
@@ -89,19 +94,15 @@ async def export_receipt(
 
     Returns ``None`` when no trade with that id exists.
 
-    Round-4 wave 2.A: when ``sign=True``, the receipt is signed with
+    When ``sign=True``, the receipt is signed with
     the operator's Ed25519 keypair (loaded / generated under
     ``data_dir``) and a :class:`halal.signing.SignedReceipt` is
     returned instead. The signature lets a scholar / auditor verify
-    the receipt without trusting our codebase. Defaults to off so
-    existing CLI / web callers see no behaviour change.
+    the receipt without trusting our codebase. Defaults to off.
     """
-    if asset_class not in ("stock", "crypto"):
-        raise ValueError(f"asset_class must be 'stock' or 'crypto'; got {asset_class!r}")
-
-    trade_model = CryptoTrade if asset_class == "crypto" else Trade
+    _check_asset_class(asset_class)
     async with AsyncSession(engine) as session:
-        trade = await session.get(trade_model, trade_id)
+        trade = await session.get(Trade, trade_id)
         if trade is None:
             return None
         screening: HalalScreening | None = None
@@ -131,22 +132,10 @@ async def export_for_symbol(
 
     Useful for "give me the audit trail for AAPL this quarter."
     """
-    if asset_class not in ("stock", "crypto"):
-        raise ValueError(f"asset_class must be 'stock' or 'crypto'; got {asset_class!r}")
-
+    _check_asset_class(asset_class)
     receipts: list[Receipt] = []
     async with AsyncSession(engine) as session:
-        if asset_class == "crypto":
-            stmt = (
-                select(CryptoTrade)
-                .where(CryptoTrade.pair == symbol)
-                .order_by(CryptoTrade.id.desc())
-                .limit(limit)
-            )
-        else:
-            stmt = (
-                select(Trade).where(Trade.symbol == symbol).order_by(Trade.id.desc()).limit(limit)
-            )
+        stmt = select(Trade).where(Trade.symbol == symbol).order_by(Trade.id.desc()).limit(limit)
         trades = (await session.exec(stmt)).all()
         screening_ids = [t.halal_screening_id for t in trades if t.halal_screening_id is not None]
         screenings: dict[int, HalalScreening] = {}

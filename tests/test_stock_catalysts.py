@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
 from halal_trader.trading.catalysts import (
@@ -17,7 +17,7 @@ def _cat(symbol="AAPL", kind="news", **kw):
         symbol=symbol,
         kind=kind,
         title="x",
-        timestamp=datetime.now(timezone.utc),
+        timestamp=datetime.now(UTC),
         sentiment="neutral",
         source="src",
     )
@@ -46,8 +46,8 @@ def test_format_renders_glyphs_and_meta():
 
 
 def test_format_drops_stale_entries():
-    fresh = _cat(title="fresh news", timestamp=datetime.now(timezone.utc))
-    stale = _cat(title="stale news", timestamp=datetime.now(timezone.utc) - timedelta(days=2))
+    fresh = _cat(title="fresh news", timestamp=datetime.now(UTC))
+    stale = _cat(title="stale news", timestamp=datetime.now(UTC) - timedelta(days=2))
     text = format_catalysts_for_prompt([fresh, stale], max_age_hours=24)
     assert "fresh news" in text
     assert "stale news" not in text
@@ -92,8 +92,8 @@ async def test_feed_no_symbols_returns_empty():
 
 
 async def test_feed_combines_multiple_sources_sorted_newest_first():
-    older = _cat(title="older", timestamp=datetime.now(timezone.utc) - timedelta(hours=2))
-    newer = _cat(title="newer", timestamp=datetime.now(timezone.utc))
+    older = _cat(title="older", timestamp=datetime.now(UTC) - timedelta(hours=2))
+    newer = _cat(title="newer", timestamp=datetime.now(UTC))
 
     s1 = MagicMock()
     s1.fetch = AsyncMock(return_value=[older])

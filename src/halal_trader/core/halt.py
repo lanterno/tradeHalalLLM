@@ -1,6 +1,6 @@
 """Operator kill-switch — read/write the single-row ``kill_switch`` table.
 
-Both bots check :func:`is_halted` at the top of every cycle. The
+The bot checks :func:`is_halted` at the top of every cycle. The
 monitor checks once per minute and refuses NEW entries; in-flight SL/TP
 exits still run because closing risk is preferable to holding overnight
 under unknown failure.

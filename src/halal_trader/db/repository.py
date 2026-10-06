@@ -1,13 +1,11 @@
 """Data access layer using SQLModel.
 
-Wave D split this monolithic class into per-table mini-repos under
-``db/repos/``. The :class:`Repository` here is now a thin delegator
-that keeps the legacy flat method surface working — every method
-forwards to the mini-repo that owns its table. New code should depend
-on the narrowest protocol it needs (``TradeRepo``,
-``LlmDecisionRepo``, …) and pull the impl from
-:class:`RepoBundle` via :meth:`Repository.bundle` or
-``RepoBundle.from_engine(engine)``.
+:class:`Repository` is a flat facade over the per-table repos in
+``db/repos/``: every method forwards to the repo that owns its table.
+New code should depend on the narrowest protocol it needs
+(``TradeRepo``, ``LlmDecisionRepo``, …) and take it from a
+:class:`RepoBundle` (``RepoBundle.from_engine(engine)`` or
+:attr:`Repository.bundle`).
 """
 
 from datetime import datetime, timedelta
@@ -22,64 +20,28 @@ if TYPE_CHECKING:
 
 
 class Repository:
-    """Legacy facade — see module docstring; prefer ``RepoBundle``."""
+    """Flat facade — see module docstring; prefer ``RepoBundle``."""
 
     def __init__(self, engine: AsyncEngine) -> None:
-        from halal_trader.db.repos.daily_recommendations import (
-            DailyRecommendationRepoImpl,
-        )
-        from halal_trader.db.repos.halal_screening import HalalScreeningRepoImpl
-        from halal_trader.db.repos.indicator_snapshots import IndicatorSnapshotRepoImpl
-        from halal_trader.db.repos.llm_decisions import LlmDecisionRepoImpl
-        from halal_trader.db.repos.purification import PurificationRepoImpl
-        from halal_trader.db.repos.runtime_config import RuntimeConfigRepoImpl
-        from halal_trader.db.repos.stock_halal_cache import StockHalalCacheRepoImpl
-        from halal_trader.db.repos.stock_pnl import StockPnlRepoImpl
-        from halal_trader.db.repos.strategy_adjustments import StrategyAdjustmentRepoImpl
-        from halal_trader.db.repos.trades import TradeRepoImpl
-        from halal_trader.db.repos.web_audit import WebAuditRepoImpl
-
-        self._engine = engine
-        # Per-table mini-repos extracted under Wave D of the cleanup
-        # roadmap. The legacy ``Repository`` keeps its method surface as
-        # thin delegators so call sites migrate incrementally.
-        self._web_audit = WebAuditRepoImpl(engine)
-        self._runtime_config = RuntimeConfigRepoImpl(engine)
-        self._purification = PurificationRepoImpl(engine)
-        self._halal_screening = HalalScreeningRepoImpl(engine)
-        self._daily_recommendations = DailyRecommendationRepoImpl(engine)
-        self._indicator_snapshots = IndicatorSnapshotRepoImpl(engine)
-        self._llm_decisions = LlmDecisionRepoImpl(engine)
-        self._trades = TradeRepoImpl(engine)
-        self._strategy_adjustments = StrategyAdjustmentRepoImpl(engine)
-        self._stock_halal_cache = StockHalalCacheRepoImpl(engine)
-        self._stock_pnl = StockPnlRepoImpl(engine)
-
-    @property
-    def bundle(self) -> "RepoBundle":
-        """Expose the mini-repos as a typed ``RepoBundle``.
-
-        Migration aid: code that wants the narrower per-table
-        protocols can take ``repo.bundle.trades`` instead of
-        the full ``Repository`` flat surface. The exposed instances
-        are the *same* objects this Repository delegates to, so there
-        is no double-construction cost.
-        """
         from halal_trader.db.repos import RepoBundle
 
-        return RepoBundle(
-            trades=self._trades,
-            stock_pnl=self._stock_pnl,
-            stock_halal_cache=self._stock_halal_cache,
-            halal_screening=self._halal_screening,
-            runtime_config=self._runtime_config,
-            daily_recommendations=self._daily_recommendations,
-            web_audit=self._web_audit,
-            indicator_snapshots=self._indicator_snapshots,
-            llm_decisions=self._llm_decisions,
-            purification=self._purification,
-            strategy_adjustments=self._strategy_adjustments,
-        )
+        self._engine = engine
+        self._bundle = RepoBundle.from_engine(engine)
+        self._web_audit = self._bundle.web_audit
+        self._purification = self._bundle.purification
+        self._halal_screening = self._bundle.halal_screening
+        self._daily_recommendations = self._bundle.daily_recommendations
+        self._indicator_snapshots = self._bundle.indicator_snapshots
+        self._llm_decisions = self._bundle.llm_decisions
+        self._trades = self._bundle.trades
+        self._strategy_adjustments = self._bundle.strategy_adjustments
+        self._stock_halal_cache = self._bundle.stock_halal_cache
+        self._stock_pnl = self._bundle.stock_pnl
+
+    @property
+    def bundle(self) -> RepoBundle:
+        """The per-table repos this facade delegates to (the same instances)."""
+        return self._bundle
 
     # ── Stock Trades (delegated to TradeRepoImpl) ──────────────────
 
@@ -192,17 +154,6 @@ class Repository:
 
     async def update_recommendation_outcome(self, rec_id: int, **fields: Any) -> bool:
         return await self._daily_recommendations.update_recommendation_outcome(rec_id, **fields)
-
-    # ── Runtime config overlay (delegated to RuntimeConfigRepoImpl) ──
-
-    async def set_runtime_config(self, key: str, value: Any, *, set_by: str | None = None) -> None:
-        await self._runtime_config.set_runtime_config(key, value, set_by=set_by)
-
-    async def delete_runtime_config(self, key: str) -> bool:
-        return await self._runtime_config.delete_runtime_config(key)
-
-    async def list_runtime_config(self) -> dict[str, Any]:
-        return await self._runtime_config.list_runtime_config()
 
     # ── Web mutation audit ─────────────────────────────────────
 
@@ -336,12 +287,6 @@ class Repository:
         return await self._indicator_snapshots.record_indicator_snapshot(
             trade_id=trade_id, pair=pair, indicators=indicators
         )
-
-    async def label_indicator_snapshot(self, trade_id: int, label: int, return_pct: float) -> None:
-        await self._indicator_snapshots.label_indicator_snapshot(trade_id, label, return_pct)
-
-    async def get_labeled_snapshots(self, min_samples: int = 50) -> list[dict[str, Any]]:
-        return await self._indicator_snapshots.get_labeled_snapshots(min_samples)
 
     # ── Strategy Adjustments (delegated to StrategyAdjustmentRepoImpl) ─
 

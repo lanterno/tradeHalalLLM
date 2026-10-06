@@ -26,7 +26,7 @@ def register(app: FastAPI) -> None:
     async def metrics(ctx: DashboardContext = Depends(get_ctx)) -> PlainTextResponse:
         snapshots = collect_default_snapshots(ctx.runtime)
         body = render_metrics(snapshots)
-        # Append the prometheus_client histograms (Wave J).
+        # Append the prometheus_client histograms.
         histograms = render_prometheus_text().decode("utf-8", errors="replace")
         if histograms:
             body = body.rstrip("\n") + "\n" + histograms

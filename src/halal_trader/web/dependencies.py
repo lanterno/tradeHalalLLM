@@ -2,9 +2,7 @@
 
 Every route takes a :class:`DashboardContext` via ``Depends(get_ctx)``;
 the context is attached to the FastAPI app at startup (lifespan) and
-pulled out on each request via ``request.app.state.ctx``. The legacy
-global-dict shim was removed in Wave A — there is no
-app_state dict anywhere in the route layer.
+pulled out on each request via ``request.app.state.ctx``.
 """
 
 from __future__ import annotations

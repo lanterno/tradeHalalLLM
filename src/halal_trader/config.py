@@ -263,7 +263,7 @@ class StockSettings(BaseSettings):
     reactor_observe_size: int = Field(default=300, ge=0)
     reactor_observe_daily_classify_cap: int = Field(default=600, ge=0)
 
-    # News-momentum reactor: entry execution (Phase 2B / "fast in").
+    # News-momentum reactor: entry execution ("fast in").
     # When enabled, a high-confidence scored catalyst places a real
     # paper BUY — gated on news+price-up confluence — instead of just
     # logging/notifying. Enabled by default on paper; flip to False to
@@ -328,7 +328,7 @@ class TelegramSettings(BaseSettings):
 
 
 class SlackSettings(BaseSettings):
-    """Round-4 wave 5.G — Slack webhook notifier."""
+    """Slack webhook settings. Nothing reads them: no Slack notifier exists."""
 
     model_config = SettingsConfigDict(**_BASE_CONFIG, env_prefix="SLACK_")
     webhook_url: str = Field(default="")
@@ -336,7 +336,7 @@ class SlackSettings(BaseSettings):
 
 
 class DiscordSettings(BaseSettings):
-    """Round-4 wave 5.G — Discord webhook notifier."""
+    """Discord webhook settings. Nothing reads them: no Discord notifier exists."""
 
     model_config = SettingsConfigDict(**_BASE_CONFIG, env_prefix="DISCORD_")
     webhook_url: str = Field(default="")

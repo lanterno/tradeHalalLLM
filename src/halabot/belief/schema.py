@@ -64,7 +64,7 @@ class EvidenceItem:
     event_id: UUID | None = None  # provenance into the event log (INV-5)
     directional: bool = True
 
-    def scaled(self, factor: float) -> "EvidenceItem":
+    def scaled(self, factor: float) -> EvidenceItem:
         """Return a copy with ``weight`` multiplied by ``factor`` (decay)."""
         return replace(self, weight=self.weight * factor)
 
@@ -102,7 +102,7 @@ class ComplianceVerdict:
     transient_error: bool = False
 
     @classmethod
-    def unknown(cls, asset: str) -> "ComplianceVerdict":
+    def unknown(cls, asset: str) -> ComplianceVerdict:
         """A doubtful placeholder for a never-screened asset."""
         return cls(asset=asset, status="doubtful", detail="not screened")
 
@@ -130,7 +130,7 @@ class BeliefState:
     version: int = 0
 
     @classmethod
-    def neutral(cls, asset: str) -> "BeliefState":
+    def neutral(cls, asset: str) -> BeliefState:
         """A fresh, opinion-free belief — the cold-start / bootstrap seed."""
         return cls(asset=asset, halal=ComplianceVerdict.unknown(asset))
 

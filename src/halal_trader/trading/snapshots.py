@@ -4,10 +4,8 @@ When a stock BUY fills we record the 9-feature indicator vector keyed
 by ``trade_id``. The ML retrainer that labelled and trained on these
 rows was deleted on 2026-10-01; the rows are kept as research data.
 
-The ``IndicatorSnapshot.pair`` column is reused — it stores whichever
-trading symbol the snapshot is for (BTCUSDT, AAPL, …) regardless of
-market. Adding a "market" column would mean another migration; the
-trade_id FK is already enough to disambiguate.
+The ``IndicatorSnapshot.pair`` column holds the stock symbol; the name
+is left over from the crypto bot and renaming it would need a migration.
 """
 
 from __future__ import annotations
