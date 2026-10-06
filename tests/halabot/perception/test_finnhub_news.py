@@ -127,6 +127,25 @@ async def test_one_symbol_failure_isolated():
     assert n == 1 and sink[0].asset == "MSFT"
 
 
+@pytest.mark.asyncio
+async def test_event_time_is_the_publish_time_capped_at_ingestion():
+    published = datetime(2026, 5, 27, 20, 0, tzinfo=UTC)  # the evening before CLOCK
+    future = datetime(2026, 5, 29, 0, 0, tzinfo=UTC)  # a skewed feed clock
+    src, _ = await _src(
+        {
+            "NVDA": [
+                _item("old", "u1", datetime=int(published.timestamp())),
+                _item("skewed", "u2", datetime=int(future.timestamp())),
+                _item("undated", "u3", datetime=None),
+            ]
+        },
+        ["NVDA"],
+    )
+    sink: list[Event] = []
+    await src.poll_once(await _emit_to(sink))
+    assert [e.ts for e in sink] == [published, CLOCK.now(), CLOCK.now()]
+
+
 def test_polarity_mapping_values():
     # neutral abstains (None); directional tags map to ±0.5
     from halabot.perception.sources.finnhub_news import _POLARITY

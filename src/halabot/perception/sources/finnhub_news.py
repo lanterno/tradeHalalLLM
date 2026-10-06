@@ -98,11 +98,18 @@ class FinnhubNewsSource(PollingSource):
         if not headline or not url:
             return None
         polarity = _lexicon_polarity(headline)
+        ingested = self._clock.now()
+        published = _published_at(raw.get("datetime"))
         return new_event(
             self._clock,
             EventType.OBSERVATION_NEWS,
             source="finnhub-news",
             asset=raw["_asset"],
+            # Event time is when the story broke, not when this poll found it:
+            # a day-old headline otherwise entered the belief as fresh news and
+            # decayed from the moment it was fetched. Capped at ingestion, so a
+            # clock-skewed timestamp can't date it into the future.
+            ts=min(published, ingested) if published is not None else ingested,
             payload={
                 "headline": headline[:300],
                 "summary": str(raw.get("summary") or "")[:500],
@@ -118,6 +125,22 @@ class FinnhubNewsSource(PollingSource):
 
     async def aclose(self) -> None:
         await self._client.aclose()
+
+
+def _published_at(value: object) -> datetime | None:
+    """Finnhub's ``datetime`` (UNIX seconds) as an aware instant, or None."""
+    if isinstance(value, bool):
+        return None
+    try:
+        seconds = float(value)  # type: ignore[arg-type]
+    except TypeError, ValueError:
+        return None
+    if seconds <= 0:
+        return None
+    try:
+        return datetime.fromtimestamp(seconds, UTC)
+    except OverflowError, OSError, ValueError:
+        return None
 
 
 def _lexicon_polarity(headline: str) -> float | None:
