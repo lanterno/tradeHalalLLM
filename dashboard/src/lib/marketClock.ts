@@ -53,7 +53,7 @@ const FMT = new Intl.DateTimeFormat("en-CA", {
 });
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
-export function newYork(at: Date): NyParts {
+function newYork(at: Date): NyParts {
   const p = Object.fromEntries(FMT.formatToParts(at).map((x) => [x.type, x.value]));
   return {
     date: `${p.year}-${p.month}-${p.day}`,
@@ -63,7 +63,7 @@ export function newYork(at: Date): NyParts {
   };
 }
 
-export function isTradingDay(date: string, weekday: number, cal: MarketCalendar): boolean {
+function isTradingDay(date: string, weekday: number, cal: MarketCalendar): boolean {
   return weekday !== 0 && weekday !== 6 && !cal.holidays.includes(date);
 }
 

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { HomeStatus } from "../../api/types";
 import { useNow } from "../../hooks/useNow";
-import { cn } from "../../lib/utils";
+import { cn, parseDay } from "../../lib/utils";
 import { formatCountdown, readClock, SESSION_BAR, type MarketState } from "../../lib/marketClock";
 
 const STATES: Record<MarketState, { label: string; dot: string; live: boolean }> = {
@@ -27,7 +27,7 @@ function localOf(nyMinutes: number, now: Date, nowNyMinutes: number): string {
 }
 
 function shortDay(iso: string): string {
-  return new Date(`${iso}T12:00:00`).toLocaleDateString("en-US", {
+  return parseDay(iso).toLocaleDateString("en-US", {
     weekday: "short",
     day: "numeric",
     month: "short",

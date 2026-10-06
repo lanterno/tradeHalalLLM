@@ -1,7 +1,7 @@
 import { Area, AreaChart, ResponsiveContainer, YAxis } from "recharts";
 import type { HomeAccount, HomeStatus } from "../../api/types";
 import { CHART } from "../../lib/charts";
-import { cn, formatUsd } from "../../lib/utils";
+import { cn, formatUsd, parseDay } from "../../lib/utils";
 import { readClock } from "../../lib/marketClock";
 import { useNow } from "../../hooks/useNow";
 
@@ -149,7 +149,7 @@ export function MoneyPanel({ data }: { data: HomeStatus }) {
               <Row label="Method" value={`${set_aside.zakat.chosen} (higher)`} />
               <Row
                 label="Next hawl"
-                value={new Date(`${set_aside.zakat.next_hawl}T12:00:00`).toLocaleDateString("en-GB", {
+                value={parseDay(set_aside.zakat.next_hawl).toLocaleDateString("en-GB", {
                   day: "numeric",
                   month: "short",
                   year: "numeric",

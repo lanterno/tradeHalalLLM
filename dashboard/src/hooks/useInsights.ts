@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { fetchPurification } from "../api/insights";
 
 // Purification accrues once per closed winning trade, so a 5-minute poll
-// is plenty. The tile also re-fetches on window focus.
+// is plenty.
 export function usePurification() {
   return useQuery({
     queryKey: ["insights", "purification"],

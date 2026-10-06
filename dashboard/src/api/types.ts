@@ -19,18 +19,13 @@ export interface AnalyticsStats {
 export interface Trade {
   id: number;
   timestamp: string;
-  // Stock rows carry ``symbol``; ``pair`` survives from the old crypto
-  // shape. Use ``entityOf()`` (lib/utils) to read whichever the row has.
-  pair?: string;
-  symbol?: string;
+  symbol: string;
   side: string;
   quantity: number;
   price: number;
   order_id: string;
-  exchange?: string;
   status: string;
   llm_reasoning: string;
-  entry_price?: number | null;
   stop_loss: number | null;
   target_price: number | null;
   exit_price: number | null;
@@ -80,9 +75,7 @@ export interface StrategyAdjustment {
 
 export interface OpenPosition {
   id: number;
-  // The backend aliases ``pair = symbol`` on stock positions.
-  pair: string;
-  symbol?: string;
+  symbol: string;
   quantity: number;
   entry_price: number;
   stop_loss: number | null;
@@ -125,8 +118,6 @@ export interface AppConfig {
   stocks_daily_return_target: number;
   database: string;
 }
-
-// ── Phase 2 / 3 surfaces ─────────────────────────────────────
 
 export interface CycleMetrics {
   window_seconds: number;
@@ -183,9 +174,8 @@ export interface RiskState {
   drawdown_pct?: number | null;
   avg_correlation?: number | null;
   summary?: string;
-  // Which bot wrote the snapshot — populated by the cycle's
-  // runtime push so the dashboard can show whose risk this is.
-  market?: "crypto" | "stocks" | string;
+  // Which bot wrote the snapshot (always "stocks" now).
+  market?: string;
   // ISO timestamp of when the cycle wrote this snapshot — useful
   // for surfacing staleness if the cycle has stopped running.
   pushed_at?: string;
@@ -201,7 +191,8 @@ export interface HaltStatus {
 export interface ReconcileLogRow {
   id: number;
   timestamp: string;
-  market: "crypto" | "stocks";
+  // A free string: rows written before 2026-10-01 may name "crypto".
+  market: string;
   symbol: string;
   db_quantity: number;
   broker_quantity: number;

@@ -9,27 +9,25 @@ import {
   CartesianGrid,
 } from "recharts";
 import type { Trade } from "../api/types";
-import { entityOf, formatUsd } from "../lib/utils";
+import { formatUsd } from "../lib/utils";
 import { AXIS_TICK, CHART, CHART_TOOLTIP, pnlFill } from "../lib/charts";
 
-interface PairBreakdownProps {
+interface SymbolBreakdownProps {
   trades: Trade[];
 }
 
-export function PairBreakdown({ trades }: PairBreakdownProps) {
-  const pnlByEntity: Record<string, number> = {};
+export function SymbolBreakdown({ trades }: SymbolBreakdownProps) {
+  const pnlBySymbol: Record<string, number> = {};
   for (const t of trades) {
-    // Stocks carry filled_price as the entry basis; crypto carry entry_price.
-    const entry = t.entry_price ?? t.filled_price ?? t.price;
+    const entry = t.filled_price ?? t.price;
     if (t.exit_price != null && entry != null) {
-      const key = entityOf(t);
       const pnl = (t.exit_price - entry) * t.quantity;
-      pnlByEntity[key] = (pnlByEntity[key] ?? 0) + pnl;
+      pnlBySymbol[t.symbol] = (pnlBySymbol[t.symbol] ?? 0) + pnl;
     }
   }
 
-  const data = Object.entries(pnlByEntity)
-    .map(([pair, pnl]) => ({ pair, pnl }))
+  const data = Object.entries(pnlBySymbol)
+    .map(([symbol, pnl]) => ({ symbol, pnl }))
     .sort((a, b) => b.pnl - a.pnl);
 
   if (!data.length) {
@@ -52,7 +50,7 @@ export function PairBreakdown({ trades }: PairBreakdownProps) {
           tickLine={false}
         />
         <YAxis
-          dataKey="pair"
+          dataKey="symbol"
           type="category"
           tick={{ fill: CHART.axisText, fontSize: 11 }}
           axisLine={false}

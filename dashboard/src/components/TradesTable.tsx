@@ -1,5 +1,5 @@
 import type { Trade } from "../api/types";
-import { cn, entityOf, formatTime, formatUsd, formatQty, pnlColor } from "../lib/utils";
+import { cn, formatTime, formatUsd, formatQty, pnlColor } from "../lib/utils";
 
 interface TradesTableProps {
   trades: Trade[];
@@ -41,10 +41,9 @@ export function TradesTable({
         </thead>
         <tbody>
           {trades.map((t) => {
-            // Entry basis: entry_price when the row carries one, else
-            // filled_price. Use != null (not truthiness) so a legit 0 isn't
-            // dropped. Mirrors the CSV export basis in Trades.tsx.
-            const entry = t.entry_price ?? t.filled_price ?? t.price;
+            // Entry basis: filled_price, else the order price. Use ?? (not
+            // truthiness) so a legit 0 isn't dropped.
+            const entry = t.filled_price ?? t.price;
             const pnl =
               t.exit_price != null && entry != null
                 ? (t.exit_price - entry) * t.quantity
@@ -58,7 +57,7 @@ export function TradesTable({
                 <td className="whitespace-nowrap px-3 py-2 text-muted">
                   {formatTime(t.timestamp)}
                 </td>
-                <td className="px-3 py-2 font-medium">{entityOf(t)}</td>
+                <td className="px-3 py-2 font-medium">{t.symbol}</td>
                 <td className="px-3 py-2">
                   <span
                     className={cn(

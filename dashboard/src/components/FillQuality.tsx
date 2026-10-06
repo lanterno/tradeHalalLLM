@@ -3,7 +3,7 @@ import { useTrades } from "../hooks/useTrades";
 import { StatCard } from "./StatCard";
 import { ErrorState } from "./ErrorState";
 import type { Trade } from "../api/types";
-import { cn, entityOf, formatTime } from "../lib/utils";
+import { cn, formatTime } from "../lib/utils";
 
 const FILLED = new Set(["filled", "closed"]);
 
@@ -37,7 +37,7 @@ function fmtLatency(ms: number | null): string {
  * Execution quality for recent orders: fill latency (submitted → filled),
  * slippage (filled vs intended price), and how many orders never filled
  * (surfaces the market-open cold-start fill-timeout pattern). Self-contained
- * over the last 100 trades of the active market.
+ * over the last 100 trades.
  */
 export function FillQuality() {
   const { data, isLoading, isError, error, refetch } = useTrades({ limit: 100 });
@@ -133,7 +133,7 @@ export function FillQuality() {
                         <td className="whitespace-nowrap px-3 py-2 text-muted">
                           {formatTime(t.filled_at ?? t.timestamp)}
                         </td>
-                        <td className="px-3 py-2 font-medium">{entityOf(t)}</td>
+                        <td className="px-3 py-2 font-medium">{t.symbol}</td>
                         <td className="px-3 py-2">{t.side}</td>
                         <td className="px-3 py-2 text-right font-mono">
                           {fmtLatency(latencyMs(t))}

@@ -1,13 +1,13 @@
 import { Link } from "react-router-dom";
 import type { HomeStatus } from "../../api/types";
-import { cn } from "../../lib/utils";
+import { cn, parseDay } from "../../lib/utils";
 
 const COLORS = ["#4ade80", "#60a5fa", "#c084fc", "#facc15", "#fb923c", "#f87171", "#2dd4bf"];
 const OTHER = "#374151";
 const pct = (v: number, d = 1) => `${(v * 100).toFixed(d)}%`;
 
 function shortDate(iso: string): string {
-  return new Date(`${iso}T12:00:00`).toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+  return parseDay(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short" });
 }
 
 export function PortfolioPanel({ portfolio }: { portfolio: HomeStatus["portfolio"] }) {

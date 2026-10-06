@@ -3,31 +3,30 @@ import { useTrades } from "../hooks/useTrades";
 import { TradesTable } from "../components/TradesTable";
 import { ErrorState } from "../components/ErrorState";
 import { FillQuality } from "../components/FillQuality";
-import { entityOf } from "../lib/utils";
 
 const PAGE_SIZE = 25;
 
 export default function Trades() {
   const [page, setPage] = useState(0);
-  const [pair, setPair] = useState("");
+  const [symbol, setSymbol] = useState("");
   const [side, setSide] = useState("");
 
   const filters = useMemo(
     () => ({
       limit: PAGE_SIZE,
       offset: page * PAGE_SIZE,
-      pair: pair || undefined,
+      symbol: symbol || undefined,
       side: side || undefined,
     }),
-    [page, pair, side],
+    [page, symbol, side],
   );
 
   const { data: trades, isLoading, isError, error, refetch } = useTrades(filters);
   const { data: allTrades } = useTrades({ limit: 500 });
 
-  const entities = useMemo(() => {
+  const symbols = useMemo(() => {
     if (!allTrades) return [];
-    return [...new Set(allTrades.map(entityOf))].filter(Boolean).sort();
+    return [...new Set(allTrades.map((t) => t.symbol))].filter(Boolean).sort();
   }, [allTrades]);
 
   const exportCsv = useCallback(() => {
@@ -53,11 +52,11 @@ export default function Trades() {
     const rows = allTrades.map((t) =>
       [
         t.timestamp,
-        entityOf(t),
+        t.symbol,
         t.side,
         t.quantity,
         t.price,
-        t.filled_price ?? t.entry_price ?? "",
+        t.filled_price ?? "",
         t.exit_price ?? "",
         t.exit_reason ?? "",
         t.status,
@@ -94,17 +93,17 @@ export default function Trades() {
       {/* Filters */}
       <div className="flex flex-wrap gap-3">
         <select
-          value={pair}
+          value={symbol}
           onChange={(e) => {
-            setPair(e.target.value);
+            setSymbol(e.target.value);
             setPage(0);
           }}
           className="rounded-lg border border-border bg-surface px-3 py-1.5 text-sm text-gray-200 outline-none focus:border-accent"
         >
           <option value="">All Symbols</option>
-          {entities.map((p) => (
-            <option key={p} value={p}>
-              {p}
+          {symbols.map((s) => (
+            <option key={s} value={s}>
+              {s}
             </option>
           ))}
         </select>

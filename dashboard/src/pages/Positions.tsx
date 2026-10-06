@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import { usePositions } from "../hooks/usePositions";
 import { StatCard } from "../components/StatCard";
 import { ErrorState } from "../components/ErrorState";
-import { cn, entityOf, formatUsd, formatQty, formatTime, pnlColor } from "../lib/utils";
+import { cn, formatUsd, formatQty, formatTime, pnlColor } from "../lib/utils";
 import { CHART_COLORS, CHART_TOOLTIP } from "../lib/charts";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts";
 
@@ -29,7 +29,7 @@ export default function Positions() {
   );
 
   const allocationData = enriched.map((p) => ({
-    name: entityOf(p),
+    name: p.symbol,
     value: p.entry_price * p.quantity,
   }));
 
@@ -98,7 +98,7 @@ export default function Positions() {
                       key={p.id}
                       className="border-b border-border/50 hover:bg-surface-hover/50 transition-colors"
                     >
-                      <td className="px-3 py-2 font-medium">{entityOf(p)}</td>
+                      <td className="px-3 py-2 font-medium">{p.symbol}</td>
                       <td className="px-3 py-2 text-right font-mono">
                         {formatQty(p.quantity)}
                       </td>

@@ -5,7 +5,7 @@ import { StatCard } from "../components/StatCard";
 import { PnlBarChart } from "../components/PnlBarChart";
 import { EquityCurve } from "../components/EquityCurve";
 import { ExitReasonsChart } from "../components/ExitReasonsChart";
-import { PairBreakdown } from "../components/PairBreakdown";
+import { SymbolBreakdown } from "../components/SymbolBreakdown";
 import { ErrorState } from "../components/ErrorState";
 import { formatUsd, formatPct, pnlColor } from "../lib/utils";
 
@@ -190,7 +190,7 @@ export default function Analytics() {
               {tradesError ? (
                 <ErrorState compact error={tradesErr} onRetry={tradesRefetch} />
               ) : trades ? (
-                <PairBreakdown trades={trades} />
+                <SymbolBreakdown trades={trades} />
               ) : null}
             </div>
           </div>
