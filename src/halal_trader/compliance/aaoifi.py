@@ -42,6 +42,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal
 
+from halal_trader.compliance.exclusions import NON_ALCOHOLIC_2080, denied
+
 Verdict = Literal["halal", "not_halal", "doubtful"]
 
 DEBT_LIMIT = 0.30
@@ -80,10 +82,11 @@ PROHIBITED_SIC: tuple[tuple[int, int, str], ...] = (
     (6793, 6793, "commodity traders (financial)"),
     (6796, 6797, "investment offices (financial)"),
     (6799, 6799, "investors, not elsewhere classified (financial)"),
+    (2080, 2080, "beverages: SIC 2080 does not separate alcoholic drinks from soft drinks"),
     (2082, 2085, "alcoholic beverages"),
     (5181, 5182, "alcohol wholesale"),
     (5921, 5921, "liquor stores"),
-    (2111, 2141, "tobacco products"),
+    (2100, 2199, "tobacco products"),
     (5194, 5194, "tobacco wholesale"),
     (2011, 2013, "meat packing and processing (pork)"),
     (7011, 7011, "hotels and casinos (gambling, alcohol)"),
@@ -101,9 +104,18 @@ PROHIBITED_SIC: tuple[tuple[int, int, str], ...] = (
 )
 
 
-def prohibited_activity(sic: int | None) -> str | None:
-    """The reason a SIC code's activity is impermissible, or None if it is not."""
+def prohibited_activity(sic: int | None, cik: int | None = None) -> str | None:
+    """The reason a company's activity is impermissible, or None if it is not.
+
+    A company excluded by name (compliance/exclusions.py) is excluded
+    whatever its SIC code; otherwise the code decides, except that the
+    named non-alcoholic drink makers are exempt from SIC 2080.
+    """
+    if (reason := denied(cik)) is not None:
+        return reason
     if sic is None:
+        return None
+    if sic == 2080 and cik in NON_ALCOHOLIC_2080:
         return None
     for low, high, reason in PROHIBITED_SIC:
         if low <= sic <= high:
@@ -195,7 +207,7 @@ def screen(f: Fundamentals) -> ScreenResult:
         "loans_to_assets": loan_share,
     }
 
-    activity = prohibited_activity(f.sic)
+    activity = prohibited_activity(f.sic, f.cik)
     if activity is None and f.sic == REIT_SIC and loan_share is not None:
         if loan_share >= LOANS_TO_ASSETS_LIMIT:
             # SIC 6798 files mortgage REITs beside equity REITs. One whose
