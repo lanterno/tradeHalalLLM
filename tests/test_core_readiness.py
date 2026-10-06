@@ -96,3 +96,23 @@ async def test_drifting_from_the_book_or_a_refused_order_is_not_ready(engine: As
     r = await check(engine, today=last)
     assert not r.ready
     assert any("gap" in f for f in r.failures) and any("refused" in f for f in r.failures)
+
+
+async def test_an_unfilled_order_is_not_clean(engine: AsyncEngine) -> None:
+    from datetime import UTC, datetime
+
+    from halal_trader.market_hours import today_eastern
+    from halal_trader.portfolio.readiness import check
+
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO core_orders (submitted_at, symbol, side, qty, est_price, notional, "
+                "reason, status, broker_order_id) VALUES (:t, 'X', 'buy', 1, 10, 10, "
+                "'rebalance', 'submitted', 'never-filled')"
+            ),
+            {"t": datetime.now(UTC)},
+        )
+    r = await check(engine, today=today_eastern())
+    assert r.unfilled == 1
+    assert any("unfilled" in f for f in r.failures)

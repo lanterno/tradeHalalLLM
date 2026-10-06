@@ -154,6 +154,7 @@ def register(app: FastAPI) -> None:
                     "gap": _f(ready.gap, 5),
                     "max_gap": gate.MAX_GAP,
                     "refused": ready.refused,
+                    "unfilled": ready.unfilled,
                     "halted": ready.halted,
                     "failures": ready.failures,
                 },

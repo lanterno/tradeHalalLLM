@@ -51,7 +51,8 @@ function StatusDot({ isLive }: { isLive: boolean }) {
 
 export function Layout() {
   const { data: health } = useHealth();
-  const isLive = health?.status === "running";
+  // The bot's heartbeat, not the web's own status (always "running").
+  const isLive = health?.bot_alive === true;
   const location = useLocation();
   // Phones: the sidebar is a drawer behind a top bar. It is open only on the
   // page it was opened on, so any navigation (a link, the back button) closes it.

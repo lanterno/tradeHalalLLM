@@ -497,6 +497,6 @@ async def build(
             "max_tracking_error": gate.MAX_TRACKING_ERROR,
             "gap": ready.gap,
             "max_gap": gate.MAX_GAP,
-            "clean": not ready.refused and not ready.halted,
+            "clean": not ready.refused and not ready.halted and not ready.unfilled,
         },
     }

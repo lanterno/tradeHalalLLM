@@ -39,11 +39,17 @@ def position_row(p: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def quote_row(symbol: str, snap: dict[str, Any] | None) -> dict[str, Any] | None:
+def quote_row(
+    symbol: str, snap: dict[str, Any] | None, *, in_session: bool = True
+) -> dict[str, Any] | None:
+    """The price to show and the close it moved from. In the regular session
+    that is the latest trade; outside it, the session's official close, so the
+    change is the familiar close-to-close one and not moved by thin
+    extended-hours trades."""
     snap = snap or {}
-    price = _f((snap.get("latestTrade") or {}).get("p")) or _f(
-        (snap.get("dailyBar") or {}).get("c")
-    )
+    trade = _f((snap.get("latestTrade") or {}).get("p"))
+    close = _f((snap.get("dailyBar") or {}).get("c"))
+    price = (trade or close) if in_session else (close or trade)
     if not price:
         return None
     return {
@@ -79,8 +85,11 @@ async def snapshot_account(engine: AsyncEngine, account: str, broker: Any) -> No
 async def snapshot_quotes(
     engine: AsyncEngine, broker: Any, symbols: tuple[str, ...] = BENCHMARKS
 ) -> int:
+    from halal_trader.market_hours import is_market_open_local
+
     payload = await broker.get_stock_snapshot(",".join(symbols)) or {}
-    rows = [r for s in symbols if (r := quote_row(s, payload.get(s)))]
+    session = is_market_open_local()
+    rows = [r for s in symbols if (r := quote_row(s, payload.get(s), in_session=session))]
     if rows:
         async with engine.begin() as conn:
             await conn.execute(

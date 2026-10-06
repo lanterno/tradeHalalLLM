@@ -9,7 +9,8 @@ have followed the rule, cleanly, for long enough.
 * **tracking:** the account's daily returns follow the ``core`` forward
   book's (the rule run on closing prices): annualised tracking error under
   ``MAX_TRACKING_ERROR`` and a cumulative gap under ``MAX_GAP``;
-* **clean:** no refused order and no halted run in the last ``MIN_DAYS``.
+* **clean:** no refused order, no order left unfilled and no halted run in
+  the last ``MIN_DAYS``.
 
 When all hold, the evening run alerts once: the operator's step is to put
 the live account's keys in place and set CORE_PAPER=false.
@@ -37,6 +38,7 @@ class Readiness:
     gap: float | None
     refused: int
     halted: int
+    unfilled: int = 0
     failures: list[str] = field(default_factory=list)
 
     @property
@@ -97,7 +99,12 @@ async def check(engine: AsyncEngine, *, today: date, book: str = "core") -> Read
         if len(days) > 1
         else None
     )
-    r = Readiness(len(days), int(monthly), tracking, gap, int(refused), int(halted))
+    from halal_trader.portfolio.execution_quality import report
+
+    # A market order that never filled is a position the book holds and the
+    # account does not: as disqualifying as a refusal.
+    unfilled = (await report(engine, since, today)).count("unfilled")
+    r = Readiness(len(days), int(monthly), tracking, gap, int(refused), int(halted), unfilled)
     if r.days < MIN_DAYS:
         r.failures.append(f"{r.days} of {MIN_DAYS} trading days")
     if r.monthly_runs < 1:
@@ -116,4 +123,6 @@ async def check(engine: AsyncEngine, *, today: date, book: str = "core") -> Read
         r.failures.append(f"{refused} refused order(s) recently")
     if halted:
         r.failures.append(f"{halted} halted run(s) recently")
+    if unfilled:
+        r.failures.append(f"{unfilled} unfilled order(s) recently")
     return r

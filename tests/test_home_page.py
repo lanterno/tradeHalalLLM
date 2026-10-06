@@ -91,6 +91,9 @@ def test_snapshot_rows_parse_alpaca_shapes() -> None:
         "prev_close": 60.0,
     }
     assert snapshots.quote_row("SPUS", {}) is None
+    after_hours = {"latestTrade": {"p": 61.2}, "dailyBar": {"c": 60.8}, "prevDailyBar": {"c": 60}}
+    assert snapshots.quote_row("SPUS", after_hours, in_session=False)["price"] == 60.8
+    assert snapshots.quote_row("SPUS", after_hours, in_session=True)["price"] == 61.2
 
 
 class FakeBroker:

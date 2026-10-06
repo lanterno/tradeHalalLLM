@@ -75,9 +75,9 @@ function Gate({ r }: { r: CoreStatus["readiness"] }) {
           }
         />
         <Check
-          ok={r.refused === 0 && r.halted === 0}
+          ok={r.refused === 0 && r.unfilled === 0 && r.halted === 0}
           label="Clean"
-          detail={`${r.refused} refused order(s), ${r.halted} halted run(s) recently`}
+          detail={`${r.refused} refused, ${r.unfilled} unfilled order(s), ${r.halted} halted run(s) recently`}
         />
       </ul>
     </div>
@@ -217,7 +217,7 @@ export default function Core() {
             <StatCard label="Holdings" value={held.length} sub={`${data.holdings.length} targeted`} />
             <StatCard
               label="Last run"
-              value={data.runs[0] ? formatDate(`${data.runs[0].run_on}T12:00:00`) : "—"}
+              value={data.runs[0] ? formatDate(data.runs[0].run_on) : "—"}
               sub={
                 data.runs[0]
                   ? data.runs[0].halted

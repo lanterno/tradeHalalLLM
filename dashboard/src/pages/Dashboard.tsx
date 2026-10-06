@@ -9,6 +9,7 @@ import { MoneyPanel } from "../components/home/MoneyPanel";
 import { PortfolioPanel } from "../components/home/PortfolioPanel";
 import { GatePanel, UpcomingPanel } from "../components/home/PlanPanels";
 import { cn, formatPct, formatUsd, pnlColor } from "../lib/utils";
+import { staleComponents, type HealthStatus } from "../api/types";
 
 const HIJRI_MONTHS = [
   "Muharram", "Safar", "Rabiʿ al-Awwal", "Rabiʿ al-Thani", "Jumada al-Ula", "Jumada al-Akhirah",
@@ -35,6 +36,13 @@ function Badge({ ok, children }: { ok: boolean | "paper"; children: React.ReactN
       ● {children}
     </span>
   );
+}
+
+function HealthBadge({ health }: { health: HealthStatus }) {
+  const stale = staleComponents(health);
+  if (!health.bot_alive) return <Badge ok={false}>Bot not reporting</Badge>;
+  if (stale.length) return <Badge ok={false}>Stale: {stale.join(", ")}</Badge>;
+  return <Badge ok>All systems healthy</Badge>;
 }
 
 function StockOfTheDay() {
@@ -120,11 +128,7 @@ export default function Dashboard() {
         </div>
         <div className="flex flex-wrap gap-2">
           {data && data.accounts.every((a) => a.paper) && <Badge ok="paper">Paper money</Badge>}
-          {health && (
-            <Badge ok={health.status === "running"}>
-              {health.status === "running" ? "All systems healthy" : "Bot not reporting"}
-            </Badge>
-          )}
+          {health && <HealthBadge health={health} />}
         </div>
       </div>
 

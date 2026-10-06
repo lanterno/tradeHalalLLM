@@ -44,9 +44,18 @@ export function formatTime(iso: string): string {
   });
 }
 
+const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
+
+/** A calendar date: "2026-10-04" stays the 4th in every timezone. */
+export function parseDay(iso: string): Date {
+  // new Date("2026-10-04") is UTC midnight, the 3rd west of Greenwich; a bare
+  // date names a day, not an instant, so read it as local noon.
+  return DATE_ONLY.test(iso) ? new Date(`${iso}T12:00:00`) : new Date(iso);
+}
+
 export function formatDate(iso: string): string {
   if (!iso) return "";
-  return new Date(iso).toLocaleDateString("en-US", {
+  return parseDay(iso).toLocaleDateString("en-US", {
     month: "short",
     day: "numeric",
   });

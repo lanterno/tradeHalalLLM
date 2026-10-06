@@ -94,9 +94,19 @@ export interface OpenPosition {
 }
 
 export interface HealthStatus {
-  status: string;
+  status: string; // the web process; always "running" while it answers
   timestamp: string;
   version: string;
+  /** The bot's own heartbeat verdict: the real "is it running?". */
+  bot_alive?: boolean;
+  bot?: Record<string, { stale?: boolean; age_seconds?: number; reason?: string | null }>;
+}
+
+/** Bot alive and no component's heartbeat stale: what "healthy" means. */
+export function staleComponents(h: HealthStatus): string[] {
+  return Object.entries(h.bot ?? {})
+    .filter(([name, b]) => !name.startsWith("_") && b.stale)
+    .map(([name]) => name);
 }
 
 export interface SystemStatus {
@@ -453,6 +463,7 @@ export interface CoreStatus {
     gap: number | null;
     max_gap: number;
     refused: number;
+    unfilled: number;
     halted: number;
     failures: string[];
   };

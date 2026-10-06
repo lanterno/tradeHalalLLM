@@ -2,19 +2,31 @@ import { Area, AreaChart, ResponsiveContainer, YAxis } from "recharts";
 import type { HomeAccount, HomeStatus } from "../../api/types";
 import { CHART } from "../../lib/charts";
 import { cn, formatUsd } from "../../lib/utils";
+import { readClock } from "../../lib/marketClock";
+import { useNow } from "../../hooks/useNow";
 
 const signed = (v: number) => `${v >= 0 ? "+" : "−"}${formatUsd(Math.abs(v))}`;
 const pct = (v: number) => `${v >= 0 ? "+" : "−"}${Math.abs(v * 100).toFixed(2)}%`;
 
-function Change({ change, changePct }: { change: number | null; changePct: number | null }) {
-  if (change === null) return <p className="text-xs text-muted">No change yet today</p>;
+/** Alpaca's change is against the previous session's close, so outside the
+ *  session it is the last session's move, not today's. */
+function Change({
+  change,
+  changePct,
+  label,
+}: {
+  change: number | null;
+  changePct: number | null;
+  label: string;
+}) {
+  if (change === null) return <p className="text-xs text-muted">No change yet {label}</p>;
   return (
     <p className="text-xs tabular-nums">
       <span className={change >= 0 ? "text-accent" : "text-loss"}>
         {signed(change)}
         {changePct !== null && ` (${pct(changePct)})`}
       </span>{" "}
-      <span className="text-muted">today</span>
+      <span className="text-muted">{label}</span>
     </p>
   );
 }
@@ -34,7 +46,7 @@ const BADGE: Record<HomeAccount["status"], string> = {
   disabled: "border-muted/35 text-muted",
 };
 
-function Account({ a }: { a: HomeAccount }) {
+function Account({ a, label }: { a: HomeAccount; label: string }) {
   const investedShare = a.invested !== null && a.equity ? a.invested / a.equity : null;
   return (
     <div className="rounded-xl border border-border bg-surface p-4">
@@ -45,7 +57,7 @@ function Account({ a }: { a: HomeAccount }) {
         </span>
       </div>
       <p className="mt-1.5 text-[22px] font-bold tabular-nums text-white">{formatUsd(a.equity)}</p>
-      <Change change={a.change} changePct={a.change_pct} />
+      <Change change={a.change} changePct={a.change_pct} label={label} />
       {investedShare !== null && (
         <div className="my-2.5 flex h-1.5 overflow-hidden rounded bg-border">
           <i className="bg-accent" style={{ width: `${investedShare * 100}%` }} />
@@ -75,6 +87,8 @@ function Account({ a }: { a: HomeAccount }) {
 
 export function MoneyPanel({ data }: { data: HomeStatus }) {
   const { total, accounts, set_aside } = data;
+  const clock = readClock(useNow(60_000), data.market);
+  const label = clock.state === "open" || clock.state === "post" ? "today" : "last session";
   const series = total.series;
   return (
     <section>
@@ -92,7 +106,7 @@ export function MoneyPanel({ data }: { data: HomeStatus }) {
           <p className="my-1 text-[34px] font-bold leading-tight tabular-nums text-white">
             {formatUsd(total.equity)}
           </p>
-          <Change change={total.change} changePct={total.change_pct} />
+          <Change change={total.change} changePct={total.change_pct} label={label} />
           {series.length > 1 && (
             <div className="mt-2 h-14">
               <ResponsiveContainer width="100%" height="100%">
@@ -121,7 +135,7 @@ export function MoneyPanel({ data }: { data: HomeStatus }) {
           )}
         </div>
         {accounts.map((a) => (
-          <Account key={a.account} a={a} />
+          <Account key={a.account} a={a} label={label} />
         ))}
         <div className="rounded-xl border border-border bg-surface p-4">
           <p className="text-[11px] font-semibold uppercase tracking-wider text-muted">Set aside</p>
