@@ -11,27 +11,63 @@ view. Re-running the same method for the same date replaces its own rows.
 
 Concept choices (each a judgment call, recorded here):
 
-* interest-bearing debt = the largest of the long-term totals companies
-  actually file (LongTermDebt; LongTermDebtNoncurrent + LongTermDebtCurrent;
-  LongTermDebtAndCapitalLeaseObligationsIncludingCurrentMaturities;
-  LongTermDebtAndCapitalLeaseObligations + its Current part; the noncurrent
-  figure + DebtCurrent), plus ShortTermBorrowings, CommercialPaper and
-  FinanceLeaseLiability. Filers pick one family: CVX files only the
-  IncludingCurrentMaturities total, and before v3 its $37B of debt read as
-  its $0.4B of short-term borrowings. Overlaps between families can count
-  some debt twice; taking the largest errs strict, never lenient.
-  Operating leases are excluded (not interest-bearing borrowing). A company
-  that files XBRL but tags none of these is treated as debt-free.
+* interest-bearing debt is read two ways and the larger wins (``debt_of``):
+  - **filed totals**: LongTermDebt; LongTermDebtNoncurrent + Current;
+    LongTermDebtAndCapitalLeaseObligationsIncludingCurrentMaturities;
+    LongTermDebtAndCapitalLeaseObligations + its Current part; the
+    noncurrent figure + DebtCurrent; DebtAndCapitalLeaseObligations;
+    DebtLongtermAndShorttermCombinedAmount; DebtInstrumentCarryingAmount;
+    NotesAndLoansPayable. Filers pick one family: CVX files only the
+    IncludingCurrentMaturities total, and before v3 its $37B of debt read as
+    its $0.4B of short-term borrowings.
+  - **the sum of five kinds of borrowing**, each read as the largest of its
+    synonyms: notes (NotesPayable, SeniorNotes, SeniorLongTermNotes +
+    SeniorNotesCurrent, LongTermNotesPayable + NotesPayableCurrent,
+    UnsecuredDebt, UnsecuredLongTermDebt), secured debt (SecuredDebt,
+    SecuredLongTermDebt), credit lines (LineOfCredit, LongTermLineOfCredit +
+    LinesOfCreditCurrent), convertibles (ConvertibleDebt, its Noncurrent +
+    Current, ConvertibleNotesPayable, ConvertibleLongTermNotesPayable +
+    ConvertibleNotesPayableCurrent) and loans (LoansPayable, OtherLongTermDebt,
+    OtherBorrowings, OtherLoansPayable). REITs and homebuilders file their debt
+    only this way: KRC as SecuredDebt + UnsecuredDebt, BXP as SeniorNotes +
+    SecuredDebt, NNN as NotesPayable + LoansPayable. Before v11 none of these
+    were read, and 98 of 467 passes on 2026-10-05 read as debt-free.
+  Synonyms within a kind are not added (MAA files the same notes as
+  NotesPayable and UnsecuredDebt), kinds are, and the two readings are never
+  added to each other. Where a filer tags one borrowing under two kinds the
+  sum overstates (MAA's NotesPayable includes its $0.36B secured debt: +6%);
+  the error is always upward, which the strict option accepts.
+  ShortTermBorrowings, CommercialPaper and FinanceLeaseLiability are added
+  on top, as before. Operating leases are excluded (not borrowing).
+  A company that tags none of it reads as debt-free, and is then held to its
+  interest expense (InterestExpense, InterestExpenseNonoperating,
+  InterestExpenseDebt, InterestPaidNet; the largest): debt implied at 6%
+  over the limit, with the tags explaining under half, is doubtful
+  (aaoifi.IMPLIED_RATE). AES files ~$20B of debt under its own elements.
 * cash and interest-bearing securities = CashAndCashEquivalentsAtCarryingValue
   (else CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents, which
-  is larger, so strict) plus the largest of ShortTermInvestments, MarketableSecuritiesCurrent and
-  AvailableForSaleSecuritiesDebtSecuritiesCurrent (companies often tag the
-  same holding under more than one, so they are not summed).
+  is larger, so strict, else Cash) plus the largest of ShortTermInvestments,
+  MarketableSecuritiesCurrent and AvailableForSaleSecuritiesDebtSecuritiesCurrent
+  (companies often tag the same holding under more than one, so they are not
+  summed).
 * interest income = InvestmentIncomeInterest, else InterestIncomeOther, else
-  InvestmentIncomeInterestAndDividend; revenue = Revenues, else
-  RevenueFromContractWithCustomerExcludingAssessedTax, else the Including
-  variant, else SalesRevenueNet.
-  Both from the latest calendar-year frame that has them.
+  InvestmentIncomeInterestAndDividend; plus lending income, the largest of
+  InterestAndDividendIncomeOperating, InterestAndFeeIncomeLoansAndLeases (and
+  its Commercial, Consumer and RealEstate parts), InterestIncomeOperating,
+  InterestIncomeSecuritiesMortgageBacked and FinancialServicesRevenue: 82%
+  of STWD's revenue is InterestAndFeeIncomeLoansCommercial, which v10 did not
+  read. Revenue = Revenues, else RevenueFromContractWithCustomerExcluding-
+  AssessedTax, else the Including variant, else SalesRevenueNet. All from the
+  latest calendar-year frame that has them.
+* loans held = the largest of MortgageLoansOnRealEstate, LoansAndLeases-
+  ReceivableNetReportedAmount, FinancingReceivableExcludingAccruedInterest-
+  AfterAllowanceForCreditLoss and NotesReceivableNet, against Assets: a REIT
+  (SIC 6798) whose assets are mostly loans is a lender.
+* receivables = the largest of AccountsReceivableNetCurrent,
+  ReceivablesNetCurrent (CAH and MCK file only this) and
+  AccountsNotesAndLoansReceivableNetCurrent. Unreported still counts as
+  none: the 49% test rarely binds, and an absent tag on a REIT or a
+  software company is usually a real absence.
 * price = the latest raw close in daily_bars (run `halal-trader data
   backfill` first). Shares = dei EntityCommonStockSharesOutstanding, else
   diluted weighted-average shares: multi-class filers (GOOG, META) report
@@ -49,7 +85,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import date
 
 from sqlalchemy import text
@@ -76,7 +112,14 @@ MAX_FAILED_SHARE = 0.02
 #     of AAOIFI, and an index Shariah board's exclusion as a veto.
 # v8: the veto recognises holdings named in fund-administrator style.
 # v9: unreported interest income is estimated (cash and securities x 5%), not zero.
-METHOD = "aaoifi-sec-v10"
+# v10: a successor registrant reads its predecessor's facts; two fallback tags.
+# v11: debt read from the kinds REITs and homebuilders file (notes, secured,
+#      credit lines, convertibles, loans) and checked against interest expense;
+#      lending income is impure; a REIT that mostly holds loans is a lender;
+#      more receivables tags; implausible share counts are doubtful; a CIK
+#      deny-list for activities a SIC code hides; share counts rescaled for
+#      splits after they were filed.
+METHOD = "aaoifi-sec-v11"
 UNMAPPED = "not an SEC registrant (or ticker not mapped)"
 _MIN_MONTHS = 12
 
@@ -86,13 +129,64 @@ _DEBT_WITH_LEASES_TOTAL = "LongTermDebtAndCapitalLeaseObligationsIncludingCurren
 _DEBT_WITH_LEASES = "LongTermDebtAndCapitalLeaseObligations"
 _DEBT_WITH_LEASES_CURRENT = "LongTermDebtAndCapitalLeaseObligationsCurrent"
 _DEBT_CURRENT = "DebtCurrent"
+# Totals a filer may report instead of the families above.
+_DEBT_OTHER_TOTALS = (
+    "DebtAndCapitalLeaseObligations",
+    "DebtLongtermAndShorttermCombinedAmount",
+    "DebtInstrumentCarryingAmount",
+    "NotesAndLoansPayable",
+)
+# (kind, alternatives): an alternative is concepts summed (noncurrent + current);
+# a kind is the largest alternative; the kinds are added together.
+DEBT_KINDS: tuple[tuple[str, tuple[tuple[str, ...], ...]], ...] = (
+    (
+        "notes",
+        (
+            ("NotesPayable",),
+            ("SeniorNotes",),
+            ("SeniorLongTermNotes", "SeniorNotesCurrent"),
+            ("LongTermNotesPayable", "NotesPayableCurrent"),
+            ("UnsecuredDebt",),
+            ("UnsecuredLongTermDebt",),
+        ),
+    ),
+    ("secured", (("SecuredDebt",), ("SecuredLongTermDebt",))),
+    ("credit lines", (("LineOfCredit",), ("LongTermLineOfCredit", "LinesOfCreditCurrent"))),
+    (
+        "convertibles",
+        (
+            ("ConvertibleDebt",),
+            ("ConvertibleDebtNoncurrent", "ConvertibleDebtCurrent"),
+            ("ConvertibleNotesPayable",),
+            ("ConvertibleLongTermNotesPayable", "ConvertibleNotesPayableCurrent"),
+        ),
+    ),
+    (
+        "loans",
+        (("LoansPayable",), ("OtherLongTermDebt",), ("OtherBorrowings",), ("OtherLoansPayable",)),
+    ),
+)
+_DEBT_KIND_CONCEPTS = tuple(
+    dict.fromkeys(c for _, alternatives in DEBT_KINDS for alt in alternatives for c in alt)
+)
 _CASH_WIDE = "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents"
 _DILUTED_SHARES = "WeightedAverageNumberOfDilutedSharesOutstanding"
 _DEBT_EXTRA = ("ShortTermBorrowings", "CommercialPaper", "FinanceLeaseLiability")
 _CASH = "CashAndCashEquivalentsAtCarryingValue"
 _CASH_PLAIN = "Cash"  # SLB tags its cash only as this
 _BALANCE_SHARES = "CommonStockSharesOutstanding"  # balance-sheet count, one class only
-_RECEIVABLES = "AccountsReceivableNetCurrent"
+_RECEIVABLES = (
+    "AccountsReceivableNetCurrent",
+    "ReceivablesNetCurrent",
+    "AccountsNotesAndLoansReceivableNetCurrent",
+)
+_LOANS_HELD = (
+    "MortgageLoansOnRealEstate",
+    "LoansAndLeasesReceivableNetReportedAmount",
+    "FinancingReceivableExcludingAccruedInterestAfterAllowanceForCreditLoss",
+    "NotesReceivableNet",
+)
+_ASSETS = "Assets"
 _SECURITIES = (
     "ShortTermInvestments",
     "MarketableSecuritiesCurrent",
@@ -102,6 +196,22 @@ _INTEREST = (
     "InvestmentIncomeInterest",
     "InterestIncomeOther",
     "InvestmentIncomeInterestAndDividend",
+)
+_LENDER_INCOME = (
+    "InterestAndDividendIncomeOperating",
+    "InterestAndFeeIncomeLoansAndLeases",
+    "InterestAndFeeIncomeLoansCommercial",
+    "InterestAndFeeIncomeLoansConsumer",
+    "InterestAndFeeIncomeLoansRealEstate",
+    "InterestIncomeOperating",
+    "InterestIncomeSecuritiesMortgageBacked",
+    "FinancialServicesRevenue",
+)
+_INTEREST_EXPENSE = (
+    "InterestExpense",
+    "InterestExpenseNonoperating",
+    "InterestExpenseDebt",
+    "InterestPaidNet",
 )
 _REVENUE = (
     "Revenues",
@@ -142,6 +252,38 @@ def _sum(*values: float | None) -> float | None:
     return sum(present) if present else None
 
 
+def _largest(*values: float | None) -> float | None:
+    return max((x for x in values if x is not None), default=None)
+
+
+def debt_of(v: Callable[[str], float | None]) -> tuple[float | None, dict[str, float | None]]:
+    """Interest-bearing debt from one company's facts (``v``: concept -> value).
+
+    Returns the debt (None when no debt concept is filed at all) and the two
+    readings behind it, for the record. See the module docstring for why
+    the larger reading wins and what each can overstate.
+    """
+    noncurrent = v(_DEBT_PARTS[0])
+    totals = _largest(
+        v(_DEBT_TOTAL),
+        _sum(noncurrent, v(_DEBT_PARTS[1])),
+        v(_DEBT_WITH_LEASES_TOTAL),
+        _sum(v(_DEBT_WITH_LEASES), v(_DEBT_WITH_LEASES_CURRENT)),
+        _sum(noncurrent if noncurrent is not None else v(_DEBT_WITH_LEASES), v(_DEBT_CURRENT)),
+        *(v(c) for c in _DEBT_OTHER_TOTALS),
+    )
+    kinds = _sum(
+        *(
+            _largest(*(_sum(*(v(c) for c in alt)) for alt in alternatives))
+            for _, alternatives in DEBT_KINDS
+        )
+    )
+    extras = _sum(*(v(e) for e in _DEBT_EXTRA))
+    core = _largest(totals, kinds)
+    debt = None if core is None and extras is None else (core or 0.0) + (extras or 0.0)
+    return debt, {"debt_from_totals": totals, "debt_from_kinds": kinds, "debt_extras": extras}
+
+
 def recent_quarter_instants(as_of: date, n: int = 5) -> list[str]:
     """SEC instant-frame periods for the last ``n`` completed quarters, newest first."""
     year, quarter = as_of.year, (as_of.month - 1) // 3  # quarters fully before as_of
@@ -154,8 +296,8 @@ def recent_quarter_instants(as_of: date, n: int = 5) -> list[str]:
     return out
 
 
-def _newest(frames: list[dict[int, Fact]], cik: int) -> float | None:
-    """The most recent value across frames (ordered newest period first),
+def _newest_fact(frames: list[dict[int, Fact]], cik: int) -> Fact | None:
+    """The most recent fact across frames (ordered newest period first),
     from ``cik`` or, if it has none, its predecessor (compliance/successors.py)."""
     for filer in lineage(cik):
         best: Fact | None = None
@@ -164,8 +306,13 @@ def _newest(frames: list[dict[int, Fact]], cik: int) -> float | None:
             if fact is not None and (best is None or fact.end > best.end):
                 best = fact
         if best is not None:
-            return best.val
+            return best
     return None
+
+
+def _newest(frames: list[dict[int, Fact]], cik: int) -> float | None:
+    fact = _newest_fact(frames, cik)
+    return fact.val if fact is not None else None
 
 
 async def _instant(
@@ -188,10 +335,14 @@ async def _mapped_by_name(engine: AsyncEngine) -> dict[str, tuple[int, str]]:
     return await mapped_ciks(engine)
 
 
+Audit = dict[str, dict[str, float | None]]
+
+
 async def gather(
     sec: SecClient, engine: AsyncEngine, symbols: Sequence[str], as_of: date
-) -> tuple[list[Fundamentals], dict[str, tuple[int | None, str]], dict[str, str]]:
-    """Fundamentals for each symbol, (cik, SIC description) for the record, and company names."""
+) -> tuple[list[Fundamentals], dict[str, tuple[int | None, str]], dict[str, str], Audit]:
+    """Fundamentals for each symbol, (cik, SIC description) for the record, company
+    names, and the intermediate figures worth keeping beside each verdict."""
     companies = await sec.companies()
     # Tickers SEC no longer lists, matched to their filer by name
     # (compliance/delisted.py); SEC's own current mapping wins.
@@ -207,12 +358,16 @@ async def gather(
             _DEBT_WITH_LEASES,
             _DEBT_WITH_LEASES_CURRENT,
             _DEBT_CURRENT,
+            *_DEBT_OTHER_TOTALS,
+            *_DEBT_KIND_CONCEPTS,
             *_DEBT_EXTRA,
             _CASH,
             _CASH_WIDE,
             _CASH_PLAIN,
             *_SECURITIES,
-            _RECEIVABLES,
+            *_RECEIVABLES,
+            *_LOANS_HELD,
+            _ASSETS,
         )
     }
     shares = await _instant(sec, "EntityCommonStockSharesOutstanding", periods, dei=True)
@@ -220,7 +375,10 @@ async def gather(
         await sec.frame("us-gaap", _DILUTED_SHARES, "shares", p.removesuffix("I")) for p in periods
     ]
     balance_shares = [await sec.frame("us-gaap", _BALANCE_SHARES, "shares", p) for p in periods]
-    annual = {c: await _annual(sec, c, as_of) for c in (*_INTEREST, *_REVENUE)}
+    annual = {
+        c: await _annual(sec, c, as_of)
+        for c in (*_INTEREST, *_LENDER_INCOME, *_INTEREST_EXPENSE, *_REVENUE)
+    }
     async with engine.connect() as conn:
         rows = await conn.execute(
             text(
@@ -277,6 +435,7 @@ async def gather(
     out: list[Fundamentals] = []
     meta: dict[str, tuple[int | None, str]] = {}
     titles: dict[str, str] = {}
+    audit: Audit = {}
     failed: list[str] = []
     for symbol in symbols:
         sym = symbol.upper()
@@ -301,34 +460,29 @@ async def gather(
         def v(concept: str, cik: int = cik) -> float | None:
             return _newest(frames[concept], cik)
 
-        noncurrent = v(_DEBT_PARTS[0])
-        candidates = (
-            v(_DEBT_TOTAL),
-            _sum(noncurrent, v(_DEBT_PARTS[1])),
-            v(_DEBT_WITH_LEASES_TOTAL),
-            _sum(v(_DEBT_WITH_LEASES), v(_DEBT_WITH_LEASES_CURRENT)),
-            _sum(noncurrent if noncurrent is not None else v(_DEBT_WITH_LEASES), v(_DEBT_CURRENT)),
-        )
-        extras = [v(e) for e in _DEBT_EXTRA]
-        core = max((x for x in candidates if x is not None), default=None)
+        def yearly(concepts: Sequence[str], cik: int = cik) -> list[float | None]:
+            return [_newest(annual[c], cik) for c in concepts]
+
         cash = v(_CASH)
         if cash is None:
             cash = v(_CASH_WIDE)
         if cash is None:
             cash = v(_CASH_PLAIN)
-        securities = max((x for x in (v(s) for s in _SECURITIES) if x is not None), default=0.0)
+        securities = _largest(*(v(s) for s in _SECURITIES)) or 0.0
         files_xbrl = cash is not None or _newest(shares, cik) is not None
-        debt: float | None
-        if core is None and all(e is None for e in extras):
-            debt = 0.0 if files_xbrl else None  # tags no debt at all: debt-free
-        else:
-            debt = (core or 0.0) + sum(e for e in extras if e is not None)
-        interest = next(
-            (x for x in (_newest(annual[c], cik) for c in _INTEREST) if x is not None), None
-        )
-        revenue = next(
-            (x for x in (_newest(annual[c], cik) for c in _REVENUE) if x is not None), None
-        )
+        debt, readings = debt_of(v)
+        if debt is None and files_xbrl:
+            debt = 0.0  # tags no debt at all; interest expense is the check (aaoifi)
+        interest = next((x for x in yearly(_INTEREST) if x is not None), None)
+        revenue = next((x for x in yearly(_REVENUE) if x is not None), None)
+        audit[sym] = {
+            **readings,
+            "interest_expense": _largest(*yearly(_INTEREST_EXPENSE)),
+            "lender_income": _largest(*yearly(_LENDER_INCOME)),
+            "loans_receivable": _largest(*(v(c) for c in _LOANS_HELD)),
+            "total_assets": v(_ASSETS),
+            "receivables": _largest(*(v(c) for c in _RECEIVABLES)),
+        }
         out.append(
             Fundamentals(
                 symbol=sym,
@@ -346,7 +500,12 @@ async def gather(
                 revenue=revenue,
                 average_price=averages.get(sym),
                 foreign_filer=foreign,
-                receivables=v(_RECEIVABLES),
+                receivables=audit[sym]["receivables"],
+                cik=cik,
+                interest_expense=audit[sym]["interest_expense"],
+                lender_income=audit[sym]["lender_income"],
+                loans_receivable=audit[sym]["loans_receivable"],
+                total_assets=audit[sym]["total_assets"],
             )
         )
     mapped = sum(1 for cik, _ in meta.values() if cik is not None)
@@ -357,7 +516,7 @@ async def gather(
             f"submissions unavailable for {len(failed)} of {mapped} companies "
             f"({', '.join(failed[:5])}, ...)"
         )
-    return out, meta, titles
+    return out, meta, titles, audit
 
 
 async def run_screen(
@@ -366,7 +525,7 @@ async def run_screen(
     """Screen ``symbols`` as of ``as_of`` and store every verdict with its inputs."""
     from halal_trader.compliance.index_veto import apply_veto, views_at
 
-    fundamentals, meta, titles = await gather(sec, engine, symbols, as_of)
+    fundamentals, meta, titles, audit = await gather(sec, engine, symbols, as_of)
     results = apply_veto([screen(f) for f in fundamentals], titles, await views_at(engine, as_of))
     async with engine.begin() as conn:
         for f, r in zip(fundamentals, results, strict=True):
@@ -394,6 +553,7 @@ async def run_screen(
                     "metrics": json.dumps(
                         {
                             **r.metrics,
+                            **audit.get(r.symbol, {}),
                             "interest_bearing_debt": f.interest_bearing_debt,
                             "cash_and_securities": f.cash_and_securities,
                             "interest_income": f.interest_income,
