@@ -74,7 +74,7 @@ async def _last_closes(engine: AsyncEngine, symbols: list[str]) -> dict[str, tup
         }
 
 
-async def _ledger_positions(
+async def ledger_positions(
     engine: AsyncEngine, account: str, open_trades: list[Any]
 ) -> tuple[list[dict[str, Any]], str | None]:
     """Holdings without a snapshot: the ledger's quantities at the last close."""
@@ -156,7 +156,7 @@ def register(app: FastAPI) -> None:
                 as_of, source = snap.taken_at.isoformat(), "snapshot"
                 age = round((now - snap.taken_at).total_seconds())
             else:
-                positions, as_of = await _ledger_positions(
+                positions, as_of = await ledger_positions(
                     ctx.engine, account, open_trades if account == "paper" else []
                 )
                 equity = cash = None

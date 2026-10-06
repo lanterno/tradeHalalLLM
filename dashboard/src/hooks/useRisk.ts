@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   clearHalt,
   fetchBackups,
+  fetchCoreRisk,
   fetchHaltStatus,
   fetchReconcileRecent,
   fetchRiskState,
@@ -13,6 +14,14 @@ export function useRiskState() {
     queryKey: ["risk", "state"],
     queryFn: fetchRiskState,
     refetchInterval: 15_000,
+  });
+}
+
+export function useCoreRisk() {
+  return useQuery({
+    queryKey: ["risk", "core"],
+    queryFn: fetchCoreRisk,
+    refetchInterval: 60_000,
   });
 }
 

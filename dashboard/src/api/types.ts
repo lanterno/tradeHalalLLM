@@ -258,6 +258,29 @@ export interface RiskState {
   // ISO timestamp of when the cycle wrote this snapshot — useful
   // for surfacing staleness if the cycle has stopped running.
   pushed_at?: string;
+  // False once the day-trader is retired: its last read then stays as it was.
+  day_trader_enabled?: boolean;
+}
+
+/** The core portfolio's risk (GET /api/risk/core). Weights are of equity. */
+export interface CoreRisk {
+  available: boolean;
+  source?: "snapshot" | "ledger";
+  as_of?: string | null;
+  age_seconds?: number | null;
+  equity?: number | null;
+  cash?: number | null;
+  cash_pct?: number | null;
+  positions?: number;
+  top10_weight?: number | null;
+  largest?: { symbol: string; weight: number | null } | null;
+  sectors?: { sector: string; weight: number | null }[];
+  failing_screen?: string[];
+  drawdown_pct?: number | null;
+  peak_equity?: number;
+  peak_day?: string | null;
+  history_from?: string | null;
+  history_days?: number;
 }
 
 export interface HaltStatus {

@@ -162,7 +162,9 @@ def test_analytics_returns_zeros_with_no_trades(client):
 def test_risk_state_unavailable_when_unset(client):
     r = client.get("/api/risk/state")
     assert r.status_code == 200
-    assert r.json() == {"available": False}
+    # Whether the day-trader runs at all comes along, so a retired one's last
+    # read can be shown as retired rather than stale.
+    assert r.json() == {"available": False, "day_trader_enabled": True}
 
 
 def test_risk_state_round_trips_cached_value(client, database_url):
