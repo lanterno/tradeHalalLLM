@@ -74,8 +74,11 @@ logs-errors:
 # ── Development ───────────────────────────────────────────
 
 # Run tests
-test:
-    uv run pytest
+# The test databases live on the operator's Postgres, so the suite needs its
+# role password: TEST_PG_PASS if set, else POSTGRES_PASSWORD from .env (the
+# value is read here and never printed), else the repo default.
+test *args:
+    TEST_PG_PASS="${TEST_PG_PASS:-$(grep -s '^POSTGRES_PASSWORD=' .env | cut -d= -f2-)}" uv run pytest {{args}}
 
 # Pre-deploy gate — stress harness over the standard scenarios
 stress:

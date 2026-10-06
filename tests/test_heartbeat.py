@@ -205,3 +205,50 @@ def test_a_retired_day_traders_cycle_reports_disabled_not_stale(
 
     assert cycle["status"] == "disabled"
     assert cycle["stale"] is False
+
+
+# ── the core's 15:40 run and Friday's digest are watched like the other jobs ──
+
+
+def test_the_core_trade_is_stale_after_a_missed_1540_run() -> None:
+    from halal_trader.core.heartbeat import CORE_TRADE, assess
+    from halal_trader.market_hours import MARKET_TZ
+
+    # Wed 7 Oct 2026 17:00 ET; the last beat was Tue's run.
+    now = datetime(2026, 10, 7, 17, 0, tzinfo=MARKET_TZ)
+    beats = {CORE_TRADE: Beat(CORE_TRADE, datetime(2026, 10, 6, 15, 41, tzinfo=MARKET_TZ), None)}
+    st = assess(beats, now=now, cycles_due=False, day_trader_enabled=False)
+    assert st[CORE_TRADE].status == "stale"
+    beats[CORE_TRADE] = Beat(CORE_TRADE, datetime(2026, 10, 7, 15, 42, tzinfo=MARKET_TZ), None)
+    assert (
+        assess(beats, now=now, cycles_due=False, day_trader_enabled=False)[CORE_TRADE].status
+        == "ok"
+    )
+
+
+def test_the_core_trade_reports_disabled_when_the_core_is_off() -> None:
+    from halal_trader.core.heartbeat import CORE_TRADE, assess
+
+    now = datetime(2026, 10, 7, 21, 0, tzinfo=UTC)
+    st = assess({}, now=now, cycles_due=False, day_trader_enabled=False, core_enabled=False)
+    assert st[CORE_TRADE].status == "disabled" and not st[CORE_TRADE].failing
+
+
+def test_the_weekly_digest_is_only_owed_on_fridays() -> None:
+    from halal_trader.core.heartbeat import DAILY_JOBS, WEEKLY_DIGEST, last_due
+    from halal_trader.market_hours import MARKET_TZ
+
+    job = DAILY_JOBS[WEEKLY_DIGEST]
+    # Tue 6 Oct: the newest owed run is Fri 2 Oct 17:15 ET.
+    due = last_due(job, datetime(2026, 10, 6, 21, 0, tzinfo=MARKET_TZ))
+    assert due == datetime(2026, 10, 2, 17, 15, tzinfo=MARKET_TZ)
+
+
+def test_describe_lists_a_watched_job_that_has_never_run() -> None:
+    from halal_trader.core.heartbeat import CORE_TRADE, assess, describe
+
+    now = datetime(2026, 10, 7, 21, 0, tzinfo=UTC)
+    st = assess({}, now=now, cycles_due=False, day_trader_enabled=False)
+    out = describe({}, st, now=now)
+    assert out[CORE_TRADE]["beat_at"] is None
+    assert out[CORE_TRADE]["status"] == "unknown"

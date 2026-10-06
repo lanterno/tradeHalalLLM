@@ -49,6 +49,8 @@ _WHAT = {
     "stock.eod": "The end-of-day job",
     "stock.ledger": "The broker-ledger sync",
     "research.daily": "The evening research run",
+    "core.trade": "The core portfolio's 15:40 run",
+    "digest.weekly": "The weekly digest",
 }
 
 
@@ -70,6 +72,7 @@ async def check_once(
     sender: Sender | None,
     *,
     day_trader_enabled: bool,
+    core_enabled: bool = True,
     now: datetime | None = None,
 ) -> dict[str, list[str]]:
     """One watchdog pass. Returns what it alerted and what recovered (for tests)."""
@@ -77,7 +80,11 @@ async def check_once(
     beats = await read_beats(engine)
     alerting, suspect = _state(beats)
     statuses = assess(
-        beats, now=now, cycles_due=cycles_due_at(now), day_trader_enabled=day_trader_enabled
+        beats,
+        now=now,
+        cycles_due=cycles_due_at(now),
+        day_trader_enabled=day_trader_enabled,
+        core_enabled=core_enabled,
     )
     failing = {c for c in WATCHED if statuses.get(c, Status("ok")).failing}
     can_send = sender is not None and sender.enabled
@@ -125,6 +132,7 @@ async def run(
     sender: Sender | None,
     *,
     day_trader_enabled: bool,
+    core_enabled: bool = True,
     interval_s: float,
 ) -> None:
     """Check every ``interval_s`` until cancelled, starting one interval in.
@@ -135,6 +143,8 @@ async def run(
     while True:
         await asyncio.sleep(interval_s)
         try:
-            await check_once(engine, sender, day_trader_enabled=day_trader_enabled)
+            await check_once(
+                engine, sender, day_trader_enabled=day_trader_enabled, core_enabled=core_enabled
+            )
         except Exception as exc:  # noqa: BLE001 -- the watchdog must outlive a bad pass
             logger.warning("watchdog pass failed: %r", exc)

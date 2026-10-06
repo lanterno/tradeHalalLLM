@@ -70,6 +70,7 @@ def _start_watchdog(
             engine,
             notifier,
             day_trader_enabled=settings.stocks.day_trader_enabled,
+            core_enabled=settings.core.enabled,
             interval_s=float(interval),
         ),
         name="fleet-watchdog",

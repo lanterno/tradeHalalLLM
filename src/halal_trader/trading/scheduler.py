@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 from halal_trader.config import get_settings
 from halal_trader.core import events
 from halal_trader.core.heartbeat import (
+    CORE_TRADE,
     DAILY_JOBS,
     RECOMMENDATION,
     RESEARCH,
@@ -26,6 +27,7 @@ from halal_trader.core.heartbeat import (
     STOCK_LEDGER,
     STOCK_MONITOR,
     STOCK_PROCESS,
+    WEEKLY_DIGEST,
     Beat,
     beat,
     read_beats,
@@ -1165,6 +1167,7 @@ class TradingBot:
         try:
             message = await build(self._engine, self.settings, today=today_eastern())
             await self._notifier.send(message)
+            await beat(self._engine, WEEKLY_DIGEST)
         except Exception as exc:  # noqa: BLE001 -- a digest must never take the bot down
             logger.error("weekly digest failed: %r", exc)
 
@@ -1297,6 +1300,13 @@ class TradingBot:
             await broker.disconnect()
         if outcome.market_closed:
             return
+        # The run finished (traded, held, halted or refused: the last two also
+        # alert below). A crash leaves no beat, so the watchdog sees it.
+        await beat(
+            self._engine,
+            CORE_TRADE,
+            {"account": outcome.account, "refused": bool(outcome.refused)},
+        )
         if outcome.refused:
             logger.error("core trade refused: %s", "; ".join(outcome.refused))
             await self._alerts.notify(

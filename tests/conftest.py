@@ -107,7 +107,7 @@ import halal_trader.db.models  # noqa: F401, E402
 PG_HOST = os.environ.get("TEST_PG_HOST", "localhost")
 PG_PORT = os.environ.get("TEST_PG_PORT", "5433")
 PG_USER = os.environ.get("TEST_PG_USER", "trader")
-PG_PASS = os.environ.get("TEST_PG_PASS", "trader-dev-only")
+PG_PASS = os.environ.get("TEST_PG_PASS") or "trader-dev-only"
 _PG_TEST_DB_BASE = os.environ.get("TEST_PG_DB", "halal_trader_test")
 
 _ADMIN_DSN_SYNC = f"postgresql://{PG_USER}:{PG_PASS}@{PG_HOST}:{PG_PORT}/postgres"

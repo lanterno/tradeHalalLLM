@@ -39,6 +39,8 @@ STOCK_EOD = "stock.eod"  # the end-of-day routine finished
 RECOMMENDATION = "recommendation.daily"  # the pre-market advisory pick was made
 MARKET_SNAPSHOT = "market.snapshot"  # the session's per-minute account/benchmark values
 RESEARCH = "research.daily"  # the evening run: bars, weekly screen, forward books
+CORE_TRADE = "core.trade"  # the core portfolio's 15:40 run finished (traded, held or refused)
+WEEKLY_DIGEST = "digest.weekly"  # Friday's Telegram summary went out
 SHADOW_PROCESS = "shadow.process"  # the halabot shadow engine's event loop is turning
 WATCHDOG = "web.watchdog"  # the web's watchdog ran; its detail is what it has alerted
 # Not a liveness row: the "already alerted" ledger of claim_once().
@@ -69,6 +71,7 @@ class DailyJob:
     at: time
     grace: timedelta  # how long after ``at`` its beat may take to land
     early_close_at: time | None = None  # its time on a 13:00-close day, if different
+    weekday: int | None = None  # only on this weekday (0 = Monday); None = every trading day
 
 
 # Mirrors the bot's cron (trading/scheduler.py). A job's beat is stale when
@@ -79,6 +82,8 @@ DAILY_JOBS: dict[str, DailyJob] = {
     STOCK_EOD: DailyJob(time(15, 50), timedelta(minutes=30), early_close_at=time(12, 50)),
     STOCK_LEDGER: DailyJob(time(16, 30), timedelta(hours=1)),
     RESEARCH: DailyJob(time(20, 30), timedelta(hours=3)),
+    CORE_TRADE: DailyJob(time(15, 40), timedelta(minutes=45), early_close_at=time(12, 40)),
+    WEEKLY_DIGEST: DailyJob(time(17, 15), timedelta(hours=1), weekday=4),
 }
 
 _UPSERT = text(
@@ -216,8 +221,8 @@ def scheduled_at(job: DailyJob, day: date) -> datetime:
 def last_due(job: DailyJob, now: datetime) -> datetime | None:
     """The newest scheduled run of ``job`` whose beat should have landed by ``now``."""
     day = now.astimezone(MARKET_TZ).date()
-    for _ in range(14):  # the longest market closure is a few days
-        if is_trading_day(day):
+    for _ in range(21):  # a few days' closure, or three weeks for a weekly job
+        if is_trading_day(day) and (job.weekday is None or day.weekday() == job.weekday):
             at = scheduled_at(job, day)
             if at + job.grace <= now:
                 return at
@@ -256,6 +261,7 @@ def assess(
     now: datetime,
     cycles_due: bool,
     day_trader_enabled: bool,
+    core_enabled: bool = True,
 ) -> dict[str, Status]:
     """A verdict for every watched component, and for every other row on record.
 
@@ -281,6 +287,9 @@ def assess(
         out[MARKET_SNAPSHOT] = Status("ok")
 
     for component, job in DAILY_JOBS.items():
+        if component == CORE_TRADE and not core_enabled:
+            out[component] = Status("disabled", "core trading is off (CORE_ENABLED)")
+            continue
         b = beats.get(component)
         due = last_due(job, now)
         if b is None:
@@ -308,6 +317,18 @@ def describe(
     (``status`` is ``stale`` or ``missing``; never true for ``disabled``).
     """
     out: dict[str, dict[str, Any]] = {}
+    # A watched component with no row yet still gets an entry: a job that has
+    # never run must show as "has not run yet", not vanish from the page.
+    for name, st in statuses.items():
+        if name not in beats:
+            out[name] = {
+                "beat_at": None,
+                "age_seconds": None,
+                "stale": st.failing,
+                "status": st.status,
+                "reason": st.reason,
+                "detail": None,
+            }
     for name, b in beats.items():
         if name == ALERT_MARKS:
             continue

@@ -34,7 +34,13 @@ async def _bot_liveness(ctx: DashboardContext) -> tuple[bool, dict[str, Any] | N
 
     day_trader = get_settings().stocks.day_trader_enabled
     cycles_due = day_trader and is_market_open_local() and now_eastern().time() >= time(10, 0)
-    statuses = assess(beats, now=now, cycles_due=cycles_due, day_trader_enabled=day_trader)
+    statuses = assess(
+        beats,
+        now=now,
+        cycles_due=cycles_due,
+        day_trader_enabled=day_trader,
+        core_enabled=get_settings().core.enabled,
+    )
     components: dict[str, Any] = describe(beats, statuses, now=now)
     alive, reason = bot_liveness(beats, now=now, cycles_due=cycles_due)
     components["_verdict"] = {"alive": alive, "reason": reason, "cycles_due": cycles_due}
