@@ -1349,15 +1349,29 @@ class TradingBot:
         could trade one account at once (assessment infra-tooling#8). The
         database is the one thing every copy shares. Session-level advisory
         locks die with the connection, so a crashed bot cannot leave it stuck.
+
+        The connection is AUTOCOMMIT. A plain connection auto-begins a
+        transaction on its first statement, and this one is never committed:
+        the bot held a transaction open for its whole life (seen idle in
+        transaction for 10 h), which pins the database's xmin horizon so
+        vacuum reclaims nothing anywhere. A session-level advisory lock does
+        not need a transaction; it lives as long as the session.
         """
         from sqlalchemy import text
 
         if self._engine is None:
             return
         conn = await self._engine.connect()
-        got = (
-            await conn.execute(text("SELECT pg_try_advisory_lock(:k)"), {"k": _TRADING_LOCK_KEY})
-        ).scalar()
+        try:
+            conn = await conn.execution_options(isolation_level="AUTOCOMMIT")
+            got = (
+                await conn.execute(
+                    text("SELECT pg_try_advisory_lock(:k)"), {"k": _TRADING_LOCK_KEY}
+                )
+            ).scalar()
+        except BaseException:
+            await conn.close()
+            raise
         if not got:
             await conn.close()
             raise RuntimeError(
@@ -1366,6 +1380,67 @@ class TradingBot:
             )
         self._trading_lock_conn = conn
         logger.info("Acquired the database trading lock")
+
+    async def _holds_trading_lock(self) -> bool:
+        """Does this process's lock session still exist and still hold the lock?
+
+        False on any error: a dropped connection (a Postgres restart, a
+        network cut) took the session -- and with it the lock -- away.
+        """
+        from sqlalchemy import text
+
+        conn = getattr(self, "_trading_lock_conn", None)
+        if conn is None:
+            return False
+        try:
+            held = (
+                await conn.execute(
+                    text(
+                        "SELECT EXISTS (SELECT 1 FROM pg_locks WHERE locktype = 'advisory' "
+                        "AND granted AND pid = pg_backend_pid() "
+                        "AND ((classid::bigint << 32) | objid::bigint) = :k)"
+                    ),
+                    {"k": _TRADING_LOCK_KEY},
+                )
+            ).scalar()
+        except Exception as exc:  # noqa: BLE001 -- any failure means "not proven held"
+            logger.warning("trading lock check failed: %r", exc)
+            return False
+        return bool(held)
+
+    async def _ensure_trading_lock(self) -> None:
+        """Keep the single-instance guarantee from lapsing silently.
+
+        Called from the run loop. If the lock's session is gone, take the
+        lock again on a fresh connection; if that fails -- another bot took
+        it meanwhile, or the database is still down -- raise, so the process
+        exits and docker restarts it into the normal startup path, which
+        refuses to run beside another bot.
+        """
+        if self._engine is None or await self._holds_trading_lock():
+            return
+        logger.error("the database trading lock was lost -- re-acquiring it")
+        stale = getattr(self, "_trading_lock_conn", None)
+        self._trading_lock_conn = None
+        if stale is not None:
+            try:
+                await stale.invalidate()
+            except Exception as exc:  # noqa: BLE001 -- it is already broken
+                logger.debug("dropping the lost lock connection failed: %r", exc)
+        try:
+            await self._acquire_trading_lock()
+        except Exception as exc:
+            try:
+                await self._alerts.notify(
+                    "stock.trading_lock_lost",
+                    f"The stock bot lost its database trading lock and could not take it back "
+                    f"({exc!r}); it is exiting so docker restarts it.",
+                    severity="critical",
+                )
+            except Exception as alert_err:  # noqa: BLE001
+                logger.warning("lock-loss alert failed: %r", alert_err)
+            raise RuntimeError(f"trading lock lost and not re-acquired: {exc!r}") from exc
+        logger.warning("re-acquired the database trading lock")
 
     async def _release_trading_lock(self) -> None:
         conn = getattr(self, "_trading_lock_conn", None)
@@ -1652,11 +1727,14 @@ class TradingBot:
             # Keep running until interrupted
             # The run loop doubles as the process heartbeat: every 60 s it
             # records that the bot is alive, so a hung or dead process shows
-            # up as a stale stock.process row in /api/health/bot.
+            # up as a stale stock.process row in /api/health/bot. It also
+            # checks the single-instance lock is still held (raises if it was
+            # lost and cannot be taken back, so docker restarts the bot).
             loop = asyncio.get_running_loop()
             last_beat = float("-inf")
             while self._running:
                 if loop.time() - last_beat >= 60:
+                    await self._ensure_trading_lock()
                     await beat(self._engine, STOCK_PROCESS)
                     last_beat = loop.time()
                 await asyncio.sleep(1)
