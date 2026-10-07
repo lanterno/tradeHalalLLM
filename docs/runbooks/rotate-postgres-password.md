@@ -21,12 +21,13 @@ docker exec -it halal-trader-pg psql -U trader -d halal_trader \
 
 # 3. In .env: set POSTGRES_PASSWORD=<new>, and put the same password in
 #    DATABASE_URL (used by `uv run` on the host, on 127.0.0.1:5433).
+#    On a server, bootstrap.sh already generated one; rotate it the same way.
 
 # 4. Recreate the app containers so they get the new DATABASE_URL.
-just home-up
+just up
 
 # 5. Check.
-just home-health
+just health
 ```
 
 Test runs are unaffected: the suite reads `TEST_PG_*` (default

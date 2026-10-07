@@ -30,16 +30,16 @@ A second message, "… is back", follows when the component beats again.
 ## Diagnose
 
 ```bash
-just home-health                                   # which container is not running / 503
+just health                                        # which container is not running / 503
 docker ps --format '{{.Names}} {{.Status}}'        # "unhealthy" = alive but not beating
-curl -s http://127.0.0.1:6010/api/health | jq .bot # each component's status and reason
+curl -s http://127.0.0.1:8082/api/health | jq .bot # each component's status and reason
 just docker-logs trader-stocks                     # or trader-shadow
 ```
 
 ## Mitigate
 
 1. **Restart loop (cause 2)** — read the first error in the logs; fix the
-   `.env` key it names, then `just home-up`.
+   `.env` key it names, then `just up`.
 2. **Hung (cause 3)** — `docker restart trader-stocks` (outside market hours
    if possible). The bot catches up the daily jobs it missed on startup.
 3. **A missed daily job (cause 4)** — a restart before its cut-off runs it

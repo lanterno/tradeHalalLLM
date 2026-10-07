@@ -118,6 +118,8 @@ just docker-logs    # the bot; `just docker-logs trader-shadow` etc.
 Watch the first market-hours cycle (`just docker-logs`). The failure mode
 is a bot that silently does nothing, not a crash.
 
+Inside the fleet, the web container's watchdog (`web/watchdog.py`) alerts on
+Telegram when a heartbeat or a daily job goes stale. From the host,
 `halabot-health.timer` runs `just health` every 5 minutes. After two
 failures in a row it alerts on Telegram, then at most hourly, and once more
 on recovery. For a server that dies outright, set `HEALTHCHECK_PING_URL`
