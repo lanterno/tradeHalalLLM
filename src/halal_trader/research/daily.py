@@ -317,7 +317,7 @@ RESTORE_DRILL_MAX_AGE_D = 40
 async def _backup_health(engine: AsyncEngine) -> list[str]:
     """Problems with the nightly backup or the monthly restore drill (empty when fine).
 
-    Both write a heartbeat (trader justfile, home-backup); a missing or stale one
+    Both write a heartbeat (justfile, `just backup`); a missing or stale one
     is reported through the evening run's alert, so a backup that stopped is
     noticed within a day rather than when it is needed.
     """

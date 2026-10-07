@@ -1,5 +1,13 @@
 # Halal Trader — single-host Docker Compose deployment.
 #
+# Run it through the justfile (`just up`, `just build`, ...), which passes
+# `--env-file .env` so POSTGRES_PASSWORD below comes from the repo's .env.
+#
+# Every published port is bound to 127.0.0.1. On a public server Docker's
+# port rules bypass the host firewall (ufw), so a port published on 0.0.0.0
+# is open to the internet whatever ufw says. Reach the dashboard through
+# Tailscale (`tailscale serve`) or an SSH tunnel; see docs/DEPLOY.md.
+#
 # Services:
 #   * postgres        — Postgres 16 + pgvector for the canonical DB.
 #   * trader-migrate  — one-shot Alembic migrate (init container).
@@ -62,6 +70,8 @@ x-core-keys: &no-core-keys
   CORE_ALPACA_SECRET_KEY: ""
   LIVE_MODE_CONFIRMATION: ""
 
+name: halabot
+
 services:
   postgres:
     image: pgvector/pgvector:pg16
@@ -70,11 +80,13 @@ services:
     environment:
       POSTGRES_DB: halal_trader
       POSTGRES_USER: trader
-      # Set POSTGRES_PASSWORD in .env (see the secrets note above); the
-      # default is for a fresh local checkout only.
+      # Set POSTGRES_PASSWORD in .env (see the secrets note above; on a server
+      # infra/server/bootstrap.sh generates one); the default is for a fresh
+      # local checkout only.
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-trader-dev-only}
     ports:
-      - "5433:5432"
+      # Loopback: the test suite and `uv run` on the host reach it here.
+      - "127.0.0.1:5433:5432"
     volumes:
       - pg-data:/var/lib/postgresql/data
     healthcheck:
@@ -147,8 +159,6 @@ services:
   # Shadow engine — the always-on Sense→Understand→Convict→Act loop that keeps
   # the belief board (/beliefs) + hb_* tables live. READ-ONLY / advisory: it
   # NEVER trades (the execution layer is dormant; ENGINE_LIVE stays unset).
-  # Replaces the macOS launchd `com.halabot.shadow` job (`halabot shadow
-  # --interval 900`). Docker's restart policy replaces the launchd watchdog.
   trader-shadow:
     image: halal-trader:latest
     container_name: trader-shadow
@@ -195,7 +205,7 @@ services:
       FRED_API_KEY: ""
       ZOYA_API_KEY: ""
     ports:
-      - "8082:8082"
+      - "127.0.0.1:8082:8082"
     volumes:
       - trader-data:/app/data
       - trader-logs:/app/logs
@@ -232,7 +242,7 @@ services:
   #   command:
   #     - "--config.file=/etc/prometheus/prometheus.yml"
   #   ports:
-  #     - "9090:9090"
+  #     - "127.0.0.1:9090:9090"
   #
   # grafana:
   #   image: grafana/grafana:latest
@@ -240,7 +250,7 @@ services:
   #   environment:
   #     GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
   #   ports:
-  #     - "3000:3000"
+  #     - "127.0.0.1:3000:3000"
   #   volumes:
   #     - grafana-data:/var/lib/grafana
 

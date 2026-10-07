@@ -14,7 +14,7 @@ dev:
 # ── Stock bot ─────────────────────────────────────────────
 
 # Start the stock trading bot in the foreground (the deployed bot runs in
-# docker via home-up; use this only with the fleet's trader-stocks stopped --
+# docker via `just up`; use this only with the fleet's trader-stocks stopped --
 # two bots on one account will fight)
 stocks:
     uv run halal-trader start
@@ -125,22 +125,19 @@ db-reset:
         echo "Database reset and migrated." || echo "Cancelled."
 
 # Every compose recipe in this file goes through this one command. The
-# project name is pinned to `infra` (that is what keeps the live
-# infra_pg-data volume attached) and infra/compose.home.yml is always layered
-# on: dashboard on 127.0.0.1:6010, Postgres on 127.0.0.1:5433. A recipe that
-# used the base file alone would recreate the running containers with both
-# ports published on every interface. `--env-file .env` makes the repo's .env
-# the source of ${POSTGRES_PASSWORD} in the compose files (compose otherwise
-# looks for infra/.env, which does not exist, and silently uses the default).
-home_compose := "docker compose --env-file .env -p infra -f infra/docker-compose.yml -f infra/compose.home.yml"
+# compose file names the project (halabot) and binds every port to 127.0.0.1
+# (dashboard 8082, Postgres 5433). `--env-file .env` makes the repo's .env the
+# source of ${POSTGRES_PASSWORD} in the compose file (compose otherwise looks
+# for infra/.env, which does not exist, and silently uses the default).
+compose := "docker compose --env-file .env -f infra/docker-compose.yml"
 
 # Bring up the Postgres + pgvector container (127.0.0.1:5433)
 pg-up:
-    {{home_compose}} up -d postgres
+    {{compose}} up -d postgres
 
 # Stop the Postgres container (data persists in the named volume)
 pg-down:
-    {{home_compose}} stop postgres
+    {{compose}} stop postgres
 
 # Dump the whole DB (schema + data + alembic version) to ./halabot-db.dump
 # for moving to another machine. Custom format, compressed. The file is
@@ -164,70 +161,53 @@ db-restore file="halabot-db.dump":
 test-db-reset:
     docker exec halal-trader-pg psql -U trader -d postgres -c 'DROP DATABASE IF EXISTS halal_trader_test'
 
-# ── Full Docker stack (postgres + bots + web in containers) ──
-# The same fleet the home stack runs (see home-* below); these are the
-# hands-on verbs. All go through {{home_compose}}.
+# ── The fleet (postgres + migrate + stocks + shadow + web, in docker) ──
+# What the server runs (docs/DEPLOY.md). All go through {{compose}}.
 
-# Build the bot image (multi-stage: deps + venv → slim runtime)
-docker-build:
-    {{home_compose}} build
+# Build the bot image (multi-stage: deps + venv → slim runtime), then drop
+# build cache older than 3 days (only the builder cache: never images,
+# containers or volumes)
+build:
+    {{compose}} build
+    docker builder prune -f --filter until=72h
 
 # Start the fleet (postgres + migrate + stocks + shadow + web) in the background
-docker-up:
-    {{home_compose}} up -d
+up:
+    {{compose}} up -d
 
 # Stop and remove all containers (data volumes persist)
-docker-down:
-    {{home_compose}} down
+down:
+    {{compose}} down
 
 # Rebuild and recreate all containers (picks up .env + code changes)
-docker-rebuild:
-    {{home_compose}} build
-    {{home_compose}} up -d --force-recreate
+rebuild:
+    {{compose}} build
+    {{compose}} up -d --force-recreate
 
 # Follow logs from one service (default: stocks). Usage: just docker-logs [service]
 docker-logs service="trader-stocks":
-    {{home_compose}} logs -f --tail=50 {{service}}
+    {{compose}} logs -f --tail=50 {{service}}
 
 # Follow logs from every service interleaved
 docker-logs-all:
-    {{home_compose}} logs -f --tail=20
+    {{compose}} logs -f --tail=20
 
 # Apply Alembic migrations inside the running stack
 docker-migrate:
-    {{home_compose}} run --rm trader-migrate
+    {{compose}} run --rm trader-migrate
 
 # Open a psql shell against the containerised Postgres
 docker-psql:
-    {{home_compose}} exec postgres psql -U trader halal_trader
+    {{compose}} exec postgres psql -U trader halal_trader
 
 # Quick health check on every service + the web API
 docker-status:
-    @{{home_compose}} ps
+    @{{compose}} ps
     @echo "---"
-    @curl -s -o /dev/null -w "Web /api/health → HTTP %{http_code}\n" http://127.0.0.1:6010/api/health
-
-# ── Home stack (~/lab/home services.toml) ─────────────────
-# The verbs ~/lab/home's services.toml names. Same fleet as docker-up, plus
-# infra/compose.home.yml: dashboard on 127.0.0.1:6010, Postgres on loopback.
-# home_compose is defined once, above pg-up, and every compose recipe uses it.
-
-# Start the fleet in the background (postgres + migrate + stocks + shadow + web)
-home-up:
-    {{home_compose}} up -d
-
-# Stop the fleet (containers removed, volumes kept)
-home-down:
-    {{home_compose}} down
-
-# Rebuild the image the fleet runs, then drop build cache older than 3 days
-# (only the builder cache: never images, containers or volumes)
-home-build:
-    {{home_compose}} build
-    docker builder prune -f --filter until=72h
+    @curl -s -o /dev/null -w "Web /api/health → HTTP %{http_code}\n" http://127.0.0.1:8082/api/health
 
 # Exit 0 only if every long-running container is running AND the API answers
-home-health:
+health:
     #!/usr/bin/env sh
     for c in halal-trader-pg trader-stocks trader-shadow trader-web; do
         [ "$(docker inspect -f '{{{{.State.Status}}' "$c" 2>/dev/null)" = running ] \
@@ -236,11 +216,11 @@ home-health:
     # /api/health/bot is 503 unless the bot's process heartbeat (written to
     # the DB every 60 s) is fresh -- a hung or crash-looping bot fails this
     # even while its container reads "running".
-    curl -fsS --max-time 3 http://127.0.0.1:6010/api/health/bot >/dev/null
+    curl -fsS --max-time 3 http://127.0.0.1:8082/api/health/bot >/dev/null
 
 # Last 100 lines from every service, no --follow (for callers that expect it to finish)
-home-logs:
-    {{home_compose}} logs --tail=100 --no-color
+logs-snapshot:
+    {{compose}} logs --tail=100 --no-color
 
 # pg_dump the database into <dest>/halal_trader.dump (restore: just db-restore <file>).
 # Rows that can be rebuilt from free sources are left out (their schema is kept):
@@ -257,7 +237,9 @@ home-logs:
 # Every dump is checked with pg_restore --list; on the 1st of each month it is
 # also fully restored into a scratch database (restore-drill). Outcomes land in
 # the heartbeats table (backup.nightly, backup.restore_drill) for the digest.
-home-backup dest:
+# On a server, infra/server/backup.sh runs this nightly and ships it off-site.
+# Dump the database (minus rebuildable rows) into <dest>; verify the dump
+backup dest:
     #!/usr/bin/env bash
     set -euo pipefail
     pg() { docker exec halal-trader-pg psql -U trader -d halal_trader -tAq "$@"; }
@@ -265,10 +247,10 @@ home-backup dest:
     for t in daily_bars market_assets monthly_bars minute_bars events event_facts event_labels event_scores eps_facts annual_fundamentals etf_holdings; do
         excluded="$excluded --exclude-table-data=$t"
     done
-    docker exec halal-trader-pg pg_dump -U trader -d halal_trader -Fc $excluded -f /tmp/home-backup.dump
-    docker exec halal-trader-pg pg_restore --list /tmp/home-backup.dump > /dev/null
-    docker cp halal-trader-pg:/tmp/home-backup.dump "{{dest}}/halal_trader.dump"
-    docker exec halal-trader-pg rm -f /tmp/home-backup.dump
+    docker exec halal-trader-pg pg_dump -U trader -d halal_trader -Fc $excluded -f /tmp/backup.dump
+    docker exec halal-trader-pg pg_restore --list /tmp/backup.dump > /dev/null
+    docker cp halal-trader-pg:/tmp/backup.dump "{{dest}}/halal_trader.dump"
+    docker exec halal-trader-pg rm -f /tmp/backup.dump
     pg -c "SELECT row_to_json(t) FROM (
              SELECT e.source, e.source_id, e.symbol, e.kind, e.published_at, e.seen_at, e.payload,
                     coalesce(json_agg(json_build_object('scorer', s.scorer, 'score', s.score,
@@ -286,7 +268,7 @@ home-backup dest:
         pg -c "INSERT INTO heartbeats (component, beat_at, detail) VALUES ('backup.restore_drill', now(), '{\"ok\": true}') ON CONFLICT (component) DO UPDATE SET beat_at = EXCLUDED.beat_at, detail = EXCLUDED.detail"
     fi
 
-# Restore a home-backup dump into a scratch database, compare it with the live
+# Restore a `just backup` dump into a scratch database, compare it with the live
 # one table by table, then drop it. Never touches halal_trader itself.
 # Usage: just restore-drill /path/to/halal_trader.dump
 restore-drill file:

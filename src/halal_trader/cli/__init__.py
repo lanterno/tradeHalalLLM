@@ -111,7 +111,7 @@ cli.add_command(quant_cmd.quant)
 # ── Halal compliance explainer ─────────────────────────────────
 cli.add_command(halal_cmd.halal_group)
 
-# ── Dead-man-switch watchdog (out-of-process via launchd) ──────
+# ── Dead-man-switch watchdog (out-of-process, e.g. cron) ──────
 cli.add_command(watchdog_cmd.watchdog)
 
 

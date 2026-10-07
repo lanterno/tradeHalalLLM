@@ -1,7 +1,7 @@
 """Dead-man-switch watchdog — alerts Telegram when no trading cycle
 has fired recently during market hours.
 
-Designed to run out-of-process (cron / launchd) so it survives the
+Designed to run out-of-process (cron / a systemd timer) so it survives the
 asyncio-loop suspensions that the in-process heartbeat cannot detect.
 Each invocation is short-lived: it tails the structured log file, finds
 the most recent ``cycle.start`` / ``cycle.complete`` event, compares it
@@ -257,6 +257,6 @@ __all__ = ["watchdog"]
 
 
 if __name__ == "__main__":
-    # Allow `python -m halal_trader.cli.watchdog` for ad-hoc launchd testing
+    # Allow `python -m halal_trader.cli.watchdog` for ad-hoc testing
     os.environ.setdefault("HALAL_TRADER_SKIP_LOGGING_SETUP", "1")
     watchdog()

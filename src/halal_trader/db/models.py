@@ -803,7 +803,7 @@ class Heartbeat(SQLModel, table=True):
     The bots and the dashboard run in separate containers, so "is the bot
     alive?" has to be answered from the database: the stock bot upserts a
     row per component (process, cycle, monitor) and /api/health/bot,
-    `just home-health` and the System page read them. Before this the
+    `just health` and the System page read them. Before this the
     dashboard's "Bot Running" came from in-process state the web container
     never had, and /api/health was a hard-coded constant.
     """
