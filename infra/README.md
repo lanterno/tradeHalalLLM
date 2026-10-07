@@ -9,7 +9,11 @@ mode. Every service shares one Postgres + pgvector instance.
 |---|---|---|
 | `postgres` | `pgvector/pgvector:pg16` | Canonical DB (trades, P&L, halal cache, LLM audit, RAG vectors, …). Listens on `127.0.0.1:5433`. |
 | `trader-stocks` | `halal-trader:latest` | Market-hours stock bot (`halal-trader start`). |
-| `trader-web` | `halal-trader:latest` | FastAPI dashboard + Prometheus `/metrics`, exposed on `8082`. |
+| `trader-shadow` | `halal-trader:latest` | The halabot shadow engine (`halabot shadow`); logs proposals, never trades. |
+| `trader-web` | `halal-trader:latest` | FastAPI dashboard + Prometheus `/metrics`, on `127.0.0.1:8082`. |
+
+Every published port is bound to loopback: on a public host Docker's port
+rules bypass the firewall.
 
 The Prometheus + Grafana sidecars are commented out — uncomment when
 the operator actually wants observability dashboards. The bot's web
@@ -33,10 +37,14 @@ restart picks up where you left off.
 
 ## Production deploy
 
+On a server, follow [docs/DEPLOY.md](../docs/DEPLOY.md). `server/` holds
+what the host runs beside Docker: `bootstrap.sh` (a fresh Ubuntu 24.04
+box), `backup.sh` (the nightly dump, shipped off-site with restic),
+`healthcheck.sh` and `alert.sh` (Telegram alerts), and their systemd units.
+
 ```bash
 cp .env.example .env             # fill in real keys
-cd infra
-docker compose up -d --build     # build the image + start everything
+just build && just up            # build the image + start everything
 ```
 
 The bots auto-restart on crash (`restart: unless-stopped`). Logs land

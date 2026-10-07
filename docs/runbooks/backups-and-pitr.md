@@ -1,11 +1,20 @@
 # Backups + point-in-time recovery
 
-## What actually runs today (2026-10-01)
+## What actually runs today (2026-10-07)
 
-- **Nightly full dump.** The home stack's backup timer (03:00) runs
-  `just home-backup <dir>`: a `pg_dump -Fc` of the whole `halal_trader`
-  database (~250 MB) into a dated directory on the Windows side of the
-  machine, so it survives losing the WSL install.
+- **Nightly dump, shipped off-site.** `halabot-backup.timer` (07:00 UTC)
+  runs `infra/server/backup.sh`: `just backup <dir>` writes a verified
+  `pg_dump -Fc` (minus the rebuildable rows) and `live_events.jsonl.gz`
+  into `/var/backups/halabot/<date>`, then restic uploads it, encrypted, to
+  the repository in `/etc/halabot/server.env` (R2, Hetzner Object Storage
+  or a Storage Box). Setup: [`docs/DEPLOY.md`](../DEPLOY.md) step 4.
+- **Why off-site.** The previous machine kept its dumps on the Windows side
+  of the same computer and was lost with them in 2026-10. `backup.offsite`
+  is written only after restic succeeds; the evening run alerts when it,
+  or `backup.nightly`, is missing or over 36 h old, and a failed run alerts
+  on Telegram through `halabot-alert@`.
+- **Restore:** `restic restore latest`, then `just db-restore` (DEPLOY.md,
+  "Restore from off-site").
 - **RPO ≈ 24 hours.** There is no WAL archiving; everything below the
   "Target design" heading is not configured. Do not read the old
   "RPO ≤ 5 minutes" figure as a fact about this deployment.

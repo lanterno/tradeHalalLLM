@@ -41,12 +41,17 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for how the pieces fit.
 
 ```bash
 cp .env.example .env          # fill in the keys; see the comments in the file
-just home-up                  # postgres, migrations, the bot, the shadow engine, the dashboard
-just home-health              # exits 0 only if the bot's heartbeat is fresh
+just build                    # the image (bot, shadow engine and dashboard)
+just up                       # postgres, migrations, the bot, the shadow engine, the dashboard
+just health                   # exits 0 only if the bot's heartbeat is fresh
 just docker-logs              # follow the bot
 ```
 
-The dashboard listens on `127.0.0.1:6010`. Its only control is the
+On a server, [docs/DEPLOY.md](docs/DEPLOY.md) is the whole procedure:
+bootstrap, secrets, off-site backups, health alerts, the dashboard over
+Tailscale.
+
+The dashboard listens on `127.0.0.1:8082`. Its only control is the
 kill-switch; operations go through the CLI:
 
 ```bash
