@@ -21,9 +21,9 @@ just lint / just format # ruff (one version: the lock's, also used by the pre-co
 just typecheck          # mypy strict over the gated packages (pyproject [tool.mypy] files)
 just precommit          # every pre-commit hook over every tracked file
 
-# The deployed fleet (runs as part of the ~/lab/home stack)
-just home-up            # postgres + migrate + stocks + shadow + web, in docker
-just home-down / home-build / home-logs / home-health / home-backup <dir>
+# The deployed fleet (a Hetzner server; docs/DEPLOY.md)
+just up                 # postgres + migrate + stocks + shadow + web, in docker
+just down / build / rebuild / health / backup <dir> / docker-status
 just docker-logs [svc]  # follow one service (default trader-stocks)
 
 # Operator
@@ -34,7 +34,7 @@ halal-trader recommend [--show|--scorecard]   # advisory daily pick, never trade
 halabot backtest ... / halabot ab-report      # shadow engine research tools
 ```
 
-Every compose recipe goes through `home_compose` in the justfile: the project name pinned to `infra` (that keeps the live `infra_pg-data` volume attached) with `infra/compose.home.yml` layered on (dashboard on `127.0.0.1:6010`, Postgres on `127.0.0.1:5433`). Never run `docker compose` on the base file alone: it recreates the live containers with both ports on every interface.
+Every compose recipe goes through `compose` in the justfile (`--env-file .env`, project `halabot`). The compose file binds every port to 127.0.0.1 (dashboard 8082, Postgres 5433): on the public server Docker's port rules bypass ufw, so never publish a port on 0.0.0.0. The host side (bootstrap, the nightly off-site backup, health alerts, systemd units) is `infra/server/`. The previous machine was lost with its database and `.env` in 2026-10; a backup counts only once restic has it off the server (`backup.offsite` heartbeat).
 
 **Database**: Postgres 16 + pgvector, Alembic is the single schema authority (`init_db()` refuses to start on a wrong revision; it never runs DDL). Tests use per-worker `halal_trader_test*` databases on the same server. `tests/conftest.py` refuses any database name that isn't disposable, runs tests without the operator's `.env` (`HALAL_TRADER_ENV_FILE`), and blocks outbound network (`TEST_ALLOW_NETWORK=1` to opt out once).
 
@@ -67,7 +67,7 @@ Authoritative diagrams: `docs/ARCHITECTURE.md` (partly pre-dates the crypto remo
 - **Liveness is in the database.** `core/heartbeat.py`: the bot beats `stock.process` (60 s), `stock.cycle`, `stock.monitor` and one row per daily job; the shadow beats `shadow.process`. `assess()` judges loops by age and daily jobs by the trading calendar (`DAILY_JOBS`); the web's watchdog (`web/watchdog.py`) alerts on Telegram when one goes stale, `/api/health/bot` is 503 when the bot is, and compose healthchecks use `core/healthcheck.py`. Add a beat (and a `DAILY_JOBS` entry for a daily job) for any new long-running component. A restarted bot catches up the daily jobs it missed (`plan_catch_up`).
 - **Secrets per container.** One `.env`; `infra/docker-compose.yml` blanks, per service, the secrets that process does not read. A new secret goes into the blank lists of every service that does not need it.
 - **Signals.** The bot and the shadow install SIGTERM/SIGINT handlers (they are PID 1 in docker); compose gives them `init: true` and a 30 s grace period. Keep `shutdown()` fast.
-- **Deploy live-path changes outside US market hours** (before 09:00 or after 16:00 ET), rebuild with `just home-build`, recreate only what changed, and watch the first cycle: the failure mode is silent no-action, not a crash.
+- **Deploy live-path changes outside US market hours** (before 09:00 or after 16:00 ET), rebuild with `just build`, recreate only what changed, and watch the first cycle: the failure mode is silent no-action, not a crash.
 - **Async repository.** `db/repository.py` is async; one `Repository(engine)` per process. Don't open engines per cycle.
 - **Structured events.** `extra={"event": events.X, ...}` with constants from `core/events.py`; correlation ids come from `core/observability.py`.
 - **Operator alerts** go through `AlertSink.notify(error_type, details)` (`notifications/telegram.py`), which rate-limits per type.
