@@ -1,0 +1,10 @@
+# Installed by infra/server/bootstrap.sh. OnFailure= target: tells the
+# operator, through the bot's Telegram, that unit %i failed.
+[Unit]
+Description=halabot alert: %i failed
+
+[Service]
+Type=oneshot
+User=@HALABOT_USER@
+WorkingDirectory=@HALABOT_DIR@
+ExecStart=@HALABOT_DIR@/infra/server/alert.sh "%i failed; see journalctl -u %i"

@@ -1,0 +1,14 @@
+# Installed by infra/server/bootstrap.sh (placeholders filled in there).
+[Unit]
+Description=halabot nightly database backup, shipped off-site
+After=docker.service network-online.target
+Wants=network-online.target
+OnFailure=halabot-alert@%n.service
+
+[Service]
+Type=oneshot
+User=@HALABOT_USER@
+WorkingDirectory=@HALABOT_DIR@
+Environment=BACKUP_DIR=@BACKUP_DIR@
+ExecStart=@HALABOT_DIR@/infra/server/backup.sh
+TimeoutStartSec=2h

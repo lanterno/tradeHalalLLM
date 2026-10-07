@@ -1,0 +1,12 @@
+# 07:00 UTC is 02:00-03:00 in New York: the market is shut and the evening
+# run's own work is done. Persistent catches a run missed while powered off.
+[Unit]
+Description=halabot nightly backup
+
+[Timer]
+OnCalendar=*-*-* 07:00:00 UTC
+RandomizedDelaySec=10min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
