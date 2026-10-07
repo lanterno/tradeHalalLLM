@@ -142,19 +142,25 @@ async def build(engine: AsyncEngine, settings: Any, *, today: date) -> str:
     )
 
     nightly, drill = beats.get("backup.nightly"), beats.get("backup.restore_drill")
+    offsite = beats.get("backup.offsite")
     async with engine.connect() as conn:
         when = {
             r.component: r.beat_at
             for r in await conn.execute(
                 text(
-                    "SELECT component, beat_at FROM heartbeats "
-                    "WHERE component IN ('backup.nightly', 'backup.restore_drill')"
+                    "SELECT component, beat_at FROM heartbeats WHERE component IN "
+                    "('backup.nightly', 'backup.restore_drill', 'backup.offsite')"
                 )
             )
         }
     if nightly is not None:
         lines.append(
             f"Backup: {when['backup.nightly']:%a %d %b} ({nightly.get('dump_mb')} MB); "
+            + (
+                f"off-site {when['backup.offsite']:%a %d %b}; "
+                if offsite is not None
+                else "NOT off-site; "
+            )
             + (
                 f"last restore drill {when['backup.restore_drill']:%d %b}"
                 if drill is not None

@@ -317,9 +317,12 @@ RESTORE_DRILL_MAX_AGE_D = 40
 async def _backup_health(engine: AsyncEngine) -> list[str]:
     """Problems with the nightly backup or the monthly restore drill (empty when fine).
 
-    Both write a heartbeat (justfile, `just backup`); a missing or stale one
-    is reported through the evening run's alert, so a backup that stopped is
-    noticed within a day rather than when it is needed.
+    Each writes a heartbeat: the dump and the drill in `just backup`, the
+    off-site copy in infra/server/backup.sh once restic has stored it. A
+    missing or stale one is reported through the evening run's alert, so a
+    backup that stopped is noticed within a day rather than when it is needed.
+    A dump that never leaves the server counts as a problem: the last machine
+    took its backups with it.
     """
     from datetime import UTC, datetime
 
@@ -328,13 +331,15 @@ async def _backup_health(engine: AsyncEngine) -> list[str]:
     beats = await read_beats(engine)
     now = datetime.now(UTC)
     problems = []
-    nightly = beats.get("backup.nightly")
-    if nightly is None or (now - nightly.beat_at).total_seconds() > BACKUP_MAX_AGE_H * 3600:
-        problems.append(
-            "backup: no nightly dump in the last 36 h"
-            if nightly
-            else "backup: no nightly dump recorded yet"
-        )
+    for component, what in (
+        ("backup.nightly", "nightly dump"),
+        ("backup.offsite", "off-site copy"),
+    ):
+        last = beats.get(component)
+        if last is None:
+            problems.append(f"backup: no {what} recorded yet")
+        elif (now - last.beat_at).total_seconds() > BACKUP_MAX_AGE_H * 3600:
+            problems.append(f"backup: no {what} in the last 36 h")
     drill = beats.get("backup.restore_drill")
     if drill is not None and (now - drill.beat_at).days > RESTORE_DRILL_MAX_AGE_D:
         problems.append(f"backup: last restore drill {drill.beat_at:%Y-%m-%d}, over 40 days ago")
