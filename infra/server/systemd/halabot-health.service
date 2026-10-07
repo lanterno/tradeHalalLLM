@@ -1,0 +1,13 @@
+# Installed by infra/server/bootstrap.sh (placeholders filled in there).
+# No OnFailure: healthcheck.sh sends its own, rate-limited alerts.
+[Unit]
+Description=halabot fleet health check
+After=docker.service
+
+[Service]
+Type=oneshot
+User=@HALABOT_USER@
+WorkingDirectory=@HALABOT_DIR@
+StateDirectory=halabot
+Environment=STATE_DIR=/var/lib/halabot
+ExecStart=@HALABOT_DIR@/infra/server/healthcheck.sh
