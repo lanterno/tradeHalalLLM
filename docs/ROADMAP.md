@@ -1,5 +1,10 @@
 # halabot roadmap
 
+> **Status, 2026-10-08:** a working document from mid-2026, kept as history. Since then
+> crypto trading was removed (2026-10-01), and Zoya with its sandbox (2026-10-08): the
+> in-house strict screen is the only halal screen. Passages about them describe what
+> was. The current state is `docs/OPERATOR_CONTEXT.md` and `docs/ARCHITECTURE.md`.
+
 Working backlog for the autonomous build loop. **Pick the next unchecked item, build a tested+committed slice, check it off.** Thesis: halal long-only strips the short leg from every factor premium, so the highest-leverage work is (1) validation rigor, (2) risk-adjusted sizing, (3) orthogonal alt-data, (4) honest outcome tracking — not more indicators.
 
 Sibling backlog: `docs/QUANT_PREDICTION_ROADMAP.md` — quantitative high/low

@@ -1,5 +1,10 @@
 # Halal Trader — Re-Architecture & Implementable Spec
 
+> **Status, 2026-10-08:** a working document from mid-2026, kept as history. Since then
+> crypto trading was removed (2026-10-01), and Zoya with its sandbox (2026-10-08): the
+> in-house strict screen is the only halal screen. Passages about them describe what
+> was. The current state is `docs/OPERATOR_CONTEXT.md` and `docs/ARCHITECTURE.md`.
+
 > **Status:** Proposal / design — not yet implemented.
 > **Scope:** Replace the per-cycle transactional trading loop with a continuously-maintained
 > *market-understanding engine*. Trades become a consequence of conviction, not of cycle cadence.

@@ -1,5 +1,10 @@
 # Quantitative prediction roadmap — "how high / how low"
 
+> **Status, 2026-10-08:** a working document from mid-2026, kept as history. Since then
+> crypto trading was removed (2026-10-01), and Zoya with its sandbox (2026-10-08): the
+> in-house strict screen is the only halal screen. Passages about them describe what
+> was. The current state is `docs/OPERATOR_CONTEXT.md` and `docs/ARCHITECTURE.md`.
+
 Working backlog for grounding the stock predictions (the daily stock-of-the-day
 recommendation and the live stock cycle's target/stop levels) in best-in-class
 mathematical and financial forecasting. Today the levels are LLM guesses with

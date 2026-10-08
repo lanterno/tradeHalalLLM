@@ -1,5 +1,10 @@
 # Stock-bot dashboard — review & improvement roadmap
 
+> **Status, 2026-10-08:** a working document from mid-2026, kept as history. Since then
+> crypto trading was removed (2026-10-01), and Zoya with its sandbox (2026-10-08): the
+> in-house strict screen is the only halal screen. Passages about them describe what
+> was. The current state is `docs/OPERATOR_CONTEXT.md` and `docs/ARCHITECTURE.md`.
+
 Review date: 2026-07-07. Scope: the FastAPI + React SPA dashboard
 (`dashboard/` frontend served by `src/halal_trader/web/`, on :8082 as the
 `trader-web` container). Focus: the **stock** bot. Method: full read of the
