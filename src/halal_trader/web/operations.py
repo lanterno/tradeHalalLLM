@@ -143,7 +143,8 @@ def _jobs(
                 "today_at": today_at.isoformat() if today_at else None,
                 "due_today": today_at is not None and today_at <= now,
                 "last": b.beat_at.isoformat() if b else None,
-                "ran_today": b is not None and b.beat_at.astimezone(MARKET_TZ).date() == today,
+                # Today's run, not a catch-up of yesterday's that landed this morning.
+                "ran_today": b is not None and today_at is not None and b.beat_at >= today_at,
                 "summary": summary,
                 "next": nxt.isoformat() if nxt else None,
                 "status": st.status,
