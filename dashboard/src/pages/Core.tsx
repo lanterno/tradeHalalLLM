@@ -198,7 +198,8 @@ export default function Core() {
               }
               sub={
                 data.equity_day
-                  ? `as of ${data.equity_day}`
+                  ? // A ledger close is a day; the bot's minute snapshot an instant.
+                    `as of ${data.equity_day.length === 10 ? formatDate(data.equity_day) : formatTime(data.equity_day)}`
                   : data.runs[0]
                     ? `at the ${data.runs[0].run_on} run`
                     : "no snapshot yet"
