@@ -37,7 +37,6 @@ async def test_a_second_bot_on_the_same_database_is_refused(database_url: str) -
 
 async def test_run_once_runs_one_cycle_and_never_the_end_of_day_flatten() -> None:
     bot = TradingBot.__new__(TradingBot)
-    bot._acquire_lock = MagicMock()  # type: ignore[method-assign]
     bot.initialize = AsyncMock()  # type: ignore[method-assign]
     bot._acquire_trading_lock = AsyncMock()  # type: ignore[method-assign]
     bot.pre_market = AsyncMock()  # type: ignore[method-assign]

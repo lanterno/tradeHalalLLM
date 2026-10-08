@@ -35,7 +35,6 @@ def _shutdown_ready(bot: TradingBot) -> TradingBot:
     bot._monitor_task = None
     bot._stocks_news = None
     bot._broker_client = MagicMock(disconnect=AsyncMock())
-    bot._lock_file = None
     bot._release_trading_lock = AsyncMock()  # type: ignore[method-assign]
     return bot
 
