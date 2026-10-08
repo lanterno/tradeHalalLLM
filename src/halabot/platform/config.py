@@ -129,9 +129,6 @@ class RiskSettings(BaseModel):
 class ExecSettings(BaseModel):
     venue: str = Field(default="alpaca")
     min_notional_usd: float = Field(default=50.0, ge=0)
-    reconcile_interval_s: float = Field(default=300.0, gt=0)
-    per_asset_breaker_threshold: int = Field(default=3, ge=1)
-    per_asset_breaker_cooldown_s: float = Field(default=900.0, gt=0)
 
 
 class HalalSettings(BaseModel):
