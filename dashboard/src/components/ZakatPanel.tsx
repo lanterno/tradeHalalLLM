@@ -122,7 +122,7 @@ export function ZakatPanel() {
                   <span className="font-medium text-white">
                     {line.symbol}{" "}
                     <span className="text-[10px] font-normal uppercase text-muted">
-                      {line.account === "core" ? "core" : "day-trader"}
+                      {line.account === "paper" ? "day-trader" : "core"}
                     </span>
                   </span>
                   <span className="text-right text-muted">
