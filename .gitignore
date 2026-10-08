@@ -43,5 +43,5 @@ logs/
 .coverage.*
 htmlcov/
 coverage.xml
-.env.pre-glm.bak
+.env.*.bak
 *.dump
