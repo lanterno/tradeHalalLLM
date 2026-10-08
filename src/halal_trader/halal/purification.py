@@ -10,7 +10,7 @@ Inputs:
 
 * ``dividend_amount_usd`` — the gross dividend received.
 * ``haram_revenue_pct`` — the screening provider's published estimate
-  (Zoya / IdealRatings publish this; default 0 if unknown so a missing
+  (screening providers publish this; default 0 if unknown so a missing
   value never *under*-tags the obligation).
 
 Output: a :class:`PurificationEntry` capturing the obligation, for the

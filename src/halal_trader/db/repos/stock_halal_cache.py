@@ -1,7 +1,8 @@
 """Stock halal-screening cache repository.
 
 Reads and writes the ``halal_cache`` table — symbol → compliance
-verdict from Zoya/AAOIFI. Matching ``StockHalalCacheRepo`` Protocol in ``protocols.py``.
+verdict from the strict in-house screen. Matching ``StockHalalCacheRepo``
+Protocol in ``protocols.py``.
 """
 
 from __future__ import annotations

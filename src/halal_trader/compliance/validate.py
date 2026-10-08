@@ -5,7 +5,7 @@ Two directions, read differently:
 * **ETF holds it, we reject it** -- a likely false negative of ours, or a
   methodology difference (the ETFs' boards use their own thresholds and
   average market caps). Each one is worth a look; this is the list that
-  decides whether Zoya production is worth buying.
+  shows where the screen and the boards disagree.
 * **We pass it, neither ETF holds it** -- only meaningful for large caps: the
   ETFs hold S&P 500 / FTSE USA names, so a halal small cap is expected to be
   absent. Large caps here are possible false positives, the dangerous kind.

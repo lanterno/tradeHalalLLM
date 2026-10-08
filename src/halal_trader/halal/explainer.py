@@ -37,7 +37,7 @@ def explain_screening(receipt: dict[str, Any]) -> Explanation:
     (``halal/audit.py:export_receipt``) — at minimum it has:
 
     * ``screening.decision`` — "halal" / "not_halal" / "doubtful"
-    * ``screening.source`` — e.g. "zoya" / "override" / "cache"
+    * ``screening.source`` — e.g. "override" / "cache"
     * ``screening.criteria`` — the JSONB criteria dict the screener wrote
     * ``trade.symbol`` — what we traded
     """

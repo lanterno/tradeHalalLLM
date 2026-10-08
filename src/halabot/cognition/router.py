@@ -26,7 +26,7 @@ from halabot.platform.events import Event, EventType
 logger = logging.getLogger(__name__)
 
 # Observation event types replayed during bootstrap (compliance is re-established
-# live by the seed / Zoya source, not replayed).
+# live by the seed, not replayed).
 _OBSERVATION_TYPES = frozenset(
     {EventType.OBSERVATION_BAR, EventType.OBSERVATION_NEWS, EventType.OBSERVATION_PRICE}
 )

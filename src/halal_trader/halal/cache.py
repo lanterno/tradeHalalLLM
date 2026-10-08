@@ -5,8 +5,7 @@ order boundary (``TradeExecutor._check_halal``) use. With a database engine
 -- as the bot always runs -- its verdicts are the strict in-house screen's
 (halal/strict.py), failing closed on a stale or missing screen, and
 ``halal_cache`` holds the trading universe: the largest names that screen
-passes (``settings.halal.universe_size``). A production Zoya key, if one is ever set,
-can only veto on top of that.
+passes (``settings.halal.universe_size``).
 
 Without an engine (tests, offline tooling) it falls back to the curated
 default list below, which is no longer what the bot trades: seven of its
@@ -23,7 +22,6 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from halal_trader.config import HalalSettings, get_settings
 from halal_trader.db.repos import StockHalalCacheRepo
 from halal_trader.halal import strict
-from halal_trader.halal.zoya import ZoyaClient
 from halal_trader.market_hours import today_eastern
 
 logger = logging.getLogger(__name__)
@@ -56,19 +54,17 @@ DEFAULT_HALAL_SYMBOLS = [
 
 
 class HalalScreener:
-    """Screens stocks for Shariah compliance: the strict screen, an optional Zoya veto, a cache."""
+    """Screens stocks for Shariah compliance: the strict in-house screen, and a cache."""
 
     def __init__(
         self,
         repo: StockHalalCacheRepo,
-        zoya: ZoyaClient | None = None,
         *,
         halal_settings: HalalSettings | None = None,
         engine: AsyncEngine | None = None,
         today: Callable[[], date] = today_eastern,
     ) -> None:
         self._repo = repo
-        self._zoya = zoya
         # Settings is a singleton; we accept an override only so tests can
         # tighten the TTL without touching the global cache. Live code
         # should leave halal_settings=None and let get_settings() decide.
@@ -78,7 +74,7 @@ class HalalScreener:
         self._today = today
 
     async def ensure_cache(self, symbols: list[str] | None = None, *, force: bool = False) -> None:
-        """Populate the halal cache, using Zoya API or defaults.
+        """Populate the halal cache from the strict screen, or the default list.
 
         Called at startup, on the configured TTL, and from
         :meth:`refresh_if_stale` (the mid-cycle hook). ``force=True``
@@ -98,65 +94,13 @@ class HalalScreener:
             await self._refresh_from_strict_screen(self._engine)
             return
 
-        if self._zoya and self._zoya.api_key:
-            target = symbols or DEFAULT_HALAL_SYMBOLS
-            logger.info("Refreshing halal cache via Zoya API for %d symbols", len(target))
-            results = await self._zoya.screen_bulk(target)
-            errored = 0
-            for result in results:
-                # Skip transient API failures — caching them as "doubtful"
-                # poisons the cache for the full TTL, so a momentary Zoya
-                # outage during the single pre-market pass starves the
-                # universe all day (observed 2026-05-27). Leaving the prior
-                # verdict (or no row) lets the next refresh retry.
-                if result.get("error"):
-                    errored += 1
-                    continue
-                await self._repo.cache_halal_status(
-                    symbol=result["symbol"],
-                    compliance=result["compliance"],
-                    detail=result.get("detail"),
-                )
-            if errored:
-                logger.warning(
-                    "Halal refresh: %d/%d symbols failed screening (transient) — "
-                    "not cached, prior verdicts preserved; will retry next refresh",
-                    errored,
-                    len(target),
-                )
-            # Surface the size of the tradable universe — a tiny halal set
-            # silently concentrates every entry into a handful of names
-            # (observed 2026-06-18: only 3/20 verdicted halal → all buys
-            # funnelled into AAPL/ADBE/INTU). Make it loud, and louder still
-            # in sandbox, where Zoya verdicts are RANDOMISED, not real.
-            halal_n = sum(
-                1 for r in results if not r.get("error") and r.get("compliance") == "halal"
+        # No database (tests, offline tooling): the curated default list.
+        for sym in DEFAULT_HALAL_SYMBOLS:
+            await self._repo.cache_halal_status(
+                symbol=sym,
+                compliance="halal",
+                detail="Default list (AAOIFI pre-screened large-cap)",
             )
-            screened_n = sum(1 for r in results if not r.get("error"))
-            logger.info(
-                "Halal universe: %d/%d screened symbols verdicted halal",
-                halal_n,
-                screened_n,
-            )
-            if get_settings().zoya.use_sandbox:
-                logger.warning(
-                    "Zoya SANDBOX mode is ON — verdicts are RANDOMISED, not real "
-                    "Shariah screening, so the %d-symbol halal universe is arbitrary. "
-                    "Set ZOYA_USE_SANDBOX=false + a production key for real compliance "
-                    "and a wider, stable universe.",
-                    halal_n,
-                )
-        else:
-            logger.info(
-                "Zoya API not configured — loading %d default halal symbols",
-                len(DEFAULT_HALAL_SYMBOLS),
-            )
-            for sym in DEFAULT_HALAL_SYMBOLS:
-                await self._repo.cache_halal_status(
-                    symbol=sym,
-                    compliance="halal",
-                    detail="Default list (AAOIFI pre-screened large-cap)",
-                )
 
     async def _refresh_from_strict_screen(self, engine: AsyncEngine) -> None:
         """Make ``halal_cache`` the strict screen's largest halal names, and nothing else.
@@ -174,15 +118,6 @@ class HalalScreener:
                 as_of,
             )
         verdicts = dict.fromkeys(names, ("halal", f"strict screen {as_of}"))
-        if names and self._zoya and self._zoya.api_key:
-            # A production Zoya key may only veto: its verdict replaces "halal"
-            # for the names it answers; a name it errors on keeps no verdict.
-            for result in await self._zoya.screen_bulk(names):
-                symbol = result["symbol"]
-                if result.get("error"):
-                    verdicts.pop(symbol, None)
-                elif result.get("compliance") != "halal":
-                    verdicts[symbol] = (result["compliance"], f"Zoya: {result.get('detail')}")
         async with engine.begin() as conn:
             await conn.execute(
                 text("DELETE FROM halal_cache WHERE NOT (symbol = ANY(:keep))"),
@@ -199,17 +134,14 @@ class HalalScreener:
     async def is_halal(self, symbol: str) -> bool:
         """Is ``symbol`` halal right now? The order boundary's question.
 
-        With an engine: the newest fresh strict screen must pass it (read at
-        the moment of asking, not from the cache), and a configured Zoya key
-        must not have vetoed it. Without one: the cached verdict.
+        With an engine: the newest fresh strict screen must pass it, read at
+        the moment of asking, not from the cache. Without one: the cached verdict.
         """
         if self._engine is not None:
             v = await strict.verdict(self._engine, symbol, today=self._today())
             if not v.halal:
                 logger.info("halal gate: %s", v.reason)
-                return False
-            if not (self._zoya and self._zoya.api_key):
-                return True
+            return v.halal
         status = await self._repo.get_halal_status(symbol)
         return status == "halal"
 

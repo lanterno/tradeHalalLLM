@@ -11,7 +11,7 @@ REARCHITECTURE.md L1 source table): the concrete legacy fetcher
 (``halal_trader.trading.fred_catalysts.FREDReleaseCalendarSource``) is
 constructed fresh in the CLI wiring and passed in through the local
 duck-typed :class:`CatalystFetcher` Protocol — this module imports
-nothing from the legacy package (mirrors ``zoya_compliance``).
+nothing from the legacy package.
 
 Facts only, no interpretation (L1): the payload carries the schedule and
 a static kind→impact prior; direction/consequence stays downstream.

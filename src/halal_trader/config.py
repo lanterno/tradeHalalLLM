@@ -86,16 +86,6 @@ class AlpacaSettings(_Group):
     mcp_server_version: str = Field(default="2.3.2", pattern=r"^\d+\.\d+\.\d+$")
 
 
-class ZoyaSettings(_Group):
-    model_config = SettingsConfigDict(**_BASE_CONFIG, env_prefix="ZOYA_")
-    ENV = frozenset({"api_key", "use_sandbox"})
-
-    api_key: str = ""
-    # A sandbox key's verdicts are random and ignored; only a production key
-    # can veto on top of the in-house screen.
-    use_sandbox: bool = True
-
-
 class FinnhubSettings(_Group):
     model_config = SettingsConfigDict(**_BASE_CONFIG, env_prefix="FINNHUB_")
     ENV = frozenset({"api_key"})
@@ -316,7 +306,6 @@ class Settings(_Group):
     ENV = frozenset({"database_url", "data_dir"})
 
     alpaca: AlpacaSettings = Field(default_factory=AlpacaSettings)
-    zoya: ZoyaSettings = Field(default_factory=ZoyaSettings)
     fred: FREDSettings = Field(default_factory=FREDSettings)
     finnhub: FinnhubSettings = Field(default_factory=FinnhubSettings)
     edgar: EDGARSettings = Field(default_factory=EDGARSettings)

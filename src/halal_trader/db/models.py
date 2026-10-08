@@ -358,7 +358,7 @@ class HalalScreening(SQLModel, table=True):
     )
     symbol: str = Field(index=True)
     asset_class: str  # 'stock'
-    source: str  # 'zoya' | 'override' | 'cache' | …
+    source: str  # 'override' | 'cache' | …
     decision: str  # 'halal' | 'not_halal' | 'doubtful'
     criteria: dict | None = Field(
         default=None, sa_column=sa.Column("criteria", JSONB, nullable=True)

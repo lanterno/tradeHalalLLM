@@ -37,16 +37,7 @@ def cli() -> None:
 )
 @click.option("--timeframe", default="1Hour", show_default=True, help="Bar timeframe.")
 @click.option("--days", default=5, show_default=True, help="Bar lookback window (days).")
-@click.option(
-    "--rescreen-compliance",
-    is_flag=True,
-    default=False,
-    help="Add the Zoya re-screening source (freshness + lapse detection, INV-7). "
-    "Off by default to spare Zoya quota; the startup seed keeps verdicts fresh.",
-)
-def shadow(
-    once: bool, interval: float | None, timeframe: str, days: int, rescreen_compliance: bool
-) -> None:
+def shadow(once: bool, interval: float | None, timeframe: str, days: int) -> None:
     """Run the read-only engine on live Alpaca data, logging shadow proposals."""
     from halabot.platform.observability import setup_logging
 
@@ -57,7 +48,6 @@ def shadow(
             interval=interval,
             timeframe=timeframe,
             days=days,
-            rescreen_compliance=rescreen_compliance,
         )
     )
 
@@ -68,7 +58,6 @@ async def _run_shadow(
     interval: float | None,
     timeframe: str,
     days: int,
-    rescreen_compliance: bool = False,
 ) -> None:
     # Lazy imports — legacy config/MCP/DB only loaded when actually running.
     from halabot.app import build_engine
@@ -182,21 +171,6 @@ async def _run_shadow(
         fred_fetcher = FREDReleaseCalendarSource(api_key=fred_key)
         sources.append(MacroCatalystSource(fred_fetcher, universe, clock, dedup_store=dedup))
 
-    zoya_client = None
-    if rescreen_compliance:
-        from halabot.perception.sources.zoya_compliance import ZoyaComplianceSource
-        from halal_trader.halal.zoya import ZoyaClient
-
-        zoya_key = getattr(getattr(settings, "zoya", None), "api_key", "") or ""
-        if zoya_key:
-            zoya_client = ZoyaClient(
-                zoya_key, use_sandbox=getattr(settings.zoya, "use_sandbox", True)
-            )
-            sources.append(ZoyaComplianceSource(zoya_client, universe, clock))
-            click.echo("compliance re-screening ENABLED (Zoya)")
-        else:
-            click.echo("--rescreen-compliance set but ZOYA_API_KEY missing; skipping")
-
     supervisor = SourceSupervisor()
     heartbeat = Supervisor()
 
@@ -240,8 +214,6 @@ async def _run_shadow(
             await news_source.aclose()
         if fred_fetcher is not None:
             await fred_fetcher.aclose()
-        if zoya_client is not None:
-            await zoya_client.close()
         await mcp.disconnect()
         await engine.stop()
         await ht_engine.dispose()

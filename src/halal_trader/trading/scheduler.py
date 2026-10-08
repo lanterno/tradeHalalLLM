@@ -40,7 +40,6 @@ from halal_trader.db.repository import Repository
 from halal_trader.domain.ports import Broker, ComplianceScreener
 from halal_trader.domain.status import EntryType
 from halal_trader.halal.cache import HalalScreener
-from halal_trader.halal.zoya import ZoyaClient
 from halal_trader.market_hours import (
     MARKET_TZ,
     effective_close_time,
@@ -129,24 +128,6 @@ def plan_catch_up(
                     break
             day -= timedelta(days=1)
     return plan
-
-
-def _zoya_for(settings: Any) -> ZoyaClient | None:
-    """The Zoya client the halal screen may consult as a veto, or None.
-
-    Zoya's SANDBOX returns randomised verdicts, so it must not decide anything
-    (operator decision 2026-10-01): with a sandbox key, as with none, the
-    strict in-house screen alone decides (halal/cache.py, halal/strict.py).
-    """
-    if not settings.zoya.api_key:
-        return None
-    if settings.zoya.use_sandbox:
-        logger.warning(
-            "Zoya key is a SANDBOX key: its verdicts are random, so they are ignored; "
-            "the strict in-house screen alone decides"
-        )
-        return None
-    return ZoyaClient(api_key=settings.zoya.api_key, use_sandbox=False)
 
 
 class TradingBot:
@@ -260,7 +241,7 @@ class TradingBot:
         # The strict in-house screen decides (fails closed when stale). Its
         # universe is rebuilt now, so the reactor's watchlist below and the
         # shadow (which reads the same cache) never start from an old one.
-        self.screener = HalalScreener(repo, _zoya_for(self.settings), engine=self._engine)
+        self.screener = HalalScreener(repo, engine=self._engine)
         try:
             await self.screener.ensure_cache(force=True)
         except Exception as exc:  # noqa: BLE001 -- pre-market retries; the gate reads the screen

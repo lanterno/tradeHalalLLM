@@ -31,10 +31,6 @@ def print_config() -> None:
         "Alpaca API Key",
         settings.alpaca.api_key[:8] + "..." if settings.alpaca.api_key else "[red]NOT SET[/red]",
     )
-    table.add_row(
-        "Zoya API",
-        "Configured" if settings.zoya.api_key else "[yellow]Not configured (defaults)[/yellow]",
-    )
     table.add_row("Database", settings.database_url.split("@")[-1])
 
     console.print(table)
