@@ -338,22 +338,6 @@ class TelegramSettings(BaseSettings):
     chat_id: str = Field(default="")
 
 
-class SlackSettings(BaseSettings):
-    """Slack webhook settings. Nothing reads them: no Slack notifier exists."""
-
-    model_config = SettingsConfigDict(**_BASE_CONFIG, env_prefix="SLACK_")
-    webhook_url: str = Field(default="")
-    channel: str = Field(default="")
-
-
-class DiscordSettings(BaseSettings):
-    """Discord webhook settings. Nothing reads them: no Discord notifier exists."""
-
-    model_config = SettingsConfigDict(**_BASE_CONFIG, env_prefix="DISCORD_")
-    webhook_url: str = Field(default="")
-    username: str = Field(default="halal-trader")
-
-
 class LiveModeSettings(BaseSettings):
     """Live-mode safeguards — all knobs use the ``LIVE_MODE_`` prefix."""
 
@@ -429,8 +413,6 @@ class Settings(BaseSettings):
     core: CoreSettings = Field(default_factory=CoreSettings)
     stocks: StockSettings = Field(default_factory=StockSettings)
     telegram: TelegramSettings = Field(default_factory=TelegramSettings)
-    slack: SlackSettings = Field(default_factory=SlackSettings)
-    discord: DiscordSettings = Field(default_factory=DiscordSettings)
     live_mode: LiveModeSettings = Field(default_factory=LiveModeSettings)
     log: LogSettings = Field(default_factory=LogSettings)
 
