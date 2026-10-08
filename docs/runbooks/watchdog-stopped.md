@@ -10,7 +10,7 @@ in a row, judged by `core/heartbeat.py:assess`:
 | `stock.process` | no beat for 3 min (the bot's run loop beats every 60 s) |
 | `shadow.process` | no beat for 3 min (the shadow's event loop beats every 60 s) |
 | `stock.monitor` | no tick for 5 min (stop-loss / take-profit enforcement) |
-| `stock.cycle` | only while `DAY_TRADER_ENABLED=true`, 10:00 ET to the close: no cycle for 45 min |
+| `stock.cycle` | 10:00 ET to the close: no cycle for 45 min |
 | `market.snapshot` | trading days 09:05-17:00 ET: no snapshot for 5 min |
 | `recommendation.daily`, `stock.eod`, `stock.ledger`, `research.daily` | the newest run owed on a trading day (09:05, 15:50 / 12:50 on early closes, 16:30, 20:30 ET), plus its grace, left no beat |
 

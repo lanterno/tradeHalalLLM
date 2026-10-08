@@ -18,10 +18,10 @@ research engine that never trades, and a dashboard, as three containers
 sharing one Postgres database (`infra/docker-compose.yml`). Two Alpaca
 accounts:
 
-* the **day-trader's** (an LLM strategy, retired by default:
-  `DAY_TRADER_ENABLED=false`), paper unless `ALPACA_PAPER_TRADE=false`;
+* the **day-trader's** (an LLM strategy), paper unless
+  `ALPACA_PAPER_TRADE=false`;
 * the **core portfolio's** (rule-based, monthly-rebalanced strict-halal
-  holdings), paper unless `CORE_PAPER=false`.
+  holdings; it runs only once its keys are set), paper unless `CORE_PAPER=false`.
 
 ## Assets, and how each is defended
 

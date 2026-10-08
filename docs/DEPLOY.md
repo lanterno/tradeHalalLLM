@@ -59,7 +59,8 @@ sudo -u halabot nano /opt/halabot/.env
 Fill in the Required section; the file says where each key comes from,
 and everything below it has working defaults. Add the Recommended keys
 (Telegram above all: the host's alerts use it too), and for the core
-portfolio a **second** Alpaca paper account's keys with `CORE_ENABLED=true`.
+portfolio a **second** Alpaca paper account's keys (`CORE_ALPACA_*`; the
+core stays off while they are empty).
 
 **Starting from an empty database against an Alpaca paper account that the
 old bot traded:** reset the paper account (Alpaca → Paper Trading → Reset)
