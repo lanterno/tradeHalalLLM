@@ -73,8 +73,7 @@ def explain_screening(receipt: dict[str, Any]) -> Explanation:
         lines.append(_render_doubt_criteria(criteria))
         lines.append("")
         lines.append(
-            "Doubtful is not halal: neither strategy buys the name. "
-            "The weekly screen re-runs it."
+            "Doubtful is not halal: neither strategy buys the name. The weekly screen re-runs it."
         )
         sources.append(f"{_HANDBOOK}#section-4-decision-states")
 
