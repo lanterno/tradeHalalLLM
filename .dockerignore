@@ -24,7 +24,6 @@ dashboard/dist
 .env
 .env.*
 !.env.example
-!.env.stocks.example
 
 # Local data / DB dumps / logs (not needed at build time)
 *.dump
