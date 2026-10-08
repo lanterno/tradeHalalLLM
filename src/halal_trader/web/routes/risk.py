@@ -140,8 +140,8 @@ def register(app: FastAPI) -> None:
     async def api_risk_state(ctx: DashboardContext = Depends(get_ctx)) -> JSONResponse:
         """The risk read the day-trader's last cycle published (via its heartbeat).
 
-        The day-trader is retired when DAY_TRADER_ENABLED is false: its last
-        read then stays as it was, and ``day_trader_enabled`` says why.
+        With DAY_TRADER_ENABLED=false its last read stays as it was, and
+        ``day_trader_enabled`` says why.
         """
         from halal_trader.core.heartbeat import cycle_risk
 

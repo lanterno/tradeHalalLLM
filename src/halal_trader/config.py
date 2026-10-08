@@ -181,7 +181,7 @@ class CoreSettings(_Group):
         }
     )
 
-    enabled: bool = False  # orders only when enabled and both keys are set
+    enabled: bool = True  # orders only when enabled and both keys are set
     alpaca_api_key: str = ""
     alpaca_secret_key: str = ""
     paper: bool = True
@@ -206,11 +206,11 @@ class StockSettings(_Group):
     model_config = SettingsConfigDict(**_BASE_CONFIG)
     ENV = frozenset({"day_trader_enabled", "reactor_entries_enabled"})
 
-    # Both retired 2026-10-04 (+2.5%/yr against SPUS's 18.6%). Off, the
-    # position monitor still manages open positions and the reactor still
-    # scores and records news.
-    day_trader_enabled: bool = False
-    reactor_entries_enabled: bool = False
+    # Run beside the core (operator, 2026-10-08). Off, the position monitor
+    # still manages open positions and the reactor still scores and records
+    # news.
+    day_trader_enabled: bool = True
+    reactor_entries_enabled: bool = True
 
     trading_interval_minutes: int = 15
     daily_return_target: float = Field(default=0.01, gt=0, le=0.5)

@@ -279,7 +279,7 @@ async def core_preflight(
         try:
             other = await day_trader(settings)
         except Exception as exc:  # noqa: BLE001 -- unverifiable must not crash the run
-            # Live money: unverifiable is a refusal. Paper: the retired
+            # Live money: unverifiable is a refusal. Paper: the
             # day-trader's keys going stale (or one transient error) must not
             # stop the core's daily run, which the readiness gate counts; the
             # identical-keys check above still holds.

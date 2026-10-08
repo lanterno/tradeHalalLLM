@@ -28,7 +28,7 @@ async def _bot_liveness(ctx: DashboardContext) -> tuple[bool, dict[str, Any] | N
     now = datetime.now(UTC)
     # Cycles are due once the session has run long enough for one to finish
     # (the first runs at 09:30 ET; allow until 10:00 before judging).
-    # A retired day-trader (DAY_TRADER_ENABLED=false) runs no cycles, so none
+    # A switched-off day-trader (DAY_TRADER_ENABLED=false) runs no cycles, so none
     # is due, and its stock.cycle row reports status "disabled", never stale.
     from halal_trader.config import get_settings
 
@@ -108,7 +108,7 @@ def register(app: FastAPI) -> None:
                 "last_cycle": ctx.runtime.last_cycle
                 or (cycle_beat["beat_at"] if cycle_beat else None),
                 "stocks_cycle_interval_seconds": ctx.settings.stocks.trading_interval_minutes * 60,
-                # Which strategies run: a retired day-trader beats no cycles,
+                # Which strategies run: a switched-off day-trader beats no cycles,
                 # so the dashboard must not read its old cycle beat as stale.
                 "day_trader_enabled": ctx.settings.stocks.day_trader_enabled,
                 "core_enabled": ctx.settings.core.enabled,

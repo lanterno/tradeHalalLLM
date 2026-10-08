@@ -198,8 +198,8 @@ class Status:
     * ``ok`` -- fresh, or not due;
     * ``stale`` -- too old, or a daily run it owed is missing;
     * ``missing`` -- a continuously-beating component with no row at all;
-    * ``disabled`` -- switched off by configuration (the retired
-      day-trader's cycle): never stale, whatever its age;
+    * ``disabled`` -- switched off by configuration (the day-trader's
+      cycle when DAY_TRADER_ENABLED=false): never stale, whatever its age;
     * ``unknown`` -- nothing to judge by (a daily job that never ran yet).
     """
 
@@ -273,7 +273,7 @@ def assess(
         out[component] = _by_age(beats.get(component), component, now, missing="missing")
 
     if not day_trader_enabled:
-        out[STOCK_CYCLE] = Status("disabled", "the day-trader is retired (DAY_TRADER_ENABLED)")
+        out[STOCK_CYCLE] = Status("disabled", "the day-trader is switched off (DAY_TRADER_ENABLED)")
     elif cycles_due:
         out[STOCK_CYCLE] = _by_age(beats.get(STOCK_CYCLE), STOCK_CYCLE, now, missing="stale")
     else:

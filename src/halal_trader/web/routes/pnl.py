@@ -1,4 +1,4 @@
-"""GET /api/pnl/daily — the retired day-trader's daily ledger (``daily_pnl``)."""
+"""GET /api/pnl/daily — the day-trader's daily ledger (``daily_pnl``)."""
 
 from __future__ import annotations
 

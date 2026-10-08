@@ -1138,8 +1138,8 @@ class TradingBot:
     def reactor_holds_overnight(self) -> bool:
         """Is a reactor entry spared the 15:50 flatten (its slow exit)?
 
-        Only while the day-trader runs to manage that exit. Retired, a held
-        entry would stay forever (MSFT from 20 Jul to 6 Oct 2026), so the
+        Only while the day-trader runs to manage that exit. Switched off, a
+        held entry would stay forever (MSFT from 20 Jul to 6 Oct 2026), so the
         flatten takes everything.
         """
         return self.settings.stocks.day_trader_enabled
@@ -1797,7 +1797,7 @@ class TradingBot:
             # so holidays and early-close days are handled even though cron fires.
             # Use hour 10-15 for the bulk, plus a separate job for the 9:30-9:45 window.
             if not self.settings.stocks.day_trader_enabled:
-                logger.info("Day-trader retired (DAY_TRADER_ENABLED=false): no cycles")
+                logger.info("Day-trader switched off (DAY_TRADER_ENABLED=false): no cycles")
             else:
                 self._schedule_cycles(interval)
 

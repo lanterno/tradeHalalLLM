@@ -1,6 +1,6 @@
 """AAOIFI compliance summary — the Halal page's and the weekly digest's source.
 
-Per broker account (the core first; the retired day-trader beside it):
+Per broker account (the core first; the day-trader beside it):
 
 * trades today / this month / this quarter (New York calendar days);
 * every **buy** this quarter judged against the in-house screen

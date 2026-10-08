@@ -1,7 +1,6 @@
 """GET /api/positions — what each broker account holds, marked to the market.
 
-Both accounts, the core first: it is the product; the day-trader is retired
-and holds what its exits have not yet closed. The marks come from the bot's
+Both accounts, the core first, then the day-trader. The marks come from the bot's
 minute snapshot of each account (``account_snapshots``, written by
 portfolio/snapshots.py): the broker's own price, market value and unrealized
 P&L, the same figures the home page shows. The web process has no broker
@@ -142,7 +141,7 @@ def register(app: FastAPI) -> None:
         open_trades = await ctx.repo.get_open_trades()
         status = {
             "core": "active" if settings.core.enabled else "disabled",
-            "paper": "active" if settings.stocks.day_trader_enabled else "retired",
+            "paper": "active" if settings.stocks.day_trader_enabled else "disabled",
         }
         out = []
         for account, label in ACCOUNTS:
