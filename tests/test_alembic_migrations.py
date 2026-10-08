@@ -75,15 +75,14 @@ def test_initial_revision_creates_expected_tables(scratch_db):
         "daily_pnl",
         "halal_cache",
         "llm_decisions",
-        "crypto_trades",
-        "crypto_daily_pnl",
-        "crypto_halal_cache",
         "indicator_snapshots",
         "strategy_adjustments",
         "kill_switch",
         "reconciliation_log",
     }
     assert expected.issubset(tables)
+    # Crypto was dropped (732583ae4034): none of its tables survive head.
+    assert not {t for t in tables if t.startswith("crypto_")}
 
 
 def test_head_resolves_to_a_revision_id():
@@ -98,9 +97,9 @@ def test_initial_revision_includes_post_phase0_columns(scratch_db):
     raw_url, sync_url = scratch_db
     command.upgrade(_alembic_cfg(sync_url), "head")
 
-    crypto_cols = _columns_in(raw_url, "crypto_trades")
+    trade_cols = _columns_in(raw_url, "trades")
     for col in ("submitted_at", "filled_at", "filled_price", "filled_quantity"):
-        assert col in crypto_cols, f"crypto_trades missing {col}"
+        assert col in trade_cols, f"trades missing {col}"
     llm_cols = _columns_in(raw_url, "llm_decisions")
     for col in (
         "prompt_version",
