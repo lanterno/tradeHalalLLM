@@ -24,7 +24,7 @@ lossless.
 it to 6KB and appends ``…[truncated]``, which isn't valid JSON.
 """
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 import sqlalchemy as sa
 
@@ -32,9 +32,9 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "c5b6a92d7311"
-down_revision: Union[str, Sequence[str], None] = "f18549dec00a"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | Sequence[str] | None = "f18549dec00a"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 _JSONB_COLUMNS: list[tuple[str, str, bool]] = [

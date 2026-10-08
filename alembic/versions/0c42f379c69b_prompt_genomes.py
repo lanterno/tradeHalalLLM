@@ -11,7 +11,7 @@ ACTIVE_PROMPT_VERSION via runtime_config — this table just records
 the lineage + scores.
 """
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 import sqlalchemy as sa
 import sqlmodel.sql.sqltypes  # noqa: F401
@@ -20,9 +20,9 @@ from sqlalchemy.dialects import postgresql
 from alembic import op
 
 revision: str = "0c42f379c69b"
-down_revision: Union[str, Sequence[str], None] = "8e2c41a6b54f"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | Sequence[str] | None = "8e2c41a6b54f"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:

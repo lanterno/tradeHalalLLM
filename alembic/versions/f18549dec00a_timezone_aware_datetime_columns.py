@@ -17,7 +17,7 @@ existing naïve values are interpreted as UTC (every writer in the
 codebase uses ``datetime.now(UTC)``), so the cast is lossless.
 """
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 import sqlalchemy as sa
 
@@ -25,9 +25,9 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "f18549dec00a"
-down_revision: Union[str, Sequence[str], None] = "76aa7ebe3b32"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | Sequence[str] | None = "76aa7ebe3b32"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 _UTC_COLUMNS: list[tuple[str, str, bool]] = [
