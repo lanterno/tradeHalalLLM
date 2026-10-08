@@ -11,9 +11,6 @@ from alembic import context
 
 # Import every table so SQLModel.metadata is fully populated for autogenerate.
 from halal_trader.db.models import (  # noqa: F401
-    CryptoDailyPnl,
-    CryptoHalalCache,
-    CryptoTrade,
     DailyPnl,
     DailyRecommendation,
     HalalCache,

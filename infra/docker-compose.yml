@@ -51,18 +51,6 @@ x-database-url: &database-url
   DATABASE_URL: postgresql+asyncpg://trader:${POSTGRES_PASSWORD:-trader-dev-only}@postgres:5432/halal_trader
   POSTGRES_PASSWORD: ""
 
-# Read by nothing at all: the crypto-era and never-built integrations' keys.
-x-unused-keys: &unused-keys
-  BINANCE_API_KEY: ""
-  BINANCE_SECRET_KEY: ""
-  COINGECKO_API_KEY: ""
-  CRYPTOPANIC_API_KEY: ""
-  ETHERSCAN_API_KEY: ""
-  REDDIT_CLIENT_ID: ""
-  REDDIT_CLIENT_SECRET: ""
-  SLACK_WEBHOOK_URL: ""
-  DISCORD_WEBHOOK_URL: ""
-
 # The core portfolio's account (it trades real money once CORE_PAPER=false)
 # and the live-mode arming token: only trader-stocks reads them.
 x-core-keys: &no-core-keys
@@ -108,7 +96,7 @@ services:
     env_file:
       - ../.env
     environment:
-      <<: [*database-url, *unused-keys, *no-core-keys]
+      <<: [*database-url, *no-core-keys]
       ALPACA_API_KEY: ""
       ALPACA_SECRET_KEY: ""
       GLM_API_KEY: ""
@@ -131,7 +119,7 @@ services:
     env_file:
       - ../.env
     environment:
-      <<: [*database-url, *unused-keys]
+      <<: *database-url
       WEB_API_TOKEN: ""
     volumes:
       - trader-data:/app/data
@@ -166,7 +154,7 @@ services:
     env_file:
       - ../.env
     environment:
-      <<: [*database-url, *unused-keys, *no-core-keys]
+      <<: [*database-url, *no-core-keys]
       WEB_API_TOKEN: ""
       TELEGRAM_BOT_TOKEN: ""
       TELEGRAM_CHAT_ID: ""
@@ -200,7 +188,7 @@ services:
     env_file:
       - ../.env
     environment:
-      <<: [*database-url, *unused-keys, *no-core-keys]
+      <<: [*database-url, *no-core-keys]
       FINNHUB_API_KEY: ""
       FRED_API_KEY: ""
       ZOYA_API_KEY: ""
