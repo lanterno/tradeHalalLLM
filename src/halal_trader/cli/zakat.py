@@ -8,6 +8,7 @@ import click
 
 from halal_trader.cli._run import fail, run_db
 from halal_trader.logging import console
+from halal_trader.portfolio.core_account import DAY_TRADER
 
 
 @click.group("zakat")
@@ -16,7 +17,7 @@ def zakat() -> None:
 
 
 @zakat.command("assess")
-@click.option("--account", default="paper", show_default=True, help='"paper" or "book:<name>".')
+@click.option("--account", default=DAY_TRADER, show_default=True, help='"paper" or "book:<name>".')
 @click.option(
     "--as-of",
     type=click.DateTime(["%Y-%m-%d"]),

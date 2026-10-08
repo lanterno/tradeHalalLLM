@@ -202,7 +202,7 @@ async def build(
     from halal_trader.core.heartbeat import core_running
     from halal_trader.portfolio import readiness as gate
     from halal_trader.portfolio import snapshots
-    from halal_trader.portfolio.core_account import core_account
+    from halal_trader.portfolio.core_account import DAY_TRADER, core_account
     from halal_trader.portfolio.core_executor import monthly_due
     from halal_trader.portfolio.snapshots import BENCHMARKS
 
@@ -278,7 +278,7 @@ async def build(
             "active" if core_on else "disabled",
             settings.core.paper,
         ),
-        "paper": ("Day-trader", "active", True),
+        DAY_TRADER: ("Day-trader", "active", True),
     }
     ledger: dict[str, list[tuple[date, float]]] = {}
     for account, day, equity in equity_rows:

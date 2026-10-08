@@ -20,7 +20,7 @@ from halal_trader.config import Settings
 from halal_trader.data.alpaca_market import AlpacaMarketData
 from halal_trader.data.store import BENCHMARKS, stored_symbols
 from halal_trader.halal import strict
-from halal_trader.portfolio.core_account import CORE_PAPER, core_account
+from halal_trader.portfolio.core_account import CORE_PAPER, DAY_TRADER, core_account
 
 logger = logging.getLogger(__name__)
 
@@ -239,7 +239,7 @@ async def _zakat(engine: AsyncEngine, settings: Settings, today: date) -> dict[s
         }
     out: dict[str, float] = {}
     for account in [
-        "paper",
+        DAY_TRADER,
         *_core_ledgers(settings),
         *(f"book:{b}" for b in await book_names(engine)),
     ]:
@@ -270,7 +270,7 @@ async def _purify(engine: AsyncEngine, settings: Settings, today: date) -> dict[
         )
     finally:
         await market.aclose()
-    out = {"paper": len(await accrue_paper(engine, through=today))}
+    out = {DAY_TRADER: len(await accrue_paper(engine, through=today))}
     for account in _core_ledgers(settings):
         out[account] = len(await accrue_account(engine, account, through=today))
     for book in await book_names(engine):

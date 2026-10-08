@@ -9,6 +9,7 @@ import click
 
 from halal_trader.cli._run import run_db
 from halal_trader.logging import console
+from halal_trader.portfolio.core_account import DAY_TRADER
 
 
 @click.group("purify")
@@ -47,7 +48,7 @@ def sync_cmd(days: int, recompute_unpaid: bool) -> None:
             )
             if recompute_unpaid:
                 await clear_unpaid(engine)
-            accrued = {"paper": len(await accrue_paper(engine, through=today))}
+            accrued = {DAY_TRADER: len(await accrue_paper(engine, through=today))}
             for book in await book_names(engine):
                 accrued[f"book:{book}"] = len(await accrue_book(engine, book, through=today))
             return n, accrued
@@ -61,7 +62,7 @@ def sync_cmd(days: int, recompute_unpaid: bool) -> None:
 
 
 @purify.command("report")
-@click.option("--account", default="paper", show_default=True, help='"paper" or "book:<name>".')
+@click.option("--account", default=DAY_TRADER, show_default=True, help='"paper" or "book:<name>".')
 @click.option("--year", type=int, default=None, help="Payment year (default: this year).")
 def report_cmd(account: str, year: int | None) -> None:
     """Dividends and the amount to purify, per holding, for one payment year."""
@@ -106,7 +107,7 @@ def report_cmd(account: str, year: int | None) -> None:
     help="Covers every unpaid accrual payable on or before this date.",
 )
 @click.option("--to", "paid_to", required=True, help="The charity, as you want it recorded.")
-@click.option("--account", default="paper", show_default=True)
+@click.option("--account", default=DAY_TRADER, show_default=True)
 def paid_cmd(through: Any, paid_to: str, account: str) -> None:
     """Record that you have given the outstanding purification away."""
 

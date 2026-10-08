@@ -184,9 +184,9 @@ class TradingBot:
         engine = await init_db(self.settings.database_url)
         self._engine = engine
         self._repo = Repository(engine)
-        # Typed per-table bundle — components can take narrow protocols
-        # instead of the full ``Repository``.
-        self._bundle = RepoBundle.from_engine(engine)
+        # Typed per-table bundle (the repository's own) -- components can take
+        # narrow protocols instead of the full ``Repository``.
+        self._bundle = self._repo.bundle
         await self._create_components()
 
     async def _create_components(self) -> None:

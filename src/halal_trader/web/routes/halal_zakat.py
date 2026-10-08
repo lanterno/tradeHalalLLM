@@ -47,11 +47,11 @@ def register(app: FastAPI) -> None:
         _, last_hawl = z.hawl_period(hawl, today)
         # The next hawl: the one on or before a day a lunar year ahead.
         _, next_hawl = z.hawl_period(hawl, date.fromordinal(last_hawl.toordinal() + 360))
-        from halal_trader.portfolio.core_account import core_account
+        from halal_trader.portfolio.core_account import DAY_TRADER, core_account
 
         core_name = core_account(get_settings().core.paper)
         accounts = []
-        for account, label in ((core_name, "Core portfolio"), ("paper", "Day-trader")):
+        for account, label in ((core_name, "Core portfolio"), (DAY_TRADER, "Day-trader")):
             now = await z.assess(ctx.engine, account, period_start=last_hawl, hawl_date=today)
             async with ctx.engine.connect() as conn:
                 row = (
@@ -98,12 +98,12 @@ def register(app: FastAPI) -> None:
     ) -> JSONResponse:
         from halal_trader.compliance.purification import report
         from halal_trader.market_hours import today_eastern
-        from halal_trader.portfolio.core_account import CORE_ACCOUNTS
+        from halal_trader.portfolio.core_account import CORE_ACCOUNTS, DAY_TRADER
 
         y = year or today_eastern().year
         lines = [
             (account, line)
-            for account in (*CORE_ACCOUNTS, "paper")
+            for account in (*CORE_ACCOUNTS, DAY_TRADER)
             for line in await report(ctx.engine, account, y)
         ]
         return JSONResponse(

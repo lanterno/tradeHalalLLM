@@ -33,7 +33,7 @@ from sqlmodel import col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from halal_trader.db.models import PurificationEntry, RoundTripPurificationRow
-from halal_trader.portfolio.core_account import CORE_ACCOUNTS, CORE_LIVE, CORE_PAPER
+from halal_trader.portfolio.core_account import CORE_ACCOUNTS, CORE_LIVE, CORE_PAPER, DAY_TRADER
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncEngine
@@ -44,7 +44,7 @@ logger = logging.getLogger(__name__)
 ACCOUNTS = (
     (CORE_LIVE, "Core portfolio (live)"),
     (CORE_PAPER, "Core portfolio"),
-    ("paper", "Day-trader"),
+    (DAY_TRADER, "Day-trader"),
 )
 VERDICTS = ("halal", "doubtful", "not_halal", "unscreened")
 # Orders that never reached the market: not trades.
@@ -214,19 +214,21 @@ async def compute_aaoifi_summary(
     )
 
 
-def _account_trades_sql(account: str) -> str:
-    """The account's trades this quarter as (symbol, side, day): the day-trader's
-    ``trades`` rows, the core's ``core_orders``, each minus what never traded."""
-    if account == "paper":
+def _account_trades_sql(account: str) -> tuple[str, dict[str, Any]]:
+    """The account's trades this quarter as (symbol, side, day), and the SQL's
+    parameters: the day-trader's ``trades`` rows, the core's ``core_orders``,
+    each minus what never traded."""
+    if account == DAY_TRADER:
         return (
             "SELECT symbol, side, (timestamp AT TIME ZONE 'America/New_York')::date AS day "
-            "FROM trades WHERE status NOT IN ('" + "', '".join(_NOT_TRADED_DAY_TRADER) + "') "
-            "AND timestamp >= :since"
+            "FROM trades WHERE status <> ALL(:not_traded) AND timestamp >= :since",
+            {"not_traded": list(_NOT_TRADED_DAY_TRADER)},
         )
     return (
         "SELECT symbol, side, (submitted_at AT TIME ZONE 'America/New_York')::date AS day "
-        "FROM core_orders WHERE status NOT IN ('" + "', '".join(_NOT_TRADED_CORE) + "') "
-        f"AND account = '{account}' AND submitted_at >= :since"
+        "FROM core_orders WHERE status <> ALL(:not_traded) AND account = :account "
+        "AND submitted_at >= :since",
+        {"not_traded": list(_NOT_TRADED_CORE), "account": account},
     )
 
 
@@ -242,7 +244,7 @@ async def _account(
     # A coarse bound for the index; the exact test is on the New York day,
     # whose midnight falls after UTC's.
     since = datetime.combine(quarter, datetime.min.time(), UTC)
-    trades_sql = _account_trades_sql(account)
+    trades_sql, trades_params = _account_trades_sql(account)
     async with engine.connect() as conn:
         counts = (
             await conn.execute(
@@ -251,7 +253,7 @@ async def _account(
                     "count(*) FILTER (WHERE day >= :m) AS month, "
                     f"count(*) FILTER (WHERE day = :t) AS today FROM ({trades_sql}) x"
                 ),
-                {"since": since, "q": quarter, "m": month, "t": today},
+                {**trades_params, "since": since, "q": quarter, "m": month, "t": today},
             )
         ).one()
         buys = (
@@ -263,7 +265,7 @@ async def _account(
                     "ORDER BY r.as_of DESC, r.screened_at DESC LIMIT 1) s ON true "
                     "WHERE x.side = 'buy' AND x.day >= :q ORDER BY x.day DESC, x.symbol"
                 ),
-                {"since": since, "q": quarter},
+                {**trades_params, "since": since, "q": quarter},
             )
         ).all()
     verdicts = dict.fromkeys(VERDICTS, 0)
@@ -328,7 +330,7 @@ async def _unpaid_by_account(session: AsyncSession, since: datetime) -> dict[str
         await _sum_legacy(session, since, paid_only=True)
     )
     if abs(legacy) > 1e-9:
-        out["paper"] = out.get("paper", 0.0) + legacy
+        out[DAY_TRADER] = out.get(DAY_TRADER, 0.0) + legacy
     return out
 
 
@@ -369,7 +371,7 @@ async def _accruals(
     payment date. Forward books are notional and stay out of the summary."""
     from halal_trader.db.models import PurificationAccrual
 
-    names = ["paper", *CORE_ACCOUNTS] if accounts is None else accounts
+    names = [DAY_TRADER, *CORE_ACCOUNTS] if accounts is None else accounts
     if not names:
         return 0.0
     when = func.coalesce(PurificationAccrual.payable_date, PurificationAccrual.ex_date)

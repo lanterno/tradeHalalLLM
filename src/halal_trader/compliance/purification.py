@@ -37,7 +37,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from halal_trader.market_hours import MARKET_TZ
-from halal_trader.portfolio.core_account import BROKER_ACCOUNTS
+from halal_trader.portfolio.core_account import BROKER_ACCOUNTS, DAY_TRADER
 
 logger = logging.getLogger(__name__)
 
@@ -94,7 +94,7 @@ async def impure_ratio(
 
 
 async def paper_positions(
-    engine: AsyncEngine, before: date, account: str = "paper"
+    engine: AsyncEngine, before: date, account: str = DAY_TRADER
 ) -> dict[str, float]:
     """Shares ``account`` held at the close of the last session before ``before``
     (New York), rebuilt from the broker ledger's fills (flat when the ledger began)."""
@@ -267,7 +267,7 @@ async def accrue_account(engine: AsyncEngine, account: str, *, through: date) ->
 
 async def accrue_paper(engine: AsyncEngine, *, through: date) -> list[Accrual]:
     """The day-trader's account (the ledger's original, "paper")."""
-    return await accrue_account(engine, "paper", through=through)
+    return await accrue_account(engine, DAY_TRADER, through=through)
 
 
 async def accrue_book(

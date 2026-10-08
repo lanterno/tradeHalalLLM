@@ -30,6 +30,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from halal_trader.market_hours import today_eastern
+from halal_trader.portfolio.core_account import DAY_TRADER
 
 if TYPE_CHECKING:
     from halal_trader.execution.alpaca_rest import AlpacaRestClient
@@ -94,7 +95,7 @@ class Performance:
 
 
 async def sync_broker_ledger(
-    engine: AsyncEngine, client: AlpacaRestClient, *, account: str = "paper"
+    engine: AsyncEngine, client: AlpacaRestClient, *, account: str = DAY_TRADER
 ) -> SyncResult:
     """Pull new activities and recent equity of one account into the ledger tables.
 
@@ -269,7 +270,7 @@ async def performance(
     *,
     start: date | None = None,
     end: date | None = None,
-    account: str = "paper",
+    account: str = DAY_TRADER,
 ) -> Performance | None:
     """Account performance from broker equity alone. None with fewer than 2 days."""
     async with engine.connect() as conn:
