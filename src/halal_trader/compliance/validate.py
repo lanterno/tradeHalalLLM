@@ -47,10 +47,10 @@ class Verdict:
 
 def rejection_kind(v: Verdict) -> RejectionKind:
     """Why the screen rejected a name: its activity, the index veto, a ratio, or missing data."""
-    if v.verdict == "doubtful":
-        return "data"
     if any(r.startswith("business activity") for r in v.reasons):
         return "activity"
+    if v.verdict == "doubtful":
+        return "data"
     if any(r.startswith("excluded by") for r in v.reasons) and not any(
         ">=" in r for r in v.reasons
     ):

@@ -37,7 +37,7 @@ import numpy as np
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from halal_trader.compliance.aaoifi import ScreenResult
+from halal_trader.compliance.aaoifi import ScreenResult, mixed_activity
 
 MAX_AGE = timedelta(days=200)
 SIZE_PERCENTILE = 20.0
@@ -123,4 +123,36 @@ def apply_veto(
                 f"although within its size range (market cap >= {floor / 1e9:.1f}B)"
             )
             out[i] = replace(r, verdict="not_halal", reasons=[*r.reasons, reason])
+    return out
+
+
+def require_board(
+    results: Sequence[ScreenResult],
+    sics: Mapping[str, int | None],
+    titles: Mapping[str, str],
+    views: Sequence[IndexView],
+) -> list[ScreenResult]:
+    """A pass in a mixed-activity sector stands only if a Shariah index holds it.
+
+    In those sectors (aaoifi.MIXED_ACTIVITY_SIC) impermissible revenue, such
+    as a restaurant's alcohol, is not in SEC data, so the ratios cannot rule
+    it out. An index Shariah board reviewed the company's revenue; without
+    its inclusion (by either ETF, at any size) the verdict is doubtful. With
+    no index holdings on file for the date, every such pass is doubtful.
+    """
+
+    def held(symbol: str) -> bool:
+        key = name_key(titles.get(symbol, ""))
+        return any(symbol in v.tickers or (key and key in v.names) for v in views)
+
+    out = []
+    for r in results:
+        activity = mixed_activity(sics.get(r.symbol))
+        if r.verdict == "halal" and activity is not None and not held(r.symbol):
+            reason = (
+                f"business activity unverified: {activity}; impermissible revenue is not "
+                "in SEC data and no Shariah index (SPUS, HLAL) holds the company"
+            )
+            r = replace(r, verdict="doubtful", reasons=[*r.reasons, reason])
+        out.append(r)
     return out

@@ -138,7 +138,11 @@ MAX_FAILED_SHARE = 0.02
 #      more receivables tags; implausible share counts are doubtful; a CIK
 #      deny-list for activities a SIC code hides; share counts rescaled for
 #      splits after they were filed.
-METHOD = "aaoifi-sec-v11"
+# v12: bars and tobacco stores are excluded; in a mixed-activity sector
+#      (restaurants, grocers, convenience, variety and warehouse stores, drug
+#      stores, grocery wholesale, food manufacturing) a pass needs a Shariah
+#      index's inclusion, else it is doubtful.
+METHOD = "aaoifi-sec-v12"
 UNMAPPED = "not an SEC registrant (or ticker not mapped)"
 _MIN_MONTHS = 12
 
@@ -716,10 +720,12 @@ async def run_screen(
     sec: SecClient, engine: AsyncEngine, symbols: Sequence[str], as_of: date
 ) -> list[ScreenResult]:
     """Screen ``symbols`` as of ``as_of`` and store every verdict with its inputs."""
-    from halal_trader.compliance.index_veto import apply_veto, views_at
+    from halal_trader.compliance.index_veto import apply_veto, require_board, views_at
 
     fundamentals, meta, titles, audit = await gather(sec, engine, symbols, as_of)
-    results = apply_veto([screen(f) for f in fundamentals], titles, await views_at(engine, as_of))
+    views = await views_at(engine, as_of)
+    results = apply_veto([screen(f) for f in fundamentals], titles, views)
+    results = require_board(results, {f.symbol: f.sic for f in fundamentals}, titles, views)
     async with engine.begin() as conn:
         for f, r in zip(fundamentals, results, strict=True):
             cik, sic_desc = meta.get(r.symbol, (None, ""))

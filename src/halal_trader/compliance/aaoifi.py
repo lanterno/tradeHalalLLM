@@ -86,6 +86,8 @@ PROHIBITED_SIC: tuple[tuple[int, int, str], ...] = (
     (2082, 2085, "alcoholic beverages"),
     (5181, 5182, "alcohol wholesale"),
     (5921, 5921, "liquor stores"),
+    (5813, 5813, "drinking places (bars)"),
+    (5993, 5993, "tobacco stores"),
     (2100, 2199, "tobacco products"),
     (5194, 5194, "tobacco wholesale"),
     (2011, 2013, "meat packing and processing (pork)"),
@@ -102,6 +104,37 @@ PROHIBITED_SIC: tuple[tuple[int, int, str], ...] = (
     (3652, 3652, "recorded music (S&P: entertainment)"),
     (7900, 7999, "amusement, recreation and gaming (S&P: entertainment, gambling)"),
 )
+
+
+# (low, high, reason): SIC ranges whose companies commonly earn impermissible
+# revenue that SEC data does not separate: a restaurant's alcohol, a grocer's
+# or a drugstore's alcohol and tobacco, pork in processed food. The ratios
+# cannot see it, so a pass there stands only if a Shariah board that looked
+# at the company's revenue (SPUS's or HLAL's) holds it; otherwise it is
+# doubtful (index_veto.require_board). Prohibited ranges above take
+# precedence.
+MIXED_ACTIVITY_SIC: tuple[tuple[int, int, str], ...] = (
+    # Food, not beverages (2080-2089): drink makers carry no pork, and the
+    # alcoholic ones are prohibited above.
+    (2000, 2079, "food manufacturing (pork products)"),
+    (2090, 2099, "miscellaneous food preparations (pork products)"),
+    (5140, 5149, "grocery wholesale (alcohol, pork)"),
+    (5331, 5331, "variety stores (alcohol, tobacco)"),
+    (5399, 5399, "general merchandise and warehouse clubs (alcohol, tobacco)"),
+    (5411, 5412, "grocery and convenience stores (alcohol, tobacco)"),
+    (5812, 5812, "restaurants (alcohol)"),
+    (5912, 5912, "drug stores (alcohol, tobacco)"),
+)
+
+
+def mixed_activity(sic: int | None) -> str | None:
+    """The hidden impermissible revenue a company's SIC code suggests, or None."""
+    if sic is None:
+        return None
+    for low, high, reason in MIXED_ACTIVITY_SIC:
+        if low <= sic <= high:
+            return reason
+    return None
 
 
 def prohibited_activity(sic: int | None, cik: int | None = None) -> str | None:
