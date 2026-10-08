@@ -5,7 +5,6 @@ sector allocation so the operator can drive compliance workflows from
 the dashboard:
 
 * GET / POST / DELETE on the purification ledger.
-* GET sector-allocation breakdown (current exposure per sector vs cap).
 """
 
 from __future__ import annotations
@@ -114,39 +113,3 @@ def register(app: FastAPI) -> None:
         if not ok:
             raise HTTPException(404, f"purification entry {entry_id} not found")
         return JSONResponse({"id": entry_id, "paid": True})
-
-    @app.get("/api/admin/halal/sector-allocation")
-    async def sector_allocation(
-        ctx: DashboardContext = Depends(get_ctx),
-    ) -> JSONResponse:
-        from halal_trader.halal.sector_limits import (
-            UNKNOWN_SECTOR,
-            compute_allocation,
-        )
-
-        positions = ctx.runtime.stock_positions or []
-        equity = ctx.runtime.stock_equity or 0.0
-
-        positions_value = {
-            getattr(p, "symbol", "?"): float(getattr(p, "qty", 0))
-            * float(getattr(p, "current_price", None) or getattr(p, "avg_entry_price", 0) or 0)
-            for p in positions
-        }
-        alloc = compute_allocation(positions_value, total_equity=equity)
-        # Render as a list of {sector, value, pct} for easy table rendering.
-        rows = []
-        for sector, value in sorted(alloc.by_sector.items()):
-            rows.append(
-                {
-                    "sector": sector,
-                    "value_usd": value,
-                    "pct": alloc.pct(sector),
-                }
-            )
-        return JSONResponse(
-            {
-                "total_equity_usd": equity,
-                "unknown_sector_label": UNKNOWN_SECTOR,
-                "allocations": rows,
-            }
-        )
