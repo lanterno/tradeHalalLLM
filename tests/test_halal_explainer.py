@@ -43,11 +43,12 @@ def test_explain_fail_lists_failures() -> None:
     assert "docs/halal_jurisprudence.md#14-prohibited-industries" in out.sources
 
 
-def test_explain_doubtful_points_to_exception_queue() -> None:
+def test_explain_doubtful_says_it_is_not_bought() -> None:
     receipt = _receipt("doubtful", {"reason": "newly listed, no Sharia ruling"})
     out = explain_screening(receipt)
     assert out.decision == "doubtful"
-    assert "exception queue" in out.body_md.lower()
+    assert "neither strategy buys" in out.body_md.lower()
+    assert not any("exception" in s for s in out.sources)
 
 
 def test_explain_handles_minimal_criteria() -> None:
