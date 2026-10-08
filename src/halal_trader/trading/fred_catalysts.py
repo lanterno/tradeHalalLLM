@@ -36,6 +36,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from halal_trader.core.http import redact
 from halal_trader.trading.catalysts import Catalyst
 
 logger = logging.getLogger(__name__)
@@ -132,7 +133,10 @@ class FREDReleaseCalendarSource:
             try:
                 dates = await self._fetch_release_dates(release_id)
             except Exception as exc:  # noqa: BLE001
-                logger.debug("FRED fetch failed for %s: %r", release, exc)
+                # FRED takes its key in the query string, so the error's URL carries it.
+                logger.debug(
+                    "FRED fetch failed for %s: %s", release, redact(repr(exc), self.api_key)
+                )
                 continue
             for d in dates:
                 out.append((release, d))

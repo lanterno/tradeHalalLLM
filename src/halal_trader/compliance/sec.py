@@ -18,8 +18,6 @@ the run (a frame, the ticker map) or only the one company (its SIC code).
 
 from __future__ import annotations
 
-import asyncio
-import email.utils
 import logging
 from collections import OrderedDict
 from dataclasses import dataclass
@@ -28,6 +26,7 @@ from typing import Any
 
 import httpx
 
+from halal_trader.core import http
 from halal_trader.market_hours import MARKET_TZ
 
 logger = logging.getLogger(__name__)
@@ -39,27 +38,10 @@ _DOMESTIC_ANNUAL = {"10-K"}
 _RETRIES = 4  # after the first try: five in all
 _BACKOFF_S = 2.0  # 2, 4, 8, 16 s between tries, unless Retry-After asks for more
 _MAX_WAIT_S = 120.0  # the longest single wait, whatever Retry-After says
-_RETRY_STATUS = frozenset({429, 500, 502, 503, 504})
 
 
 class SecUnavailable(RuntimeError):
     """EDGAR did not answer usefully after every retry."""
-
-
-def retry_after(response: httpx.Response) -> float | None:
-    """Seconds a Retry-After header asks for (delta-seconds or an HTTP date), if any."""
-    value = (response.headers.get("Retry-After") or "").strip()
-    if not value:
-        return None
-    if value.isdigit():
-        return float(value)
-    try:
-        when = email.utils.parsedate_to_datetime(value)
-    except TypeError, ValueError:
-        return None
-    if when.tzinfo is None:
-        when = when.replace(tzinfo=UTC)
-    return max((when - datetime.now(UTC)).total_seconds(), 0.0)
 
 
 def filed_at(filed: date, accepted: str | None = None) -> datetime:
@@ -102,10 +84,9 @@ class SecClient:
         self._client = client or httpx.AsyncClient(timeout=60.0)
         self._owns_client = client is None
         self._headers = {"User-Agent": user_agent, "Accept-Encoding": "gzip, deflate"}
-        self._min_interval = min_interval_s
+        self._pacer = http.Pacer(min_interval_s)
         self._retries = retries
         self._backoff = backoff_s
-        self._last = 0.0
         # Per-client memos: a screening history re-reads the same quarter's
         # frames (5 per screen, 4 shared with the next) and the same SIC codes.
         self._frames: OrderedDict[tuple[str, str, str, str], dict[int, Fact]] = OrderedDict()
@@ -120,36 +101,27 @@ class SecClient:
     async def _fetch(self, url: str) -> httpx.Response | None:
         """GET ``url``: None on a 404, the response on success, SecUnavailable when
         a retryable failure outlasts the retries. Other HTTP errors raise at once."""
-        loop = asyncio.get_running_loop()
-        for attempt in range(self._retries + 1):
-            wait = self._last + self._min_interval - loop.time()
-            if wait > 0:
-                await asyncio.sleep(wait)
-            self._last = loop.time()
-            final = attempt == self._retries
-            try:
-                response = await self._client.get(url, headers=self._headers)
-            except httpx.TimeoutException, httpx.TransportError:
-                if final:
-                    raise SecUnavailable(f"{url}: no answer after {attempt + 1} tries") from None
-                delay = self._backoff * 2**attempt
-                logger.warning("EDGAR %s: no answer; retrying in %.0f s", url, delay)
-            else:
-                if response.status_code == 404:
-                    return None
-                if response.status_code not in _RETRY_STATUS:
-                    response.raise_for_status()
-                    return response
-                if final:
-                    raise SecUnavailable(
-                        f"{url}: HTTP {response.status_code} after {attempt + 1} tries"
-                    )
-                delay = max(retry_after(response) or 0.0, self._backoff * 2**attempt)
-                logger.warning(
-                    "EDGAR %s: HTTP %d; retrying in %.0f s", url, response.status_code, delay
-                )
-            await asyncio.sleep(min(delay, _MAX_WAIT_S))
-        raise AssertionError("unreachable")  # pragma: no cover
+        tries = self._retries + 1
+        try:
+            response = await http.request(
+                self._client,
+                "GET",
+                url,
+                label=f"EDGAR {url}",
+                retries=self._retries,
+                backoff_s=self._backoff,
+                max_wait_s=_MAX_WAIT_S,
+                pacer=self._pacer,
+                headers=self._headers,
+            )
+        except httpx.TransportError:
+            raise SecUnavailable(f"{url}: no answer after {tries} tries") from None
+        if response.status_code == 404:
+            return None
+        if response.status_code in http.RETRY_STATUS:
+            raise SecUnavailable(f"{url}: HTTP {response.status_code} after {tries} tries")
+        response.raise_for_status()
+        return response
 
     async def _get(self, url: str) -> Any:
         response = await self._fetch(url)

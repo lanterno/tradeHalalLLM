@@ -21,7 +21,6 @@ portfolio and the side-by-side check `halal-trader broker compare`.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import uuid
@@ -30,17 +29,21 @@ from typing import Any
 
 import httpx
 
+from halal_trader.core import http
 from halal_trader.domain.models import Account, MarketClock, Position
+from halal_trader.execution.alpaca_http import (
+    DATA_URL,
+    SIP_EMBARGO,
+    auth_headers,
+    iso_z,
+    trading_url,
+)
 from halal_trader.market_hours import now_eastern, today_eastern
 
 logger = logging.getLogger(__name__)
 
-PAPER_URL = "https://paper-api.alpaca.markets"
-LIVE_URL = "https://api.alpaca.markets"
-DATA_URL = "https://data.alpaca.markets"
 _TIMEOUT = httpx.Timeout(15.0, connect=5.0)
 _GET_RETRIES = 3
-_SIP_EMBARGO = timedelta(minutes=16)
 
 
 class BrokerError(RuntimeError):
@@ -74,12 +77,10 @@ class AlpacaRestBroker:
         client: httpx.AsyncClient | None = None,
         data_feed: str = "iex",
     ) -> None:
-        if not api_key or not secret_key:
-            raise ValueError("Alpaca API key and secret are required")
+        self._headers = auth_headers(api_key, secret_key)
         self._client = client or httpx.AsyncClient(timeout=_TIMEOUT)
         self._owns_client = client is None
-        self._base = PAPER_URL if paper else LIVE_URL
-        self._headers = {"APCA-API-KEY-ID": api_key, "APCA-API-SECRET-KEY": secret_key}
+        self._base = trading_url(paper)
         self._feed = data_feed
 
     # ── lifecycle (parity with the MCP client) ────────────────────
@@ -103,25 +104,27 @@ class AlpacaRestBroker:
         json: dict[str, Any] | None = None,
         allow_404: bool = False,
     ) -> Any:
-        retries = _GET_RETRIES if method == "GET" else 1
-        for attempt in range(retries):
-            try:
-                response = await self._client.request(
-                    method, url, params=params, json=json, headers=self._headers
-                )
-            except httpx.TransportError:
-                if attempt + 1 >= retries:
-                    raise
-                await asyncio.sleep(0.5 * 2**attempt)
-                continue
-            if allow_404 and response.status_code == 404:
-                return None
-            if response.status_code >= 400:
-                raise BrokerError(response.status_code, response.text)
-            if response.status_code == 204 or not response.content:
-                return {}
-            return response.json()
-        raise RuntimeError("unreachable")
+        # Reads are retried; an order (POST/DELETE) is sent once, never twice.
+        read = method == "GET"
+        response = await http.request(
+            self._client,
+            method,
+            url,
+            label="Alpaca broker",
+            retries=_GET_RETRIES - 1 if read else 0,
+            backoff_s=0.5,
+            retry_status=http.RETRY_STATUS if read else frozenset(),
+            params=params,
+            json=json,
+            headers=self._headers,
+        )
+        if allow_404 and response.status_code == 404:
+            return None
+        if response.status_code >= 400:
+            raise BrokerError(response.status_code, response.text)
+        if response.status_code == 204 or not response.content:
+            return {}
+        return response.json()
 
     def _trading(self, path: str) -> str:
         return f"{self._base}{path}"
@@ -202,12 +205,12 @@ class AlpacaRestBroker:
     async def get_stock_bars(self, symbol: str, days: int = 5, timeframe: str = "1Day") -> Any:
         """``{"bars": {"AAPL": [...]}}``: consolidated (SIP) history, as the
         free plan allows up to 15 minutes ago."""
-        end = datetime.now(UTC) - _SIP_EMBARGO
+        end = datetime.now(UTC) - SIP_EMBARGO
         params = {
             "symbols": symbol,
             "timeframe": timeframe,
-            "start": (end - timedelta(days=days)).isoformat().replace("+00:00", "Z"),
-            "end": end.isoformat().replace("+00:00", "Z"),
+            "start": iso_z(end - timedelta(days=days)),
+            "end": iso_z(end),
             "feed": "sip",
             "limit": 10_000,
         }

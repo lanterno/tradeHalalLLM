@@ -39,7 +39,7 @@ def sync_cmd(days: int, recompute_unpaid: bool) -> None:
         from halal_trader.market_hours import today_eastern
         from halal_trader.research.forward_book import book_names
 
-        market = AlpacaMarketData(settings.alpaca.api_key, settings.alpaca.secret_key)
+        market = AlpacaMarketData.from_settings(settings)
         today = today_eastern()
         try:
             symbols = await held_symbols(engine, today - timedelta(days=days))

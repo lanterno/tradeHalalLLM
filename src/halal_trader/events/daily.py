@@ -92,7 +92,7 @@ async def refresh_events(engine: AsyncEngine, settings: Any, *, today: date) -> 
         steps: list[tuple[str, Any]] = []
 
         async def news() -> int:
-            market = AlpacaMarketData(settings.alpaca.api_key, settings.alpaca.secret_key)
+            market = AlpacaMarketData.from_settings(settings)
             try:
                 return await history.backfill_news(
                     engine,

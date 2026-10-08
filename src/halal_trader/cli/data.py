@@ -20,7 +20,7 @@ def _with_store(work: Callable[[Any, Any], Awaitable[T]]) -> T:
     async def _run(engine: Any, settings: Any) -> T:
         from halal_trader.data.alpaca_market import AlpacaMarketData
 
-        client = AlpacaMarketData(settings.alpaca.api_key, settings.alpaca.secret_key)
+        client = AlpacaMarketData.from_settings(settings)
         try:
             return await work(engine, client)
         finally:

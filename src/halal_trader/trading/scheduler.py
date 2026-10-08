@@ -452,11 +452,7 @@ class TradingBot:
                 if use_alpaca:
                     from halal_trader.data.alpaca_market import AlpacaMarketData
 
-                    source = AlpacaNewsSource(
-                        AlpacaMarketData(
-                            self.settings.alpaca.api_key, self.settings.alpaca.secret_key
-                        )
-                    )
+                    source = AlpacaNewsSource(AlpacaMarketData.from_settings(self.settings))
                     if finnhub_key:
                         source = FallbackNewsSource(
                             source, FinnhubNewsSource(finnhub_key), watchlist

@@ -75,9 +75,8 @@ def backfill_cmd(what: str, rate: int) -> None:
             if what in ("eps", "all"):
                 out["eps"] = await history.backfill_eps(engine, sec, companies)
             if what in ("news", "all"):
-                market = AlpacaMarketData(
-                    settings.alpaca.api_key,
-                    settings.alpaca.secret_key,
+                market = AlpacaMarketData.from_settings(
+                    settings,
                     min_interval_s=60.0 / max(rate, 1),
                 )
                 try:
@@ -259,9 +258,7 @@ def intraday_cmd(rate: int) -> None:
         from halal_trader.data.alpaca_market import AlpacaMarketData
         from halal_trader.events.intraday import first_in_session, run, selection, summarise
 
-        market = AlpacaMarketData(
-            settings.alpaca.api_key, settings.alpaca.secret_key, min_interval_s=60.0 / rate
-        )
+        market = AlpacaMarketData.from_settings(settings, min_interval_s=60.0 / rate)
         try:
             chosen = selection(await first_in_session(engine))
             console.print(f"{len(chosen)} in-session headlines to study")

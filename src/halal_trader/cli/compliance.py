@@ -96,7 +96,7 @@ def map_delisted_cmd() -> None:
         from halal_trader.market_hours import today_eastern
 
         sec = SecClient(settings.edgar.user_agent)
-        market = AlpacaMarketData(settings.alpaca.api_key, settings.alpaca.secret_key)
+        market = AlpacaMarketData.from_settings(settings)
         try:
             assets = [*await market.assets(), *await market.inactive_assets()]
             matches = await map_unmapped(sec, engine, assets, today=today_eastern())

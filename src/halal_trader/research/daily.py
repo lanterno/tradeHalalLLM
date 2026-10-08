@@ -105,7 +105,7 @@ async def run_research(engine: AsyncEngine, settings: Settings, *, today: date) 
         return run
 
     try:
-        market = AlpacaMarketData(settings.alpaca.api_key, settings.alpaca.secret_key)
+        market = AlpacaMarketData.from_settings(settings)
         try:
             run.monthly_rows = await _refresh_monthly(engine, market, today)
             # The point-in-time universe once monthly bars exist (a new entrant
@@ -263,7 +263,7 @@ async def _purify(engine: AsyncEngine, settings: Settings, today: date) -> dict[
     from halal_trader.research.forward_book import book_names
 
     since = today - timedelta(days=400)
-    market = AlpacaMarketData(settings.alpaca.api_key, settings.alpaca.secret_key)
+    market = AlpacaMarketData.from_settings(settings)
     try:
         await sync_dividends(
             engine, market, await held_symbols(engine, since), start=since, end=today

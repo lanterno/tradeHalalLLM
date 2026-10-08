@@ -19,14 +19,15 @@ from typing import Any
 
 import httpx
 
+from halal_trader.core import http
+from halal_trader.execution.alpaca_http import auth_headers, iso_z, trading_url
 from halal_trader.market_hours import MARKET_TZ, effective_close_time, today_eastern
 
 logger = logging.getLogger(__name__)
 
-PAPER_BASE_URL = "https://paper-api.alpaca.markets"
-LIVE_BASE_URL = "https://api.alpaca.markets"
 _TIMEOUT_S = 20.0
 _PAGE_SIZE = 100
+_RETRIES = 3  # a read-only after-close sync can wait
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,21 +129,24 @@ class AlpacaRestClient:
         paper: bool = True,
         client: httpx.AsyncClient | None = None,
     ) -> None:
-        if not api_key or not secret_key:
-            raise ValueError("Alpaca API key and secret are required")
-        self._client = client or httpx.AsyncClient(
-            base_url=PAPER_BASE_URL if paper else LIVE_BASE_URL,
-            timeout=_TIMEOUT_S,
-        )
+        self._headers = auth_headers(api_key, secret_key)
+        self._client = client or httpx.AsyncClient(base_url=trading_url(paper), timeout=_TIMEOUT_S)
         self._owns_client = client is None
-        self._headers = {"APCA-API-KEY-ID": api_key, "APCA-API-SECRET-KEY": secret_key}
 
     async def aclose(self) -> None:
         if self._owns_client:
             await self._client.aclose()
 
     async def _get(self, path: str, params: dict[str, Any]) -> Any:
-        response = await self._client.get(path, params=params, headers=self._headers)
+        response = await http.request(
+            self._client,
+            "GET",
+            path,
+            label="Alpaca ledger",
+            retries=_RETRIES,
+            params=params,
+            headers=self._headers,
+        )
         response.raise_for_status()
         return response.json()
 
@@ -150,7 +154,7 @@ class AlpacaRestClient:
         """Every account activity after ``after`` (all of them when None), oldest first."""
         params: dict[str, Any] = {"direction": "asc", "page_size": _PAGE_SIZE}
         if after is not None:
-            params["after"] = after.astimezone(UTC).isoformat().replace("+00:00", "Z")
+            params["after"] = iso_z(after)
         out: list[BrokerActivity] = []
         while True:
             page = await self._get("/v2/account/activities", params)

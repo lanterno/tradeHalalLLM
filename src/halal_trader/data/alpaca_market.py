@@ -12,26 +12,31 @@ fields we store raises instead of storing nonsense.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime
 from typing import Any, Literal
 
 import httpx
 
+from halal_trader.core import http
+from halal_trader.execution.alpaca_http import (
+    DATA_URL,
+    SIP_EMBARGO,
+    auth_headers,
+    iso_z,
+    trading_url,
+)
+
 logger = logging.getLogger(__name__)
 
-DATA_URL = "https://data.alpaca.markets"
-TRADING_URL = "https://paper-api.alpaca.markets"
 Adjustment = Literal["raw", "all"]
 
 _SYMBOLS_PER_REQUEST = 100
 _PAGE_LIMIT = 10_000
 _MIN_INTERVAL_S = 0.35  # ~170 requests/min, under the free tier's 200
 _MAX_RETRIES = 5
-_SIP_EMBARGO = timedelta(minutes=16)
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,37 +117,40 @@ class AlpacaMarketData:
         api_key: str,
         secret_key: str,
         *,
+        paper: bool = True,
         client: httpx.AsyncClient | None = None,
         min_interval_s: float = _MIN_INTERVAL_S,
     ) -> None:
-        if not api_key or not secret_key:
-            raise ValueError("Alpaca API key and secret are required")
+        self._headers = auth_headers(api_key, secret_key)
         self._client = client or httpx.AsyncClient(timeout=30.0)
         self._owns_client = client is None
-        self._headers = {"APCA-API-KEY-ID": api_key, "APCA-API-SECRET-KEY": secret_key}
-        self._min_interval = min_interval_s
-        self._last_request = 0.0
+        self._trading = trading_url(paper)  # the asset list is a trading-API call
+        self._pacer = http.Pacer(min_interval_s)
+
+    @classmethod
+    def from_settings(cls, settings: Any, **kwargs: Any) -> AlpacaMarketData:
+        """The day-trader's keys (ALPACA_*), in their account's environment."""
+        a = settings.alpaca
+        return cls(a.api_key, a.secret_key, paper=a.paper_trade, **kwargs)
 
     async def aclose(self) -> None:
         if self._owns_client:
             await self._client.aclose()
 
     async def _get(self, url: str, params: dict[str, Any]) -> Any:
-        loop = asyncio.get_running_loop()
-        for attempt in range(_MAX_RETRIES):
-            wait = self._last_request + self._min_interval - loop.time()
-            if wait > 0:
-                await asyncio.sleep(wait)
-            self._last_request = loop.time()
-            response = await self._client.get(url, params=params, headers=self._headers)
-            if response.status_code == 429:
-                backoff = 2.0 ** (attempt + 1)
-                logger.warning("market data rate-limited; backing off %.0fs", backoff)
-                await asyncio.sleep(backoff)
-                continue
-            response.raise_for_status()
-            return response.json()
-        raise RuntimeError(f"market data request still rate-limited after {_MAX_RETRIES} tries")
+        response = await http.request(
+            self._client,
+            "GET",
+            url,
+            label="Alpaca market data",
+            retries=_MAX_RETRIES - 1,
+            backoff_s=2.0,
+            pacer=self._pacer,
+            params=params,
+            headers=self._headers,
+        )
+        response.raise_for_status()
+        return response.json()
 
     async def news(
         self,
@@ -170,14 +178,14 @@ class AlpacaMarketData:
         out: dict[int, NewsArticle] = {}
         for chunk in chunks:
             params: dict[str, Any] = {
-                "start": start.astimezone(UTC).isoformat().replace("+00:00", "Z"),
+                "start": iso_z(start),
                 "limit": 50,
                 "sort": "desc",
             }
             if chunk is not None:
                 params["symbols"] = chunk
             if end is not None:
-                params["end"] = end.astimezone(UTC).isoformat().replace("+00:00", "Z")
+                params["end"] = iso_z(end)
             for _ in range(max_pages):
                 payload = await self._get(f"{DATA_URL}/v1beta1/news", params)
                 for raw in payload.get("news") or []:
@@ -197,11 +205,8 @@ class AlpacaMarketData:
         params: dict[str, Any] = {
             "symbols": symbol,
             "timeframe": "1Min",
-            "start": start.astimezone(UTC).isoformat().replace("+00:00", "Z"),
-            "end": min(end, datetime.now(UTC) - _SIP_EMBARGO)
-            .astimezone(UTC)
-            .isoformat()
-            .replace("+00:00", "Z"),
+            "start": iso_z(start),
+            "end": iso_z(min(end, datetime.now(UTC) - SIP_EMBARGO)),
             "feed": "sip",
             "adjustment": "raw",
             "limit": _PAGE_LIMIT,
@@ -240,7 +245,7 @@ class AlpacaMarketData:
     async def assets(self) -> list[Asset]:
         """Every active US equity Alpaca lists (stocks and ETFs)."""
         payload = await self._get(
-            f"{TRADING_URL}/v2/assets", {"status": "active", "asset_class": "us_equity"}
+            f"{self._trading}/v2/assets", {"status": "active", "asset_class": "us_equity"}
         )
         return [parse_asset(a) for a in payload]
 
@@ -251,7 +256,7 @@ class AlpacaMarketData:
         the companies that did not survive.
         """
         payload = await self._get(
-            f"{TRADING_URL}/v2/assets", {"status": "inactive", "asset_class": "us_equity"}
+            f"{self._trading}/v2/assets", {"status": "inactive", "asset_class": "us_equity"}
         )
         return [parse_asset(a) for a in payload]
 
@@ -269,7 +274,7 @@ class AlpacaMarketData:
         ``timeframe`` is Alpaca's: "1Day", or "1Month" (stamped on the first
         of the month) for cheap long-horizon liquidity history.
         """
-        end_ts = datetime.now(UTC) - _SIP_EMBARGO
+        end_ts = datetime.now(UTC) - SIP_EMBARGO
         if end is not None:
             end_ts = min(end_ts, datetime.combine(end, datetime.max.time(), UTC))
         wanted = sorted({s.upper() for s in symbols})
@@ -280,7 +285,7 @@ class AlpacaMarketData:
                 "symbols": ",".join(batch),
                 "timeframe": timeframe,
                 "start": start.isoformat(),
-                "end": end_ts.isoformat().replace("+00:00", "Z"),
+                "end": iso_z(end_ts),
                 "adjustment": adjustment,
                 "feed": "sip",
                 "limit": _PAGE_LIMIT,
