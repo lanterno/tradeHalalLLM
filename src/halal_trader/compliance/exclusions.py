@@ -15,11 +15,10 @@ SIC 7011 already treats them, advertising and media, entertainment), stated
 in its own filings, and a SIC code that hides it. Adding one is a line
 here and a test is not needed per entry; the name must be the filer's.
 
-What deliberately is not here yet: restaurants that sell alcohol
-(Texas Roadhouse, Brinker, Cheesecake Factory). Their alcohol share of sales
-is disclosed in the 10-K, typically 10-15%, which would fail the 5% impure
-income test; that needs each company's own figure, not a guess, and is
-left for a reviewed follow-up.
+Restaurants that sell alcohol (Texas Roadhouse, Brinker, Cheesecake
+Factory), and grocers or drugstores selling alcohol and tobacco, are not
+listed one by one: since screen v12 a pass in those sectors needs a Shariah
+index's inclusion (aaoifi.MIXED_ACTIVITY_SIC, index_veto.require_board).
 
 ``NON_ALCOHOLIC_2080`` is the other side: SIC 2080 ("Beverages") is now an
 excluded code because it holds Constellation Brands and Diageo beside
