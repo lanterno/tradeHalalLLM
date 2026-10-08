@@ -20,7 +20,7 @@ from halal_trader.mcp.client import AlpacaMCPClient, MCPToolError
 from halal_trader.trading.executor import TradeExecutor, _accepted_closes
 
 
-def _executor(broker: MagicMock, opens: list[Any], *, hold: bool = True) -> tuple[Any, MagicMock]:
+def _executor(broker: MagicMock, opens: list[Any]) -> tuple[Any, MagicMock]:
     repo = MagicMock()
     repo.get_open_trades = AsyncMock(return_value=opens)
     repo.close_open_trades_for_symbol = AsyncMock(return_value=1)
@@ -31,7 +31,6 @@ def _executor(broker: MagicMock, opens: list[Any], *, hold: bool = True) -> tupl
         max_position_pct=1.0,
         max_simultaneous_positions=10,
         max_sector_pct=0,
-        reactor_hold_overnight=hold,
     )
     return executor, repo
 
@@ -97,7 +96,7 @@ async def test_batch_close_records_only_symbols_with_a_2xx() -> None:
             ]
         }
     )
-    executor, repo = _executor(broker, [_buy("AMD", 8), _buy("ORCL", 38)], hold=False)
+    executor, repo = _executor(broker, [_buy("AMD", 8), _buy("ORCL", 38)])
 
     await executor.close_all()
 
@@ -109,7 +108,7 @@ async def test_unrecognised_batch_reply_records_nothing() -> None:
     broker = MagicMock()
     broker.get_all_positions = _held("AMD")
     broker.close_all_positions = AsyncMock(return_value="Error: validation failed")
-    executor, repo = _executor(broker, [_buy("AMD", 8)], hold=False)
+    executor, repo = _executor(broker, [_buy("AMD", 8)])
 
     await executor.close_all()
 
@@ -123,7 +122,7 @@ async def test_failed_snapshot_requires_an_accepted_close() -> None:
     broker = MagicMock()
     broker.get_all_positions = AsyncMock(side_effect=RuntimeError("broker down"))
     broker.close_all_positions = AsyncMock(return_value={"result": []})
-    executor, repo = _executor(broker, [_buy("AMD", 8)], hold=False)
+    executor, repo = _executor(broker, [_buy("AMD", 8)])
 
     await executor.close_all()
 
