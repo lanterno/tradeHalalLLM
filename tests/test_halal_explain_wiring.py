@@ -67,7 +67,7 @@ async def test_explain_route_returns_markdown_for_trade_with_screening() -> None
     from halal_trader.core.context import DashboardContext, RuntimeView
     from halal_trader.halal.audit import Receipt
     from halal_trader.web.dependencies import get_ctx
-    from halal_trader.web.routes.admin_halal import register
+    from halal_trader.web.routes.halal_explain import register
 
     # Build a Receipt the explainer will turn into markdown.
     payload = {
@@ -119,7 +119,7 @@ async def test_explain_route_returns_404_for_unknown_trade() -> None:
 
     from halal_trader.core.context import DashboardContext, RuntimeView
     from halal_trader.web.dependencies import get_ctx
-    from halal_trader.web.routes.admin_halal import register
+    from halal_trader.web.routes.halal_explain import register
 
     app = FastAPI()
     ctx = DashboardContext(
@@ -154,7 +154,7 @@ async def test_explain_route_handles_legacy_trade_without_screening() -> None:
     from halal_trader.core.context import DashboardContext, RuntimeView
     from halal_trader.halal.audit import Receipt
     from halal_trader.web.dependencies import get_ctx
-    from halal_trader.web.routes.admin_halal import register
+    from halal_trader.web.routes.halal_explain import register
 
     payload = {
         "asset_class": "stock",

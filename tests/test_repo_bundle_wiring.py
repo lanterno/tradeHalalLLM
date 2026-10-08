@@ -39,7 +39,6 @@ def test_repository_bundle_returns_same_impls_as_delegators() -> None:
     assert bundle.web_audit is repo._web_audit
     assert bundle.indicator_snapshots is repo._indicator_snapshots
     assert bundle.llm_decisions is repo._llm_decisions
-    assert bundle.purification is repo._purification
     assert bundle.strategy_adjustments is repo._strategy_adjustments
 
 
@@ -70,7 +69,6 @@ def test_from_engine_builds_full_bundle_without_repository() -> None:
         "web_audit",
         "indicator_snapshots",
         "llm_decisions",
-        "purification",
         "strategy_adjustments",
     ):
         assert getattr(bundle, field_name) is not None, (
