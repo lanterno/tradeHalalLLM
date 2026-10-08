@@ -73,6 +73,20 @@ Authoritative diagrams: `docs/ARCHITECTURE.md` (where it and the code differ, tr
 - **Operator alerts** go through `AlertSink.notify(error_type, details)` (`notifications/telegram.py`), which rate-limits per type.
 - **Fill confirmation.** `core/fills.py:confirm_alpaca` fills `submitted_at`/`filled_at`/`filled_price`/`filled_quantity`; never conflate submitted with filled.
 - **CLI lazy imports.** Heavy modules are imported inside command functions so `--help` stays fast.
+
+### One way to do each thing
+
+Before writing a query, a client or a job, use the shared helper; a second copy is how the copies came to disagree.
+
+- **Scheduled jobs** run through `TradingBot._job` (job id, start/finish events, alert on failure, the heartbeat only when it finished) at the times `DAILY_JOBS` gives; `_add_daily` schedules them, early-close times included.
+- **CLI commands** that need the database use `cli/_run.py`: `run_db(work)` and `fail(message)`. Engines come from `db.models.create_engine`/`init_db`/`open_db` only.
+- **The halal screen** is read through `halal/strict.py` (`newest_screen`, `screen_rows`, `verdict`, `halal_universe`); both strategies' order boundaries use `verdict`.
+- **Shared reads:** `data.store.last_closes`/`stored_symbols`, `execution.ledger.equity_history`, `research.forward_book.nav_series`/`latest_weights`, `portfolio.snapshots.read_snapshot(s)`, `heartbeat.read_beat(s)`, `portfolio.holdings` (marking, screen view, sectors), `compliance.purification.unpaid`.
+- **Accounts:** names from `portfolio/core_account.py` (`DAY_TRADER`, `core_account()`), the configured list from `broker_accounts(settings)`; never a literal `'core'`/`'paper'`.
+- **Time:** `market_hours.py` (`MARKET_TZ`, `today_eastern()`, the calendar walks); never a private `ZoneInfo` or a UTC "today" for a trading day. SEC filing times: `compliance.sec.filed_at`.
+- **HTTP:** `core/http.py` (`request` with retries, `Pacer`, `redact`); Alpaca's URLs, auth and timestamps in `execution/alpaca_http.py`; snapshots parsed by `trading.bars.parse_snapshot`; Finnhub news by `sentiment/finnhub.py`.
+- **Numbers:** `core.num.to_float`, and `money`/`ratio` for what the API reports (cents, five-decimal fractions).
+- **Web routes** take settings from `ctx.settings`, degrade a failed read with `web/soft.py`, and gate a destructive mutation with `require_confirmation`. The dashboard formats through `formatPct`/`formatUsd` in `dashboard/src/lib/utils.ts`.
 - **The optional `[ml]` extra** must degrade gracefully when absent.
 - **PEP 758** `except A, B:` (no parentheses) is valid Python 3.14 and what ruff formats to. Don't "fix" it.
 
