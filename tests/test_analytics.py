@@ -6,7 +6,7 @@ from halal_trader.portfolio.analytics import PerformanceAnalytics, PerformanceSt
 
 
 def _make_rt(
-    pair,
+    symbol,
     pnl,
     pnl_pct,
     duration_minutes=10,
@@ -14,7 +14,7 @@ def _make_rt(
     closed_at="2025-01-01T12:00:00",
 ):
     return {
-        "pair": pair,
+        "symbol": symbol,
         "pnl": pnl,
         "pnl_pct": pnl_pct,
         "duration_minutes": duration_minutes,
@@ -74,7 +74,7 @@ class TestPerformanceStats:
         assert stats.profit_factor == pytest.approx(15.0 / 10.0)
         assert stats.total_pnl == pytest.approx(5.0)
 
-    async def test_best_worst_pair(self):
+    async def test_best_worst_symbol(self):
         trips = [
             _make_rt("AAPL", 20.0, 0.02, closed_at="2025-01-01T12:00:00"),
             _make_rt("MSFT", -5.0, -0.01, closed_at="2025-01-01T12:05:00"),
@@ -84,10 +84,10 @@ class TestPerformanceStats:
         analytics = PerformanceAnalytics(FakeRepo(trips))
         stats = await analytics.compute_stats()
 
-        assert stats.best_pair == "AAPL"
-        assert stats.best_pair_pnl == pytest.approx(18.0)
-        assert stats.worst_pair == "NVDA"
-        assert stats.worst_pair_pnl == pytest.approx(-10.0)
+        assert stats.best_symbol == "AAPL"
+        assert stats.best_symbol_pnl == pytest.approx(18.0)
+        assert stats.worst_symbol == "NVDA"
+        assert stats.worst_symbol_pnl == pytest.approx(-10.0)
 
     async def test_exit_reasons(self):
         t1 = "2025-01-01T12:00:00"

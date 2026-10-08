@@ -15,9 +15,9 @@ class _FakeRepo:
         self.calls: list[dict[str, Any]] = []
 
     async def record_indicator_snapshot(
-        self, *, trade_id: int, pair: str, indicators: dict[str, float]
+        self, *, trade_id: int, symbol: str, indicators: dict[str, float]
     ) -> int:
-        self.calls.append({"trade_id": trade_id, "pair": pair, "indicators": indicators})
+        self.calls.append({"trade_id": trade_id, "symbol": symbol, "indicators": indicators})
         if self.fail:
             raise RuntimeError("DB locked")
         return 99
@@ -53,7 +53,7 @@ async def test_record_stock_snapshot_writes_with_enough_bars():
     assert len(repo.calls) == 1
     call = repo.calls[0]
     assert call["trade_id"] == 42
-    assert call["pair"] == "AAPL"
+    assert call["symbol"] == "AAPL"
     # At least one of the 9 indicator features should be populated.
     assert any(k in call["indicators"] for k in _FEATURE_KEYS)
 

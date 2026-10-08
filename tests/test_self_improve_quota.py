@@ -24,7 +24,7 @@ def _review(llm_error: Exception | None = None) -> StockTradeSelfReview:
     trades = AsyncMock()
     trades.get_completed_stock_round_trips.return_value = [
         {
-            "pair": "AAPL",
+            "symbol": "AAPL",
             "buy_price": 200,
             "sell_price": 198,
             "pnl": -10.0,

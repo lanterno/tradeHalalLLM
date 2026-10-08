@@ -51,7 +51,7 @@ def test_enabled_false_when_empty():
 async def test_notify_trade_buy_uses_green_emoji():
     n = _notifier()
     with patch.object(n, "send", new=AsyncMock()) as mock_send:
-        await n.notify_trade(pair="AAPL", side="buy", quantity=10, price=4_200.0)
+        await n.notify_trade(symbol="AAPL", side="buy", quantity=10, price=4_200.0)
         msg = mock_send.await_args.args[0]
     assert "BUY" in msg
     assert "AAPL" in msg
@@ -64,7 +64,7 @@ async def test_notify_trade_buy_uses_green_emoji():
 async def test_notify_trade_sell_uses_red_emoji():
     n = _notifier()
     with patch.object(n, "send", new=AsyncMock()) as mock_send:
-        await n.notify_trade(pair="MSFT", side="sell", quantity=5, price=250.0)
+        await n.notify_trade(symbol="MSFT", side="sell", quantity=5, price=250.0)
         msg = mock_send.await_args.args[0]
     assert "SELL" in msg
     # red circle for sell
@@ -78,7 +78,7 @@ async def test_notify_trade_truncates_long_reasoning():
     long_reason = "x" * 500
     with patch.object(n, "send", new=AsyncMock()) as mock_send:
         await n.notify_trade(
-            pair="AAPL",
+            symbol="AAPL",
             side="buy",
             quantity=10,
             price=200.0,
@@ -98,7 +98,7 @@ async def test_notify_sl_tp_take_profit_uses_check_emoji():
     n = _notifier()
     with patch.object(n, "send", new=AsyncMock()) as mock_send:
         await n.notify_sl_tp(
-            pair="AAPL",
+            symbol="AAPL",
             exit_reason="take_profit",
             entry_price=40_000.0,
             exit_price=42_000.0,
@@ -115,7 +115,7 @@ async def test_notify_sl_tp_stop_loss_uses_x_emoji():
     n = _notifier()
     with patch.object(n, "send", new=AsyncMock()) as mock_send:
         await n.notify_sl_tp(
-            pair="AAPL",
+            symbol="AAPL",
             exit_reason="stop_loss",
             entry_price=40_000.0,
             exit_price=39_000.0,
@@ -194,7 +194,7 @@ async def test_notify_trade_includes_market_and_notional():
     n = _notifier()
     with patch.object(n, "send", new=AsyncMock()) as mock_send:
         await n.notify_trade(
-            pair="AAPL",
+            symbol="AAPL",
             side="buy",
             quantity=5,
             price=500.0,
@@ -215,7 +215,7 @@ async def test_notify_sl_tp_includes_pct_pnl_and_hold_time():
     n = _notifier()
     with patch.object(n, "send", new=AsyncMock()) as mock_send:
         await n.notify_sl_tp(
-            pair="AAPL",
+            symbol="AAPL",
             exit_reason="stop_loss",
             entry_price=50_000.0,
             exit_price=49_000.0,
@@ -237,7 +237,7 @@ async def test_notify_sl_tp_renders_hold_in_hours_when_long():
     n = _notifier()
     with patch.object(n, "send", new=AsyncMock()) as mock_send:
         await n.notify_sl_tp(
-            pair="AAPL",
+            symbol="AAPL",
             exit_reason="take_profit",
             entry_price=50_000.0,
             exit_price=51_000.0,

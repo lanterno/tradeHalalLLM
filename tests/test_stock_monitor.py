@@ -507,7 +507,7 @@ async def test_exit_calls_notifier_when_wired(engine):
 
         notifier.notify_sl_tp.assert_awaited_once()
         kwargs = notifier.notify_sl_tp.await_args.kwargs
-        assert kwargs["pair"] == "AAPL"
+        assert kwargs["symbol"] == "AAPL"
         assert kwargs["exit_reason"] == "stop_loss"
         assert kwargs["entry_price"] == 200.0
         assert kwargs["exit_price"] == 185.0

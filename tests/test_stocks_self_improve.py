@@ -38,7 +38,7 @@ def _review(
             or {
                 "observations": [],
                 "parameter_adjustments": {},
-                "pairs_to_avoid": [],
+                "symbols_to_avoid": [],
                 "strategy_notes": "",
             }
         )
@@ -133,7 +133,7 @@ async def test_review_clamps_max_position_pct_to_stocks_bounds():
     to its knob's window in ``_STOCK_SAFE_BOUNDS``."""
     trades_response = [
         {
-            "pair": "AAPL",
+            "symbol": "AAPL",
             "buy_price": 180.0,
             "sell_price": 175.0,
             "pnl": -50.0,
@@ -149,7 +149,7 @@ async def test_review_clamps_max_position_pct_to_stocks_bounds():
                 "max_position_pct": 0.50,  # over the high bound — clamp to 0.30
                 "daily_loss_limit": 0.001,  # under the low bound — clamp to 0.005
             },
-            "pairs_to_avoid": [],
+            "symbols_to_avoid": [],
             "strategy_notes": "",
         },
     )
@@ -187,7 +187,7 @@ async def test_review_drops_crypto_only_knobs_silently():
                 "rsi_buy_threshold": 30.0,  # crypto-only — DROP
                 "max_position_pct": 0.18,  # valid stocks knob
             },
-            "pairs_to_avoid": [],
+            "symbols_to_avoid": [],
             "strategy_notes": "",
         },
         strategy=strategy,
@@ -195,7 +195,7 @@ async def test_review_drops_crypto_only_knobs_silently():
     trades.get_completed_stock_round_trips = AsyncMock(
         return_value=[
             {
-                "pair": "MSFT",
+                "symbol": "MSFT",
                 "buy_price": 400,
                 "sell_price": 395,
                 "pnl": -5,
@@ -233,7 +233,7 @@ async def test_review_mutates_strategy_max_position_pct():
         llm_response={
             "observations": [],
             "parameter_adjustments": {"max_position_pct": 0.15},
-            "pairs_to_avoid": [],
+            "symbols_to_avoid": [],
             "strategy_notes": "",
         },
         strategy=strategy,
@@ -241,7 +241,7 @@ async def test_review_mutates_strategy_max_position_pct():
     trades.get_completed_stock_round_trips = AsyncMock(
         return_value=[
             {
-                "pair": "TSLA",
+                "symbol": "TSLA",
                 "buy_price": 200,
                 "sell_price": 195,
                 "pnl": -5,
@@ -266,7 +266,7 @@ def test_format_adjustments_uses_stocks_friendly_labels():
     pinned to catch a future refactor that breaks the contract."""
     review, *_ = _review()
     review._active_adjustments = {"max_position_pct": 0.18, "daily_loss_limit": 0.015}
-    review._pairs_to_avoid = ["GME"]
+    review._symbols_to_avoid = ["GME"]
     out = review.format_adjustments_for_prompt()
     assert "max_position_pct: 0.18" in out
     assert "daily_loss_limit: 0.015" in out

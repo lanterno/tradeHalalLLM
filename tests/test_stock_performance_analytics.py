@@ -49,8 +49,8 @@ async def test_stock_analytics_aggregates_round_trips(engine):
     assert stats.losses == 1
     assert stats.win_rate > 0.6
     assert stats.total_pnl == 150
-    assert stats.best_pair in {"AAPL", "GOOG"}
-    assert stats.worst_pair == "MSFT"
+    assert stats.best_symbol in {"AAPL", "GOOG"}
+    assert stats.worst_symbol == "MSFT"
 
 
 async def test_stock_analytics_excludes_zero_entry_phantom(engine):
@@ -77,7 +77,7 @@ async def test_stock_analytics_excludes_zero_entry_phantom(engine):
     # Phantom excluded entirely — counts and P&L match the 3 real round-trips.
     assert stats.total_trades == 3
     assert stats.total_pnl == 150
-    assert "TSLA" not in {stats.best_pair, stats.worst_pair}
+    assert "TSLA" not in {stats.best_symbol, stats.worst_symbol}
 
 
 async def test_format_for_prompt_renders_text(engine):
