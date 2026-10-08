@@ -19,6 +19,7 @@ def _bot(core_keys: bool) -> TradingBot:
             alpaca_api_key="ck" if core_keys else "",
             alpaca_secret_key="cs" if core_keys else "",
             paper=True,
+            enabled=core_keys,
         ),
     )
     bot._alerts = SimpleNamespace(notify=AsyncMock())

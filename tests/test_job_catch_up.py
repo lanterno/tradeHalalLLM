@@ -238,7 +238,7 @@ async def test_the_day_trader_account_watch_uses_its_paper_setting(
     bot = _bot(None)
     bot.settings = SimpleNamespace(  # type: ignore[assignment]
         alpaca=SimpleNamespace(api_key="k", secret_key="s", paper_trade=False),
-        core=SimpleNamespace(alpaca_api_key="", alpaca_secret_key=""),
+        core=SimpleNamespace(alpaca_api_key="", alpaca_secret_key="", enabled=False),
     )
 
     assert await bot.account_watch() == []
