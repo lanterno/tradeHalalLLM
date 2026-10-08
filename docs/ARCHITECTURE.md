@@ -74,7 +74,7 @@ these where it is wired.
 
 `mcp/client.py` launches `alpaca-mcp-server` over stdio. In the image it is
 a build-time install of the frozen closure in `infra/alpaca-mcp-server.txt`;
-on a host it is `uvx alpaca-mcp-server@<ALPACA_MCP_SERVER_VERSION>`. Never
+on a host it is `uvx alpaca-mcp-server@<mcp_server_version>`. Never
 unpinned: an upstream change has broken the bot at startup more than once.
 Recorded payloads of the pinned release live in `tests/fixtures/`.
 Read-only account data for the books comes from Alpaca's REST API
@@ -83,8 +83,8 @@ directly (`execution/alpaca_rest.py`).
 `execution/alpaca_broker.py` implements the same `Broker` port over REST,
 with no subprocess: timeouts, strict parsing, and a `client_order_id` on
 every order so a timed-out submission is looked up before it is retried.
-`ALPACA_BROKER_ADAPTER=rest` selects it; the default stays `mcp` until
-`halal-trader broker compare` has agreed through live sessions.
+The core portfolio trades through it, and `halal-trader broker compare`
+checks it against the MCP server the day-trader uses.
 
 ## Books, health, spend
 

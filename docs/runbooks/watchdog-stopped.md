@@ -1,8 +1,8 @@
 # Watchdog: "<component> stopped" — a process or a daily job stopped beating
 
 **Severity:** PAGE for `stock.process`, `stock.monitor`; WARN for the rest
-**Triggers when:** the web's watchdog (`web/watchdog.py`, every
-`WEB_WATCHDOG_INTERVAL_SECONDS`) finds the component failing on two passes
+**Triggers when:** the web's watchdog (`web/watchdog.py`, every 5 minutes)
+finds the component failing on two passes
 in a row, judged by `core/heartbeat.py:assess`:
 
 | Component | Stale when |

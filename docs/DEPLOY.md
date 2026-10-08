@@ -56,17 +56,10 @@ installs and starts the systemd timers; installs Tailscale.
 sudo -u halabot nano /opt/halabot/.env
 ```
 
-The keys, and where each comes from (the file's comments have the detail):
-
-| Key | Needed | Source |
-|---|---|---|
-| `ALPACA_API_KEY`, `ALPACA_SECRET_KEY` | yes | Alpaca → Paper Trading → API keys |
-| `GLM_API_KEY` | yes (the bot will not start without it) | OpenRouter |
-| `EDGAR_USER_AGENT` | yes for the screen and filings | `Your Name (you@example.com)`; SEC requires it |
-| `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | strongly | @BotFather. Also used by the host's alerts |
-| `FINNHUB_API_KEY` | recommended | finnhub.io (news) |
-| `ZOYA_API_KEY` | optional | A sandbox key is ignored (the curated list is used) |
-| `CORE_ALPACA_API_KEY`, `CORE_ALPACA_SECRET_KEY`, `CORE_ENABLED` | optional | A **second** Alpaca paper account for the core portfolio |
+Fill in the Required section; the file says where each key comes from,
+and everything below it has working defaults. Add the Recommended keys
+(Telegram above all: the host's alerts use it too), and for the core
+portfolio a **second** Alpaca paper account's keys with `CORE_ENABLED=true`.
 
 **Starting from an empty database against an Alpaca paper account that the
 old bot traded:** reset the paper account (Alpaca → Paper Trading → Reset)

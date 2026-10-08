@@ -90,7 +90,7 @@ churn kills this bot.
 The operator asked the agent to take the open decisions itself and to
 automate as much as possible. Recorded here so they can be revisited:
 
-- **LLM budget enforced** (`LLM_BUDGET_ENFORCE=true`): a week of observe mode
+- **LLM budget enforced** (always, since 2026-10-08 a fixed setting): a week of observe mode
   peaked at $0.58/day for the live pool against its $3 daily cap; pools are
   $25 live / $15 research per month.
 - **The LLM day-trader is retired** (`DAY_TRADER_ENABLED=false`), not halted:
@@ -148,7 +148,7 @@ choice (verified research verdict, 2026-07-01):
    halal gate reads the strict in-house screen (`halal_screen_results`, weekly
    in the evening research run): the core's order boundary, and since then the
    day-trader's and reactor's (`halal/strict.py` via `HalalScreener`), whose
-   universe is the screen's `HALAL_UNIVERSE_SIZE` largest halal names. A stale
+   universe is the screen's 20 largest halal names (`settings.halal.universe_size`). A stale
    (>10 days) or missing screen makes nothing halal. Sandbox Zoya verdicts are
    ignored; a production key could only veto. The old curated 20-name list
    (`DEFAULT_HALAL_SYMBOLS`) is research-only now: seven of its names fail the

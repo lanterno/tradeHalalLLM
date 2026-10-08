@@ -31,9 +31,8 @@ Each entry shows which endpoint failed with what error.
    a Z.ai endpoint); if it's a known outage, set
    `GLM_FALLBACK_BASE_URL` (+ `GLM_FALLBACK_MODEL` /
    `GLM_FALLBACK_API_KEY`) in `.env`, restart the bot.
-2. **All throttled** — wait one cycle. If sustained, lower
-   `LLM_DAILY_USD_CAP` to slow the cycle's call rate, or pause
-   the agentic-tool loop (`LLM_AGENT_ENABLED=false`).
+2. **All throttled** — wait one cycle. If sustained, configure a
+   fallback endpoint (above) or halt until the provider recovers.
 3. **Key rotation** — re-export the new keys, restart the bot.
 
 ## Escalate
