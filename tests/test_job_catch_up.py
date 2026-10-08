@@ -136,6 +136,7 @@ def _bot(engine: AsyncEngine | None) -> TradingBot:
     bot = TradingBot.__new__(TradingBot)
     bot._engine = engine
     bot._alerts = MagicMock(notify=AsyncMock())
+    bot._notifier = MagicMock(send=AsyncMock(return_value=True), notify_daily_summary=AsyncMock())
     bot.scheduler = MagicMock(running=True)
     return bot
 
@@ -189,7 +190,6 @@ async def test_end_of_day_beats_and_prunes_the_audit_log(engine: AsyncEngine) ->
     bot = _bot(engine)
     bot._news_reactor = None
     bot._self_review = None
-    bot._notifier = None
     executor = MagicMock(close_all=AsyncMock(return_value={}))
     portfolio = MagicMock(record_day_end=AsyncMock(return_value={}))
     bot._require_initialized = MagicMock(return_value=(None, executor, portfolio, None))  # type: ignore[method-assign]
@@ -206,6 +206,7 @@ async def test_end_of_day_beats_and_prunes_the_audit_log(engine: AsyncEngine) ->
 
     assert STOCK_EOD in await read_beats(engine)
     bot._prune_audit_log.assert_awaited_once()
+    bot._notifier.notify_daily_summary.assert_awaited_once()
 
     # A failed end-of-day leaves no beat (so it is caught up), but still prunes.
     executor.close_all = AsyncMock(side_effect=RuntimeError("broker down"))
