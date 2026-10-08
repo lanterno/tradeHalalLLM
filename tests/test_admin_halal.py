@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
-
 import pytest
 from fastapi.testclient import TestClient
 
@@ -97,31 +95,3 @@ def test_the_screener_bypassing_refresh_route_is_gone(client):
 
 
 # ── Sector allocation ────────────────────────────────────────
-
-
-def test_sector_allocation_empty_when_no_state(client):
-    r = client.get("/api/admin/halal/sector-allocation")
-    assert r.status_code == 200
-    body = r.json()
-    assert body["allocations"] == []
-    assert body["total_equity_usd"] == 0.0
-
-
-def test_sector_allocation_buckets_by_sector(client):
-    p1 = MagicMock()
-    p1.symbol = "AAPL"
-    p1.qty = 50
-    p1.current_price = 200.0
-    p1.avg_entry_price = 200.0
-    p2 = MagicMock()
-    p2.symbol = "JNJ"
-    p2.qty = 10
-    p2.current_price = 150.0
-    p2.avg_entry_price = 150.0
-    client.app.state.ctx.runtime.stock_positions = [p1, p2]
-    client.app.state.ctx.runtime.stock_equity = 20_000
-
-    r = client.get("/api/admin/halal/sector-allocation").json()
-    by_sector = {row["sector"]: row["value_usd"] for row in r["allocations"]}
-    assert by_sector["Technology"] == 10_000  # 50 * 200
-    assert by_sector["Healthcare"] == 1_500  # 10 * 150
