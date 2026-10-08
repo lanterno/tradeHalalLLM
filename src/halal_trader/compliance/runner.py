@@ -138,7 +138,7 @@ MAX_FAILED_SHARE = 0.02
 #      more receivables tags; implausible share counts are doubtful; a CIK
 #      deny-list for activities a SIC code hides; share counts rescaled for
 #      splits after they were filed.
-# v12: bars and tobacco stores are excluded; in a mixed-activity sector
+# v12: bars, tobacco stores and three cruise lines are excluded; in a mixed-activity sector
 #      (restaurants, grocers, convenience, variety and warehouse stores, drug
 #      stores, grocery wholesale, food manufacturing) a pass needs a Shariah
 #      index's inclusion, else it is doubtful.

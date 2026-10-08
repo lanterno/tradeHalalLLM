@@ -85,6 +85,20 @@ DENIED: dict[int, tuple[str, str]] = {
     1793659: ("Rush Street Interactive, Inc.", "online casino and sports betting (gambling)"),
     1071255: ("Golden Entertainment, Inc.", "casinos and slot-route operations (gambling)"),
     907242: ("Monarch Casino & Resort Inc", "casinos (gambling)"),
+    # Cruise lines (SIC 4400, shared with shipping): onboard casinos and bars.
+    884887: (
+        "ROYAL CARIBBEAN CRUISES LTD",
+        "cruise line: onboard revenue includes casino operations (gambling) and drinks",
+    ),
+    1513761: (
+        "Norwegian Cruise Line Holdings Ltd.",
+        "cruise line: onboard revenue includes casino operations (gambling) and drinks",
+    ),
+    815097: (
+        "Carnival Corp Ltd.",
+        "cruise line: bars and lounges across the fleet; onboard and other revenue, "
+        "including drinks, is 35% of the total (alcohol)",
+    ),
     # Conventional finance under business-services codes (SIC 7389).
     1428336: (
         "HealthEquity, Inc.",
