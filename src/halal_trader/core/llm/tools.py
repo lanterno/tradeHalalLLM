@@ -60,7 +60,7 @@ _DECISION_SCHEMA: dict[str, Any] = {
         "symbol": {"type": "string", "description": "Stock symbol, e.g. 'AAPL'"},
         "quantity": {
             "type": "number",
-            "description": "Absolute order quantity in base-asset units (e.g. BTC, not USDT).",
+            "description": "Absolute order quantity, in shares.",
             "minimum": 0,
         },
         "confidence": {
@@ -76,14 +76,14 @@ _DECISION_SCHEMA: dict[str, Any] = {
         "stop_loss": {
             "type": "number",
             "description": (
-                "Optional per-decision stop-loss price (USDT, absolute). "
+                "Optional per-decision stop-loss price (USD, absolute). "
                 "Override the default — omit to use the configured percentage."
             ),
         },
         "target_price": {
             "type": "number",
             "description": (
-                "Optional per-decision take-profit price (USDT, absolute). "
+                "Optional per-decision take-profit price (USD, absolute). "
                 "Override the default — omit to use the configured percentage."
             ),
         },
