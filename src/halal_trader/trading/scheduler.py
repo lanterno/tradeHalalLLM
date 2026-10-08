@@ -1,15 +1,12 @@
 """APScheduler trading loop — pre-market, intraday, and end-of-day jobs."""
 
 import asyncio
-import fcntl
 import html
 import logging
-import os
 import signal
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
-from pathlib import Path
 from typing import Any
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -64,8 +61,6 @@ logger = logging.getLogger(__name__)
 # pg advisory-lock key for "one stock bot per database" (ASCII 'HALALSTK').
 _TRADING_LOCK_KEY = 0x48414C414C53544B
 
-
-_PID_FILE = Path("halal_trader.pid")
 
 _RECOMMEND_RETRY_AFTER = timedelta(minutes=15)
 # The core trades with market orders; a catch-up run after a restart must
@@ -182,7 +177,6 @@ class TradingBot:
         self.scheduler = AsyncIOScheduler(
             job_defaults={"coalesce": True, "max_instances": 1, "misfire_grace_time": 300}
         )
-        self._lock_file: int | None = None
         # The session holding the database trading lock (_acquire_trading_lock).
         self._trading_lock_conn: AsyncConnection | None = None
         # Lazy-built in ``_create_components``; closed in ``shutdown``.
@@ -646,42 +640,6 @@ class TradingBot:
         except Exception as exc:  # noqa: BLE001
             logger.warning("web_actions prune failed: %r", exc)
 
-    # ── PID Lock ─────────────────────────────────────────────────
-
-    def _acquire_lock(self) -> None:
-        """Acquire a PID file lock to prevent duplicate bot instances."""
-        try:
-            self._lock_file = os.open(str(_PID_FILE), os.O_CREAT | os.O_RDWR)
-            fcntl.flock(self._lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            os.write(self._lock_file, str(os.getpid()).encode())
-            os.ftruncate(self._lock_file, len(str(os.getpid())))
-            logger.info("Acquired PID lock (pid=%d)", os.getpid())
-        except OSError:
-            try:
-                with open(_PID_FILE) as f:
-                    other_pid = f.read().strip()
-            except Exception:
-                other_pid = "unknown"
-            raise RuntimeError(
-                f"Another trading bot instance is already running (pid={other_pid}). "
-                f"Remove {_PID_FILE} if the previous instance crashed."
-            ) from None
-
-    def _release_lock(self) -> None:
-        """Release the PID file lock."""
-        if self._lock_file is not None:
-            try:
-                fcntl.flock(self._lock_file, fcntl.LOCK_UN)
-                os.close(self._lock_file)
-            except OSError:
-                pass
-            self._lock_file = None
-            try:
-                _PID_FILE.unlink(missing_ok=True)
-            except OSError:
-                pass
-            logger.info("Released PID lock")
-
     # ── Shutdown ─────────────────────────────────────────────────
 
     async def shutdown(self) -> None:
@@ -717,7 +675,6 @@ class TradingBot:
             except Exception as exc:  # noqa: BLE001
                 logger.debug("Stock news collector close failed: %r", exc)
         await self._broker_client.disconnect()
-        self._release_lock()
         await self._release_trading_lock()
         self._running = False
         if self._engine is not None:
@@ -1428,9 +1385,9 @@ class TradingBot:
     async def _acquire_trading_lock(self) -> None:
         """Hold a Postgres advisory lock for the life of this process.
 
-        The PID file lock is per filesystem: a bot started on the host and
-        the bot in the container never saw each other's lock, so two bots
-        could trade one account at once (assessment infra-tooling#8). The
+        One stock bot per database: a bot started on the host and the bot in
+        the container share nothing else (a PID file, the lock this replaced,
+        is per filesystem, so two bots once could trade one account). The
         database is the one thing every copy shares. Session-level advisory
         locks die with the connection, so a crashed bot cannot leave it stuck.
 
@@ -1608,7 +1565,6 @@ class TradingBot:
         close the live bot's book. It also takes the single-instance lock, so
         it refuses to run beside a live bot rather than racing it.
         """
-        self._acquire_lock()
         await self.initialize()
         await self._acquire_trading_lock()
         try:
@@ -1678,7 +1634,6 @@ class TradingBot:
         from halal_trader.core.observability import set_service
 
         set_service("stock")  # tag this process's logs
-        self._acquire_lock()
         await self.initialize()
         await self._acquire_trading_lock()
         try:
