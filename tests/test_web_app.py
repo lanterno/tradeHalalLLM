@@ -117,10 +117,10 @@ def test_audit_actor_reflects_request_id(client):
     client.post(
         "/api/system/halt",
         json={"reason": "actor-correlation test"},
-        headers={"X-Halt-Confirm": "yes", "X-Request-ID": "actor-cor-rid-42"},
+        headers={"X-Trader-Confirm": "true", "X-Request-ID": "actor-cor-rid-42"},
     )
     # Clean up: resume the halt so the test DB ends in a known state.
-    client.delete("/api/system/halt", headers={"X-Halt-Confirm": "yes"})
+    client.delete("/api/system/halt", headers={"X-Trader-Confirm": "true"})
 
     r = client.get("/api/activity?limit=5")
     assert r.status_code == 200
@@ -223,15 +223,15 @@ def test_halt_get_returns_disabled_initially(client):
 
 def test_halt_post_requires_confirm_header(client):
     r = client.post("/api/system/halt", json={"reason": "drill"})
-    assert r.status_code == 400
-    assert "X-Halt-Confirm" in r.json()["error"]
+    assert r.status_code == 412  # the confirm step every destructive route has
+    assert "X-Trader-Confirm" in r.json()["detail"]
 
 
 def test_halt_post_engages_with_confirm_header(client):
     r = client.post(
         "/api/system/halt",
         json={"reason": "drill"},
-        headers={"X-Halt-Confirm": "yes"},
+        headers={"X-Trader-Confirm": "true"},
     )
     assert r.status_code == 200
     body = r.json()
@@ -246,16 +246,16 @@ def test_halt_post_engages_with_confirm_header(client):
 
 def test_halt_delete_requires_confirm_header(client):
     r = client.delete("/api/system/halt")
-    assert r.status_code == 400
+    assert r.status_code == 412
 
 
 def test_halt_delete_clears_with_confirm_header(client):
     client.post(
         "/api/system/halt",
         json={"reason": "drill"},
-        headers={"X-Halt-Confirm": "yes"},
+        headers={"X-Trader-Confirm": "true"},
     )
-    r = client.delete("/api/system/halt", headers={"X-Halt-Confirm": "yes"})
+    r = client.delete("/api/system/halt", headers={"X-Trader-Confirm": "true"})
     assert r.status_code == 200
     body = r.json()
     assert body["enabled"] is False
