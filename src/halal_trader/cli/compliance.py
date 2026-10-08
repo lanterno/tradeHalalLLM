@@ -22,7 +22,6 @@ def screen_cmd(symbols: str) -> None:
     """Screen symbols against AAOIFI business-activity and financial-ratio rules."""
 
     async def _run(engine: Any, settings: Any) -> list[Any]:
-        from sqlalchemy import text
 
         from halal_trader.compliance.runner import run_screen
         from halal_trader.compliance.sec import SecClient
@@ -33,9 +32,9 @@ def screen_cmd(symbols: str) -> None:
         try:
             chosen = [s.strip().upper() for s in symbols.split(",") if s.strip()]
             if not chosen:
-                async with engine.connect() as conn:
-                    rows = await conn.execute(text("SELECT DISTINCT symbol FROM daily_bars"))
-                    chosen = sorted(r.symbol for r in rows if r.symbol not in BENCHMARKS)
+                from halal_trader.data.store import stored_symbols
+
+                chosen = [s for s in await stored_symbols(engine) if s not in BENCHMARKS]
             if not chosen:
                 fail("no symbols: pass --symbols or run `data backfill`")
             return await run_screen(sec, engine, chosen, today_eastern())

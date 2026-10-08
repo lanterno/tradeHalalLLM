@@ -18,6 +18,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from halal_trader.compliance import purification
+from halal_trader.data.store import last_closes
 from halal_trader.halal import strict
 from halal_trader.market_hours import (
     EARLY_CLOSE_DATES,
@@ -350,17 +351,7 @@ async def build(
         ]
     else:  # before the first snapshot: the ledger's shares at the last close
         shares = await paper_positions(engine, today + timedelta(days=1), core_name)
-        async with engine.connect() as conn:
-            last_close = {
-                r.symbol: float(r.close)
-                for r in await conn.execute(
-                    text(
-                        "SELECT DISTINCT ON (symbol) symbol, close FROM daily_bars "
-                        "WHERE adjustment = 'raw' AND symbol = ANY(:s) ORDER BY symbol, day DESC"
-                    ),
-                    {"s": sorted(shares)},
-                )
-            }
+        last_close = {s: c for s, (_, c) in (await last_closes(engine, sorted(shares))).items()}
         held = [
             {"symbol": s, "value": q * last_close.get(s, 0.0), "change_today": None}
             for s, q in shares.items()

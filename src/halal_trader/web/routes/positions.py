@@ -22,6 +22,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from halal_trader.core.context import DashboardContext
+from halal_trader.data.store import last_closes
 from halal_trader.portfolio.core_account import DAY_TRADER, core_account
 from halal_trader.web.dependencies import get_ctx
 
@@ -56,22 +57,6 @@ def broker_position(p: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-async def _last_closes(engine: AsyncEngine, symbols: list[str]) -> dict[str, tuple[Any, float]]:
-    if not symbols:
-        return {}
-    async with engine.connect() as conn:
-        return {
-            r.symbol: (r.day, float(r.close))
-            for r in await conn.execute(
-                text(
-                    "SELECT DISTINCT ON (symbol) symbol, day, close FROM daily_bars "
-                    "WHERE adjustment = 'raw' AND symbol = ANY(:s) ORDER BY symbol, day DESC"
-                ),
-                {"s": symbols},
-            )
-        }
-
-
 async def ledger_positions(
     engine: AsyncEngine, account: str, open_trades: list[Any]
 ) -> tuple[list[dict[str, Any]], str | None]:
@@ -89,7 +74,7 @@ async def ledger_positions(
     else:
         qty = await paper_positions(engine, today_eastern() + timedelta(days=1), account)
         cost = {}
-    closes = await _last_closes(engine, sorted(qty))
+    closes = await last_closes(engine, sorted(qty))
     rows = []
     for symbol, q in qty.items():
         day_close = closes.get(symbol)

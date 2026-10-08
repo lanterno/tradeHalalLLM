@@ -74,15 +74,13 @@ def backfill_cmd(top: int, since: Any) -> None:
 @data.command("update")
 def update_cmd() -> None:
     """Top up every stored symbol to the latest closed session."""
-    from sqlalchemy import text
 
     from halal_trader.data.store import update_bars
 
     async def work(engine: Any, client: Any) -> tuple[int, dict[str, int]]:
-        async with engine.connect() as conn:
-            symbols = [
-                r.symbol for r in await conn.execute(text("SELECT DISTINCT symbol FROM daily_bars"))
-            ]
+        from halal_trader.data.store import stored_symbols
+
+        symbols = await stored_symbols(engine)
         if not symbols:
             return 0, {}
         return len(symbols), await update_bars(engine, client, symbols, since=date(2016, 1, 1))

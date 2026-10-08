@@ -112,6 +112,35 @@ async def liquid_universe(
     return ranked[:top_n]
 
 
+async def stored_symbols(engine: AsyncEngine, adjustment: Adjustment | None = None) -> list[str]:
+    """Every symbol with stored daily bars (of ``adjustment`` when given), sorted."""
+    sql = "SELECT DISTINCT symbol FROM daily_bars"
+    params: dict[str, str] = {}
+    if adjustment is not None:
+        sql += " WHERE adjustment = :adj"
+        params["adj"] = adjustment
+    async with engine.connect() as conn:
+        return sorted(r.symbol for r in await conn.execute(text(sql), params))
+
+
+async def last_closes(
+    engine: AsyncEngine, symbols: Sequence[str], *, on_or_before: date | None = None
+) -> dict[str, tuple[date, float]]:
+    """Each symbol's newest stored as-traded (raw) close, and its day; a symbol
+    without one is absent."""
+    if not symbols:
+        return {}
+    sql = "SELECT DISTINCT ON (symbol) symbol, day, close FROM daily_bars "
+    sql += "WHERE adjustment = 'raw' AND symbol = ANY(:s) AND close > 0 "
+    params: dict[str, object] = {"s": list(symbols)}
+    if on_or_before is not None:
+        sql += "AND day <= :d "
+        params["d"] = on_or_before
+    async with engine.connect() as conn:
+        rows = await conn.execute(text(sql + "ORDER BY symbol, day DESC"), params)
+        return {r.symbol: (r.day, float(r.close)) for r in rows}
+
+
 async def store_bars(engine: AsyncEngine, bars: Sequence[DailyBar], adjustment: Adjustment) -> int:
     """Upsert bars (a re-fetched adjusted bar replaces the older vintage)."""
     sql = text(

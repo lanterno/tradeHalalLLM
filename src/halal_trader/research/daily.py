@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from halal_trader.compliance.sec import filed_at
 from halal_trader.config import Settings
 from halal_trader.data.alpaca_market import AlpacaMarketData
-from halal_trader.data.store import BENCHMARKS
+from halal_trader.data.store import BENCHMARKS, stored_symbols
 from halal_trader.halal import strict
 from halal_trader.portfolio.core_account import CORE_PAPER, core_account
 
@@ -41,12 +41,6 @@ class ResearchRun:
     zakat: dict[str, float] = field(default_factory=dict)  # account -> amount due, on a hawl
     core_ready_now: bool = False  # the core passed its live-money gate for the first time
     errors: list[str] = field(default_factory=list)
-
-
-async def _stored_symbols(engine: AsyncEngine) -> list[str]:
-    async with engine.connect() as conn:
-        rows = await conn.execute(text("SELECT DISTINCT symbol FROM daily_bars"))
-        return sorted(r.symbol for r in rows)
 
 
 async def _screen_age(engine: AsyncEngine, today: date) -> timedelta | None:
@@ -106,7 +100,7 @@ async def run_research(engine: AsyncEngine, settings: Settings, *, today: date) 
     from halal_trader.research.forward_book import advance_book, book_names
 
     run = ResearchRun()
-    if not await _stored_symbols(engine):
+    if not await stored_symbols(engine):
         run.errors.append("no stored bars: run `halal-trader data backfill` first")
         return run
 
@@ -116,7 +110,7 @@ async def run_research(engine: AsyncEngine, settings: Settings, *, today: date) 
             run.monthly_rows = await _refresh_monthly(engine, market, today)
             # The point-in-time universe once monthly bars exist (a new entrant
             # is backfilled from 2016 by update_bars); every stored name before.
-            symbols = await _members(engine, today) or await _stored_symbols(engine)
+            symbols = await _members(engine, today) or await stored_symbols(engine)
             run.bars_stored = await update_bars(engine, market, symbols, since=_BACKFILL_FROM)
         finally:
             await market.aclose()
@@ -149,7 +143,7 @@ async def run_research(engine: AsyncEngine, settings: Settings, *, today: date) 
 
             # The index veto reads the halal ETFs' newest filed holdings.
             await sync_holdings(sec, engine)
-            universe = await _members(engine, today) or await _stored_symbols(engine)
+            universe = await _members(engine, today) or await stored_symbols(engine)
             stocks = [s for s in universe if s not in BENCHMARKS]
             run.screened = len(await run_screen(sec, engine, stocks, today))
             run.errors += await _validate_screen(engine, today)

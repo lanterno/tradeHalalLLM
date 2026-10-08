@@ -113,6 +113,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from halal_trader.compliance.aaoifi import Fundamentals, ScreenResult, screen
 from halal_trader.compliance.sec import Company, Fact, SecClient, SecUnavailable
 from halal_trader.compliance.successors import lineage
+from halal_trader.data.store import last_closes
 
 logger = logging.getLogger(__name__)
 
@@ -550,19 +551,9 @@ async def gather(
         c: await _annual(sec, c, as_of)
         for c in (*_INTEREST, *_LENDER_INCOME, *_INTEREST_EXPENSE, *_REVENUE)
     }
+    priced = await last_closes(engine, [s.upper() for s in symbols], on_or_before=as_of)
+    prices = {sym: close for sym, (_, close) in priced.items()}
     async with engine.connect() as conn:
-        rows = await conn.execute(
-            text(
-                """
-                SELECT DISTINCT ON (symbol) symbol, day, close FROM daily_bars
-                WHERE adjustment = 'raw' AND symbol = ANY(:s) AND day <= :as_of
-                ORDER BY symbol, day DESC
-                """
-            ),
-            {"s": [s.upper() for s in symbols], "as_of": as_of},
-        )
-        priced = {r.symbol: (r.day, float(r.close)) for r in rows}
-        prices = {sym: close for sym, (_, close) in priced.items()}
         rows = await conn.execute(
             text(
                 """

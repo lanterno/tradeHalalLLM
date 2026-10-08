@@ -50,6 +50,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from halal_trader.compliance import purification
+from halal_trader.data.store import last_closes
 from halal_trader.halal import strict
 from halal_trader.portfolio.core_account import CORE_PAPER, core_account
 from halal_trader.portfolio.strict_core import (
@@ -146,23 +147,6 @@ def _prices(snapshot: Any) -> dict[str, float]:
         if price:
             out[symbol] = float(price)
     return out
-
-
-async def _last_closes(engine: AsyncEngine, symbols: list[str], day: date) -> dict[str, float]:
-    if not symbols:
-        return {}
-    async with engine.connect() as conn:
-        return {
-            r.symbol: float(r.close)
-            for r in await conn.execute(
-                text(
-                    "SELECT DISTINCT ON (symbol) symbol, close FROM daily_bars "
-                    "WHERE adjustment = 'raw' AND symbol = ANY(:s) AND day <= :d AND close > 0 "
-                    "ORDER BY symbol, day DESC"
-                ),
-                {"s": symbols, "d": day},
-            )
-        }
 
 
 def _open_buy_notional(orders: list[dict[str, Any]]) -> float:
@@ -301,7 +285,10 @@ async def plan(
     # targets and sold as if it had left them.
     unpriced_held = [s for s in candidates if s not in prices and s in positions]
     if unpriced_held:
-        closes = await _last_closes(engine, unpriced_held, today)
+        closes = {
+            s: c
+            for s, (_, c) in (await last_closes(engine, unpriced_held, on_or_before=today)).items()
+        }
         for s in unpriced_held:
             fallback = positions[s].current_price or closes.get(s)
             if fallback:

@@ -44,6 +44,7 @@ def register(app: FastAPI) -> None:
         from halal_trader.compliance.purification import paper_positions
         from halal_trader.config import get_settings
         from halal_trader.core.heartbeat import core_running
+        from halal_trader.data.store import last_closes
         from halal_trader.market_hours import today_eastern
         from halal_trader.portfolio import readiness as gate
         from halal_trader.portfolio.core_account import core_account
@@ -106,17 +107,7 @@ def register(app: FastAPI) -> None:
                 )
             ).all()
             shares = await paper_positions(engine, today + timedelta(days=1), account)
-            closes = {
-                r.symbol: float(r.close)
-                for r in await conn.execute(
-                    text(
-                        "SELECT DISTINCT ON (symbol) symbol, close FROM daily_bars "
-                        "WHERE adjustment = 'raw' AND symbol = ANY(:s) "
-                        "ORDER BY symbol, day DESC"
-                    ),
-                    {"s": sorted(shares)},
-                )
-            }
+            closes = {s: c for s, (_, c) in (await last_closes(engine, sorted(shares))).items()}
 
         equity = float(equity_rows[-1].equity) if equity_rows else None
         equity_day = equity_rows[-1].day.isoformat() if equity_rows else None

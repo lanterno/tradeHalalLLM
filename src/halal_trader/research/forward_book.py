@@ -36,7 +36,7 @@ import numpy as np
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from halal_trader.data.store import BENCHMARKS
+from halal_trader.data.store import BENCHMARKS, stored_symbols
 from halal_trader.data.universe import universe_at
 from halal_trader.halal import strict
 from halal_trader.research.factor_backtest import (
@@ -180,14 +180,6 @@ async def _halal_as_of(engine: AsyncEngine, day: date) -> set[str] | None:
     return {r.symbol for r in await strict.screen_rows(engine, as_of, halal_only=True)}
 
 
-async def _universe(engine: AsyncEngine) -> list[str]:
-    async with engine.connect() as conn:
-        rows = await conn.execute(
-            text("SELECT DISTINCT symbol FROM daily_bars WHERE adjustment = 'all'")
-        )
-        return sorted(r.symbol for r in rows)
-
-
 def target_weights(prices: Prices, t: int, eligible: set[str], top_n: int) -> dict[str, float]:
     """Equal weights over the top ``top_n`` eligible names scored at session ``t``."""
     score = scores_at(prices.close, t)
@@ -261,7 +253,7 @@ async def advance_book(engine: AsyncEngine, name: str, *, through: date) -> list
     last = await _last_day(engine, name)
     since = (last.day if last else through) - _HISTORY
     prices, _ = split_reused_tickers(
-        await load_prices(engine, await _universe(engine), since=since)
+        await load_prices(engine, await stored_symbols(engine, "all"), since=since)
     )
     sessions = [i for i, d in enumerate(prices.days) if d <= through]
     if not sessions:
