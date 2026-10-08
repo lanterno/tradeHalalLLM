@@ -103,7 +103,6 @@ services:
       GLM_FALLBACK_API_KEY: ""
       FINNHUB_API_KEY: ""
       FRED_API_KEY: ""
-      ZOYA_API_KEY: ""
       TELEGRAM_BOT_TOKEN: ""
       TELEGRAM_CHAT_ID: ""
       WEB_API_TOKEN: ""
@@ -159,7 +158,6 @@ services:
       TELEGRAM_BOT_TOKEN: ""
       TELEGRAM_CHAT_ID: ""
       # Only `--rescreen-compliance` reads it, and the command below omits it.
-      ZOYA_API_KEY: ""
     volumes:
       - trader-data:/app/data
       - trader-logs:/app/logs
@@ -191,7 +189,6 @@ services:
       <<: [*database-url, *no-core-keys]
       FINNHUB_API_KEY: ""
       FRED_API_KEY: ""
-      ZOYA_API_KEY: ""
     ports:
       - "127.0.0.1:8082:8082"
     volumes:
