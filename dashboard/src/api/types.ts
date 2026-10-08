@@ -9,8 +9,8 @@ export interface AnalyticsStats {
   profit_factor: number;
   max_drawdown_pct: number;
   avg_hold_minutes: number;
-  best_pair: string;
-  worst_pair: string;
+  best_symbol: string;
+  worst_symbol: string;
   streak: number;
   streak_type: string;
   by_exit_reason: Record<string, number>;
@@ -293,7 +293,7 @@ export interface HaltStatus {
 export interface ReconcileLogRow {
   id: number;
   timestamp: string;
-  // A free string: rows written before 2026-10-01 may name "crypto".
+  // "stocks": the only market since crypto was removed.
   market: string;
   symbol: string;
   db_quantity: number;

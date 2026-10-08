@@ -149,7 +149,7 @@ export default function Analytics() {
               label="Best Symbol"
               value={
                 <span className="text-accent text-lg">
-                  {stats.best_pair || "N/A"}
+                  {stats.best_symbol || "N/A"}
                 </span>
               }
             />
@@ -157,7 +157,7 @@ export default function Analytics() {
               label="Worst Symbol"
               value={
                 <span className="text-loss text-lg">
-                  {stats.worst_pair || "N/A"}
+                  {stats.worst_symbol || "N/A"}
                 </span>
               }
             />
