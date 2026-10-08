@@ -312,8 +312,3 @@ def ship_verdict(
     if c_wink < h_wink and c_err <= h_err and better * 2 > len(shared):
         return "pass"
     return "inconclusive"
-
-
-def garch_verdict(results: dict[str, dict[str, SourceScore]]) -> str:
-    """Back-compat wrapper: the GARCH-FHS ship rule via :func:`ship_verdict`."""
-    return ship_verdict(results, "garch_fhs")

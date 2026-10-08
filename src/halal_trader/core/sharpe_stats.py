@@ -94,19 +94,3 @@ def deflated_sharpe_ratio(
         sr_variance = _sharpe_estimator_variance(n, sr, skew, kurt)
     benchmark = expected_max_sharpe(sr_variance, n_trials)
     return probabilistic_sharpe_ratio(returns, sr_benchmark=benchmark)
-
-
-def passes_sharpe_gate(
-    returns: Any,
-    *,
-    n_trials: int = 1,
-    sr_variance: float | None = None,
-    min_prob: float = 0.95,
-) -> bool:
-    """True if the (deflated, when multi-trial) Sharpe is significant.
-
-    Uses DSR when ``n_trials > 1`` (multiple-testing correction), else PSR.
-    """
-    if n_trials > 1:
-        return deflated_sharpe_ratio(returns, n_trials, sr_variance) >= min_prob
-    return probabilistic_sharpe_ratio(returns) >= min_prob

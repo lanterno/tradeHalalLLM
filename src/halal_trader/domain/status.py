@@ -31,11 +31,6 @@ class TradeStatus(StrEnum):
     ERROR = "error"
 
     @classmethod
-    def is_terminal(cls, status: TradeStatus | str) -> bool:
-        """A status that means the order is fully resolved and won't change."""
-        return status in {cls.FILLED, cls.REJECTED, cls.CANCELED, cls.CLOSED, cls.ERROR}
-
-    @classmethod
     def is_open(cls, status: TradeStatus | str) -> bool:
         """A status that may still produce fills or trade events."""
         return status in {cls.PENDING, cls.SUBMITTED, cls.PARTIALLY_FILLED}

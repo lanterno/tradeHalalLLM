@@ -211,36 +211,3 @@ def swing_zones(
     zones = [Level(float(np.mean(c)), "swing_zone", strength=float(len(c))) for c in clusters]
     zones.sort(key=lambda z: (-(z.strength or 0), z.price))
     return zones[:top_k]
-
-
-def level_map(
-    dates: list[str],
-    highs: FloatArray,
-    lows: FloatArray,
-    closes: FloatArray,
-    *,
-    atr: float,
-) -> list[Level]:
-    """Compose all families into one price-sorted map, round-snap merged.
-
-    A non-round level within ``0.15·ATR`` of a round-number grid point is
-    snapped to it (the round number absorbs it — confluence per the
-    research), keeping the stronger ``kind`` in the name.
-    """
-    c = np.asarray(closes, dtype=np.float64)
-    if c.size == 0:
-        raise ValueError("closes must be non-empty")
-    price = float(c[-1])
-    levels = prior_extreme_levels(dates, highs, lows) + swing_zones(highs, lows, atr)
-    rounds = round_number_levels(price)
-    snap_eps = 0.15 * atr
-    snapped: list[Level] = []
-    for lvl in levels:
-        near = next((r for r in rounds if abs(r.price - lvl.price) <= snap_eps), None)
-        if near is not None:
-            snapped.append(Level(near.price, f"{lvl.kind}+{near.kind}", strength=lvl.strength))
-        else:
-            snapped.append(lvl)
-    out = snapped + rounds
-    out.sort(key=lambda z: z.price)
-    return out

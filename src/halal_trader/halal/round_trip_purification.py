@@ -22,7 +22,7 @@ the other:
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import ROUND_HALF_UP, Decimal
@@ -140,18 +140,6 @@ class RoundTripLedger:
             await s.commit()
             return True
 
-    async def mark_disbursed(self, entry_id: str, *, to: str = "") -> bool:
-        async with self._sm() as s:
-            row = await s.get(RoundTripPurificationRow, entry_id)
-            if row is None or row.disbursed:
-                return False
-            row.disbursed = True
-            row.disbursed_at = datetime.now(UTC)
-            row.disbursed_to = to
-            s.add(row)
-            await s.commit()
-            return True
-
     async def outstanding(self) -> float:
         async with self._sm() as s:
             rows = (
@@ -255,22 +243,3 @@ async def outstanding_round_trip_due(ledger: RoundTripLedger) -> dict[str, Any]:
         "disbursed_total_usd": await ledger.disbursed_total(),
         "n_entries": await ledger.count(),
     }
-
-
-def load_rules_from_dicts(rows: Iterable[Mapping]) -> dict[str, RoundTripRule]:
-    out: dict[str, RoundTripRule] = {}
-    for row in rows:
-        sym = str(row.get("symbol", "")).upper()
-        if not sym:
-            continue
-        try:
-            ratio = float(row.get("impure_ratio", 0))
-        except (TypeError, ValueError) as _exc:  # noqa: F841 — keep parens, ruff format strips them otherwise
-            continue
-        out[sym] = RoundTripRule(
-            symbol=sym,
-            impure_ratio=ratio,
-            source=str(row.get("source", "manual")),
-            note=str(row.get("note", "")),
-        )
-    return out

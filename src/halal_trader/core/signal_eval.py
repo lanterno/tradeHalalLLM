@@ -62,19 +62,3 @@ def information_coefficient(signal: Any, outcomes: Any) -> float:
     if s.size < 3:
         return 0.0
     return _pearson(_rankdata(s), _rankdata(o))
-
-
-def icir(ic_values: Any) -> float:
-    """Information Ratio of an IC series: mean(IC) / std(IC).
-
-    Rewards a signal whose predictive power is *consistent* across periods, not
-    one lucky big IC. Returns 0.0 for fewer than 2 values or zero dispersion.
-    """
-    ics = np.asarray(ic_values, dtype=float)
-    ics = ics[np.isfinite(ics)]
-    if ics.size < 2:
-        return 0.0
-    sd = float(ics.std(ddof=1))
-    if sd < 1e-12:  # effectively constant (float noise, not real dispersion)
-        return 0.0
-    return float(ics.mean() / sd)

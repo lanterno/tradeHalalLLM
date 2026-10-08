@@ -158,12 +158,6 @@ class ExceptionQueue:
     async def pending(self) -> list[ExceptionEntry]:
         return await self.by_status("pending")
 
-    async def is_approved(self, instrument: str, kind: str) -> bool:
-        """Quick gate: returns True only if an approval exists for this pair."""
-        async with self._sm() as s:
-            row = await s.get(ShariaExceptionRow, self._key(instrument, kind))
-            return row is not None and row.status == "approved"
-
 
 def render_summary(entries: Iterable[ExceptionEntry]) -> str:
     """Operator-friendly summary table."""

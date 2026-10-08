@@ -20,7 +20,7 @@ Phase 1 of ``docs/QUANT_PREDICTION_ROADMAP.md``: the deterministic
   Never trust a theoretical z where a measured one is available.
 
 The ATR-multiple band (`atr_band`) is the naive baseline every model must
-beat on pinball/Winkler/coverage (see ``quant/eval.py``) before shipping.
+beat on Winkler/coverage (``quant compare-bands``) before shipping.
 
 Pure numpy by design. Daily vol units throughout (NOT annualized), matching
 ``quant/volatility.py``; horizons are in trading days.
@@ -187,7 +187,7 @@ def price_bands(close: float, sigma_daily: float, horizon: int, z: float) -> Pri
 def atr_band(close: float, atr: float, horizon: int, multiple: float = 1.0) -> PriceBands:
     """ATR-multiple band: ``close ± m·ATR·√h`` — the naive baseline.
 
-    Every fitted band model must beat this on pinball/Winkler/coverage on
+    Every fitted band model must beat this on Winkler/coverage on
     disjoint OOS windows before it ships (roadmap validation gate 1).
     ``expected_range`` is ``2·m·ATR·√h`` (the band width itself — ATR is
     an average range, not a quantile, which is exactly why this is the

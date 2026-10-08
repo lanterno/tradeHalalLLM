@@ -44,7 +44,7 @@ def register(app: FastAPI) -> None:
 
         Subscribers see ``cycle.start``, ``cycle.stage.start``,
         ``cycle.stage.end``, ``cycle.complete``, ``cycle.failed``,
-        ``llm.call.complete``, ``executor.fill``, etc — anything the
+        ``executor.fill``, etc — anything the
         bot publishes on the EventBus matching ``topic`` (default
         ``*`` — everything).
         """

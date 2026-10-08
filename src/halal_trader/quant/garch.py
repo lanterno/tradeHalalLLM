@@ -23,7 +23,7 @@ window, never once; and daily-step simulation sees only daily-close
 extremes — the true intraday high/low is systematically more extreme, which
 is exactly the bias the downstream empirical coverage measurement exists to
 absorb. NOT wired into the engine: per the roadmap it ships only after
-beating the ATR/HAR baseline on pinball + Winkler + coverage on disjoint
+beating the ATR/HAR baseline on Winkler + coverage on disjoint
 OOS windows (`quant compare-bands`, trials ledger).
 """
 
