@@ -7,6 +7,7 @@ import logging
 import os
 import signal
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
@@ -35,6 +36,7 @@ from halal_trader.core.heartbeat import (
     scheduled_at,
 )
 from halal_trader.core.llm import create_llm
+from halal_trader.core.observability import job_context
 from halal_trader.db.models import init_db
 from halal_trader.db.repos import RepoBundle
 from halal_trader.db.repository import Repository
@@ -49,6 +51,7 @@ from halal_trader.market_hours import (
     today_eastern,
 )
 from halal_trader.mcp.client import AlpacaMCPClient
+from halal_trader.notifications.telegram import AlertSink, TelegramNotifier
 from halal_trader.trading.catalysts import StockCatalystFeed
 from halal_trader.trading.cycle import TradingCycleService
 from halal_trader.trading.executor import TradeExecutor
@@ -65,9 +68,8 @@ _TRADING_LOCK_KEY = 0x48414C414C53544B
 _PID_FILE = Path("halal_trader.pid")
 
 _RECOMMEND_RETRY_AFTER = timedelta(minutes=15)
-# The core trades at 15:40 ET with market orders; a catch-up run after a
-# restart must leave them time to fill before the close.
-_CORE_TRADE_AT = time(15, 40)
+# The core trades with market orders; a catch-up run after a restart must
+# leave them time to fill before the close.
 _CORE_CATCH_UP_CUTOFF = timedelta(minutes=5)
 # Daily jobs older than this are not caught up: their moment has passed.
 _CATCH_UP_HORIZON = timedelta(days=4)
@@ -111,7 +113,7 @@ def plan_catch_up(
         rec_at = scheduled_at(DAILY_JOBS[RECOMMENDATION], today)
         if now >= rec_at and missed(RECOMMENDATION, rec_at):
             plan.append(("recommend", today))
-        core_at = datetime.combine(today, _CORE_TRADE_AT, MARKET_TZ)
+        core_at = scheduled_at(DAILY_JOBS[CORE_TRADE], today)  # 12:40 on a 13:00 close
         if core_due and core_at <= now < close - _CORE_CATCH_UP_CUTOFF:
             plan.append(("core_trade", today))
         eod_at = scheduled_at(DAILY_JOBS[STOCK_EOD], today)
@@ -129,6 +131,29 @@ def plan_catch_up(
                     break
             day -= timedelta(days=1)
     return plan
+
+
+@dataclass(frozen=True, slots=True)
+class Skipped:
+    """A job's run that had nothing to do (not a trading day, not its run today)."""
+
+    reason: str
+
+
+# What a job's body returns: its heartbeat's detail when it finished, or Skipped.
+JobOutcome = dict[str, Any] | Skipped | None
+
+_WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+
+
+def _off_schedule(component: str, scheduled: time | None) -> Skipped | None:
+    """Skipped when ``scheduled`` (the cron time that fired) is not today's run time
+    of ``component``: on a 13:00-close day only the early time runs, else only the
+    regular one. A catch-up run passes no time and always runs."""
+    if scheduled is None:
+        return None
+    due = scheduled_at(DAILY_JOBS[component], today_eastern()).time()
+    return None if scheduled == due else Skipped(f"today's run is at {due:%H:%M}")
 
 
 class TradingBot:
@@ -178,6 +203,15 @@ class TradingBot:
         # stop / trend-break as their only rule-based exit.
         self._monitor: Any | None = None
         self._monitor_task: asyncio.Task[None] | None = None
+        # Telegram, and the rate-limited alert sink on it: always present (a
+        # disabled notifier makes both no-ops), so no call site checks for None.
+        self._notifier = TelegramNotifier(
+            bot_token=self.settings.telegram.bot_token,
+            chat_id=self.settings.telegram.chat_id,
+        )
+        self._alerts = AlertSink(self._notifier)
+        # The live core's dated token, checked once at start (core_start_check).
+        self._core_token_problem: str | None = "the live token was not checked at start"
 
     async def initialize(self) -> None:
         """Set up the database, then build every trading component."""
@@ -202,14 +236,6 @@ class TradingBot:
         repo = self._repo
         assert repo is not None
 
-        # Telegram notifier + rate-limited error sink (shared across cycle and EOD)
-        from halal_trader.notifications.telegram import AlertSink, TelegramNotifier
-
-        self._notifier = TelegramNotifier(
-            bot_token=self.settings.telegram.bot_token,
-            chat_id=self.settings.telegram.chat_id,
-        )
-        self._alerts = AlertSink(self._notifier)
         # One daily LLM spend total for every process on the key
         # (core/llm/spend.py); every GLM call below reports into it.
         from halal_trader.core.llm import spend
@@ -535,73 +561,68 @@ class TradingBot:
         transient failure left the day without a pick); only a failed retry
         alerts.
         """
-        now = now_eastern()
-        if not is_trading_day(now.date()):
-            return
-        if self._recommendation is None:
-            return
-        try:
-            rec = await self._recommendation.generate()
-            await beat(self._engine, RECOMMENDATION, {"symbol": rec.get("symbol")})
-            logger.info(
-                "Daily recommendation ready: %s (conviction %.2f)",
-                rec.get("symbol"),
-                float(rec.get("conviction") or 0.0),
+        done = await self._job(
+            "recommend",
+            self._recommend,
+            alert="recommendation.failed" if is_retry else None,
+            beat_as=RECOMMENDATION,
+        )
+        if not done and not is_retry and self.scheduler.running:
+            from apscheduler.triggers.date import DateTrigger
+
+            self.scheduler.add_job(
+                self.recommend,
+                DateTrigger(run_date=datetime.now(UTC) + _RECOMMEND_RETRY_AFTER),
+                kwargs={"is_retry": True},
+                id="daily_recommendation_retry",
+                replace_existing=True,
+                misfire_grace_time=900,
             )
-            # Label matured past picks with forward returns (honest scorecard).
-            from halal_trader.recommendation.scorecard import backfill_outcomes
+            logger.info("Daily recommendation: retrying in %s", _RECOMMEND_RETRY_AFTER)
 
-            res = await backfill_outcomes(self.broker, self._repo)
-            if res.get("updated") or res.get("skipped"):
-                logger.info(
-                    "Recommendation scorecard backfill: %d updated, %d scored, %d skipped",
-                    res.get("updated", 0),
-                    res.get("scored", 0),
-                    res.get("skipped", 0),
-                )
-            # Adaptive-conformal band maintenance: matured candidate
-            # outcomes nudge the band multiplier; a Kupiec coverage-drift
-            # failure is operator-alertable (the action hook the roadmap
-            # requires — never observation-only).
-            from halal_trader.core import events
-            from halal_trader.quant.conformal import update_band_conformal
+    async def _recommend(self) -> JobOutcome:
+        if not is_trading_day(today_eastern()):
+            return Skipped("not a trading day")
+        if self._recommendation is None:
+            return Skipped("no recommendation engine")
+        rec = await self._recommendation.generate()
+        logger.info(
+            "Daily recommendation ready: %s (conviction %.2f)",
+            rec.get("symbol"),
+            float(rec.get("conviction") or 0.0),
+        )
+        # Label matured past picks with forward returns (honest scorecard).
+        from halal_trader.recommendation.scorecard import backfill_outcomes
 
-            aci = await update_band_conformal(self._repo)
-            if aci.get("drift"):
-                logger.warning(
-                    "Band coverage drift: trailing breach rate fails Kupiec "
-                    "(p=%.4f, n=%d); ACI alpha now %.4f (z_eff %.3f)",
-                    aci.get("drift_p") or 0.0,
-                    aci.get("trailing_n", 0),
-                    aci.get("alpha") or 0.0,
-                    aci.get("effective_z") or 0.0,
-                    extra={"event": events.BAND_COVERAGE_DRIFT},
-                )
-                if self._alerts is not None:
-                    await self._alerts.notify(
-                        "band.coverage_drift",
-                        f"5d band coverage drifted (Kupiec p={aci.get('drift_p'):.4f}, "
-                        f"n={aci.get('trailing_n')}); ACI widened to "
-                        f"z={aci.get('effective_z')}",
-                        market="stocks",
-                    )
-        except Exception as exc:  # noqa: BLE001 — advisory; never break the bot
-            logger.warning("Daily recommendation generation failed: %r", exc)
-            if not is_retry and self.scheduler.running:
-                from apscheduler.triggers.date import DateTrigger
+        res = await backfill_outcomes(self.broker, self._repo)
+        if res.get("updated") or res.get("skipped"):
+            logger.info(
+                "Recommendation scorecard backfill: %d updated, %d scored, %d skipped",
+                res.get("updated", 0),
+                res.get("scored", 0),
+                res.get("skipped", 0),
+            )
+        # Adaptive-conformal band maintenance: matured candidate outcomes nudge
+        # the band multiplier; a Kupiec coverage-drift failure is alerted.
+        from halal_trader.quant.conformal import update_band_conformal
 
-                self.scheduler.add_job(
-                    self.recommend,
-                    DateTrigger(run_date=datetime.now(UTC) + _RECOMMEND_RETRY_AFTER),
-                    kwargs={"is_retry": True},
-                    id="daily_recommendation_retry",
-                    replace_existing=True,
-                    misfire_grace_time=900,
-                )
-                logger.info("Daily recommendation: retrying in %s", _RECOMMEND_RETRY_AFTER)
-                return
-            if self._alerts is not None:
-                await self._alerts.notify("recommendation.failed", repr(exc)[:300], market="stocks")
+        aci = await update_band_conformal(self._repo)
+        if aci.get("drift"):
+            logger.warning(
+                "Band coverage drift: trailing breach rate fails Kupiec "
+                "(p=%.4f, n=%d); ACI alpha now %.4f (z_eff %.3f)",
+                aci.get("drift_p") or 0.0,
+                aci.get("trailing_n", 0),
+                aci.get("alpha") or 0.0,
+                aci.get("effective_z") or 0.0,
+                extra={"event": events.BAND_COVERAGE_DRIFT},
+            )
+            await self._alerts.notify(
+                "band.coverage_drift",
+                f"5d band coverage drifted (Kupiec p={aci.get('drift_p'):.4f}, "
+                f"n={aci.get('trailing_n')}); ACI widened to z={aci.get('effective_z')}",
+            )
+        return {"symbol": rec.get("symbol")}
 
     def _get_cycle_service(self) -> TradingCycleService:
         _, _, _, cs = self._require_initialized()
@@ -758,7 +779,7 @@ class TradingBot:
                 result.get("status"),
                 f" ({result.get('reason')})" if result.get("reason") else "",
                 extra={
-                    "event": events.TRADE_BUY_PLACED,
+                    "event": events.REACTOR_ENTRY,
                     "symbol": event.symbol,
                     "status": result.get("status"),
                     "entry_type": EntryType.REACTOR_MOMENTUM,
@@ -874,78 +895,69 @@ class TradingBot:
 
     # ── Scheduled Jobs ──────────────────────────────────────────
 
-    async def pre_market(self) -> None:
-        """Pre-market job: refresh halal cache, record day start."""
-        now = now_eastern()
-        logger.info(
-            "=== PRE-MARKET ROUTINE === (current time: %s ET)", now.strftime("%Y-%m-%d %H:%M:%S")
-        )
+    async def _job(
+        self,
+        name: str,
+        body: Callable[[], Awaitable[JobOutcome]],
+        *,
+        alert: str | None,
+        beat_as: str | None = None,
+    ) -> bool:
+        """Run one scheduled job the way every job runs.
 
-        # Skip entirely on weekends and market holidays. APScheduler's
-        # cron only fires Mon-Fri so weekends shouldn't normally hit
-        # here, but the cycle can also be invoked manually (--once) or
-        # during startup orchestration, so the check stays.
-        if not is_trading_day(now.date()):
-            day_kind = "weekend" if now.weekday() >= 5 else "market holiday"
-            logger.info(
-                "Today is not a trading day (%s), skipping pre-market routine",
-                day_kind,
-            )
-            return
-
-        screener, _, portfolio, _ = self._require_initialized()
-        try:
-            # Check if market will open today
-            clock = await self.broker.get_clock()
-            logger.info(
-                "Market clock: is_open=%s next_open='%s' next_close='%s'",
-                clock.is_open,
-                clock.next_open,
-                clock.next_close,
-            )
-
-            close = effective_close_time(now.date())
-            logger.info(
-                "Market schedule: close at %s ET%s",
-                close.strftime("%H:%M"),
-                " (early close)" if close.hour < 16 else "",
-            )
-
-            # Log upcoming trading calendar. The Alpaca MCP server wraps
-            # its response as ``{"result": [...]}``; unwrap before
-            # iterating. Decorative-only — failures are debug-logged.
+        Under one ``job_id`` (core/observability.py) its start, end or skip is
+        logged as a structured event. A failure is logged with its traceback
+        and alerted as ``alert`` (None: logged only), and never escapes: a job
+        must not take the bot down. ``beat_as`` is written only when the body
+        finished, with what it returned as the beat's detail, so a crashed
+        run leaves no beat and the watchdog sees it. Returns whether it finished.
+        """
+        with job_context(name):
+            logger.info("job %s started", name, extra={"event": events.JOB_START, "job": name})
             try:
-                calendar = await self.broker.get_calendar()
-                rows = (
-                    calendar.get("result", [])
-                    if isinstance(calendar, dict)
-                    else (calendar if isinstance(calendar, list) else [])
+                outcome = await body()
+            except Exception as exc:  # noqa: BLE001 -- see the docstring
+                logger.exception(
+                    "job %s failed", name, extra={"event": events.JOB_FAILED, "job": name}
                 )
-                if rows:
-                    next_days = rows[:5]
-                    logger.info(
-                        "Upcoming trading days: %s",
-                        [d.get("date", d) if isinstance(d, dict) else d for d in next_days],
-                    )
-            except Exception as e:
-                logger.debug("Could not fetch market calendar: %r", e)
-
-            # Refresh halal stock cache
-            await screener.ensure_cache()
-
-            # Record starting equity
-            await portfolio.record_day_start()
-
-            logger.info("Pre-market routine complete")
-        except Exception as e:
-            logger.error("Pre-market routine failed: %r", e)
-            if self._alerts is not None:
-                await self._alerts.notify(
-                    "stock.pre_market.failed",
-                    repr(e),
-                    market="stocks",
-                    severity="error",
+                if alert is not None:
+                    await self._alerts.notify(alert, f"{name}: {exc!r}", severity="error")
+                return False
+            if isinstance(outcome, Skipped):
+                logger.info(
+                    "job %s skipped: %s",
+                    name,
+                    outcome.reason,
+                    extra={"event": events.JOB_SKIPPED, "job": name},
                 )
+                return True
+            if beat_as is not None and self._engine is not None:
+                await beat(self._engine, beat_as, outcome)
+            logger.info("job %s finished", name, extra={"event": events.JOB_COMPLETE, "job": name})
+            return True
+
+    async def pre_market(self) -> None:
+        """Pre-market job: check the clock, refresh the halal cache, record day start."""
+        await self._job("pre_market", self._pre_market, alert="stock.pre_market.failed")
+
+    async def _pre_market(self) -> JobOutcome:
+        now = now_eastern()
+        if not is_trading_day(now.date()):
+            return Skipped("weekend" if now.weekday() >= 5 else "market holiday")
+        screener, _, portfolio, _ = self._require_initialized()
+        clock = await self.broker.get_clock()
+        close = effective_close_time(now.date())
+        logger.info(
+            "Market clock: is_open=%s next_open=%s next_close=%s; closes at %s ET%s",
+            clock.is_open,
+            clock.next_open,
+            clock.next_close,
+            close.strftime("%H:%M"),
+            " (early close)" if close.hour < 16 else "",
+        )
+        await screener.ensure_cache()
+        await portfolio.record_day_start()
+        return None
 
     async def trading_cycle(self) -> None:
         """Intraday trading cycle — delegates to TradingCycleService.
@@ -979,50 +991,57 @@ class TradingBot:
         against the fills this bot recorded; any difference alerts, because a
         fill the bot does not know about is a position it is not managing.
         """
+        await self._job(
+            "broker_ledger",
+            lambda: self._sync_broker_ledger(day or today_eastern()),
+            alert="ledger.sync_failed",
+            beat_as=STOCK_LEDGER,
+        )
+
+    async def _sync_broker_ledger(self, day: date) -> JobOutcome:
         from halal_trader.execution.ledger import reconcile_fills, sync_accounts
         from halal_trader.portfolio.core_account import broker_accounts
 
         if self._engine is None:
-            return
-        try:
-            await sync_accounts(self._engine, broker_accounts(self.settings))
-            rec = await reconcile_fills(self._engine, day or today_eastern())
-        except Exception as exc:  # noqa: BLE001 -- the job must not take the bot down
-            logger.error("broker ledger sync failed: %r", exc)
-            await self._alerts.notify("ledger.sync_failed", repr(exc)[:500])
-            return
-        await beat(self._engine, STOCK_LEDGER, {"broker_fills": rec.broker_fills})
+            return Skipped("no database")
+        await sync_accounts(self._engine, broker_accounts(self.settings))
+        rec = await reconcile_fills(self._engine, day)
         if rec.clean:
-            logger.info("broker ledger: %d fills today, books agree", rec.broker_fills)
-            return
-        lines = [
-            f"{d.symbol} {d.side}: broker {d.broker_qty:g} vs recorded {d.recorded_qty:g}"
-            for d in rec.drifts
-        ]
-        logger.warning("broker ledger drift on %s: %s", rec.day, "; ".join(lines))
-        await self._alerts.notify("ledger.fill_drift", f"{rec.day}: " + "; ".join(lines))
+            logger.info("broker ledger: %d fills on %s, books agree", rec.broker_fills, rec.day)
+        else:
+            lines = [
+                f"{d.symbol} {d.side}: broker {d.broker_qty:g} vs recorded {d.recorded_qty:g}"
+                for d in rec.drifts
+            ]
+            logger.warning("broker ledger drift on %s: %s", rec.day, "; ".join(lines))
+            await self._alerts.notify("ledger.fill_drift", f"{rec.day}: " + "; ".join(lines))
+        return {"broker_fills": rec.broker_fills}
 
     async def research_daily(self, *, day: date | None = None) -> None:
         """Evening job: top up bars, re-screen weekly, advance the forward books.
 
         Research only -- nothing here places an order. It runs after the
-        extended session so the day's bars are final, and any failure is
-        alerted and contained. ``day`` defaults to today; a catch-up run after
-        a restart passes the trading day whose run was missed, so the books
-        never advance into a session that has not happened.
+        extended session so the day's bars are final. ``day`` defaults to
+        today; a catch-up run after a restart passes the trading day whose
+        run was missed, so the books never advance into a session that has
+        not happened. A step that failed inside a finished run is alerted
+        too, and counted in the beat.
         """
+        await self._job(
+            "research_daily",
+            lambda: self._research_daily(day or today_eastern()),
+            alert="research.failed",
+            beat_as=RESEARCH,
+        )
+
+    async def _research_daily(self, day: date) -> JobOutcome:
         from halal_trader.research.daily import run_research
 
         if self._engine is None:
-            return
-        try:
-            run = await run_research(self._engine, self.settings, today=day or today_eastern())
-        except Exception as exc:  # noqa: BLE001 -- the job must not take the bot down
-            logger.error("research run failed: %r", exc)
-            await self._alerts.notify("research.failed", repr(exc)[:500])
-            return
+            return Skipped("no database")
+        run = await run_research(self._engine, self.settings, today=day)
         if run.errors:
-            await self._alerts.notify("research.failed", "; ".join(run.errors)[:500])
+            await self._alerts.notify("research.failed", "; ".join(run.errors))
         if run.core_ready_now:
             await self._alerts.notify(
                 "core.ready",
@@ -1039,24 +1058,48 @@ class TradingBot:
                 + ", ".join(f"{account} ${amount:,.2f}" for account, amount in run.zakat.items())
                 + ". Details: halal-trader zakat assess.",
             )
-        await beat(
-            self._engine,
-            RESEARCH,
-            {
-                "books": run.books,
-                "screened": run.screened,
-                "rescreen_for": run.rescreen_for,
-                "event_labels": run.event_labels,
-                "event_refresh": run.event_refresh,
-                "errors": len(run.errors),
-            },
-        )
         logger.info(
             "research run: books %s, screened %s, event labels %s",
             run.books,
             run.screened,
             run.event_labels,
         )
+        return {
+            "books": run.books,
+            "screened": run.screened,
+            "rescreen_for": run.rescreen_for,
+            "event_labels": run.event_labels,
+            "event_refresh": run.event_refresh,
+            "errors": len(run.errors),
+        }
+
+    def _add_daily(
+        self,
+        method: Callable[..., Awaitable[Any]],
+        component: str,
+        job_id: str,
+        *,
+        grace_s: int,
+    ) -> None:
+        """Schedule a daily job at its DAILY_JOBS time, and at its 13:00-close
+        time where it has one; each run is told which time fired (``scheduled``)
+        so only today's runs (see _off_schedule)."""
+        job = DAILY_JOBS[component]
+        day_of_week = "mon-fri" if job.weekday is None else _WEEKDAYS[job.weekday]
+        times = [(job_id, job.at)]
+        if job.early_close_at is not None:
+            times.append((f"{job_id}_early_close", job.early_close_at))
+        for name, at in times:
+            self.scheduler.add_job(
+                method,
+                CronTrigger(
+                    day_of_week=day_of_week, hour=at.hour, minute=at.minute, timezone=MARKET_TZ
+                ),
+                kwargs={"scheduled": at} if job.early_close_at is not None else {},
+                id=name,
+                replace_existing=True,
+                misfire_grace_time=grace_s,
+            )
 
     def _schedule_cycles(self, interval: int) -> None:
         """The day-trader's cycles: every ``interval`` minutes 10:00-15:45, plus 9:30/9:45."""
@@ -1088,16 +1131,20 @@ class TradingBot:
 
     async def weekly_digest(self) -> None:
         """Send the week's summary to Telegram (notifications/digest.py)."""
+        await self._job(
+            "weekly_digest", self._weekly_digest, alert="digest.failed", beat_as=WEEKLY_DIGEST
+        )
+
+    async def _weekly_digest(self) -> JobOutcome:
         from halal_trader.notifications.digest import build
 
         if self._engine is None:
-            return
-        try:
-            message = await build(self._engine, self.settings, today=today_eastern())
-            await self._notifier.send(message)
-            await beat(self._engine, WEEKLY_DIGEST)
-        except Exception as exc:  # noqa: BLE001 -- a digest must never take the bot down
-            logger.error("weekly digest failed: %r", exc)
+            return Skipped("no database")
+        message = await build(self._engine, self.settings, today=today_eastern())
+        if not await self._notifier.send(message):
+            # Not sent is not done: no beat, so the watchdog reports it.
+            raise RuntimeError("Telegram did not take the weekly digest")
+        return None
 
     async def market_snapshot(self) -> None:
         """Each minute of the session: both accounts' values and the benchmarks'
@@ -1161,7 +1208,7 @@ class TradingBot:
             )
         return failures
 
-    async def core_trade(self) -> None:
+    async def core_trade(self, *, scheduled: time | None = None) -> None:
         """Trade the strict-halal core portfolio on its own account (portfolio/core_executor.py).
 
         Monthly rebalance on the first run of a month that trades, sells of
@@ -1178,17 +1225,30 @@ class TradingBot:
         when the bot starts (core_start_check); every other gate is checked on
         every run.
         """
+        await self._job(
+            "core_trade",
+            lambda: self._core_trade(scheduled),
+            alert="core.failed",
+            beat_as=CORE_TRADE,
+        )
+
+    async def _core_trade(self, scheduled: time | None) -> JobOutcome:
         from halal_trader.execution.alpaca_broker import AlpacaRestBroker
         from halal_trader.portfolio import core_executor as ce
 
         core = self.settings.core
-        if self._engine is None or not (core.enabled):
-            return
-        token = getattr(self, "_core_token_problem", "the live token was not checked at start")
-        if not core.paper and token:
-            logger.error("core trade refused: live money without its token (%s)", token)
-            await self._alerts.notify("core.refused", f"live core not armed: {token}"[:500])
-            return
+        if self._engine is None or not core.enabled:
+            return Skipped("the core has no keys")
+        if off := _off_schedule(CORE_TRADE, scheduled):
+            return off
+        if not core.paper and self._core_token_problem:
+            logger.error(
+                "core trade refused: live money without its token (%s)", self._core_token_problem
+            )
+            await self._alerts.notify(
+                "core.refused", f"live core not armed: {self._core_token_problem}"
+            )
+            return Skipped("live money without its token")
         broker = AlpacaRestBroker(core.alpaca_api_key, core.alpaca_secret_key, paper=core.paper)
         try:
             outcome = await ce.run(
@@ -1199,27 +1259,17 @@ class TradingBot:
                 execute_orders=True,
                 check_token=False,  # checked at start: a dated token matches one day only
             )
-        except Exception as exc:  # noqa: BLE001 -- the job must not take the bot down
-            logger.error("core trade failed: %r", exc)
-            await self._alerts.notify("core.failed", repr(exc)[:500])
-            return
         finally:
             await broker.disconnect()
         if outcome.market_closed:
-            return
+            return Skipped("the market is closed")
         # The run finished (traded, held, halted or refused: the last two also
         # alert below). A crash leaves no beat, so the watchdog sees it.
-        await beat(
-            self._engine,
-            CORE_TRADE,
-            {"account": outcome.account, "refused": bool(outcome.refused)},
-        )
+        detail = {"account": outcome.account, "refused": bool(outcome.refused)}
         if outcome.refused:
             logger.error("core trade refused: %s", "; ".join(outcome.refused))
-            await self._alerts.notify(
-                "core.refused", ("core not run: " + "; ".join(outcome.refused))[:500]
-            )
-            return
+            await self._alerts.notify("core.refused", "core not run: " + "; ".join(outcome.refused))
+            return detail
         plan = outcome.plan
         assert plan is not None
         refused = outcome.rejected
@@ -1244,13 +1294,7 @@ class TradingBot:
             len(refused),
             "; " + "; ".join(plan.notes) if plan.notes else "",
         )
-
-    async def core_trade_early_close(self) -> None:
-        """The core's run on a 13:00 early close, when 15:40 finds the market shut."""
-        from halal_trader.market_hours import EARLY_CLOSE_DATES
-
-        if today_eastern() in EARLY_CLOSE_DATES:
-            await self.core_trade()
+        return detail
 
     async def core_start_check(self) -> list[str]:
         """At bot start: the core's dated live token, then every other preflight gate.
@@ -1270,7 +1314,7 @@ class TradingBot:
         core = self.settings.core
         self._core_token_problem = core_token_problem(self.settings)
         problems = [self._core_token_problem] if self._core_token_problem else []
-        if self._engine is None or not (core.enabled):
+        if self._engine is None or not core.enabled:
             return problems
         broker = AlpacaRestBroker(core.alpaca_api_key, core.alpaca_secret_key, paper=core.paper)
         try:
@@ -1288,162 +1332,95 @@ class TradingBot:
             await broker.disconnect()
         if problems:
             logger.error("core start check: %s", "; ".join(problems))
-            await self._alerts.notify(
-                "core.refused", ("core at start: " + "; ".join(problems))[:500]
-            )
+            await self._alerts.notify("core.refused", "core at start: " + "; ".join(problems))
         return problems
 
-    async def end_of_day(self) -> None:
-        """End-of-day job: close all positions, record P&L."""
-        logger.info("=== END OF DAY ROUTINE ===")
-        _, executor, portfolio, _ = self._require_initialized()
-        try:
-            # Close all positions
-            close_result = await executor.close_all()
-            logger.info("Close all positions result: %s", close_result)
+    async def end_of_day(self, *, scheduled: time | None = None) -> None:
+        """End-of-day job: close all positions, record the day's P&L, review, report.
 
-            # Wait for positions to close
-            await asyncio.sleep(5)
-
-            # Record daily P&L
-            summary = await portfolio.record_day_end()
-
-            # Enrich with market tag + date + LLM cost/calls so the
-            # richer Telegram summary fields fire.
-            summary["market"] = "stocks"
-
-            summary["date"] = today_eastern().isoformat()
-            if self._engine is not None:
-                try:
-                    from sqlalchemy import text
-                    from sqlalchemy.ext.asyncio import AsyncSession
-
-                    async with AsyncSession(self._engine) as session:
-                        row = (
-                            await session.execute(
-                                text(
-                                    "SELECT COUNT(*)::int, "
-                                    "COALESCE(SUM(cost_usd), 0)::float "
-                                    "FROM llm_decisions "
-                                    "WHERE timestamp::date = CURRENT_DATE"
-                                )
-                            )
-                        ).first()
-                        if row:
-                            summary["llm_calls"] = int(row[0] or 0)
-                            summary["llm_cost_usd"] = float(row[1] or 0.0)
-                except Exception as exc:
-                    logger.debug("Failed to enrich stocks daily summary with LLM cost: %r", exc)
-
-            # Classifier telemetry (cumulative since process start) —
-            # surfaces reactor classify volume + cost so we can answer
-            # "where did the spend go" from the daily summary without
-            # standing up dedicated persistence.
-            if self._news_reactor is not None:
-                classifier = getattr(self._news_reactor, "classifier", None)
-                if classifier is not None and hasattr(classifier, "get_telemetry"):
-                    try:
-                        telem = classifier.get_telemetry()
-                        summary["classifier_calls"] = telem.get("total_calls", 0)
-                        summary["classifier_calls_today"] = telem.get("calls_today", 0)
-                        summary["classifier_cost_usd"] = telem.get("cost_usd_total", 0.0)
-                        summary["classifier_quota_exhausted"] = telem.get("quota_exhausted", False)
-                        summary["classifier_by_provider"] = telem.get("calls_by_provider", {})
-                        if telem.get("quota_exhausted"):
-                            # Surface quota exhaustion as a daily-summary
-                            # ops alert too, in case the per-trip critical
-                            # alert was missed (e.g. operator joined late).
-                            if self._alerts is not None:
-                                await self._alerts.notify(
-                                    "classifier.quota_exhausted.eod",
-                                    (
-                                        "Reactor classifier ended the day in "
-                                        "quota-exhausted state. Top up the LLM "
-                                        "provider before the next session or "
-                                        "the news-momentum reactor stays "
-                                        "offline."
-                                    ),
-                                    market="stocks",
-                                    severity="critical",
-                                )
-                    except Exception as exc:  # noqa: BLE001
-                        logger.debug("classifier telemetry roll-up failed: %r", exc)
-
-            logger.info("Day summary: %s", summary)
-            # The flatten and the day's P&L are done: what the watchdog and a
-            # restarted bot's catch-up check for.
-            await beat(self._engine, STOCK_EOD, {"date": summary["date"]})
-
-            # End-of-day self-review. Pulls
-            # the day's closed round-trips, asks the LLM what patterns
-            # to learn, persists bounded knob overrides. Failures
-            # (network, LLM down, no trades) degrade silently — the
-            # rest of the daily-end routine must still run.
-            if self._self_review:
-                try:
-                    review = await self._self_review.review(lookback_days=1)
-                    if review.observations:
-                        logger.info(
-                            "Stocks self-review observations: %s",
-                            "; ".join(review.observations[:3]),
-                        )
-                except Exception as exc:
-                    logger.debug("Stocks self-review failed: %r", exc)
-
-            # Send daily summary via Telegram.
-            if self._notifier and self._notifier.enabled:
-                try:
-                    await self._notifier.notify_daily_summary(summary or {})
-                except Exception as exc:
-                    logger.debug("Failed to send stocks daily summary: %r", exc)
-
-        except Exception as e:
-            logger.error("End of day routine failed: %r", e)
-            if self._alerts is not None:
-                await self._alerts.notify(
-                    "stock.end_of_day.failed",
-                    repr(e),
-                    market="stocks",
-                    severity="error",
-                )
-        # Housekeeping, whatever happened above: the dashboard's mutation audit
-        # rows past ``settings.web.audit_retention_days``.
+        On a 13:00-close day it runs at 12:50 only (``scheduled`` names the cron
+        time that fired; a catch-up passes none). The audit-log prune runs
+        whatever happened.
+        """
+        await self._job(
+            "end_of_day",
+            lambda: self._end_of_day(scheduled),
+            alert="stock.end_of_day.failed",
+            beat_as=STOCK_EOD,
+        )
         await self._prune_audit_log()
 
-    async def _early_close_eod(self) -> None:
-        """End-of-day for early-close days (market closes at 1:00 PM ET).
+    async def _end_of_day(self, scheduled: time | None) -> JobOutcome:
+        if off := _off_schedule(STOCK_EOD, scheduled):
+            return off
+        _, executor, portfolio, _ = self._require_initialized()
+        close_result = await executor.close_all()
+        logger.info("Close all positions result: %s", close_result)
+        await asyncio.sleep(5)  # let the closes fill before the day's P&L is read
+        summary = await portfolio.record_day_end()
+        summary["market"] = "Day-trader"  # the summary's header
+        summary["date"] = today_eastern().isoformat()
+        summary.update(await self._llm_spend_today())
+        summary.update(await self._classifier_rollup())
+        logger.info("Day summary: %s", summary)
 
-        Fires at 12:50 PM ET every weekday, but only runs the EOD logic
-        when today is actually an early-close day.
-        """
+        # End-of-day self-review: the day's closed round-trips, the LLM's
+        # lessons, bounded knob overrides. It must not stop the report.
+        if self._self_review:
+            try:
+                review = await self._self_review.review(lookback_days=1)
+                if review.observations:
+                    logger.info(
+                        "Stocks self-review observations: %s",
+                        "; ".join(review.observations[:3]),
+                    )
+            except Exception as exc:  # noqa: BLE001 -- see above
+                logger.warning("Stocks self-review failed: %r", exc)
+        await self._notifier.notify_daily_summary(summary)
+        return {"date": summary["date"]}
+
+    async def _llm_spend_today(self) -> dict[str, Any]:
+        """Today's LLM calls and cost (New York day), for the daily summary."""
+        from sqlalchemy import text
+
+        from halal_trader.market_hours import trading_day_end_utc, trading_day_start_utc
+
+        if self._engine is None:
+            return {}
         today = today_eastern()
-        if effective_close_time(today).hour >= 16:
-            return
-        logger.info("=== EARLY CLOSE END OF DAY ROUTINE === (market closes at 1:00 PM ET)")
-        await self.end_of_day()
+        async with self._engine.connect() as conn:
+            row = (
+                await conn.execute(
+                    text(
+                        "SELECT count(*)::int AS n, coalesce(sum(cost_usd), 0)::float AS usd "
+                        "FROM llm_decisions WHERE timestamp >= :a AND timestamp < :b"
+                    ),
+                    {"a": trading_day_start_utc(today), "b": trading_day_end_utc(today)},
+                )
+            ).one()
+        return {"llm_calls": row.n, "llm_cost_usd": row.usd}
 
-    async def _heartbeat(self) -> None:
-        """Hourly heartbeat — proves the bot is alive even when no cycle
-        is due. Fires regardless of market state so a silent log file is
-        always an alarm, not just "the market is closed."
-        """
-        from halal_trader.market_hours import is_market_open_local
-
-        now = now_eastern()
-        try:
-            clock = await self.broker.get_clock()
-            next_open = clock.next_open
-            next_close = clock.next_close
-        except Exception:
-            next_open = None
-            next_close = None
-        logger.info(
-            "Stocks bot heartbeat — market_open=%s next_open=%s next_close=%s (now: %s ET)",
-            is_market_open_local(),
-            next_open or "unknown",
-            next_close or "unknown",
-            now.strftime("%Y-%m-%d %H:%M"),
-        )
+    async def _classifier_rollup(self) -> dict[str, Any]:
+        """The reactor classifier's cumulative calls and cost since the process
+        started; a day ending in quota exhaustion is alerted as critical."""
+        classifier = getattr(self._news_reactor, "classifier", None)
+        if classifier is None or not hasattr(classifier, "get_telemetry"):
+            return {}
+        telem = classifier.get_telemetry()
+        if telem.get("quota_exhausted"):
+            await self._alerts.notify(
+                "classifier.quota_exhausted.eod",
+                "Reactor classifier ended the day in quota-exhausted state. Top up the LLM "
+                "provider before the next session or the news-momentum reactor stays offline.",
+                severity="critical",
+            )
+        return {
+            "classifier_calls": telem.get("total_calls", 0),
+            "classifier_calls_today": telem.get("calls_today", 0),
+            "classifier_cost_usd": telem.get("cost_usd_total", 0.0),
+            "classifier_quota_exhausted": telem.get("quota_exhausted", False),
+            "classifier_by_provider": telem.get("calls_by_provider", {}),
+        }
 
     # ── Main Loop ───────────────────────────────────────────────
 
@@ -1721,95 +1698,26 @@ class TradingBot:
                 misfire_grace_time=1800,
             )
 
-            # Advisory daily halal "stock of the day" — generated pre-market,
-            # a few minutes after the cache refresh, before the open. Never
-            # trades; surfaced on the dashboard / CLI / API.
-            self.scheduler.add_job(
-                self.recommend,
-                CronTrigger(day_of_week="mon-fri", hour=9, minute=5, timezone=MARKET_TZ),
-                id="daily_recommendation",
-                replace_existing=True,
-                misfire_grace_time=3600,
-            )
-
             # Schedule trading cycles every N minutes during market hours (9:30 - 15:45 ET).
             # The cycle's run_cycle() performs its own is_market_open_local() check,
             # so holidays and early-close days are handled even though cron fires.
             # Use hour 10-15 for the bulk, plus a separate job for the 9:30-9:45 window.
             self._schedule_cycles(interval)
 
-            # Schedule end-of-day at 3:50 PM ET (before regular 4:00 close).
-            # On early-close days (1:00 PM close), the trading cycle's local
-            # market-open check will already stop trades after 1:00 PM, and the
-            # EOD job will still fire at 3:50 PM to reconcile P&L.
-            # A separate early-close EOD job fires at 12:50 PM ET to close
-            # positions before the 1:00 PM early close.
-            self.scheduler.add_job(
-                self.end_of_day,
-                CronTrigger(day_of_week="mon-fri", hour=15, minute=50, timezone=MARKET_TZ),
-                id="end_of_day",
-                replace_existing=True,
-                misfire_grace_time=1800,
-                coalesce=True,
-            )
-            # After the close, when the day's fills are final at the broker.
-            self.scheduler.add_job(
-                self.sync_broker_ledger,
-                CronTrigger(day_of_week="mon-fri", hour=16, minute=30, timezone=MARKET_TZ),
-                id="broker_ledger",
-                replace_existing=True,
-                misfire_grace_time=3600,
-                coalesce=True,
-            )
-            # Research, after the extended session closes at 20:00 ET.
-            self.scheduler.add_job(
-                self.research_daily,
-                CronTrigger(day_of_week="mon-fri", hour=20, minute=30, timezone=MARKET_TZ),
-                id="research_daily",
-                replace_existing=True,
-                misfire_grace_time=3600,
-                coalesce=True,
-            )
+            # The daily jobs, at the times DAILY_JOBS gives (core/heartbeat.py:
+            # the watchdog judges them by the same table), each with its
+            # 13:00-close time where it has one.
+            # The advisory stock of the day (never trades), after the cache refresh.
+            self._add_daily(self.recommend, RECOMMENDATION, "daily_recommendation", grace_s=3600)
+            self._add_daily(self.end_of_day, STOCK_EOD, "end_of_day", grace_s=1800)
+            self._add_daily(self.sync_broker_ledger, STOCK_LEDGER, "broker_ledger", grace_s=3600)
+            self._add_daily(self.research_daily, RESEARCH, "research_daily", grace_s=3600)
+            self._add_daily(self.weekly_digest, WEEKLY_DIGEST, "weekly_digest", grace_s=3600)
             if self.settings.core.enabled:
                 # The core's gates, once at start: the live token is held for
                 # the process, the rest are alerted now and re-checked per run.
                 await self.core_start_check()
-                # The strict-halal core, on its own account, late in the session
-                # (20 minutes before the close, on early-close days too).
-                self.scheduler.add_job(
-                    self.core_trade,
-                    CronTrigger(day_of_week="mon-fri", hour=15, minute=40, timezone=MARKET_TZ),
-                    id="core_trade",
-                    replace_existing=True,
-                    misfire_grace_time=600,
-                    coalesce=True,
-                )
-                self.scheduler.add_job(
-                    self.core_trade_early_close,
-                    CronTrigger(day_of_week="mon-fri", hour=12, minute=40, timezone=MARKET_TZ),
-                    id="core_trade_early_close",
-                    replace_existing=True,
-                    misfire_grace_time=600,
-                    coalesce=True,
-                )
-            self.scheduler.add_job(
-                self._early_close_eod,
-                CronTrigger(day_of_week="mon-fri", hour=12, minute=50, timezone=MARKET_TZ),
-                id="early_close_eod",
-                replace_existing=True,
-                misfire_grace_time=1800,
-                coalesce=True,
-            )
-
-            # One summary message every Friday evening (notifications/digest.py).
-            self.scheduler.add_job(
-                self.weekly_digest,
-                CronTrigger(day_of_week="fri", hour=17, minute=15, timezone=MARKET_TZ),
-                id="weekly_digest",
-                replace_existing=True,
-                misfire_grace_time=3600,
-                coalesce=True,
-            )
+                self._add_daily(self.core_trade, CORE_TRADE, "core_trade", grace_s=600)
 
             # Both Alpaca accounts' keys still work: a revoked key otherwise
             # leaves a "healthy" bot that cannot trade (2026-10-04: regenerating
@@ -1823,8 +1731,6 @@ class TradingBot:
                 id="market_snapshot",
                 replace_existing=True,
                 misfire_grace_time=50,
-                coalesce=True,
-                max_instances=1,
                 next_run_time=datetime.now(UTC),
             )
 
@@ -1834,21 +1740,6 @@ class TradingBot:
                 id="account_watch",
                 replace_existing=True,
                 misfire_grace_time=900,
-                coalesce=True,
-            )
-
-            # Idle-period heartbeat — proves the bot is alive on
-            # weekends, holidays, and outside trading hours. Without
-            # this, the stocks-bot container is silent for ~63h from
-            # Friday 4pm ET to Monday 9am ET — indistinguishable from
-            # a hung process.
-            self.scheduler.add_job(
-                self._heartbeat,
-                CronTrigger(minute=0, timezone=MARKET_TZ),  # top of every hour
-                id="heartbeat",
-                replace_existing=True,
-                misfire_grace_time=900,
-                coalesce=True,
             )
 
             self.scheduler.start()

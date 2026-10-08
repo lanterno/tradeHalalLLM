@@ -18,10 +18,17 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from halal_trader.compliance import purification
+from halal_trader.core.heartbeat import CORE_TRADE as CORE_TRADE_JOB
+from halal_trader.core.heartbeat import DAILY_JOBS
+from halal_trader.core.heartbeat import RESEARCH as RESEARCH_JOB
+from halal_trader.core.heartbeat import WEEKLY_DIGEST as DIGEST_JOB
 from halal_trader.data.store import last_closes
 from halal_trader.halal import strict
 from halal_trader.market_hours import (
+    EARLY_CLOSE,
     EARLY_CLOSE_DATES,
+    MARKET_CLOSE,
+    MARKET_OPEN,
     MARKET_TZ,
     US_MARKET_HOLIDAYS,
     is_trading_day,
@@ -30,14 +37,15 @@ from halal_trader.market_hours import (
 
 SESSION = {
     "pre": "04:00",
-    "open": "09:30",
-    "close": "16:00",
-    "early_close": "13:00",
+    "open": f"{MARKET_OPEN:%H:%M}",
+    "close": f"{MARKET_CLOSE:%H:%M}",
+    "early_close": f"{EARLY_CLOSE:%H:%M}",
     "post": "20:00",
 }
-CORE_TRADE = time(15, 40)
-RESEARCH = time(20, 30)
-DIGEST = time(17, 15)
+# The bot's own schedule (core/heartbeat.py), not a copy of it.
+CORE_TRADE = DAILY_JOBS[CORE_TRADE_JOB].at
+RESEARCH = DAILY_JOBS[RESEARCH_JOB].at
+DIGEST = DAILY_JOBS[DIGEST_JOB].at
 SCREEN_EVERY = timedelta(days=7)
 TOP = 10
 
