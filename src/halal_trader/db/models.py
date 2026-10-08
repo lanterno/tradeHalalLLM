@@ -136,13 +136,6 @@ class LlmDecision(SQLModel, table=True):
     cache_write_tokens: int | None = None
     cost_usd: float | None = None  # rounded float — Decimal aggregation done in code
 
-    # Written by the agentic tool-calling mode, deleted 2026-10-01; the
-    # column stays until a migration drops it. Always None for new rows.
-    tool_transcript: list | None = Field(
-        default=None,
-        sa_column=sa.Column("tool_transcript", JSONB, nullable=True),
-    )
-
 
 class StrategyAdjustment(SQLModel, table=True):
     """Audit log for LLM self-improvement parameter changes."""
