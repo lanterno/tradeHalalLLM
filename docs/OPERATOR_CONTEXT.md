@@ -87,6 +87,12 @@ churn kills this bot.
 
 ## Operator decisions of 2026-10-08
 
+- **Both strategies run side by side**, reversing the day-trader's retirement
+  of 2026-10-04: the LLM day-trader with its reactor entries (the `ALPACA_*`
+  account) and the strict-halal core (the `CORE_ALPACA_*` account), each on
+  its own paper account. The operator expects more from the day-trader than
+  its first months showed; the core is the measured baseline it has to beat.
+  All three switches default to on.
 - **Zoya removed.** The in-house strict screen is the only halal screen.
 - **Mixed-activity sectors need a Shariah board's inclusion** (screen v12):
   restaurants, grocers, convenience, variety and warehouse stores, drug
@@ -102,7 +108,8 @@ automate as much as possible. Recorded here so they can be revisited:
 - **LLM budget enforced** (always, since 2026-10-08 a fixed setting): a week of observe mode
   peaked at $0.58/day for the live pool against its $3 daily cap; pools are
   $25 live / $15 research per month.
-- **The LLM day-trader is retired** (`DAY_TRADER_ENABLED=false`), not halted:
+- **The LLM day-trader is retired** (`DAY_TRADER_ENABLED=false`; reversed on
+  2026-10-08, see above), not halted:
   +2.5%/yr vs SPUS 18.6%. Its exits and the EOD flatten still run. The
   kill-switch stays for emergencies and stops every strategy. The core under
   a halt buys nothing but still sells what the screen no longer holds halal
