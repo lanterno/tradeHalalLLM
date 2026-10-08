@@ -18,7 +18,7 @@ export async function setHalt(reason: string): Promise<HaltStatus> {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "X-Halt-Confirm": "yes",
+      "X-Trader-Confirm": "true",
     },
     body: JSON.stringify({ reason }),
   });
@@ -28,7 +28,7 @@ export async function clearHalt(): Promise<HaltStatus> {
   return apiFetch<HaltStatus>("/api/system/halt", {
     method: "DELETE",
     headers: {
-      "X-Halt-Confirm": "yes",
+      "X-Trader-Confirm": "true",
     },
   });
 }
