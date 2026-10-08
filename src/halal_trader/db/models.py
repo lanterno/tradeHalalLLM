@@ -336,31 +336,6 @@ class RoundTripPurificationRow(SQLModel, table=True):
     disbursed_to: str = ""
 
 
-class RegretRecordRow(SQLModel, table=True):
-    """Hindsight regret record for one closed trade.
-
-    Aggregate queries (mean, p99, by symbol/setup_type) run as proper
-    SQL against this table.
-
-    Nothing writes this table since ``core/regret`` was deleted on 2026-10-01;
-    the model stays so the schema matches the migrations.
-    """
-
-    __tablename__ = "regret_records"
-
-    trade_id: str = Field(primary_key=True)
-    symbol: str = Field(index=True)
-    regret: float
-    optimal_size_pct: float
-    actual_size_pct: float
-    pnl_pct: float
-    note: str = ""
-    setup_type: str | None = None
-    closed_at: datetime = Field(
-        default_factory=lambda: datetime.now(UTC), sa_type=sa.DateTime(timezone=True)
-    )
-
-
 class RationaleRow(SQLModel, table=True):
     """RAG store row — one closed-trade rationale + outcome.
 
