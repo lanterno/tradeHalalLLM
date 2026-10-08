@@ -45,7 +45,7 @@ What it does, idempotently: updates the system and enables security
 updates; installs Docker (with log rotation), `just`, `restic`, `jq`;
 adds 4 GB of swap; sets ufw to SSH only; makes SSH key-only; creates the
 `halabot` user (in the `docker` group, with root's SSH key); clones the
-repo to `/opt/halabot`; writes `.env` from `.env.stocks.example` with a
+repo to `/opt/halabot`; writes `.env` from `.env.example` with a
 fresh `POSTGRES_PASSWORD` (also in `DATABASE_URL`) and `WEB_API_TOKEN`;
 writes `/etc/halabot/server.env` from `infra/server/server.env.example`;
 installs and starts the systemd timers; installs Tailscale.

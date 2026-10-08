@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 LLM-powered halal day-trading bot for **US stocks** (Alpaca paper trading via MCP). Python 3.14+, managed with `uv`. Single developer, working directly on `main`. Paper only, until a strategy passes the written capital gates (see below).
 
-**Crypto trading was abandoned on 2026-10-01** and its code deleted. The `crypto_*` tables remain in the schema until an operator-gated migration drops them; nothing writes to them.
+**Crypto trading was abandoned on 2026-10-01**: its code was deleted then, and its tables dropped on 2026-10-08 (migration `732583ae4034`).
 
 **Read `docs/OPERATOR_CONTEXT.md` first.** It holds the non-code-derivable context: the working agreement, the stocks strategy intent (**fast in, slow out**), why the sole LLM provider is GLM-5.2 via OpenRouter (don't undo it; the bot won't start without `GLM_API_KEY`), operator-gated issues you can't fix in code (Zoya sandbox, reconcile drift and the destructive fix-drift tool; don't touch `_aggregate_stocks_positions`), and the `src/halabot` engineering lessons (validate every edge with `halabot backtest` on disjoint OOS windows; the engine is shadow-only and never trades).
 
@@ -36,13 +36,13 @@ halabot backtest ... / halabot ab-report      # shadow engine research tools
 
 Every compose recipe goes through `compose` in the justfile (`--env-file .env`, project `halabot`). The compose file binds every port to 127.0.0.1 (dashboard 8082, Postgres 5433): on the public server Docker's port rules bypass ufw, so never publish a port on 0.0.0.0. The host side (bootstrap, the nightly off-site backup, health alerts, systemd units) is `infra/server/`. The previous machine was lost with its database and `.env` in 2026-10; a backup counts only once restic has it off the server (`backup.offsite` heartbeat).
 
-**Database**: Postgres 16 + pgvector, Alembic is the single schema authority (`init_db()` refuses to start on a wrong revision; it never runs DDL). Tests use per-worker `halal_trader_test*` databases on the same server. `tests/conftest.py` refuses any database name that isn't disposable, runs tests without the operator's `.env` (`HALAL_TRADER_ENV_FILE`), and blocks outbound network (`TEST_ALLOW_NETWORK=1` to opt out once).
+**Database**: Postgres 16 + pgvector, Alembic is the single schema authority (`init_db()` refuses to start on a wrong revision; it never runs DDL). The models must match what the migrations build (`tests/test_alembic_migrations.py` compares them): an index or constraint goes in both the model and its migration, or the next `--autogenerate` proposes dropping it. Tests use per-worker `halal_trader_test*` databases on the same server. `tests/conftest.py` refuses any database name that isn't disposable, runs tests without the operator's `.env` (`HALAL_TRADER_ENV_FILE`), and blocks outbound network (`TEST_ALLOW_NETWORK=1` to opt out once).
 
 Dashboard frontend: `cd dashboard && npm install && npm run build` (served from `dashboard/dist` by `web/app.py`); `npm run dev` for hot reload.
 
 ## Architecture
 
-Authoritative diagrams: `docs/ARCHITECTURE.md` (partly pre-dates the crypto removal; trust the code).
+Authoritative diagrams: `docs/ARCHITECTURE.md` (where it and the code differ, trust the code).
 
 **One live bot, one shadow engine, one dashboard; three containers, one database.** `trading/scheduler.py:TradingBot` (APScheduler cron, 15-min cycles in market hours) drives `TradingCycleService` → `TradingStrategy` (one GLM tool call) → `TradeExecutor` (Alpaca via the MCP stdio subprocess). Between cycles, `StockPositionMonitor` enforces SL/TP and trailing stops every 30 s, and `StockNewsEventReactor` can place half-size "fast in" momentum entries. `src/halabot` runs alongside as `halabot shadow` and only logs proposals. The web (`web/app.py`) is a separate process: **the database is the only contract between them**. In-process state (`RuntimeView`, `EventBus`) does not reach the web.
 
@@ -62,7 +62,7 @@ Authoritative diagrams: `docs/ARCHITECTURE.md` (partly pre-dates the crypto remo
 
 ## Conventions / gotchas
 
-- **Settings are a singleton** (`config.py:get_settings()`); pass `settings` by DI, never construct `Settings` elsewhere. Every field must be documented in `.env.example` and `.env.stocks.example` (`tests/test_settings_parity.py`).
+- **Settings are a singleton** (`config.py:get_settings()`); pass `settings` by DI, never construct `Settings` elsewhere. Every field must be documented in `.env.example`, the one env template (`tests/test_settings_parity.py`).
 - **The broker server is frozen.** The image runs alpaca-mcp-server from `infra/alpaca-mcp-server.txt`, an exact `pip freeze` installed at build time; host runs use `uvx alpaca-mcp-server@<ALPACA_MCP_SERVER_VERSION>`. Never let it float: an unpinned server, or a pinned server with floating dependencies, has broken the bot at startup. Upgrade by re-freezing, bumping the version default (a test keeps the two in sync), and smoke-testing a live cycle.
 - **Liveness is in the database.** `core/heartbeat.py`: the bot beats `stock.process` (60 s), `stock.cycle`, `stock.monitor` and one row per daily job; the shadow beats `shadow.process`. `assess()` judges loops by age and daily jobs by the trading calendar (`DAILY_JOBS`); the web's watchdog (`web/watchdog.py`) alerts on Telegram when one goes stale, `/api/health/bot` is 503 when the bot is, and compose healthchecks use `core/healthcheck.py`. Add a beat (and a `DAILY_JOBS` entry for a daily job) for any new long-running component. A restarted bot catches up the daily jobs it missed (`plan_catch_up`).
 - **Secrets per container.** One `.env`; `infra/docker-compose.yml` blanks, per service, the secrets that process does not read. A new secret goes into the blank lists of every service that does not need it.

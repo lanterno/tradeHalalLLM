@@ -35,7 +35,8 @@ throughput, not review.
   the refactor aims to *improve* it (edge, universe, execution), not only
   harden it. The roadmap and the decisions behind it are in the local-only
   `docs/MODERNIZATION_PLAN.md` (§9); see CLAUDE.md for why it isn't committed.
-- **Crypto trading is abandoned**; its code is deleted.
+- **Crypto trading is abandoned**; its code is deleted and, since 2026-10-08,
+  its tables dropped.
 - **Real capital only through staged, pre-signed gates** (paper → small live →
   scale; thresholds in the plan). Until the first gate is signed, everything
   stays paper. A live account would be a cash account (no margin).

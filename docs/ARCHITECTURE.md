@@ -136,8 +136,8 @@ Separate from the live path; nothing here trades.
 ## Configuration
 
 `config.py:Settings`, loaded once from the environment and `.env`; every
-field is documented in `.env.example` and `.env.stocks.example` (a test
-enforces both directions). Secrets never enter the repo.
+field is documented in `.env.example` (a test enforces both
+directions). Secrets never enter the repo.
 
 ## Schema
 
