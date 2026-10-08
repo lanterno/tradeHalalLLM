@@ -21,6 +21,7 @@ from halal_trader.web.routes import (
     home,
     insights,
     metrics,
+    operations,
     pnl,
     positions,
     prometheus,
@@ -52,6 +53,7 @@ _MODULES = (
     home,
     recommendation,
     halabot_beliefs,
+    operations,
 )
 
 

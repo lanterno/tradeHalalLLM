@@ -260,6 +260,18 @@ def last_due(job: DailyJob, now: datetime) -> datetime | None:
     return None
 
 
+def next_run(job: DailyJob, now: datetime) -> datetime | None:
+    """The first scheduled run of ``job`` after ``now``."""
+    day = now.astimezone(MARKET_TZ).date()
+    for _ in range(21):
+        if is_trading_day(day) and (job.weekday is None or day.weekday() == job.weekday):
+            at = scheduled_at(job, day)
+            if at > now:
+                return at
+        day += timedelta(days=1)
+    return None
+
+
 def cycles_due_at(now: datetime) -> bool:
     """Should trading cycles be completing at ``now`` (session open since 10:00 ET)?"""
     et = now.astimezone(MARKET_TZ)
