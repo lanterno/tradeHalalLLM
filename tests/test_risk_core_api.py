@@ -97,6 +97,30 @@ def test_core_risk_reads_the_snapshot(client) -> None:
     assert body["peak_day"] == "2026-09-01"
 
 
+def test_a_holding_missing_from_the_newest_screen_is_failing(client, database_url) -> None:
+    """The newest screen decides, as on the home page and at the order boundary:
+    an older pass does not count for a name the newest screen does not hold."""
+
+    async def newer_screen() -> None:
+        engine = create_async_engine(database_url)
+        async with engine.begin() as conn:
+            await conn.execute(
+                text("UPDATE halal_screen_results SET verdict = 'halal' WHERE symbol = 'S11'")
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO halal_screen_results (as_of, symbol, sic_description, verdict, "
+                    "reasons, metrics, method, screened_at) SELECT '2026-10-02', symbol, "
+                    "sic_description, verdict, reasons, metrics, method, now() "
+                    "FROM halal_screen_results WHERE symbol <> 'S11'"
+                )
+            )
+        await engine.dispose()
+
+    asyncio.run(newer_screen())
+    assert client.get("/api/risk/core").json()["failing_screen"] == ["S11"]
+
+
 def test_core_risk_without_an_account_is_unavailable(database_url, tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("LOG_DIR", str(tmp_path / "logs"))
     with TestClient(web_app.create_app()) as c:
