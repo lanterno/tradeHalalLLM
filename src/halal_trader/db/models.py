@@ -425,6 +425,14 @@ class RationaleRow(SQLModel, table=True):
     """
 
     __tablename__ = "rag_rationales"
+    __table_args__ = (
+        sa.Index(
+            "ix_rag_rationales_embedding_hnsw",
+            "embedding",
+            postgresql_using="hnsw",
+            postgresql_ops={"embedding": "vector_cosine_ops"},
+        ),
+    )
 
     trade_id: str = Field(primary_key=True)
     symbol: str = Field(index=True)
@@ -474,6 +482,7 @@ class BrokerActivity(SQLModel, table=True):
     """
 
     __tablename__ = "broker_activities"
+    __table_args__ = (sa.Index("ix_broker_activities_account_time", "account", "transaction_time"),)
 
     id: str = Field(primary_key=True)
     activity_type: str = Field(index=True)
@@ -786,6 +795,8 @@ class Event(SQLModel, table=True):
     __tablename__ = "events"
     __table_args__ = (
         sa.UniqueConstraint("source", "source_id", "symbol", name="uq_events_source_item"),
+        sa.Index("ix_events_kind_published", "kind", "published_at"),
+        sa.Index("ix_events_symbol_published", "symbol", "published_at"),
     )
 
     id: int | None = Field(default=None, sa_column=sa.Column(sa.BigInteger(), primary_key=True))
@@ -807,7 +818,9 @@ class EventScore(SQLModel, table=True):
     )
 
     id: int | None = Field(default=None, sa_column=sa.Column(sa.BigInteger(), primary_key=True))
-    event_id: int = Field(sa_column=sa.Column(sa.BigInteger(), sa.ForeignKey("events.id")))
+    event_id: int = Field(
+        sa_column=sa.Column(sa.BigInteger(), sa.ForeignKey("events.id"), nullable=False)
+    )
     scorer: str
     score: float
     tag: str | None = None
@@ -820,9 +833,15 @@ class EventFact(SQLModel, table=True):
     Several per event are possible (a result and its guidance)."""
 
     __tablename__ = "event_facts"
+    __table_args__ = (
+        sa.Index("ix_event_facts_event_extractor", "event_id", "extractor"),
+        sa.Index("ix_event_facts_kind", "kind"),
+    )
 
     id: int | None = Field(default=None, sa_column=sa.Column(sa.BigInteger(), primary_key=True))
-    event_id: int = Field(sa_column=sa.Column(sa.BigInteger(), sa.ForeignKey("events.id")))
+    event_id: int = Field(
+        sa_column=sa.Column(sa.BigInteger(), sa.ForeignKey("events.id"), nullable=False)
+    )
     extractor: str
     kind: str
     fields: dict = Field(sa_column=sa.Column("fields", JSONB, nullable=False))
@@ -846,6 +865,7 @@ class Dividend(SQLModel, table=True):
     """A cash dividend from Alpaca's corporate actions: rate per share, by ex-date."""
 
     __tablename__ = "dividends"
+    __table_args__ = (sa.Index("ix_dividends_symbol_ex", "symbol", "ex_date"),)
 
     source_id: str = Field(primary_key=True)
     symbol: str
@@ -908,6 +928,7 @@ class CoreOrder(SQLModel, table=True):
     refused, with the screen verdict it relied on: the receipt for every fill."""
 
     __tablename__ = "core_orders"
+    __table_args__ = (sa.Index("ix_core_orders_submitted", "submitted_at"),)
 
     id: int | None = Field(default=None, primary_key=True)
     # "core" (paper) or "core-live": portfolio/core_account.py.
@@ -931,6 +952,7 @@ class CoreRun(SQLModel, table=True):
     """One run of the core executor: monthly or forced-sales-only, executed or a plan."""
 
     __tablename__ = "core_runs"
+    __table_args__ = (sa.Index("ix_core_runs_account_run_on", "account", "run_on"),)
 
     id: int | None = Field(default=None, primary_key=True)
     account: str = Field(default="core", sa_column_kwargs={"server_default": "core"})
@@ -983,6 +1005,7 @@ class EpsFact(SQLModel, table=True):
     the input to standardized unexpected earnings, known only from ``filed``."""
 
     __tablename__ = "eps_facts"
+    __table_args__ = (sa.Index("ix_eps_facts_cik_filed", "cik", "filed"),)
 
     cik: int = Field(primary_key=True)
     concept: str = Field(primary_key=True)
@@ -1001,6 +1024,7 @@ class EtfHolding(SQLModel, table=True):
     the filing (when it became public), not only by the period it reports."""
 
     __tablename__ = "etf_holdings"
+    __table_args__ = (sa.Index("ix_etf_holdings_etf_filed", "etf", "filed"),)
 
     id: int | None = Field(default=None, primary_key=True)
     etf: str
