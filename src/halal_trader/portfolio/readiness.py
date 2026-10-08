@@ -71,25 +71,13 @@ async def check(
     engine: AsyncEngine, *, today: date, book: str = "core", account: str = CORE_PAPER
 ) -> Readiness:
     """The gate for ``account`` as of ``today`` (only data up to ``today`` counts)."""
+    from halal_trader.execution.ledger import equity_history
     from halal_trader.portfolio.execution_quality import report
+    from halal_trader.research.forward_book import nav_series
 
+    equity = await equity_history(engine, account, through=today)
+    navs = dict(await nav_series(engine, book, through=today))
     async with engine.connect() as conn:
-        equity = (
-            await conn.execute(
-                text(
-                    "SELECT day, equity FROM broker_equity WHERE account = :a AND equity > 0 "
-                    "AND day <= :t ORDER BY day"
-                ),
-                {"a": account, "t": today},
-            )
-        ).all()
-        navs = {
-            r.day: float(r.nav)
-            for r in await conn.execute(
-                text("SELECT day, nav FROM forward_book_days WHERE book = :b AND day <= :t"),
-                {"b": book, "t": today},
-            )
-        }
         runs = (
             await conn.execute(
                 text(
@@ -122,7 +110,7 @@ async def check(
 
     # Pre-trade equity: the first run that traded, before its orders, stands in
     # for the account on the book's last day before it.
-    acct = {r.day: float(r.equity) for r in equity}
+    acct = dict(equity)
     first_run = next((r for r in runs if r.executed and r.halted is None and r.equity), None)
     if first_run is not None:
         before = [d for d in navs if d < first_run.run_on]

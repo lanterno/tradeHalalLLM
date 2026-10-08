@@ -45,47 +45,22 @@ def register(app: FastAPI) -> None:
         from halal_trader.config import get_settings
         from halal_trader.core.heartbeat import core_running
         from halal_trader.data.store import last_closes
+        from halal_trader.execution.ledger import equity_history
         from halal_trader.market_hours import today_eastern
         from halal_trader.portfolio import readiness as gate
         from halal_trader.portfolio.core_account import core_account
+        from halal_trader.portfolio.snapshots import read_snapshot
+        from halal_trader.research.forward_book import latest_weights, nav_series
 
         settings = get_settings()
         account = core_account(settings.core.paper)
         today = today_eastern()
         engine = ctx.engine
+        equity_rows = await equity_history(engine, account)
+        navs = dict(await nav_series(engine, "core"))
+        targets = await latest_weights(engine, "core")
+        snap = await read_snapshot(engine, account)
         async with engine.connect() as conn:
-            equity_rows = (
-                await conn.execute(
-                    text(
-                        "SELECT day, equity FROM broker_equity WHERE account = :a "
-                        "AND equity > 0 ORDER BY day"
-                    ),
-                    {"a": account},
-                )
-            ).all()
-            snap = (
-                await conn.execute(
-                    text(
-                        "SELECT taken_at, equity, positions FROM account_snapshots "
-                        "WHERE account = :a"
-                    ),
-                    {"a": account},
-                )
-            ).first()
-            navs = {
-                r.day: float(r.nav)
-                for r in await conn.execute(
-                    text("SELECT day, nav FROM forward_book_days WHERE book = 'core' ORDER BY day")
-                )
-            }
-            book_weights = (
-                await conn.execute(
-                    text(
-                        "SELECT weights FROM forward_book_days WHERE book = 'core' "
-                        "ORDER BY day DESC LIMIT 1"
-                    )
-                )
-            ).scalar()
             orders = (
                 await conn.execute(
                     text(
@@ -109,8 +84,8 @@ def register(app: FastAPI) -> None:
             shares = await paper_positions(engine, today + timedelta(days=1), account)
             closes = {s: c for s, (_, c) in (await last_closes(engine, sorted(shares))).items()}
 
-        equity = float(equity_rows[-1].equity) if equity_rows else None
-        equity_day = equity_rows[-1].day.isoformat() if equity_rows else None
+        equity = equity_rows[-1][1] if equity_rows else None
+        equity_day = equity_rows[-1][0].isoformat() if equity_rows else None
         values = {s: q * closes.get(s, 0.0) for s, q in shares.items()}
         source = "ledger"
         if snap is not None and snap.equity > 0:
@@ -122,7 +97,6 @@ def register(app: FastAPI) -> None:
                 if p.get("qty"):
                     shares[p["symbol"]] = float(p["qty"])
                     values[p["symbol"]] = float(p.get("market_value") or 0.0)
-        targets = dict(book_weights or {})
         holdings: list[dict[str, Any]] = []
         for symbol in sorted(set(shares) | set(targets)):
             value = values.get(symbol, 0.0)
@@ -143,14 +117,14 @@ def register(app: FastAPI) -> None:
         # Account and book, both rebased to 100 at the account's first day.
         series = []
         if equity_rows:
-            first = equity_rows[0]
-            base_nav = navs.get(first.day)
-            for r in equity_rows:
-                nav = navs.get(r.day)
+            first_day, first_equity = equity_rows[0]
+            base_nav = navs.get(first_day)
+            for day, equity_then in equity_rows:
+                nav = navs.get(day)
                 series.append(
                     {
-                        "date": r.day.isoformat(),
-                        "account": _f(100 * float(r.equity) / float(first.equity), 3),
+                        "date": day.isoformat(),
+                        "account": _f(100 * equity_then / first_equity, 3),
                         "book": _f(100 * nav / base_nav, 3) if nav and base_nav else None,
                     }
                 )

@@ -7,7 +7,6 @@ from typing import Any
 
 from fastapi import Depends, FastAPI
 from fastapi.responses import JSONResponse
-from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from halal_trader.core.context import DashboardContext
@@ -47,28 +46,13 @@ async def core_risk(engine: AsyncEngine, account: str) -> dict[str, Any]:
     snapshot (falling back to its ledger at the last close) and its daily
     equity history. ``account`` is its ledger name (core_account())."""
     from halal_trader.compliance.sectors import sector_of
+    from halal_trader.execution.ledger import equity_history
+    from halal_trader.portfolio.snapshots import read_snapshot
     from halal_trader.web.routes.positions import broker_position, ledger_positions
 
-    async with engine.connect() as conn:
-        snap = (
-            await conn.execute(
-                text(
-                    "SELECT taken_at, equity, cash, last_equity, positions "
-                    "FROM account_snapshots WHERE account = :a"
-                ),
-                {"a": account},
-            )
-        ).first()
-        history = [
-            (r.day, float(r.equity))
-            for r in await conn.execute(
-                text(
-                    "SELECT day, equity FROM broker_equity WHERE account = :a AND equity > 0 "
-                    "ORDER BY day"
-                ),
-                {"a": account},
-            )
-        ]
+    snap = await read_snapshot(engine, account)
+    history = await equity_history(engine, account)
+    as_of: str | None
     now = datetime.now(UTC)
     if snap is not None:
         positions = [broker_position(p) for p in snap.positions or []]

@@ -18,7 +18,6 @@ from typing import Any
 
 from fastapi import Depends, FastAPI
 from fastapi.responses import JSONResponse
-from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from halal_trader.core.context import DashboardContext
@@ -116,13 +115,9 @@ def register(app: FastAPI) -> None:
         from halal_trader.core.heartbeat import core_running
 
         now = datetime.now(UTC)
-        async with ctx.engine.connect() as conn:
-            snaps = {
-                r.account: r
-                for r in await conn.execute(
-                    text("SELECT account, taken_at, equity, cash, positions FROM account_snapshots")
-                )
-            }
+        from halal_trader.portfolio.snapshots import read_snapshots
+
+        snaps = await read_snapshots(ctx.engine)
         open_trades = await ctx.repo.get_open_trades()
         core_name = core_account(ctx.settings.core.paper)
         status = {
@@ -135,6 +130,7 @@ def register(app: FastAPI) -> None:
             equity: float | None
             cash: float | None
             age: int | None
+            as_of: str | None
             if snap is not None:
                 positions = [broker_position(p) for p in snap.positions or []]
                 equity, cash = float(snap.equity), float(snap.cash)

@@ -284,15 +284,15 @@ async def _core_readiness(engine: AsyncEngine, today: date) -> bool:
     The verdict is kept in the ``core.readiness`` heartbeat, so the alert
     fires on the transition, not every evening after.
     """
-    from halal_trader.core.heartbeat import beat, read_beats
+    from halal_trader.core.heartbeat import CORE_READINESS, beat, read_beats
     from halal_trader.portfolio.readiness import check
 
     result = await check(engine, today=today)
-    previous = (await read_beats(engine)).get("core.readiness")
+    previous = (await read_beats(engine)).get(CORE_READINESS)
     was_ready = bool(previous and (previous.detail or {}).get("ready"))
     await beat(
         engine,
-        "core.readiness",
+        CORE_READINESS,
         {
             "ready": result.ready,
             "days": result.days,
@@ -320,21 +320,26 @@ async def _backup_health(engine: AsyncEngine) -> list[str]:
     """
     from datetime import UTC, datetime
 
-    from halal_trader.core.heartbeat import read_beats
+    from halal_trader.core.heartbeat import (
+        BACKUP_NIGHTLY,
+        BACKUP_OFFSITE,
+        BACKUP_RESTORE_DRILL,
+        read_beats,
+    )
 
     beats = await read_beats(engine)
     now = datetime.now(UTC)
     problems = []
     for component, what in (
-        ("backup.nightly", "nightly dump"),
-        ("backup.offsite", "off-site copy"),
+        (BACKUP_NIGHTLY, "nightly dump"),
+        (BACKUP_OFFSITE, "off-site copy"),
     ):
         last = beats.get(component)
         if last is None:
             problems.append(f"backup: no {what} recorded yet")
         elif (now - last.beat_at).total_seconds() > BACKUP_MAX_AGE_H * 3600:
             problems.append(f"backup: no {what} in the last 36 h")
-    drill = beats.get("backup.restore_drill")
+    drill = beats.get(BACKUP_RESTORE_DRILL)
     if drill is not None and (now - drill.beat_at).days > RESTORE_DRILL_MAX_AGE_D:
         problems.append(f"backup: last restore drill {drill.beat_at:%Y-%m-%d}, over 40 days ago")
     return problems
@@ -377,15 +382,10 @@ async def _validate_screen(engine: AsyncEngine, today: date) -> list[str]:
 async def _core_holdings(engine: AsyncEngine) -> set[str]:
     """What the core holds or is about to: the core book's newest weights and the
     core account's orders of the last two months."""
+    from halal_trader.research.forward_book import latest_weights
+
+    weights = await latest_weights(engine, "core")
     async with engine.connect() as conn:
-        weights = (
-            await conn.execute(
-                text(
-                    "SELECT weights FROM forward_book_days WHERE book = 'core' "
-                    "ORDER BY day DESC LIMIT 1"
-                )
-            )
-        ).scalar()
         ordered = {
             r.symbol
             for r in await conn.execute(
@@ -393,7 +393,7 @@ async def _core_holdings(engine: AsyncEngine) -> set[str]:
                 {"d": datetime.now(UTC) - timedelta(days=62)},
             )
         }
-    return set(dict(weights or {})) | ordered
+    return set(weights) | ordered
 
 
 # Filings that can change a screen's inputs: annual and quarterly reports,

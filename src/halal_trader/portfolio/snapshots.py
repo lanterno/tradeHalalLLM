@@ -11,6 +11,7 @@ daily_bars.
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
@@ -57,6 +58,43 @@ def quote_row(
         "price": price,
         "prev_close": _f((snap.get("prevDailyBar") or {}).get("c")),
     }
+
+
+@dataclass(frozen=True, slots=True)
+class AccountSnapshot:
+    account: str
+    taken_at: datetime
+    equity: float
+    cash: float
+    last_equity: float | None
+    positions: list[dict[str, Any]]
+
+
+async def read_snapshots(engine: AsyncEngine) -> dict[str, AccountSnapshot]:
+    """Every account's latest snapshot, by account name."""
+    async with engine.connect() as conn:
+        rows = await conn.execute(
+            text(
+                "SELECT account, taken_at, equity, cash, last_equity, positions "
+                "FROM account_snapshots"
+            )
+        )
+        return {
+            r.account: AccountSnapshot(
+                r.account,
+                r.taken_at,
+                float(r.equity),
+                float(r.cash),
+                float(r.last_equity) if r.last_equity is not None else None,
+                list(r.positions or []),
+            )
+            for r in rows
+        }
+
+
+async def read_snapshot(engine: AsyncEngine, account: str) -> AccountSnapshot | None:
+    """One account's latest snapshot (None before the first)."""
+    return (await read_snapshots(engine)).get(account)
 
 
 async def snapshot_account(engine: AsyncEngine, account: str, broker: Any) -> None:

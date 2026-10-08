@@ -201,6 +201,7 @@ async def build(
     from halal_trader.compliance.sectors import sector_of
     from halal_trader.core.heartbeat import core_running
     from halal_trader.portfolio import readiness as gate
+    from halal_trader.portfolio import snapshots
     from halal_trader.portfolio.core_account import core_account
     from halal_trader.portfolio.core_executor import monthly_due
     from halal_trader.portfolio.snapshots import BENCHMARKS
@@ -209,8 +210,8 @@ async def build(
     core_on = await core_running(engine)  # the web never sees the core's keys
     now = now or datetime.now(UTC)
     today = now.astimezone(MARKET_TZ).date()
+    snaps = await snapshots.read_snapshots(engine)
     async with engine.connect() as conn:
-        snaps = {r.account: r for r in await conn.execute(text("SELECT * FROM account_snapshots"))}
         equity_rows = [
             (r.account, r.day, float(r.equity))
             for r in await conn.execute(

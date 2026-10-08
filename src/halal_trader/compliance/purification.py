@@ -126,22 +126,14 @@ async def held_shares(engine: AsyncEngine, before: date, account: str) -> dict[s
     the ledger not yet synced past it (its fills would be missing), or a fill
     within ``SNAPSHOT_FILL_MARGIN`` of it (the two clocks cannot order them).
     """
-    from halal_trader.core.heartbeat import STOCK_LEDGER
+    from halal_trader.core.heartbeat import STOCK_LEDGER, read_beat
+    from halal_trader.portfolio.snapshots import read_snapshot
 
+    snap = await read_snapshot(engine, account)
+    ledger = await read_beat(engine, STOCK_LEDGER)
+    if snap is None or ledger is None or ledger.beat_at < snap.taken_at:
+        return await paper_positions(engine, before, account)
     async with engine.connect() as conn:
-        snap = (
-            await conn.execute(
-                text("SELECT taken_at, positions FROM account_snapshots WHERE account = :a"),
-                {"a": account},
-            )
-        ).first()
-        synced = (
-            await conn.execute(
-                text("SELECT beat_at FROM heartbeats WHERE component = :c"), {"c": STOCK_LEDGER}
-            )
-        ).scalar()
-        if snap is None or synced is None or synced < snap.taken_at:
-            return await paper_positions(engine, before, account)
         near = (
             await conn.execute(
                 text(

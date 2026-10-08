@@ -16,15 +16,17 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from halal_trader.core.heartbeat import (
+    BACKUP_NIGHTLY,
+    BACKUP_OFFSITE,
+    BACKUP_RESTORE_DRILL,
+    CORE_READINESS,
+    read_beats,
+)
 
-async def _first_last(
-    engine: AsyncEngine, sql: str, params: dict[str, Any]
-) -> tuple[float, float] | None:
-    async with engine.connect() as conn:
-        rows = (await conn.execute(text(sql), params)).all()
-    if len(rows) < 2:
-        return None
-    return float(rows[0][1]), float(rows[-1][1])
+
+def _first_last(series: list[tuple[date, float]]) -> tuple[float, float] | None:
+    return (series[0][1], series[-1][1]) if len(series) >= 2 else None
 
 
 def _pct(pair: tuple[float, float] | None) -> str:
@@ -35,50 +37,34 @@ async def build(engine: AsyncEngine, settings: Any, *, today: date) -> str:
     week = today - timedelta(days=7)
     lines = [f"<b>Halal Trader — week to {today:%a %d %b %Y}</b>"]
 
+    from halal_trader.execution.ledger import equity_history
     from halal_trader.portfolio.core_account import core_account
+    from halal_trader.research.forward_book import nav_series
 
     account = core_account(settings.core.paper)
-    core = await _first_last(
-        engine,
-        "SELECT day, equity FROM broker_equity WHERE account = :a AND day >= :d ORDER BY day",
-        {"d": week, "a": account},
-    )
+    history = await equity_history(engine, account)
+    core = _first_last([(d, e) for d, e in history if d >= week])
+    core_now = history[-1][1] if history else None
     async with engine.connect() as conn:
-        core_now = (
-            await conn.execute(
-                text(
-                    "SELECT equity FROM broker_equity WHERE account = :a ORDER BY day DESC LIMIT 1"
-                ),
-                {"a": account},
-            )
-        ).scalar()
-    spus = await _first_last(
-        engine,
-        "SELECT day, close FROM daily_bars WHERE symbol = 'SPUS' AND adjustment = 'all' "
-        "AND day >= :d ORDER BY day",
-        {"d": week},
-    )
-    book = await _first_last(
-        engine,
-        "SELECT day, nav FROM forward_book_days WHERE book = 'core' AND day >= :d ORDER BY day",
-        {"d": week},
-    )
-    s1 = await _first_last(
-        engine,
-        "SELECT day, nav FROM forward_book_days WHERE book = 's1' AND day >= :d ORDER BY day",
-        {"d": week},
-    )
+        spus_rows = await conn.execute(
+            text(
+                "SELECT day, close FROM daily_bars WHERE symbol = 'SPUS' AND adjustment = 'all' "
+                "AND day >= :d ORDER BY day"
+            ),
+            {"d": week},
+        )
+        spus = _first_last([(r.day, float(r.close)) for r in spus_rows])
+    book = _first_last(await nav_series(engine, "core", since=week))
+    s1 = _first_last(await nav_series(engine, "s1", since=week))
     lines.append(
         f"Core account: {f'${core_now:,.0f}' if core_now else 'no equity yet'} "
         f"({_pct(core)} this week) · core book {_pct(book)} · SPUS {_pct(spus)} · s1 {_pct(s1)}"
     )
 
-    async with engine.connect() as conn:
-        beats = {
-            r.component: r.detail or {}
-            for r in await conn.execute(text("SELECT component, detail FROM heartbeats"))
-        }
-    ready = beats.get("core.readiness", {})
+    rows = await read_beats(engine)
+    beats = {c: b.detail or {} for c, b in rows.items()}
+    when = {c: b.beat_at for c, b in rows.items()}
+    ready = beats.get(CORE_READINESS, {})
     if ready:
         status = (
             "READY for live keys"
@@ -141,28 +127,18 @@ async def build(engine: AsyncEngine, settings: Any, *, today: date) -> str:
         f"${spend.get('research', 0.0):.2f} of ${settings.llm.monthly_research_usd:.0f}"
     )
 
-    nightly, drill = beats.get("backup.nightly"), beats.get("backup.restore_drill")
-    offsite = beats.get("backup.offsite")
-    async with engine.connect() as conn:
-        when = {
-            r.component: r.beat_at
-            for r in await conn.execute(
-                text(
-                    "SELECT component, beat_at FROM heartbeats WHERE component IN "
-                    "('backup.nightly', 'backup.restore_drill', 'backup.offsite')"
-                )
-            )
-        }
+    nightly, drill = beats.get(BACKUP_NIGHTLY), beats.get(BACKUP_RESTORE_DRILL)
+    offsite = beats.get(BACKUP_OFFSITE)
     if nightly is not None:
         lines.append(
-            f"Backup: {when['backup.nightly']:%a %d %b} ({nightly.get('dump_mb')} MB); "
+            f"Backup: {when[BACKUP_NIGHTLY]:%a %d %b} ({nightly.get('dump_mb')} MB); "
             + (
-                f"off-site {when['backup.offsite']:%a %d %b}; "
+                f"off-site {when[BACKUP_OFFSITE]:%a %d %b}; "
                 if offsite is not None
                 else "NOT off-site; "
             )
             + (
-                f"last restore drill {when['backup.restore_drill']:%d %b}"
+                f"last restore drill {when[BACKUP_RESTORE_DRILL]:%d %b}"
                 if drill is not None
                 else "no restore drill yet"
             )

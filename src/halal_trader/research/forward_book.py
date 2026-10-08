@@ -154,6 +154,32 @@ def _core_target(
     return targets(split_share_classes(rolled, ciks), top_n)
 
 
+async def nav_series(
+    engine: AsyncEngine,
+    book: str,
+    *,
+    since: date | None = None,
+    through: date | None = None,
+) -> list[tuple[date, float]]:
+    """A book's net asset value by day, oldest first."""
+    async with engine.connect() as conn:
+        rows = await conn.execute(
+            text(
+                "SELECT day, nav FROM forward_book_days WHERE book = :b "
+                "AND (CAST(:s AS DATE) IS NULL OR day >= :s) "
+                "AND (CAST(:t AS DATE) IS NULL OR day <= :t) ORDER BY day"
+            ),
+            {"b": book, "s": since, "t": through},
+        )
+        return [(r.day, float(r.nav)) for r in rows]
+
+
+async def latest_weights(engine: AsyncEngine, book: str) -> dict[str, float]:
+    """A book's newest target weights (empty before its first day)."""
+    last = await _last_day(engine, book)
+    return dict(last.weights) if last else {}
+
+
 async def _last_day(engine: AsyncEngine, name: str) -> BookDay | None:
     async with engine.connect() as conn:
         row = (

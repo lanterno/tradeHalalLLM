@@ -43,6 +43,11 @@ CORE_TRADE = "core.trade"  # the core portfolio's 15:40 run finished (traded, he
 WEEKLY_DIGEST = "digest.weekly"  # Friday's Telegram summary went out
 SHADOW_PROCESS = "shadow.process"  # the halabot shadow engine's event loop is turning
 WATCHDOG = "web.watchdog"  # the web's watchdog ran; its detail is what it has alerted
+CORE_READINESS = "core.readiness"  # the evening's live-money gate verdict, in its detail
+# Written by the host's scripts (infra/server/backup.sh), not by a process here.
+BACKUP_NIGHTLY = "backup.nightly"
+BACKUP_RESTORE_DRILL = "backup.restore_drill"
+BACKUP_OFFSITE = "backup.offsite"
 # Not a liveness row: the "already alerted" ledger of claim_once().
 ALERT_MARKS = "alerts.sent"
 
@@ -164,6 +169,18 @@ def core_on(beats: dict[str, Beat]) -> bool:
 async def core_running(engine: AsyncEngine) -> bool:
     """:func:`core_on`, read from the database."""
     return core_on(await read_beats(engine))
+
+
+async def read_beat(engine: AsyncEngine, component: str) -> Beat | None:
+    """One component's latest beat, if it ever beat."""
+    async with engine.connect() as conn:
+        r = (
+            await conn.execute(
+                text("SELECT component, beat_at, detail FROM heartbeats WHERE component = :c"),
+                {"c": component},
+            )
+        ).first()
+    return Beat(r.component, r.beat_at, r.detail) if r is not None else None
 
 
 async def cycle_risk(engine: AsyncEngine) -> tuple[dict[str, Any] | None, datetime | None]:

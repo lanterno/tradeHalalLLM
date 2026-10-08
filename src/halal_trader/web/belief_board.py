@@ -85,18 +85,12 @@ async def core_weights(
     engine: AsyncEngine, account: str
 ) -> tuple[datetime | None, dict[str, float]]:
     """The core account's weight in each holding, from its newest snapshot."""
-    async with engine.connect() as conn:
-        snap = (
-            await conn.execute(
-                text(
-                    "SELECT taken_at, equity, positions FROM account_snapshots WHERE account = :a"
-                ),
-                {"a": account},
-            )
-        ).first()
-    if snap is None or not snap.equity or float(snap.equity) <= 0:
+    from halal_trader.portfolio.snapshots import read_snapshot
+
+    snap = await read_snapshot(engine, account)
+    if snap is None or snap.equity <= 0:
         return None, {}
-    equity = float(snap.equity)
+    equity = snap.equity
     weights: dict[str, float] = {}
     for p in snap.positions or []:
         symbol, value = p.get("symbol"), p.get("market_value")
@@ -106,16 +100,10 @@ async def core_weights(
 
 
 async def shadow_heartbeat(engine: AsyncEngine) -> datetime | None:
-    from halal_trader.core.heartbeat import SHADOW_PROCESS
+    from halal_trader.core.heartbeat import SHADOW_PROCESS, read_beat
 
-    async with engine.connect() as conn:
-        value = (
-            await conn.execute(
-                text("SELECT beat_at FROM heartbeats WHERE component = :c"),
-                {"c": SHADOW_PROCESS},
-            )
-        ).scalar()
-    return value if isinstance(value, datetime) else None
+    b = await read_beat(engine, SHADOW_PROCESS)
+    return b.beat_at if b is not None else None
 
 
 async def shadow_llm_spend(engine: AsyncEngine, *, today: date) -> dict[str, Any]:

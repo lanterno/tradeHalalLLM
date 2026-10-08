@@ -187,6 +187,27 @@ async def sync_broker_ledger(
     return SyncResult(len(activities), new, len(points))
 
 
+async def equity_history(
+    engine: AsyncEngine,
+    account: str,
+    *,
+    since: date | None = None,
+    through: date | None = None,
+) -> list[tuple[date, float]]:
+    """An account's daily closing equity from the broker, oldest first (days the
+    account was empty, at zero, left out)."""
+    async with engine.connect() as conn:
+        rows = await conn.execute(
+            text(
+                "SELECT day, equity FROM broker_equity WHERE account = :a AND equity > 0 "
+                "AND (CAST(:s AS DATE) IS NULL OR day >= :s) "
+                "AND (CAST(:t AS DATE) IS NULL OR day <= :t) ORDER BY day"
+            ),
+            {"a": account, "s": since, "t": through},
+        )
+        return [(r.day, float(r.equity)) for r in rows]
+
+
 async def sync_accounts(
     engine: AsyncEngine, accounts: Iterable[BrokerAccount]
 ) -> dict[str, SyncResult]:
