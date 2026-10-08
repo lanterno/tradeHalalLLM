@@ -147,25 +147,8 @@ class AlpacaMCPClient:
         if name not in self._tools:
             raise ValueError(f"Unknown tool: {name}. Available: {list(self._tools.keys())}")
 
-        import time as _time
-
-        from halal_trader.core.metrics import observe_broker_call
-
         logger.debug("Calling MCP tool: %s(%s)", name, arguments or {})
-        t0 = _time.monotonic()
-        error = False
-        try:
-            result = await self.session.call_tool(name, arguments or {})
-        except Exception:
-            error = True
-            raise
-        finally:
-            observe_broker_call(
-                broker="alpaca",
-                method=name,
-                ms=(_time.monotonic() - t0) * 1000.0,
-                error=error,
-            )
+        result = await self.session.call_tool(name, arguments or {})
 
         # Extract text content from the result
         contents = []

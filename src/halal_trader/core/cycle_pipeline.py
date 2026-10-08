@@ -171,13 +171,6 @@ async def stage(
         logger.debug("cycle stage %r failed (swallowed): %r", name, exc)
     finally:
         outcome.elapsed_ms = (time.monotonic() - t0) * 1000.0
-        # Prometheus histogram (no-op without prometheus_client).
-        try:
-            from halal_trader.core.metrics import observe_stage_latency
-
-            observe_stage_latency(name=name, ms=outcome.elapsed_ms, error=outcome.error)
-        except Exception:  # noqa: BLE001
-            pass
         if bus is not None:
             try:
                 await bus.publish(
