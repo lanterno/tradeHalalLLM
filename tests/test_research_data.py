@@ -58,7 +58,7 @@ async def test_client_follows_pages_and_backs_off_on_429() -> None:
 
     async def no_sleep(_s: float) -> None: ...
 
-    import halal_trader.data.alpaca_market as mod
+    import halal_trader.core.http as mod
 
     client = AlpacaMarketData(
         "k", "s", client=httpx.AsyncClient(transport=httpx.MockTransport(handler)), min_interval_s=0

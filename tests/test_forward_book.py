@@ -211,7 +211,7 @@ def _settings():  # type: ignore[no-untyped-def]
     from types import SimpleNamespace
 
     return SimpleNamespace(
-        alpaca=SimpleNamespace(api_key="k", secret_key="s"),
+        alpaca=SimpleNamespace(api_key="k", secret_key="s", paper_trade=True),
         edgar=SimpleNamespace(user_agent="test test@example.invalid"),
         core=SimpleNamespace(paper=True),
     )

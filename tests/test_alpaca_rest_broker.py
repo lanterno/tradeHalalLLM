@@ -9,7 +9,7 @@ from typing import Any
 import httpx
 import pytest
 
-from halal_trader.execution import alpaca_broker
+from halal_trader.core import http
 from halal_trader.execution.alpaca_broker import AlpacaRestBroker, BrokerError
 
 Handler = Callable[[httpx.Request], httpx.Response]
@@ -20,7 +20,7 @@ def _no_backoff(monkeypatch: pytest.MonkeyPatch) -> None:
     async def instant(_: float) -> None:
         return None
 
-    monkeypatch.setattr(alpaca_broker.asyncio, "sleep", instant)
+    monkeypatch.setattr(http.asyncio, "sleep", instant)
 
 
 def _broker(handler: Handler) -> AlpacaRestBroker:

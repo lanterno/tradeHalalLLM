@@ -40,7 +40,7 @@ async def test_each_step_reports_and_the_rest_still_run(
 
     settings = SimpleNamespace(
         edgar=SimpleNamespace(user_agent="t t@example.invalid"),
-        alpaca=SimpleNamespace(api_key="k", secret_key="s"),
+        alpaca=SimpleNamespace(api_key="k", secret_key="s", paper_trade=True),
         llm=SimpleNamespace(model="m", monthly_live_usd=25.0, monthly_research_usd=15.0),
         glm=None,
     )

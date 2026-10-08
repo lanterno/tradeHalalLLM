@@ -12,7 +12,8 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from halal_trader.compliance.runner import SUBMISSIONS_UNAVAILABLE, run_screen
-from halal_trader.compliance.sec import Company, Fact, SecClient, SecUnavailable, retry_after
+from halal_trader.compliance.sec import Company, Fact, SecClient, SecUnavailable
+from halal_trader.core.http import retry_after
 
 UA = "test test@example.invalid"
 
@@ -34,7 +35,7 @@ def slept(monkeypatch: pytest.MonkeyPatch) -> list[float]:
     async def fake_sleep(seconds: float) -> None:
         waits.append(seconds)
 
-    monkeypatch.setattr("halal_trader.compliance.sec.asyncio.sleep", fake_sleep)
+    monkeypatch.setattr("halal_trader.core.http.asyncio.sleep", fake_sleep)
     return waits
 
 
