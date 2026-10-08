@@ -45,27 +45,15 @@ from typing import Any, Protocol
 import httpx
 
 from halal_trader.events.store import EventRecord, EventRecorder, Score
+from halal_trader.sentiment import finnhub
 
 logger = logging.getLogger(__name__)
 
 # Finnhub company-news endpoint. Free tier: 60 req/min, far above the
 # reactor's actual demand (~1 call per symbol every 60s = 1 call/s on
 # a 10-symbol watchlist).
-_FINNHUB_API_BASE = "https://finnhub.io/api/v1/company-news"
-_HTTP_TIMEOUT_S = 10.0
 _DEFAULT_MAX_HEADLINE_AGE_S = 1800.0
 _OBSERVE_REFRESH_S = 6 * 3600.0
-
-
-def _published_at(item: dict[str, Any]) -> datetime | None:
-    """The item's publication time (UTC): a datetime, or Finnhub's epoch seconds."""
-    raw = item.get("published_at") or item.get("datetime")
-    if isinstance(raw, datetime):
-        return raw.astimezone(UTC)
-    try:
-        return datetime.fromtimestamp(float(raw), UTC) if raw else None
-    except TypeError, ValueError, OverflowError:
-        return None
 
 
 class FinnhubNewsSource:
@@ -80,27 +68,15 @@ class FinnhubNewsSource:
 
     async def fetch(self, symbols: list[str]) -> list[tuple[str, dict[str, Any]]]:
         if self._client is None or self._client.is_closed:
-            self._client = httpx.AsyncClient(timeout=_HTTP_TIMEOUT_S)
-        today = datetime.now(UTC).date()
+            self._client = httpx.AsyncClient(timeout=finnhub.TIMEOUT_S)
         out: list[tuple[str, dict[str, Any]]] = []
         for symbol in symbols:
             try:
-                # Key in a header: a ?token= query param leaks via httpx error URLs.
-                resp = await self._client.get(
-                    _FINNHUB_API_BASE,
-                    params={
-                        "symbol": symbol,
-                        "from": (today - timedelta(days=1)).isoformat(),
-                        "to": today.isoformat(),
-                    },
-                    headers={"X-Finnhub-Token": self._api_key},
-                )
-                resp.raise_for_status()
-                data = resp.json()
+                data = await finnhub.company_news(self._client, self._api_key, symbol)
             except Exception as exc:  # noqa: BLE001
                 logger.debug("Finnhub news fetch failed for %s: %r", symbol, exc)
                 data = []
-            for item in data if isinstance(data, list) else []:
+            for item in data:
                 out.append((symbol, {**item, "feed": "finnhub"}))
             # Polite spacing: the free tier allows 60 requests a minute.
             if self._spacing > 0:
@@ -560,7 +536,7 @@ class StockNewsEventReactor:
         if not title:
             return None
         summary = str(item.get("summary") or "")[:500]
-        published = _published_at(item)
+        published = finnhub.published_at(item.get("published_at") or item.get("datetime"))
         now = datetime.now(UTC)
         record = EventRecord(
             source=str(item.get("feed") or getattr(self._source, "name", "finnhub")),

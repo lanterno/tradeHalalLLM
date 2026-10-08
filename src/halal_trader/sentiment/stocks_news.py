@@ -29,6 +29,7 @@ from typing import Any
 
 import httpx
 
+from halal_trader.sentiment import finnhub
 from halal_trader.sentiment.events import NewsEvent
 from halal_trader.sentiment.headline_polarity import classify_headline
 
@@ -55,7 +56,6 @@ _BREAKER_THRESHOLD = 5  # consecutive failures before silencing
 # enough for our 10-symbol universe at a 15-min cadence (~40 calls/h).
 # Drop-in replacement for the Yahoo search endpoint which started 429-ing
 # within minutes of the morning cycle on 2026-05-21.
-_FINNHUB_API_BASE = "https://finnhub.io/api/v1/company-news"
 
 
 class StockNewsCollector:
@@ -212,7 +212,6 @@ class FinnhubNewsCollector:
         return out
 
     async def _fetch_one(self, symbol: str) -> list[NewsEvent]:
-        from datetime import UTC, datetime, timedelta
 
         sym = symbol.upper()
         now_t = time.monotonic()
@@ -222,19 +221,9 @@ class FinnhubNewsCollector:
         if self._circuit_open:
             return []
 
-        now = datetime.now(UTC).date()
-        from_date = (now - timedelta(days=self._lookback_days)).isoformat()
-        to_date = now.isoformat()
         client = await self._http()
-        params = {"symbol": sym, "from": from_date, "to": to_date}
         try:
-            # Key in a header, not ?token=: httpx error messages carry the full
-            # URL, so a query-param key leaked into every logged failure.
-            r = await client.get(
-                _FINNHUB_API_BASE, params=params, headers={"X-Finnhub-Token": self._api_key}
-            )
-            r.raise_for_status()
-            data = r.json()
+            data = await finnhub.company_news(client, self._api_key, sym, days=self._lookback_days)
         except Exception as exc:  # noqa: BLE001
             logger.debug("Finnhub news request failed for %s: %r", sym, exc)
             self._consecutive_failures += 1

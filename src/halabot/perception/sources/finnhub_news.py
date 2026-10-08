@@ -12,7 +12,6 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
@@ -20,11 +19,10 @@ import httpx
 from halabot.perception.poll import PollingSource
 from halabot.platform.clock import Clock
 from halabot.platform.events import Event, EventType, new_event
+from halal_trader.sentiment import finnhub
 
 logger = logging.getLogger(__name__)
 
-_FINNHUB_NEWS = "https://finnhub.io/api/v1/company-news"
-_HTTP_TIMEOUT_S = 10.0
 # Lexicon tag → directional polarity. "neutral" → None so the interpreter
 # abstains (no fabricated signal); the magnitude is modest so one headline
 # can't dominate a belief on its own.
@@ -55,7 +53,7 @@ class FinnhubNewsSource(PollingSource):
         self._clock = clock
         self._lookback = lookback_days
         self._spacing = per_symbol_spacing_s
-        self._client = client or httpx.AsyncClient(timeout=_HTTP_TIMEOUT_S)
+        self._client = client or httpx.AsyncClient(timeout=finnhub.TIMEOUT_S)
 
     @property
     def enabled(self) -> bool:
@@ -65,29 +63,16 @@ class FinnhubNewsSource(PollingSource):
         if not self.enabled:
             return []
         symbols = await self._universe()
-        today = datetime.now(UTC).date()
-        params_base = {
-            "from": (today - timedelta(days=self._lookback)).isoformat(),
-            "to": today.isoformat(),
-        }
-        # Key in a header, not ?token=: the failure log below prints the
-        # exception, and httpx exceptions carry the full request URL.
-        auth = {"X-Finnhub-Token": self._api_key}
         out: list[dict[str, Any]] = []
         for sym in symbols:
             try:
-                resp = await self._client.get(
-                    _FINNHUB_NEWS, params={**params_base, "symbol": sym}, headers=auth
+                items = await finnhub.company_news(
+                    self._client, self._api_key, sym, days=self._lookback
                 )
-                resp.raise_for_status()
-                items = resp.json()
             except Exception as exc:  # noqa: BLE001 — one symbol's failure skips it
                 logger.warning("finnhub-news fetch failed for %s: %r", sym, exc)
                 items = []
-            if isinstance(items, list):
-                for item in items:
-                    if isinstance(item, dict):
-                        out.append({"_asset": sym, **item})
+            out.extend({"_asset": sym, **item} for item in items)
             if self._spacing > 0:
                 await self._sleep(self._spacing)
         return out
@@ -99,7 +84,7 @@ class FinnhubNewsSource(PollingSource):
             return None
         polarity = _lexicon_polarity(headline)
         ingested = self._clock.now()
-        published = _published_at(raw.get("datetime"))
+        published = finnhub.published_at(raw.get("datetime"))
         return new_event(
             self._clock,
             EventType.OBSERVATION_NEWS,
@@ -125,22 +110,6 @@ class FinnhubNewsSource(PollingSource):
 
     async def aclose(self) -> None:
         await self._client.aclose()
-
-
-def _published_at(value: object) -> datetime | None:
-    """Finnhub's ``datetime`` (UNIX seconds) as an aware instant, or None."""
-    if isinstance(value, bool):
-        return None
-    try:
-        seconds = float(value)  # type: ignore[arg-type]
-    except TypeError, ValueError:
-        return None
-    if seconds <= 0:
-        return None
-    try:
-        return datetime.fromtimestamp(seconds, UTC)
-    except OverflowError, OSError, ValueError:
-        return None
 
 
 def _lexicon_polarity(headline: str) -> float | None:
