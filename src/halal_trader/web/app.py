@@ -78,7 +78,7 @@ def _start_watchdog(
 
 def create_app() -> Any:
     """Create and configure the FastAPI application."""
-    from fastapi import FastAPI, Request
+    from fastapi import FastAPI, HTTPException, Request
     from fastapi.responses import FileResponse, Response
     from fastapi.staticfiles import StaticFiles
 
@@ -172,6 +172,9 @@ def create_app() -> Any:
 
         @app.get("/{full_path:path}", include_in_schema=False)
         async def spa_catch_all(full_path: str) -> FileResponse:
+            # An unknown API path is a 404, not the SPA's index.html with a 200.
+            if full_path == "api" or full_path.startswith(("api/", "ws/")):
+                raise HTTPException(404, f"no such endpoint: /{full_path}")
             served = _resolve_static(_dist_root, full_path)
             if served is not None:
                 return FileResponse(str(served))
