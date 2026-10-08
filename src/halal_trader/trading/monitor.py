@@ -26,6 +26,7 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any
 
+from halal_trader.core import events
 from halal_trader.db.repos import TradeRepo
 from halal_trader.domain.ports import Broker
 from halal_trader.domain.status import EntryType
@@ -532,7 +533,20 @@ class StockPositionMonitor:
         await self._record_exit_sell(trade, price, reason, result, submitted_at, sell_qty)
         self._high_water.pop(trade.id, None)
         self._last_trend_check.pop(trade.id, None)
-        logger.info("Closed %s on %s at %.2f", trade.symbol, reason, price)
+        logger.info(
+            "Closed %s on %s at %.2f",
+            trade.symbol,
+            reason,
+            price,
+            extra={
+                "event": {
+                    "stop_loss": events.TRADE_EXIT_SL,
+                    "take_profit": events.TRADE_EXIT_TP,
+                }.get(reason, events.TRADE_EXIT_OTHER),
+                "symbol": trade.symbol,
+                "exit_reason": reason,
+            },
+        )
 
         if self._notifier and getattr(self._notifier, "enabled", False):
             try:

@@ -28,6 +28,7 @@ from datetime import UTC, date, datetime
 from typing import TYPE_CHECKING
 
 from halal_trader.config import Settings
+from halal_trader.core import events
 from halal_trader.domain.models import Account
 
 if TYPE_CHECKING:
@@ -148,7 +149,7 @@ class LiveModeChecker:
             "Live-mode safeguard violations on %s — engaging kill-switch:\n%s",
             self.market,
             details,
-            extra={"event": "safeguards.violation", "market": self.market},
+            extra={"event": events.SAFEGUARD_VIOLATION, "market": self.market},
         )
 
         if engine is not None:

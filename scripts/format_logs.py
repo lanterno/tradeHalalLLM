@@ -17,7 +17,7 @@ import sys
 def _format(record: dict) -> str:
     ts = (record.get("timestamp") or "")[-12:]
     level = (record.get("level") or "?")[:7].ljust(7)
-    cycle = record.get("cycle_id") or record.get("monitor_id") or record.get("request_id")
+    cycle = record.get("cycle_id") or record.get("job_id") or record.get("request_id")
     event = record.get("event")
     message = (record.get("message") or "")[:140]
 

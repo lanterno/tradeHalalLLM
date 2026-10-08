@@ -1,6 +1,6 @@
 """Correlation-id plumbing for structured logging.
 
-Every cycle, monitor exit, and HTTP request gets an id that flows through
+Every cycle, scheduled job and HTTP request gets an id that flows through
 ContextVars and into JSON log records via `ObservabilityFilter`. Operators
 can grep `cycle_id=cycle-...` to follow a single iteration end-to-end.
 """
@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 
 cycle_id_var: ContextVar[str] = ContextVar("cycle_id", default="")
-monitor_id_var: ContextVar[str] = ContextVar("monitor_id", default="")
+job_id_var: ContextVar[str] = ContextVar("job_id", default="")
 request_id_var: ContextVar[str] = ContextVar("request_id", default="")
 
 # Which process owns these log records. Set once at bot startup
@@ -48,6 +48,16 @@ def cycle_context(cycle_id: str | None = None) -> Iterator[str]:
         cycle_id_var.reset(token)
 
 
+@contextmanager
+def job_context(name: str) -> Iterator[str]:
+    """Set ``job_id_var`` (``<name>-XXXXXXXX``) for the duration of the block."""
+    token = job_id_var.set(new_id(name))
+    try:
+        yield job_id_var.get()
+    finally:
+        job_id_var.reset(token)
+
+
 class ObservabilityFilter(logging.Filter):
     """Attach the active correlation ids to every LogRecord.
 
@@ -57,12 +67,12 @@ class ObservabilityFilter(logging.Filter):
 
     def filter(self, record: logging.LogRecord) -> bool:
         cid = cycle_id_var.get()
-        mid = monitor_id_var.get()
+        jid = job_id_var.get()
         rid = request_id_var.get()
         if cid:
             record.cycle_id = cid
-        if mid:
-            record.monitor_id = mid
+        if jid:
+            record.job_id = jid
         if rid:
             record.request_id = rid
         if _service_name:

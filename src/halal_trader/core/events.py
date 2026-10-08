@@ -29,14 +29,28 @@ HALAL_GATE_REJECTED: Final[str] = "trade.rejected.halal"
 TRADE_FILL_PARTIAL: Final[str] = "trade.fill.partial"
 TRADE_EXIT_SL: Final[str] = "trade.exit.stop_loss"
 TRADE_EXIT_TP: Final[str] = "trade.exit.take_profit"
+# The monitor closed a position on another rule (trailing stop, trend break, ...).
+TRADE_EXIT_OTHER: Final[str] = "trade.exit.other"
+# What became of a reactor entry the news asked for (placed, skipped, refused).
+REACTOR_ENTRY: Final[str] = "reactor.entry"
 
 # ── LLM ─────────────────────────────────────────────────────────
 LLM_CALL_COMPLETE: Final[str] = "llm.call.complete"
 LLM_CHAIN_BACKOFF: Final[str] = "llm.chain.backoff"
+LLM_INSUFFICIENT_QUOTA: Final[str] = "llm.insufficient_quota"
 
 # ── Risk / Reconciliation ──────────────────────────────────────
 RECONCILE_DRIFT: Final[str] = "reconcile.drift"
+SAFEGUARD_VIOLATION: Final[str] = "safeguards.violation"
 
 # ── Scheduler ───────────────────────────────────────────────────
+# Every scheduled job's run (TradingBot._job), under one job_id.
+JOB_START: Final[str] = "scheduler.job.start"
+JOB_COMPLETE: Final[str] = "scheduler.job.complete"
+JOB_SKIPPED: Final[str] = "scheduler.job.skipped"
+JOB_FAILED: Final[str] = "scheduler.job.failed"
 # A daily job whose scheduled run a restart skipped, run late on startup.
 JOB_CATCH_UP: Final[str] = "scheduler.catch_up"
+
+# ── Tracing ─────────────────────────────────────────────────────
+TRACE_SPAN: Final[str] = "trace.span"

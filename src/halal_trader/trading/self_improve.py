@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, ClassVar
 
+from halal_trader.core import events
 from halal_trader.db.repos import StrategyAdjustmentRepo, TradeRepo
 from halal_trader.domain.ports import LLMBackend
 
@@ -323,7 +324,7 @@ Analyze these trades and execution failures, and suggest improvements.
                 self._last_review_time = _time.monotonic() + 3600 - self._REVIEW_COOLDOWN_SECONDS
                 logger.critical(
                     "Self-review LLM out of credits — review backed off 1h",
-                    extra={"event": "llm.insufficient_quota"},
+                    extra={"event": events.LLM_INSUFFICIENT_QUOTA},
                 )
             else:
                 logger.error("Self-review failed: %r", e)

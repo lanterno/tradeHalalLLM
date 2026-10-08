@@ -32,9 +32,10 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any
 
+from halal_trader.core import events
 from halal_trader.core.observability import (
     cycle_id_var,
-    monitor_id_var,
+    job_id_var,
     new_id,
     request_id_var,
 )
@@ -67,7 +68,7 @@ class Span:
     events: list[SpanEvent] = field(default_factory=list)
     error: str | None = None
     cycle_id: str = ""
-    monitor_id: str = ""
+    job_id: str = ""
     request_id: str = ""
 
     @property
@@ -98,7 +99,7 @@ class Span:
             ],
             "error": self.error,
             "cycle_id": self.cycle_id,
-            "monitor_id": self.monitor_id,
+            "job_id": self.job_id,
             "request_id": self.request_id,
         }
 
@@ -134,7 +135,7 @@ class LogSpanExporter(SpanExporter):
             "trace.span %s closed (%.2fms)",
             span.name,
             span.duration_ms,
-            extra={"event": "trace.span", **payload},
+            extra={"event": events.TRACE_SPAN, **payload},
         )
 
 
@@ -160,7 +161,7 @@ class Tracer:
             parent_id=parent.span_id if parent else None,
             attrs=dict(attrs),
             cycle_id=cycle_id_var.get(),
-            monitor_id=monitor_id_var.get(),
+            job_id=job_id_var.get(),
             request_id=request_id_var.get(),
         )
 
