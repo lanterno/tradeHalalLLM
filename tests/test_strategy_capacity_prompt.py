@@ -12,6 +12,14 @@ from __future__ import annotations
 
 from halal_trader.trading.strategy import _format_capacity
 
+SECTORS = {
+    "AAPL": "Technology",
+    "MSFT": "Technology",
+    "JNJ": "Healthcare",
+    "LLY": "Healthcare",
+    "XOM": "Energy",
+}
+
 
 def test_capacity_at_cap_warns_explicitly():
     out = _format_capacity(5, 5)
@@ -74,7 +82,7 @@ def _pos(symbol: str, qty: float, price: float):
 def test_sector_exposure_empty_when_no_positions():
     from halal_trader.trading.strategy import _format_sector_exposure
 
-    out = _format_sector_exposure([], equity=100_000, max_sector_pct=0.40)
+    out = _format_sector_exposure([], equity=100_000, max_sector_pct=0.40, sector_map=SECTORS)
     assert "all-cash" in out
     assert "40%" in out
 
@@ -83,7 +91,9 @@ def test_sector_exposure_below_cap_no_warning():
     from halal_trader.trading.strategy import _format_sector_exposure
 
     # MSFT 10% of equity — well below 40% cap
-    out = _format_sector_exposure([_pos("MSFT", 50, 200)], equity=100_000, max_sector_pct=0.40)
+    out = _format_sector_exposure(
+        [_pos("MSFT", 50, 200)], equity=100_000, max_sector_pct=0.40, sector_map=SECTORS
+    )
     assert "Technology" in out
     assert "10%" in out
     # No alarm wording when comfortably below the cap.
@@ -98,7 +108,9 @@ def test_sector_exposure_at_cap_emits_warning():
     from halal_trader.trading.strategy import _format_sector_exposure
 
     # JNJ $40k of $100k equity = exactly 40% — at cap
-    out = _format_sector_exposure([_pos("JNJ", 250, 160)], equity=100_000, max_sector_pct=0.40)
+    out = _format_sector_exposure(
+        [_pos("JNJ", 250, 160)], equity=100_000, max_sector_pct=0.40, sector_map=SECTORS
+    )
     assert "AT CAP" in out
     assert "WILL BE REJECTED" in out
     assert "Healthcare" in out
@@ -108,7 +120,9 @@ def test_sector_exposure_near_cap_emits_warning():
     from halal_trader.trading.strategy import _format_sector_exposure
 
     # JNJ $33k of $100k = 33% — within 80% of 40% cap (>=32%)
-    out = _format_sector_exposure([_pos("JNJ", 206, 160)], equity=100_000, max_sector_pct=0.40)
+    out = _format_sector_exposure(
+        [_pos("JNJ", 206, 160)], equity=100_000, max_sector_pct=0.40, sector_map=SECTORS
+    )
     assert "near cap" in out
     assert "WILL BE REJECTED" in out
 
@@ -122,6 +136,7 @@ def test_sector_exposure_aggregates_multiple_symbols_in_same_sector():
         [_pos("JNJ", 125, 160), _pos("LLY", 50, 500)],
         equity=100_000,
         max_sector_pct=0.40,
+        sector_map=SECTORS,
     )
     assert "AT CAP" in out
     assert "Healthcare" in out
@@ -135,7 +150,9 @@ def test_sector_exposure_marks_technology_exempt():
     from halal_trader.trading.strategy import _format_sector_exposure
 
     # MSFT $80k of $100k = 80% — would normally scream AT CAP.
-    out = _format_sector_exposure([_pos("MSFT", 400, 200)], equity=100_000, max_sector_pct=0.40)
+    out = _format_sector_exposure(
+        [_pos("MSFT", 400, 200)], equity=100_000, max_sector_pct=0.40, sector_map=SECTORS
+    )
     assert "Technology" in out
     assert "exempt" in out
     # The cap-warning footer must NOT mention Technology.
@@ -159,6 +176,7 @@ def test_sector_exposure_mixed_tech_and_capped_sectors():
         ],
         equity=100_000,
         max_sector_pct=0.40,
+        sector_map=SECTORS,
     )
     assert "Technology" in out
     assert "(exempt — no cap)" in out

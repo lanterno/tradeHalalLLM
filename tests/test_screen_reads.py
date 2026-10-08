@@ -71,3 +71,20 @@ async def test_both_strategies_apply_one_order_boundary_rule(engine: AsyncEngine
     # Stale: neither passes anything.
     late = TODAY + timedelta(days=20)
     assert await is_halal_now(engine, "AAPL", late) == (False, TODAY - timedelta(days=1))
+
+
+async def test_the_sector_cap_reads_each_names_industry_from_the_screen(
+    engine: AsyncEngine,
+) -> None:
+    from halal_trader.db.repository import Repository
+    from halal_trader.halal.cache import HalalScreener
+
+    await _screen(engine, TODAY - timedelta(days=1), {"MU": "halal", "ADBE": "halal"})
+    screener = HalalScreener(Repository(engine), engine=engine)
+    screener._today = lambda: TODAY  # type: ignore[method-assign]
+
+    # The seeded rows are all "Services-prepackaged software": Technology.
+    assert await screener.sectors(["MU", "ADBE", "GONE"]) == {
+        "MU": "Technology",
+        "ADBE": "Technology",
+    }

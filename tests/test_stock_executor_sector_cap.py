@@ -59,6 +59,18 @@ def _broker(account: Account, *, snapshot_price: float = 100.0):
     return b
 
 
+class _Screener:
+    """The halal gate and the cap's sector lookup, as HalalScreener answers them."""
+
+    SECTORS = {"AAPL": "Technology", "MSFT": "Technology", "JNJ": "Healthcare", "LLY": "Healthcare"}
+
+    async def is_halal(self, symbol: str) -> bool:
+        return True
+
+    async def sectors(self, symbols: list[str]) -> dict[str, str]:
+        return {s: self.SECTORS[s] for s in symbols if s in self.SECTORS}
+
+
 def _decision(symbol: str = "MSFT", quantity: int = 30) -> TradeDecision:
     return TradeDecision(
         action=TradeAction.BUY,
@@ -86,6 +98,7 @@ async def test_sector_cap_blocks_buy_that_concentrates_healthcare():
         max_position_pct=1.0,  # disable per-position cap for this test
         max_simultaneous_positions=10,
         max_sector_pct=0.40,
+        screener=_Screener(),
     )
     positions = [_position("JNJ", qty=70, price=100)]  # 7000 in Healthcare
     result = await executor._execute_buy(_decision("LLY", quantity=30), positions=positions)
@@ -108,6 +121,7 @@ async def test_sector_cap_does_not_block_tech_buys_by_default():
         max_position_pct=1.0,
         max_simultaneous_positions=10,
         max_sector_pct=0.40,
+        screener=_Screener(),
     )
     positions = [_position("AAPL", qty=70, price=100)]  # 7000 in Tech — past 40%
     result = await executor._execute_buy(_decision("MSFT", quantity=30), positions=positions)
@@ -126,6 +140,7 @@ async def test_sector_cap_allows_buy_in_a_different_sector():
         max_position_pct=1.0,
         max_simultaneous_positions=10,
         max_sector_pct=0.40,
+        screener=_Screener(),
     )
     positions = [_position("AAPL", qty=70, price=100)]
     # JNJ is Healthcare, separate bucket from Tech.
@@ -163,6 +178,7 @@ async def test_sector_cap_no_op_with_zero_equity():
         max_position_pct=1.0,
         max_simultaneous_positions=10,
         max_sector_pct=0.40,
+        screener=_Screener(),
     )
     result = await executor._execute_buy(_decision(), positions=[])
     assert result["status"] != "rejected"
