@@ -43,6 +43,7 @@ def register(app: FastAPI) -> None:
     async def api_core(ctx: DashboardContext = Depends(get_ctx)) -> JSONResponse:
         from halal_trader.compliance.purification import paper_positions
         from halal_trader.config import get_settings
+        from halal_trader.core.heartbeat import core_running
         from halal_trader.market_hours import today_eastern
         from halal_trader.portfolio import readiness as gate
         from halal_trader.portfolio.core_account import core_account
@@ -170,7 +171,7 @@ def register(app: FastAPI) -> None:
         ready = await gate.check(engine, today=today)  # the paper rehearsal's gate
         return JSONResponse(
             {
-                "enabled": settings.core.enabled,
+                "enabled": await core_running(engine),
                 "paper": settings.core.paper,
                 "account": account,
                 "equity": _f(equity),

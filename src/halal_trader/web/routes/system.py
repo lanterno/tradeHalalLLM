@@ -28,12 +28,8 @@ async def _bot_liveness(ctx: DashboardContext) -> tuple[bool, dict[str, Any] | N
     now = datetime.now(UTC)
     # Cycles are due once the session has run long enough for one to finish
     # (the first runs at 09:30 ET; allow until 10:00 before judging).
-    from halal_trader.config import get_settings
-
     cycles_due = is_market_open_local() and now_eastern().time() >= time(10, 0)
-    statuses = assess(
-        beats, now=now, cycles_due=cycles_due, core_enabled=get_settings().core.enabled
-    )
+    statuses = assess(beats, now=now, cycles_due=cycles_due)
     components: dict[str, Any] = describe(beats, statuses, now=now)
     alive, reason = bot_liveness(beats, now=now, cycles_due=cycles_due)
     components["_verdict"] = {"alive": alive, "reason": reason, "cycles_due": cycles_due}
@@ -89,7 +85,7 @@ def register(app: FastAPI) -> None:
                 except Exception:  # noqa: BLE001
                     classifier_health = None
 
-        from halal_trader.core.heartbeat import STOCK_CYCLE
+        from halal_trader.core.heartbeat import STOCK_CYCLE, core_running
 
         alive, components = await _bot_liveness(ctx)
         cycle_beat = (components or {}).get(STOCK_CYCLE)
@@ -101,8 +97,9 @@ def register(app: FastAPI) -> None:
                 "last_cycle": ctx.runtime.last_cycle
                 or (cycle_beat["beat_at"] if cycle_beat else None),
                 "stocks_cycle_interval_seconds": ctx.settings.stocks.trading_interval_minutes * 60,
-                # The core runs only with its own account's keys set.
-                "core_enabled": ctx.settings.core.enabled,
+                # The core runs only with its own account's keys set; the bot
+                # says so in its process beat (the web never sees those keys).
+                "core_enabled": await core_running(ctx.engine),
                 "classifier_health": classifier_health,
                 "uptime_seconds": uptime,
             }
@@ -112,13 +109,14 @@ def register(app: FastAPI) -> None:
     async def api_core_config(ctx: DashboardContext = Depends(get_ctx)) -> JSONResponse:
         """The core portfolio's parameters for the System page: its settings
         (never its keys) and the rule constants it trades by."""
+        from halal_trader.core.heartbeat import core_running
         from halal_trader.portfolio import core_executor, strict_core
         from halal_trader.portfolio.home import CORE_TRADE
 
         core = ctx.settings.core
         return JSONResponse(
             {
-                "core_enabled": core.enabled,
+                "core_enabled": await core_running(ctx.engine),
                 "core_paper": core.paper,
                 "core_top_n": core.top_n,
                 "core_rebalance_band": strict_core.BAND,

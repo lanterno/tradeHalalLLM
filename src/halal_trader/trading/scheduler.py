@@ -1949,7 +1949,9 @@ class TradingBot:
             while self._running:
                 if loop.time() - last_beat >= 60:
                     await self._ensure_trading_lock()
-                    await beat(self._engine, STOCK_PROCESS)
+                    await beat(
+                        self._engine, STOCK_PROCESS, detail={"core": self.settings.core.enabled}
+                    )
                     last_beat = loop.time()
                 await asyncio.sleep(1)
 

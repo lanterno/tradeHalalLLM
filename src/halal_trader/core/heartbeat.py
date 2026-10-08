@@ -153,6 +153,19 @@ async def read_beats(engine: AsyncEngine) -> dict[str, Beat]:
         return {r.component: Beat(r.component, r.beat_at, r.detail) for r in rows}
 
 
+def core_on(beats: dict[str, Beat]) -> bool:
+    """Does the bot run the core? Its process beat says so (``{"core": ...}``):
+    the core's keys never reach the web. True until the bot has said, so a
+    missed core run is never excused by a guess."""
+    b = beats.get(STOCK_PROCESS)
+    return bool((b.detail or {}).get("core", True)) if b is not None else True
+
+
+async def core_running(engine: AsyncEngine) -> bool:
+    """:func:`core_on`, read from the database."""
+    return core_on(await read_beats(engine))
+
+
 async def cycle_risk(engine: AsyncEngine) -> tuple[dict[str, Any] | None, datetime | None]:
     """The risk snapshot the last trading cycle published, and when."""
     beats = await read_beats(engine)
@@ -260,7 +273,6 @@ def assess(
     *,
     now: datetime,
     cycles_due: bool,
-    core_enabled: bool = True,
 ) -> dict[str, Status]:
     """A verdict for every watched component, and for every other row on record.
 
@@ -268,6 +280,7 @@ def assess(
     the market clock); :func:`cycles_due_at` computes it from ``now``.
     """
     out: dict[str, Status] = {}
+    core_enabled = core_on(beats)
     for component in CONTINUOUS:
         out[component] = _by_age(beats.get(component), component, now, missing="missing")
 

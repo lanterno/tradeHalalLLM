@@ -201,12 +201,14 @@ async def build(
     from halal_trader.compliance import zakat as z
     from halal_trader.compliance.purification import paper_positions
     from halal_trader.compliance.sectors import sector_of
+    from halal_trader.core.heartbeat import core_running
     from halal_trader.portfolio import readiness as gate
     from halal_trader.portfolio.core_account import core_account
     from halal_trader.portfolio.core_executor import monthly_due
     from halal_trader.portfolio.snapshots import BENCHMARKS
 
     core_name = core_account(settings.core.paper)  # "core" on paper, "core-live" live
+    core_on = await core_running(engine)  # the web never sees the core's keys
     now = now or datetime.now(UTC)
     today = now.astimezone(MARKET_TZ).date()
     async with engine.connect() as conn:
@@ -291,7 +293,7 @@ async def build(
     meta = {
         core_name: (
             "Core portfolio",
-            "active" if settings.core.enabled else "disabled",
+            "active" if core_on else "disabled",
             settings.core.paper,
         ),
         "paper": ("Day-trader", "active", True),
@@ -491,7 +493,7 @@ async def build(
         },
         "upcoming": upcoming(
             now,
-            core_enabled=bool(settings.core.enabled),
+            core_enabled=core_on,
             monthly_done=monthly_done,
             last_screen=screen_as_of,
             next_hawl=next_hawl,

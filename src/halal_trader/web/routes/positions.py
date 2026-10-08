@@ -129,7 +129,8 @@ def _ledger_levels(open_trades: list[Any]) -> dict[str, dict[str, Any]]:
 def register(app: FastAPI) -> None:
     @app.get("/api/positions")
     async def api_positions(ctx: DashboardContext = Depends(get_ctx)) -> JSONResponse:
-        settings = ctx.settings
+        from halal_trader.core.heartbeat import core_running
+
         now = datetime.now(UTC)
         async with ctx.engine.connect() as conn:
             snaps = {
@@ -140,7 +141,7 @@ def register(app: FastAPI) -> None:
             }
         open_trades = await ctx.repo.get_open_trades()
         status = {
-            "core": "active" if settings.core.enabled else "disabled",
+            "core": "active" if await core_running(ctx.engine) else "disabled",
             "paper": "active",
         }
         out = []

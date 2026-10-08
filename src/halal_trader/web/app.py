@@ -69,7 +69,6 @@ def _start_watchdog(
         watchdog.run(
             engine,
             notifier,
-            core_enabled=settings.core.enabled,
             interval_s=float(interval),
         ),
         name="fleet-watchdog",
