@@ -17,6 +17,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+# The handbook the explanations cite; anchors are its GitHub heading slugs.
+_HANDBOOK = "docs/halal_jurisprudence.md"
+
 
 @dataclass(frozen=True)
 class Explanation:
@@ -59,11 +62,12 @@ def explain_screening(receipt: dict[str, Any]) -> Explanation:
     if decision == "halal":
         lines.append("## Why this passed")
         lines.append(_render_pass_criteria(criteria))
-        sources.append("docs/halal_jurisprudence.md#section-1-utility-tokens")
+        sources.append(f"{_HANDBOOK}#section-2-aaoifi-financial-ratios-default-profile")
     elif decision == "not_halal":
         lines.append("## Why this failed")
         lines.append(_render_fail_criteria(criteria))
-        sources.append("docs/halal_jurisprudence.md#section-3-prohibited-activities")
+        sources.append(f"{_HANDBOOK}#14-prohibited-industries")
+        sources.append(f"{_HANDBOOK}#section-2-aaoifi-financial-ratios-default-profile")
     else:  # doubtful
         lines.append("## Why this is doubtful")
         lines.append(_render_doubt_criteria(criteria))
@@ -72,7 +76,8 @@ def explain_screening(receipt: dict[str, Any]) -> Explanation:
             "Operator may override via the Sharia exception queue; "
             "see `/api/insights/exceptions` for pending entries."
         )
-        sources.append("docs/halal_jurisprudence.md#section-4-doubtful-and-overrides")
+        sources.append(f"{_HANDBOOK}#section-4-decision-states")
+        sources.append(f"{_HANDBOOK}#section-7-exception-queue")
 
     if criteria.get("notes"):
         lines.append("")
