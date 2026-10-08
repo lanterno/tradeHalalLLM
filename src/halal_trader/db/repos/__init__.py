@@ -17,7 +17,6 @@ from halal_trader.db.repos.protocols import (
     HalalScreeningRepo,
     IndicatorSnapshotRepo,
     LlmDecisionRepo,
-    PurificationRepo,
     StockHalalCacheRepo,
     StockPnlRepo,
     StrategyAdjustmentRepo,
@@ -47,7 +46,6 @@ class RepoBundle:
     web_audit: WebAuditRepo
     indicator_snapshots: IndicatorSnapshotRepo
     llm_decisions: LlmDecisionRepo
-    purification: PurificationRepo
     strategy_adjustments: StrategyAdjustmentRepo
 
     @classmethod
@@ -59,7 +57,6 @@ class RepoBundle:
         from halal_trader.db.repos.halal_screening import HalalScreeningRepoImpl
         from halal_trader.db.repos.indicator_snapshots import IndicatorSnapshotRepoImpl
         from halal_trader.db.repos.llm_decisions import LlmDecisionRepoImpl
-        from halal_trader.db.repos.purification import PurificationRepoImpl
         from halal_trader.db.repos.stock_halal_cache import StockHalalCacheRepoImpl
         from halal_trader.db.repos.stock_pnl import StockPnlRepoImpl
         from halal_trader.db.repos.strategy_adjustments import StrategyAdjustmentRepoImpl
@@ -75,7 +72,6 @@ class RepoBundle:
             web_audit=WebAuditRepoImpl(engine),
             indicator_snapshots=IndicatorSnapshotRepoImpl(engine),
             llm_decisions=LlmDecisionRepoImpl(engine),
-            purification=PurificationRepoImpl(engine),
             strategy_adjustments=StrategyAdjustmentRepoImpl(engine),
         )
 
@@ -85,7 +81,6 @@ __all__ = [
     "HalalScreeningRepo",
     "IndicatorSnapshotRepo",
     "LlmDecisionRepo",
-    "PurificationRepo",
     "RepoBundle",
     "StockHalalCacheRepo",
     "StockPnlRepo",

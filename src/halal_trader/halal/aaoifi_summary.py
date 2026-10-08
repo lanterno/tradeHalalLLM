@@ -32,7 +32,7 @@ from sqlalchemy import and_, func, text
 from sqlmodel import col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from halal_trader.db.models import PurificationEntry, RoundTripPurificationRow
+from halal_trader.db.models import RoundTripPurificationRow
 from halal_trader.portfolio.core_account import CORE_ACCOUNTS, CORE_LIVE, CORE_PAPER, DAY_TRADER
 
 if TYPE_CHECKING:
@@ -297,13 +297,6 @@ async def _account(
 async def _sum_purification_accrued(session: AsyncSession, since: datetime) -> float:
     """Sum dividend-side + capital-gains-side purification due since
     ``since``."""
-    div = (
-        await session.exec(
-            select(func.coalesce(func.sum(PurificationEntry.purification_usd), 0.0)).where(
-                PurificationEntry.timestamp >= since
-            )
-        )
-    ).one()
     ledger = await _accruals(session, since, paid_only=False)
     cap = (
         await session.exec(
@@ -312,13 +305,12 @@ async def _sum_purification_accrued(session: AsyncSession, since: datetime) -> f
             ).where(RoundTripPurificationRow.timestamp >= since)
         )
     ).one()
-    return float(div or 0.0) + ledger + float(cap or 0.0)
+    return ledger + float(cap or 0.0)
 
 
 async def _unpaid_by_account(session: AsyncSession, since: datetime) -> dict[str, float]:
-    """Purification accrued and not yet paid, per broker account. The legacy
-    dividend table and the round-trip ledger predate the core and carry no
-    account: both were the day-trader's ("paper")."""
+    """Purification accrued and not yet paid, per broker account. The round-trip
+    ledger predates the core and carries no account: it was the day-trader's."""
     out: dict[str, float] = {}
     for account, _ in ACCOUNTS:
         owed = await _accruals(session, since, paid_only=False, accounts=[account]) - (
@@ -335,18 +327,14 @@ async def _unpaid_by_account(session: AsyncSession, since: datetime) -> dict[str
 
 
 async def _sum_legacy(session: AsyncSession, since: datetime, *, paid_only: bool) -> float:
-    div_q = select(func.coalesce(func.sum(PurificationEntry.purification_usd), 0.0)).where(
-        PurificationEntry.timestamp >= since
-    )
+    """The round-trip (capital gains) ledger's purification since ``since``."""
     cap_q = select(
         func.coalesce(func.sum(RoundTripPurificationRow.purification_due_usd), 0.0)
     ).where(RoundTripPurificationRow.timestamp >= since)
     if paid_only:
-        div_q = div_q.where(col(PurificationEntry.paid_at).is_not(None))
         cap_q = cap_q.where(col(RoundTripPurificationRow.disbursed).is_(True))
-    div = (await session.exec(div_q)).one()
     cap = (await session.exec(cap_q)).one()
-    return float(div or 0.0) + float(cap or 0.0)
+    return float(cap or 0.0)
 
 
 def _live_accounts() -> list[str]:
@@ -354,7 +342,7 @@ def _live_accounts() -> list[str]:
     from halal_trader.config import get_settings
 
     settings = get_settings()
-    live = [] if settings.alpaca.paper_trade else ["paper"]
+    live = [] if settings.alpaca.paper_trade else [DAY_TRADER]
     if not settings.core.paper:
         live.append(CORE_LIVE)
     return live
@@ -389,16 +377,6 @@ async def _accruals(
 async def _sum_purification_disbursed(session: AsyncSession, since: datetime) -> float:
     """Sum disbursed purification across both ledgers (paid_at /
     disbursed_at NOT NULL)."""
-    div = (
-        await session.exec(
-            select(func.coalesce(func.sum(PurificationEntry.purification_usd), 0.0)).where(
-                and_(
-                    col(PurificationEntry.timestamp) >= since,
-                    col(PurificationEntry.paid_at).is_not(None),
-                )
-            )
-        )
-    ).one()
     ledger = await _accruals(session, since, paid_only=True)
     cap = (
         await session.exec(
@@ -412,4 +390,4 @@ async def _sum_purification_disbursed(session: AsyncSession, since: datetime) ->
             )
         )
     ).one()
-    return float(div or 0.0) + ledger + float(cap or 0.0)
+    return ledger + float(cap or 0.0)

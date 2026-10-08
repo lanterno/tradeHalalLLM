@@ -1,8 +1,7 @@
 """Round-trip purification accounting (capital-gains flavour).
 
-The existing :mod:`halal_trader.halal.purification` module covers
-*dividend* purification — the income side. This module covers the
-*capital-gains* side: when a halal-screened equity earns a small
+Dividend purification, the income side, is compliance/purification.py.
+This module covers the *capital-gains* side: when a halal-screened equity earns a small
 fraction of revenue from non-compliant lines (under the AAOIFI 5%
 threshold, say), the realised gain on a buy-then-sell round trip
 includes a proportional impure component the holder is expected to

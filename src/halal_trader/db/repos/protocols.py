@@ -140,25 +140,6 @@ class LlmDecisionRepo(Protocol):
     async def get_recent_decisions(self, limit: int = ...) -> list[dict[str, Any]]: ...
 
 
-class PurificationRepo(Protocol):
-    async def record_purification(
-        self,
-        *,
-        symbol: str,
-        dividend_usd: float,
-        haram_pct: float,
-        purification_usd: float,
-        notes: str | None = ...,
-    ) -> int: ...
-
-    async def mark_purification_paid(
-        self, entry_id: int, paid_at: datetime | None = ...
-    ) -> bool: ...
-
-    async def get_outstanding_purification(self) -> list[dict[str, Any]]: ...
-    async def get_purification_totals(self) -> dict[str, float]: ...
-
-
 class StrategyAdjustmentRepo(Protocol):
     async def record_strategy_adjustment(
         self,

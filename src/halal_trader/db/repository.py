@@ -28,7 +28,6 @@ class Repository:
         self._engine = engine
         self._bundle = RepoBundle.from_engine(engine)
         self._web_audit = self._bundle.web_audit
-        self._purification = self._bundle.purification
         self._halal_screening = self._bundle.halal_screening
         self._daily_recommendations = self._bundle.daily_recommendations
         self._indicator_snapshots = self._bundle.indicator_snapshots
@@ -176,34 +175,6 @@ class Repository:
 
     async def delete_old_web_actions(self, *, older_than: timedelta) -> int:
         return await self._web_audit.delete_old_web_actions(older_than=older_than)
-
-    # ── Purification ledger (delegated to PurificationRepoImpl) ──────
-
-    async def record_purification(
-        self,
-        *,
-        symbol: str,
-        dividend_usd: float,
-        haram_pct: float,
-        purification_usd: float,
-        notes: str | None = None,
-    ) -> int:
-        return await self._purification.record_purification(
-            symbol=symbol,
-            dividend_usd=dividend_usd,
-            haram_pct=haram_pct,
-            purification_usd=purification_usd,
-            notes=notes,
-        )
-
-    async def mark_purification_paid(self, entry_id: int, paid_at: datetime | None = None) -> bool:
-        return await self._purification.mark_purification_paid(entry_id, paid_at)
-
-    async def get_outstanding_purification(self) -> list[dict[str, Any]]:
-        return await self._purification.get_outstanding_purification()
-
-    async def get_purification_totals(self) -> dict[str, float]:
-        return await self._purification.get_purification_totals()
 
     # ── Halal Screenings (delegated to HalalScreeningRepoImpl) ───────
 

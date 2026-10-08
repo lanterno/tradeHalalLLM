@@ -10,13 +10,13 @@ from fastapi import FastAPI
 
 from halal_trader.web.routes import (
     activity,
-    admin_halal,
     analytics,
     config,
     core,
     decisions,
     halabot_beliefs,
     halal_compliance,
+    halal_explain,
     halal_zakat,
     home,
     insights,
@@ -44,7 +44,7 @@ _MODULES = (
     research,
     prometheus,
     activity,
-    admin_halal,
+    halal_explain,
     insights,
     halal_compliance,
     halal_zakat,
