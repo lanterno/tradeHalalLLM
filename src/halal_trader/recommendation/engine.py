@@ -192,8 +192,7 @@ class DailyRecommendationEngine:
                 "from_hi": round((last / max(highs) - 1) * 100, 2) if highs else None,
             }
             summary.update(self._quant_fields(klines, ind))
-            if self._settings.stocks.recommendation_expected_move:
-                summary.update(await self._implied_fields(sym, last))
+            summary.update(await self._implied_fields(sym, last))
             out[sym] = summary
         return out
 

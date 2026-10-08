@@ -11,8 +11,8 @@ type a known string (e.g. the symbol being closed) and only then sends
 the confirmation header. The header is the single boundary the server
 checks — it doesn't enforce any particular client-side typing UI.
 
-Tests can disable the requirement by setting ``WEB_REQUIRE_CONFIRMATION
-=false`` so the runner doesn't have to forge headers in every call.
+Tests can disable the requirement (``settings.web.require_confirmation =
+False``) so the runner doesn't have to forge headers in every call.
 """
 
 from __future__ import annotations

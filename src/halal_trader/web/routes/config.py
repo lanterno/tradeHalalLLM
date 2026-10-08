@@ -74,6 +74,8 @@ def _walk_settings_schema(model: type[BaseSettings]) -> list[dict[str, Any]]:
         if isinstance(ann, type) and issubclass(ann, BaseSettings):
             out.extend(_walk_settings_schema(ann))
             continue
+        if name not in getattr(model, "ENV", frozenset()):
+            continue  # a fixed value, not configuration
         env_name = (
             field.validation_alias
             if isinstance(field.validation_alias, str)

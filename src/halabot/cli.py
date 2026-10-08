@@ -99,7 +99,7 @@ async def _run_shadow(
             ht_engine,
             consumer="shadow",
             cap_usd=settings.llm.daily_usd_cap,
-            enforce=settings.llm.budget_enforce,
+            enforce=True,
             monthly_cap_usd=spend.monthly_cap_for(
                 "shadow",
                 live_usd=settings.llm.monthly_live_usd,

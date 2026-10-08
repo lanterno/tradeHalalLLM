@@ -39,7 +39,6 @@ from halal_trader.db.repos import RepoBundle
 from halal_trader.db.repository import Repository
 from halal_trader.domain.ports import Broker, ComplianceScreener
 from halal_trader.domain.status import EntryType
-from halal_trader.execution.broker_factory import create_broker
 from halal_trader.halal.cache import HalalScreener
 from halal_trader.halal.zoya import ZoyaClient
 from halal_trader.market_hours import (
@@ -49,6 +48,7 @@ from halal_trader.market_hours import (
     now_eastern,
     today_eastern,
 )
+from halal_trader.mcp.client import AlpacaMCPClient
 from halal_trader.trading.catalysts import StockCatalystFeed
 from halal_trader.trading.cycle import TradingCycleService
 from halal_trader.trading.executor import TradeExecutor
@@ -158,7 +158,7 @@ class TradingBot:
         self._engine: AsyncEngine | None = None
         self._repo: Repository | None = None
         self._bundle: RepoBundle | None = None
-        self._broker_client = create_broker(self.settings)
+        self._broker_client = AlpacaMCPClient()
         self.broker: Broker = self._broker_client
         self.screener: ComplianceScreener | None = None
         self.executor: TradeExecutor | None = None
@@ -238,7 +238,7 @@ class TradingBot:
                 self._engine,
                 consumer="stock",
                 cap_usd=self.settings.llm.daily_usd_cap,
-                enforce=self.settings.llm.budget_enforce,
+                enforce=True,
                 alert=self._alerts.notify,
                 monthly_cap_usd=spend.monthly_cap_for(
                     "stock",
@@ -250,7 +250,7 @@ class TradingBot:
             else None
         )
 
-        # Broker connection (ALPACA_BROKER_ADAPTER: the MCP server, or REST)
+        # Broker connection (the alpaca-mcp-server subprocess)
         await self._broker_client.connect()
 
         # LLM
@@ -333,7 +333,6 @@ class TradingBot:
             reactor_trailing_stop_distance_pct=(
                 self.settings.stocks.reactor_trailing_stop_distance_pct
             ),
-            trend_break_enabled=self.settings.stocks.trend_break_enabled,
             trend_break_ma_period=self.settings.stocks.trend_break_ma_period,
             trend_break_timeframe=self.settings.stocks.trend_break_timeframe,
             on_tick=lambda detail: beat(self._engine, STOCK_MONITOR, detail),
@@ -430,9 +429,7 @@ class TradingBot:
         finnhub_cfg = getattr(self.settings, "finnhub", None)
         finnhub_key = getattr(finnhub_cfg, "api_key", "") if finnhub_cfg else ""
         stocks_cfg = self.settings.stocks
-        use_alpaca = stocks_cfg.reactor_news_source == "alpaca" and bool(
-            self.settings.alpaca.api_key and self.settings.alpaca.secret_key
-        )
+        use_alpaca = bool(self.settings.alpaca.api_key and self.settings.alpaca.secret_key)
         if finnhub_key or use_alpaca:
             from halal_trader.sentiment.stocks_events import (
                 AlpacaNewsSource,
@@ -454,28 +451,16 @@ class TradingBot:
                 )
                 watchlist = []
             if watchlist:
-                classifier: Any
-                if self.settings.stocks.headline_classifier == "finbert":
-                    # Local, free, LLM-outage-resilient sentiment classifier.
-                    from halal_trader.sentiment.finbert_classifier import (
-                        FinBERTHeadlineClassifier,
-                    )
+                # Dedicated classifier GLM stack (separate instances from the
+                # strategy LLM) so backoff state and usage accounting don't
+                # bleed between the two workloads. See create_classifier_llm.
+                from halal_trader.core.llm import create_classifier_llm
 
-                    classifier = FinBERTHeadlineClassifier()
-                    logger.info("Reactor headline classifier: FinBERT (local)")
-                else:
-                    # Dedicated classifier GLM stack (separate instances
-                    # from the strategy LLM) so backoff state and usage
-                    # accounting don't bleed between the two workloads.
-                    # See create_classifier_llm.
-                    from halal_trader.core.llm import create_classifier_llm
-
-                    classifier_llm = create_classifier_llm(self.settings)
-                    classifier = GPTHeadlineClassifier(
-                        classifier_llm,
-                        alert_sink=self._alerts,
-                        daily_classify_cap=self.settings.stocks.reactor_daily_classify_cap,
-                    )
+                classifier = GPTHeadlineClassifier(
+                    create_classifier_llm(self.settings),
+                    alert_sink=self._alerts,
+                    daily_classify_cap=self.settings.stocks.reactor_daily_classify_cap,
+                )
                 # Gate the reactor's sweep on the kill-switch so it stops
                 # burning classifier/Finnhub calls while halted (entries are
                 # blocked downstream regardless).
@@ -527,14 +512,12 @@ class TradingBot:
                 )
                 logger.info(
                     "StockNewsEventReactor wired (%d symbols, threshold=%.2f, "
-                    "daily_classify_cap=%d, entries=%s, size=%.0f%% of cap, "
-                    "hold_overnight=%s)",
+                    "daily_classify_cap=%d, entries=%s, size=%.0f%% of cap)",
                     len(watchlist),
                     StockNewsEventReactor._DEFAULT_SCORE_THRESHOLD,
                     self.settings.stocks.reactor_daily_classify_cap,
                     "ON" if self.settings.stocks.reactor_entries_enabled else "OFF",
                     self.settings.stocks.reactor_entry_size_fraction * 100,
-                    self.settings.stocks.reactor_hold_overnight,
                 )
 
         # Cycle service — owns the intraday trading logic
@@ -1178,8 +1161,7 @@ class TradingBot:
         entry would stay forever (MSFT from 20 Jul to 6 Oct 2026), so the
         flatten takes everything.
         """
-        stocks = self.settings.stocks
-        return bool(stocks.reactor_hold_overnight and stocks.day_trader_enabled)
+        return self.settings.stocks.day_trader_enabled
 
     async def market_snapshot(self) -> None:
         """Each minute of the session: both accounts' values and the benchmarks'
@@ -1502,7 +1484,7 @@ class TradingBot:
                     severity="error",
                 )
         # Housekeeping, whatever happened above: the dashboard's mutation audit
-        # rows past WEB_AUDIT_RETENTION_DAYS.
+        # rows past ``settings.web.audit_retention_days``.
         await self._prune_audit_log()
 
     async def _early_close_eod(self) -> None:

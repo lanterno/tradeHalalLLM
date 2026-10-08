@@ -9,37 +9,6 @@ from rich.text import Text
 from halal_trader.logging import console
 
 
-def _warn_uncapped_cloud_llm() -> None:
-    """Print a loud warning when the LLM is configured with no spend cap.
-
-    GLM is always a metered cloud endpoint, so ``LLM_DAILY_USD_CAP=0``
-    means the bot will keep calling the API regardless of cost — a
-    runaway cycle loop can spend real money in an hour. Surface the
-    risk at startup so the operator sees it before they walk away from
-    the terminal.
-    """
-    from halal_trader.config import get_settings
-
-    settings = get_settings()
-    if settings.llm.daily_usd_cap > 0:
-        return
-    console.print(
-        Panel.fit(
-            Text.from_markup(
-                "[bold red]⚠ LLM_DAILY_USD_CAP=0[/bold red] with metered model "
-                f"[bold]{settings.llm.model}[/bold]\n"
-                "No daily spend cap is set. A runaway cycle can spend\n"
-                "real money in an hour. Set [cyan]LLM_DAILY_USD_CAP=3.0[/cyan] "
-                "(or similar) in .env and restart:\n"
-                "crossing it alerts, and with [cyan]LLM_BUDGET_ENFORCE=true[/cyan] "
-                "further LLM calls are refused for the day."
-            ),
-            border_style="red",
-            title="Spend safety",
-        )
-    )
-
-
 def print_config() -> None:
     """Print the stock-side configuration table."""
     from halal_trader.config import get_settings
@@ -69,7 +38,6 @@ def print_config() -> None:
     table.add_row("Database", settings.database_url.split("@")[-1])
 
     console.print(table)
-    _warn_uncapped_cloud_llm()
 
 
 def print_account(account: object) -> None:

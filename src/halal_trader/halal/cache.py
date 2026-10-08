@@ -5,7 +5,7 @@ order boundary (``TradeExecutor._check_halal``) use. With a database engine
 -- as the bot always runs -- its verdicts are the strict in-house screen's
 (halal/strict.py), failing closed on a stale or missing screen, and
 ``halal_cache`` holds the trading universe: the largest names that screen
-passes (``HALAL_UNIVERSE_SIZE``). A production Zoya key, if one is ever set,
+passes (``settings.halal.universe_size``). A production Zoya key, if one is ever set,
 can only veto on top of that.
 
 Without an engine (tests, offline tooling) it falls back to the curated

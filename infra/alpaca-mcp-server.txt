@@ -9,7 +9,7 @@
 # verified working, on 2026-10-01 (pre-market: account, clock, positions).
 #
 # To upgrade: resolve the new server in a scratch venv, freeze it here, bump
-# ALPACA_MCP_SERVER_VERSION's default in config.py to match (a test enforces
+# AlpacaSettings.mcp_server_version in config.py to match (a test enforces
 # it), run the recorded-payload contract tests, rebuild, and smoke-test one
 # live cycle.
 aiofile==3.12.3

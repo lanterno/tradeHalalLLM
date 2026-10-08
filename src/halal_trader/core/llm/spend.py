@@ -5,19 +5,17 @@ whether it may run. The total lives in the ``llm_spend`` table, one row per
 (UTC day, consumer), so it survives restarts and adds up the stock bot and
 the shadow engine, which share one OpenRouter key and one bill.
 
-Two modes (``LLM_BUDGET_ENFORCE``):
-
-* observe (default): never blocks; alerts once a day at 80% of the cap and
-  once when the cap is crossed, so the cap can be sized from real data;
-* enforce: additionally refuses every further LLM call for the rest of the
-  UTC day once the cap is reached. That is the actual spend stop -- the
-  kill-switch alone would not be (the classifier and the shadow keep
-  calling). Exits keep working: the position monitor does not use the LLM.
+Once the day's total reaches the cap, every further LLM call is refused for
+the rest of the UTC day; an alert goes out at 80% and at the cap. That is
+the actual spend stop -- the kill-switch alone would not be (the classifier
+and the shadow keep calling). Exits keep working: the position monitor does
+not use the LLM. (Observe mode, ``enforce=False``, only alerts; the bot and
+the shadow always enforce, as decided 2026-10-04.)
 
 On top of the daily cap, each consumer belongs to a **monthly pool** with
 its own cap (operator decision 2026-10-02: $25 live for the bot and the
 shadow engine, $15 research, $10 of the $50 key limit as headroom). The
-pool alerts and, in enforce mode, refuses exactly like the daily cap, so
+pool alerts and refuses exactly like the daily cap, so
 research can never spend the live bot's budget, nor the reverse.
 
 Nothing here raises into a caller except :class:`BudgetExhausted`, which is
@@ -178,7 +176,7 @@ class SpendMeter:
                 + (
                     "further LLM calls are refused until tomorrow (UTC)."
                     if self._enforce
-                    else "observe mode: calls continue (set LLM_BUDGET_ENFORCE=true to stop them)."
+                    else "observe mode: calls continue."
                 ),
             )
         elif spent >= self._cap * _WARN_FRACTION:

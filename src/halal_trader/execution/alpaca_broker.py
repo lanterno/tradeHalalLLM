@@ -15,9 +15,8 @@ API directly with httpx:
 * account, clock and positions are parsed strictly into domain models: a
   missing field raises instead of becoming 0.
 
-Selected by ALPACA_BROKER_ADAPTER=rest (default stays "mcp" until a
-side-by-side comparison on paper -- `halal-trader broker compare` -- has
-agreed for long enough to switch).
+The bot trades through the MCP server; this adapter serves the core
+portfolio and the side-by-side check `halal-trader broker compare`.
 """
 
 from __future__ import annotations

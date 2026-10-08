@@ -61,16 +61,11 @@ def server_parameters(
     The alpaca-mcp-server CLI has no "serve" subcommand: it defaults to the
     stdio transport when launched with no args, which is exactly what MCP's
     StdioServerParameters expects. In the Docker image the server is a
-    build-time install launched by path (mcp_server_command); on a host it is
+    build-time install launched by path; on a host it is
     `uvx alpaca-mcp-server@X.Y.Z` (see AlpacaSettings for why both are pinned).
     """
-    # Precedence: explicit setting > the image's build-time install > uvx. The
-    # image install is found by path, not via an env var, so an empty
-    # ALPACA_MCP_SERVER_COMMAND= copied from .env.example cannot silently put
-    # a container back on runtime resolution.
-    explicit = settings.alpaca.mcp_server_command
-    if explicit or baked_server.exists():
-        command, args = explicit or str(baked_server), []
+    if baked_server.exists():
+        command, args = str(baked_server), []
     else:
         command, args = "uvx", [f"alpaca-mcp-server@{settings.alpaca.mcp_server_version}"]
     return StdioServerParameters(
