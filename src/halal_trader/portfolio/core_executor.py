@@ -544,8 +544,11 @@ async def _record(
         await conn.execute(
             text(
                 "INSERT INTO core_orders (account, submitted_at, symbol, side, qty, est_price, "
-                "notional, reason, screen_as_of, status, broker_order_id, response) VALUES "
-                "(:acc, :at, :s, :side, :q, :p, :n, :r, :scr, :st, :bid, CAST(:resp AS JSONB))"
+                "notional, reason, screen_as_of, screen_method, status, broker_order_id, "
+                "response) VALUES (:acc, :at, :s, :side, :q, :p, :n, :r, :scr, "
+                "(SELECT method FROM halal_screen_current "
+                "WHERE as_of = CAST(:scr AS DATE) AND symbol = CAST(:s AS VARCHAR)), "
+                ":st, :bid, CAST(:resp AS JSONB))"
             ),
             row,
         )

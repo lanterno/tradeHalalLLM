@@ -88,7 +88,7 @@ def register(app: FastAPI) -> None:
                 await conn.execute(
                     text(
                         "SELECT submitted_at, symbol, side, qty, est_price, notional, reason, "
-                        "screen_as_of, status FROM core_orders WHERE account = :a "
+                        "screen_as_of, screen_method, status FROM core_orders WHERE account = :a "
                         "ORDER BY submitted_at DESC LIMIT 60"
                     ),
                     {"a": account},
@@ -205,6 +205,7 @@ def register(app: FastAPI) -> None:
                         "notional": _f(o.notional),
                         "reason": o.reason,
                         "screen_as_of": o.screen_as_of.isoformat() if o.screen_as_of else None,
+                        "screen_method": o.screen_method,
                         "status": o.status,
                         **_fill(fill_of.get((o.submitted_at, o.symbol))),
                     }

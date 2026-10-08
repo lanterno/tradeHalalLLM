@@ -941,6 +941,9 @@ class CoreOrder(SQLModel, table=True):
     notional: float
     reason: str
     screen_as_of: date | None = None
+    # The method of the verdict the order relied on (halal_screen_current's row
+    # for screen_as_of and the symbol): with screen_as_of, an exact receipt.
+    screen_method: str | None = None
     status: str
     broker_order_id: str | None = None
     response: dict | None = Field(
