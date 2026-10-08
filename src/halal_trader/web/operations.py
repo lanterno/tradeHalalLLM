@@ -620,6 +620,7 @@ async def build(
     watchdog = beats.get(hb.WATCHDOG)
     return {
         "now": now.isoformat(),
+        "paper": settings.core.paper,
         "market": _market(now),
         "fleet": {
             "verdict": "down" if not alive else "degraded" if problems else "healthy",
