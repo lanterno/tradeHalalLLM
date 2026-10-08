@@ -73,7 +73,7 @@ Authoritative diagrams: `docs/ARCHITECTURE.md` (where it and the code differ, tr
 - **Operator alerts** go through `AlertSink.notify(error_type, details)` (`notifications/telegram.py`), which rate-limits per type.
 - **Fill confirmation.** `core/fills.py:confirm_alpaca` fills `submitted_at`/`filled_at`/`filled_price`/`filled_quantity`; never conflate submitted with filled.
 - **CLI lazy imports.** Heavy modules are imported inside command functions so `--help` stays fast.
-- **Optional extras** (`[ml]`, `[dashboard]`) must degrade gracefully when absent.
+- **The optional `[ml]` extra** must degrade gracefully when absent.
 - **PEP 758** `except A, B:` (no parentheses) is valid Python 3.14 and what ruff formats to. Don't "fix" it.
 
 ## Product strategy

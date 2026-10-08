@@ -39,10 +39,10 @@ WORKDIR /app
 # table so it must be present at sync time.
 COPY pyproject.toml uv.lock README.md ./
 
-# Sync core deps; the dashboard / ml extras are optional and the
-# operator can rebuild with --build-arg EXTRAS="ml,dashboard". EXTRAS is
+# Sync core deps; the ml extra is optional and the
+# operator can rebuild with --build-arg EXTRAS="ml". EXTRAS is
 # comma-separated, but uv's --extra takes ONE name per flag — so expand it into
-# repeated --extra flags. Passing "ml,dashboard" as a single --extra value
+# repeated --extra flags. Passing "a,b" as a single --extra value
 # silently matches no extra and installs neither (base deps only). When EXTRAS
 # is empty the loop adds nothing and this is a plain `uv sync --frozen`.
 ARG EXTRAS=""

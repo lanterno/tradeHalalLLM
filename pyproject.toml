@@ -27,8 +27,6 @@ dependencies = [
     # Timezone data (required on minimal/WSL systems without system tzdata)
     "tzdata",
     "uvicorn>=0.40.0",
-    # uvicorn's WebSocket transport (the dashboard's /ws/cycle stream).
-    "websockets",
     "fastapi>=0.135.1",
     "asyncpg>=0.31.0",
     "psycopg[binary]>=3.3.3",
@@ -40,7 +38,6 @@ dependencies = [
 
 [project.optional-dependencies]
 ml = [
-    "transformers",
     "torch",
     "scikit-learn",
     "chronos-forecasting",
@@ -49,12 +46,8 @@ ml = [
     # the deterministic quant/ core stays pure numpy.
     "arch>=8.0",
 ]
-dashboard = [
-    "fastapi",
-    "uvicorn",
-]
 all = [
-    "halal-trader[ml,dashboard]",
+    "halal-trader[ml]",
 ]
 dev = [
     "pytest",
