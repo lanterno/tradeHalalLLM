@@ -42,10 +42,10 @@ def drawdown(points: list[tuple[date, float]], current: float) -> dict[str, Any]
     }
 
 
-async def core_risk(engine: AsyncEngine) -> dict[str, Any]:
+async def core_risk(engine: AsyncEngine, account: str) -> dict[str, Any]:
     """The core account's concentration and drawdown, from the bot's minute
     snapshot (falling back to its ledger at the last close) and its daily
-    equity history."""
+    equity history. ``account`` is its ledger name (core_account())."""
     from halal_trader.compliance.sectors import sector_of
     from halal_trader.web.routes.positions import broker_position, ledger_positions
 
@@ -54,17 +54,19 @@ async def core_risk(engine: AsyncEngine) -> dict[str, Any]:
             await conn.execute(
                 text(
                     "SELECT taken_at, equity, cash, last_equity, positions "
-                    "FROM account_snapshots WHERE account = 'core'"
-                )
+                    "FROM account_snapshots WHERE account = :a"
+                ),
+                {"a": account},
             )
         ).first()
         history = [
             (r.day, float(r.equity))
             for r in await conn.execute(
                 text(
-                    "SELECT day, equity FROM broker_equity WHERE account = 'core' AND equity > 0 "
+                    "SELECT day, equity FROM broker_equity WHERE account = :a AND equity > 0 "
                     "ORDER BY day"
-                )
+                ),
+                {"a": account},
             )
         ]
     now = datetime.now(UTC)
@@ -82,7 +84,7 @@ async def core_risk(engine: AsyncEngine) -> dict[str, Any]:
             if not history or history[-1][0] < prev_day:
                 history.append((prev_day, float(snap.last_equity)))
     else:
-        positions, as_of = await ledger_positions(engine, "core", [])
+        positions, as_of = await ledger_positions(engine, account, [])
         equity = cash = age = None
         source = "ledger"
         if not positions:
@@ -156,4 +158,6 @@ def register(app: FastAPI) -> None:
     async def api_risk_core(ctx: DashboardContext = Depends(get_ctx)) -> JSONResponse:
         """The core portfolio's risk: concentration (top ten, largest holding,
         sectors) and drawdown from its own equity peak."""
-        return JSONResponse(await core_risk(ctx.engine))
+        from halal_trader.portfolio.core_account import core_account
+
+        return JSONResponse(await core_risk(ctx.engine, core_account(ctx.settings.core.paper)))

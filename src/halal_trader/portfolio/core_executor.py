@@ -49,6 +49,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from halal_trader.compliance import purification
 from halal_trader.halal import strict
 from halal_trader.portfolio.core_account import CORE_PAPER, core_account
 from halal_trader.portfolio.strict_core import (
@@ -162,20 +163,6 @@ async def _last_closes(engine: AsyncEngine, symbols: list[str], day: date) -> di
                 {"s": symbols, "d": day},
             )
         }
-
-
-async def unpaid_purification(engine: AsyncEngine, account: str) -> float:
-    async with engine.connect() as conn:
-        total = (
-            await conn.execute(
-                text(
-                    "SELECT coalesce(sum(amount), 0) FROM purification_accruals "
-                    "WHERE account = :a AND paid_at IS NULL"
-                ),
-                {"a": account},
-            )
-        ).scalar()
-    return float(total or 0.0)
 
 
 def _open_buy_notional(orders: list[dict[str, Any]]) -> float:
@@ -357,7 +344,7 @@ async def plan(
 
     # Purification owed by this account is not the portfolio's to invest: it
     # stays as cash until it is given away (purify paid).
-    reserved = await unpaid_purification(engine, account)
+    reserved = await purification.unpaid(engine, [account])
     if reserved > 0:
         result.notes.append(f"${reserved:,.2f} held back for purification")
     proceeds = sum(o.notional for o in sells)
@@ -454,7 +441,7 @@ async def execute(
         proceeds=0.0,
         open_buys=_open_buy_notional(await broker.get_open_orders()),
         equity=acct.effective_equity,
-        reserved=await unpaid_purification(engine, p.account),
+        reserved=await purification.unpaid(engine, [p.account]),
         ceiling=p.live_ceiling,
         invested=invested,
         notes=p.notes,

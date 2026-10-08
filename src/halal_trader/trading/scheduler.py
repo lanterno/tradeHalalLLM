@@ -20,6 +20,7 @@ from halal_trader.core import events
 from halal_trader.core.heartbeat import (
     CORE_TRADE,
     DAILY_JOBS,
+    MARKET_SNAPSHOT,
     RECOMMENDATION,
     RESEARCH,
     STOCK_CYCLE,
@@ -982,38 +983,18 @@ class TradingBot:
         against the fills this bot recorded; any difference alerts, because a
         fill the bot does not know about is a position it is not managing.
         """
-        from halal_trader.execution.alpaca_rest import AlpacaRestClient
-        from halal_trader.execution.ledger import reconcile_fills, sync_broker_ledger
-        from halal_trader.portfolio.core_account import core_account
+        from halal_trader.execution.ledger import reconcile_fills, sync_accounts
+        from halal_trader.portfolio.core_account import broker_accounts
 
         if self._engine is None:
             return
-        alpaca = self.settings.alpaca
         try:
-            client = AlpacaRestClient(alpaca.api_key, alpaca.secret_key, paper=alpaca.paper_trade)
-        except ValueError as exc:
-            logger.warning("broker ledger sync skipped: %r", exc)
-            return
-        try:
-            await sync_broker_ledger(self._engine, client)
-            core = self.settings.core
-            if core.alpaca_api_key and core.alpaca_secret_key:
-                core_client = AlpacaRestClient(
-                    core.alpaca_api_key, core.alpaca_secret_key, paper=core.paper
-                )
-                try:
-                    await sync_broker_ledger(
-                        self._engine, core_client, account=core_account(core.paper)
-                    )
-                finally:
-                    await core_client.aclose()
+            await sync_accounts(self._engine, broker_accounts(self.settings))
             rec = await reconcile_fills(self._engine, day or today_eastern())
         except Exception as exc:  # noqa: BLE001 -- the job must not take the bot down
             logger.error("broker ledger sync failed: %r", exc)
             await self._alerts.notify("ledger.sync_failed", repr(exc)[:500])
             return
-        finally:
-            await client.aclose()
         await beat(self._engine, STOCK_LEDGER, {"broker_fills": rec.broker_fills})
         if rec.clean:
             logger.info("broker ledger: %d fills today, books agree", rec.broker_fills)
@@ -1132,30 +1113,25 @@ class TradingBot:
         """
         from halal_trader.execution.alpaca_broker import AlpacaRestBroker
         from halal_trader.portfolio import snapshots
-        from halal_trader.portfolio.core_account import core_account
+        from halal_trader.portfolio.core_account import broker_accounts
 
         if self._engine is None:
             return
-        alpaca, core = self.settings.alpaca, self.settings.core
-        accounts = [("paper", alpaca.api_key, alpaca.secret_key, alpaca.paper_trade)]
-        if core.alpaca_api_key and core.alpaca_secret_key:
-            label = core_account(core.paper)
-            accounts.append((label, core.alpaca_api_key, core.alpaca_secret_key, core.paper))
         taken = []
-        for i, (name, key, secret, paper) in enumerate(accounts):
-            if not (key and secret):
+        for i, a in enumerate(broker_accounts(self.settings)):
+            if not (a.api_key and a.secret_key):
                 continue
-            broker = AlpacaRestBroker(key, secret, paper=paper)
+            broker = AlpacaRestBroker(a.api_key, a.secret_key, paper=a.paper)
             try:
-                await snapshots.snapshot_account(self._engine, name, broker)
+                await snapshots.snapshot_account(self._engine, a.name, broker)
                 if i == 0:
                     await snapshots.snapshot_quotes(self._engine, broker)
-                taken.append(name)
+                taken.append(a.name)
             except Exception as exc:  # noqa: BLE001 -- a missed minute heals itself
-                logger.warning("market snapshot of %s failed: %r", name, exc)
+                logger.warning("market snapshot of %s failed: %r", a.name, exc)
             finally:
                 await broker.disconnect()
-        await beat(self._engine, "market.snapshot", {"accounts": taken})
+        await beat(self._engine, MARKET_SNAPSHOT, {"accounts": taken})
 
     async def account_watch(self) -> list[str]:
         """Check every configured Alpaca account answers its keys; alert on any that don't.
@@ -1164,23 +1140,19 @@ class TradingBot:
         broker; a refusal (401/403) is reported at once, since it never heals.
         """
         from halal_trader.execution.alpaca_broker import AlpacaRestBroker
+        from halal_trader.portfolio.core_account import broker_accounts
 
-        alpaca = self.settings.alpaca
-        accounts = [("day-trader", alpaca.api_key, alpaca.secret_key, alpaca.paper_trade)]
-        core = self.settings.core
-        if core.alpaca_api_key and core.alpaca_secret_key:
-            accounts.append(("core", core.alpaca_api_key, core.alpaca_secret_key, core.paper))
         failures = []
-        for name, key, secret, paper in accounts:
-            if not (key and secret):
+        for a in broker_accounts(self.settings):
+            if not (a.api_key and a.secret_key):
                 continue
-            broker = AlpacaRestBroker(key, secret, paper=paper)
+            broker = AlpacaRestBroker(a.api_key, a.secret_key, paper=a.paper)
             try:
                 account = await broker.get_account_info()
                 if account.status.upper() != "ACTIVE":
-                    failures.append(f"{name}: account status {account.status}")
+                    failures.append(f"{a.label}: account status {account.status}")
             except Exception as exc:  # noqa: BLE001 -- the point is to report it
-                failures.append(f"{name}: {exc!r}"[:200])
+                failures.append(f"{a.label}: {exc!r}"[:200])
             finally:
                 await broker.disconnect()
         if failures:

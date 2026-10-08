@@ -6,6 +6,7 @@ from fastapi import Depends, FastAPI
 from fastapi.responses import JSONResponse
 
 from halal_trader.core.context import DashboardContext
+from halal_trader.portfolio.core_account import BROKER_ACCOUNTS, DAY_TRADER
 from halal_trader.web.dependencies import get_ctx
 
 
@@ -34,8 +35,9 @@ def register(app: FastAPI) -> None:
                 await conn.execute(
                     text(
                         "SELECT account, symbol, amount, paid_at IS NOT NULL AS paid "
-                        "FROM purification_accruals WHERE account IN ('core', 'paper')"
-                    )
+                        "FROM purification_accruals WHERE account = ANY(:a)"
+                    ),
+                    {"a": list(BROKER_ACCOUNTS)},
                 )
             ).all()
         ledger = RoundTripLedger(engine=ctx.engine)
@@ -55,7 +57,7 @@ def register(app: FastAPI) -> None:
             by_account[r.account] = by_account.get(r.account, 0.0) + float(r.amount)
             by_symbol[r.symbol] = by_symbol.get(r.symbol, 0.0) + float(r.amount)
         if legacy is not None:
-            by_account["paper"] = by_account.get("paper", 0.0) + legacy["total_usd"]
+            by_account[DAY_TRADER] = by_account.get(DAY_TRADER, 0.0) + legacy["total_usd"]
             for symbol, amount in legacy["by_symbol"].items():
                 by_symbol[symbol] = by_symbol.get(symbol, 0.0) + amount
             disbursed += legacy["disbursed_total_usd"]

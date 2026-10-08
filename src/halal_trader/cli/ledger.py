@@ -18,25 +18,18 @@ def ledger() -> None:
 
 @ledger.command("sync")
 def sync_cmd() -> None:
-    """Copy new Alpaca activities and recent daily equity into the ledger."""
+    """Copy every account's new Alpaca activities and recent daily equity into the ledger
+    (the after-close job's own sync)."""
 
     async def _run(engine: Any, settings: Any) -> None:
-        from halal_trader.execution.alpaca_rest import AlpacaRestClient
-        from halal_trader.execution.ledger import sync_broker_ledger
+        from halal_trader.execution.ledger import sync_accounts
+        from halal_trader.portfolio.core_account import broker_accounts
 
-        client = AlpacaRestClient(
-            settings.alpaca.api_key,
-            settings.alpaca.secret_key,
-            paper=settings.alpaca.paper_trade,
-        )
-        try:
-            r = await sync_broker_ledger(engine, client)
-        finally:
-            await client.aclose()
-        console.print(
-            f"activities: {r.activities_fetched} fetched, {r.activities_new} new; "
-            f"equity days: {r.equity_days}"
-        )
+        for name, r in (await sync_accounts(engine, broker_accounts(settings))).items():
+            console.print(
+                f"{name}: activities {r.activities_fetched} fetched, {r.activities_new} new; "
+                f"equity days: {r.equity_days}"
+            )
 
     run_db(_run)
 

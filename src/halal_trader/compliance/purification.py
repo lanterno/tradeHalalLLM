@@ -37,6 +37,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from halal_trader.market_hours import MARKET_TZ
+from halal_trader.portfolio.core_account import BROKER_ACCOUNTS
 
 logger = logging.getLogger(__name__)
 
@@ -364,6 +365,23 @@ class PurificationLine:
     amount: float
     payments: int
     assumed: int  # payments whose ratio was unknown (5% assumed)
+
+
+async def unpaid(engine: AsyncEngine, accounts: Iterable[str] = BROKER_ACCOUNTS) -> float:
+    """What the accounts still owe to charity. The default is every broker
+    account: a forward book's accruals ("book:*") are per a notional $10,000
+    that nobody holds, so nothing is set aside for them."""
+    async with engine.connect() as conn:
+        total = (
+            await conn.execute(
+                text(
+                    "SELECT coalesce(sum(amount), 0) FROM purification_accruals "
+                    "WHERE paid_at IS NULL AND account = ANY(:a)"
+                ),
+                {"a": list(accounts)},
+            )
+        ).scalar()
+    return float(total or 0.0)
 
 
 async def report(engine: AsyncEngine, account: str, year: int) -> list[PurificationLine]:

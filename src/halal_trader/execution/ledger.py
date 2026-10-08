@@ -21,6 +21,7 @@ import json
 import logging
 import math
 from collections import defaultdict
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import TYPE_CHECKING
@@ -32,6 +33,7 @@ from halal_trader.market_hours import today_eastern
 
 if TYPE_CHECKING:
     from halal_trader.execution.alpaca_rest import AlpacaRestClient
+    from halal_trader.portfolio.core_account import BrokerAccount
 
 logger = logging.getLogger(__name__)
 
@@ -183,6 +185,22 @@ async def sync_broker_ledger(
         len(points),
     )
     return SyncResult(len(activities), new, len(points))
+
+
+async def sync_accounts(
+    engine: AsyncEngine, accounts: Iterable[BrokerAccount]
+) -> dict[str, SyncResult]:
+    """:func:`sync_broker_ledger` for each account (portfolio/core_account.broker_accounts)."""
+    from halal_trader.execution.alpaca_rest import AlpacaRestClient
+
+    out: dict[str, SyncResult] = {}
+    for a in accounts:
+        client = AlpacaRestClient(a.api_key, a.secret_key, paper=a.paper)
+        try:
+            out[a.name] = await sync_broker_ledger(engine, client, account=a.name)
+        finally:
+            await client.aclose()
+    return out
 
 
 async def reconcile_fills(engine: AsyncEngine, day: date) -> FillReconciliation:

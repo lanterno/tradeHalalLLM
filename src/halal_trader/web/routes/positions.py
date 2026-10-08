@@ -22,9 +22,8 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from halal_trader.core.context import DashboardContext
+from halal_trader.portfolio.core_account import DAY_TRADER, core_account
 from halal_trader.web.dependencies import get_ctx
-
-ACCOUNTS = (("core", "Core portfolio"), ("paper", "Day-trader"))
 
 
 def _f(value: Any, digits: int = 2) -> float | None:
@@ -80,7 +79,7 @@ async def ledger_positions(
     from halal_trader.compliance.purification import paper_positions
     from halal_trader.market_hours import today_eastern
 
-    if account == "paper":
+    if account == DAY_TRADER:
         qty: dict[str, float] = {}
         cost: dict[str, float] = {}
         for t in open_trades:
@@ -140,12 +139,13 @@ def register(app: FastAPI) -> None:
                 )
             }
         open_trades = await ctx.repo.get_open_trades()
+        core_name = core_account(ctx.settings.core.paper)
         status = {
-            "core": "active" if await core_running(ctx.engine) else "disabled",
-            "paper": "active",
+            core_name: "active" if await core_running(ctx.engine) else "disabled",
+            DAY_TRADER: "active",
         }
         out = []
-        for account, label in ACCOUNTS:
+        for account, label in ((core_name, "Core portfolio"), (DAY_TRADER, "Day-trader")):
             snap = snaps.get(account)
             equity: float | None
             cash: float | None
@@ -157,13 +157,13 @@ def register(app: FastAPI) -> None:
                 age = round((now - snap.taken_at).total_seconds())
             else:
                 positions, as_of = await ledger_positions(
-                    ctx.engine, account, open_trades if account == "paper" else []
+                    ctx.engine, account, open_trades if account == DAY_TRADER else []
                 )
                 equity = cash = None
                 source, age = "ledger", None
                 if not positions:
                     continue
-            if account == "paper":
+            if account == DAY_TRADER:
                 levels = _ledger_levels(open_trades)
                 for p in positions:
                     p.update(levels.get(p["symbol"], {}))

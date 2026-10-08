@@ -17,6 +17,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from halal_trader.compliance import purification
 from halal_trader.halal import strict
 from halal_trader.market_hours import (
     EARLY_CLOSE_DATES,
@@ -233,16 +234,7 @@ async def build(
             r.verdict
             for r in (await strict.screen_rows(engine, screen_as_of) if screen_as_of else [])
         )
-        # Broker accounts only: a forward book's accruals ("book:*") are per a
-        # notional $10,000 that nobody holds, so nothing is set aside for them.
-        unpaid = (
-            await conn.execute(
-                text(
-                    "SELECT coalesce(sum(amount), 0) FROM purification_accruals "
-                    "WHERE paid_at IS NULL AND account NOT LIKE 'book:%'"
-                )
-            )
-        ).scalar()
+        unpaid = await purification.unpaid(engine)
         last_run = (
             await conn.execute(
                 text(
