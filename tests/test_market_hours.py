@@ -107,3 +107,24 @@ def test_dst_transition_jan_uses_est_offset():
     """In January (EST, UTC-5), midnight ET → 05:00 UTC."""
     out = trading_day_start_utc(date(2026, 1, 15))
     assert out.hour == 5
+
+
+def test_calendar_walks_skip_weekends_and_holidays() -> None:
+    from halal_trader.market_hours import (
+        next_trading_day,
+        previous_trading_day,
+        trading_days_back,
+    )
+
+    thanksgiving = date(2026, 11, 26)
+    assert thanksgiving in US_MARKET_HOLIDAYS
+    assert next_trading_day(date(2026, 11, 25)) == date(2026, 11, 27)
+    assert previous_trading_day(date(2026, 11, 27)) == date(2026, 11, 25)
+    assert next_trading_day(date(2026, 10, 9)) == date(2026, 10, 12)  # Fri -> Mon
+    assert previous_trading_day(date(2026, 10, 12)) == date(2026, 10, 9)
+    assert trading_days_back(date(2026, 11, 30), 3) == [
+        date(2026, 11, 25),
+        date(2026, 11, 27),
+        date(2026, 11, 30),
+    ]
+    assert trading_days_back(date(2026, 11, 29), 1) == [date(2026, 11, 27)]  # a Sunday

@@ -20,8 +20,8 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from halal_trader.core.safeguards import expected_core_token
+from halal_trader.market_hours import trading_days_back
 from halal_trader.portfolio import core_executor as ce
-from halal_trader.portfolio.readiness import trading_days_back
 from tests._core_fakes import FakeCoreBroker, core_settings, day_trader_is, no_sleep, screen
 
 TODAY = date(2026, 11, 20)

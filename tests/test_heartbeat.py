@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -59,16 +59,11 @@ def test_staleness_follows_each_components_cadence() -> None:
 
 @pytest.fixture
 def market_open(monkeypatch: pytest.MonkeyPatch) -> dict[str, bool]:
-    """Pin market state (default: closed) so liveness doesn't depend on when tests run."""
-    from datetime import time as dtime
-
-    import halal_trader.market_hours as mh
+    """Pin whether cycles are due (default: no) so liveness doesn't depend on when tests run."""
+    import halal_trader.core.heartbeat as hb
 
     state = {"open": False}
-    monkeypatch.setattr(mh, "is_market_open_local", lambda: state["open"])
-    monkeypatch.setattr(
-        mh, "now_eastern", lambda: datetime.combine(date(2026, 10, 1), dtime(14, 0), mh.MARKET_TZ)
-    )
+    monkeypatch.setattr(hb, "cycles_due_at", lambda now: state["open"])
     return state
 
 

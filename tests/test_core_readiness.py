@@ -8,7 +8,8 @@ from datetime import UTC, date, datetime, timedelta
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from halal_trader.portfolio.readiness import check, live_gate, trading_days_back
+from halal_trader.market_hours import trading_days_back
+from halal_trader.portfolio.readiness import check, live_gate
 from halal_trader.research.daily import _core_readiness
 
 START = date(2026, 10, 5)
