@@ -14,10 +14,10 @@ from halal_trader.web.middleware.confirm import require_confirmation
 
 def _confirm_app(monkeypatch, *, require: bool):
     monkeypatch.setenv("WEB_API_TOKEN", "")
-    monkeypatch.setenv("WEB_REQUIRE_CONFIRMATION", "true" if require else "false")
     import halal_trader.config as _cfg
 
     monkeypatch.setattr(_cfg, "_settings", None)
+    monkeypatch.setattr(_cfg.get_settings().web, "require_confirmation", require)
 
     app = FastAPI()
 
@@ -43,7 +43,7 @@ def test_confirm_required_passes_with_header(monkeypatch):
 
 
 def test_confirm_disabled_lets_request_through(monkeypatch):
-    """Tests can opt out via WEB_REQUIRE_CONFIRMATION=false."""
+    """Tests can opt out by turning ``require_confirmation`` off."""
     app = _confirm_app(monkeypatch, require=False)
     c = TestClient(app)
     r = c.post("/api/admin/destroy")

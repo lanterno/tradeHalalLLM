@@ -13,18 +13,15 @@ from halal_trader.db.repos.trades import TradeRepoImpl
 from halal_trader.trading.scheduler import TradingBot
 
 
-@pytest.mark.parametrize(
-    ("hold", "enabled", "expected"),
-    [(True, True, True), (True, False, False), (False, True, False)],
-)
+@pytest.mark.parametrize("enabled", [True, False])
 def test_reactor_entries_are_held_overnight_only_while_the_day_trader_runs(
-    hold: bool, enabled: bool, expected: bool
+    enabled: bool,
 ) -> None:
     bot = TradingBot()
     bot.settings = SimpleNamespace(  # type: ignore[assignment]
-        stocks=SimpleNamespace(reactor_hold_overnight=hold, day_trader_enabled=enabled)
+        stocks=SimpleNamespace(day_trader_enabled=enabled)
     )
-    assert bot.reactor_holds_overnight() is expected
+    assert bot.reactor_holds_overnight() is enabled
 
 
 async def test_a_rejected_buy_is_not_an_open_position(engine: AsyncEngine) -> None:

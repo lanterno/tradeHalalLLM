@@ -38,7 +38,10 @@ def test_schema_includes_well_known_envvars(client):
     assert "LLM_MODEL" in env_names
     assert "ALPACA_API_KEY" in env_names
     assert "ZOYA_API_KEY" in env_names
-    assert "LLM_DAILY_USD_CAP" in env_names
+    assert "DAY_TRADER_ENABLED" in env_names
+    # Fixed values are not configuration.
+    assert "TRADING_INTERVAL_MINUTES" not in env_names
+    assert "LLM_DAILY_USD_CAP" not in env_names
 
 
 def test_schema_flags_secrets(client):
@@ -55,8 +58,7 @@ def test_schema_flags_secrets(client):
 def test_schema_default_for_simple_int_field(client):
     rows = client.get("/api/config/schema").json()
     by_name = {r["env_name"]: r for r in rows}
-    # The stock cycle ships at 15 minutes by default.
-    assert by_name["TRADING_INTERVAL_MINUTES"]["default"] == 15
+    assert by_name["CORE_LIVE_MAX_NOTIONAL"]["default"] == 1000.0
 
 
 def test_schema_never_sends_a_secrets_default(client):

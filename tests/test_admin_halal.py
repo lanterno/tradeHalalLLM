@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 import pytest
 from fastapi.testclient import TestClient
 
+from halal_trader.config import get_settings
 from halal_trader.web import app as web_app
 
 
@@ -14,7 +15,7 @@ from halal_trader.web import app as web_app
 def client(database_url, tmp_path, monkeypatch):
     monkeypatch.setenv("LOG_DIR", str(tmp_path / "logs"))
     monkeypatch.setenv("WEB_API_TOKEN", "secret")
-    monkeypatch.setenv("WEB_REQUIRE_CONFIRMATION", "false")
+    monkeypatch.setattr(get_settings().web, "require_confirmation", False)
     app = web_app.create_app()
 
     with TestClient(app) as c:

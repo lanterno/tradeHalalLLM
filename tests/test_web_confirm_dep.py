@@ -2,7 +2,7 @@
 
 Existing `test_web_confirm_activity.py` tests the audit-log side; this
 file pins the dependency itself: header-gate semantics, normalisation,
-and the ``WEB_REQUIRE_CONFIRMATION=false`` test bypass.
+and the ``require_confirmation=False`` test bypass.
 """
 
 from __future__ import annotations
@@ -32,7 +32,7 @@ def _settings(*, require: bool) -> MagicMock:
 
 @patch("halal_trader.web.middleware.confirm.get_settings")
 def test_returns_none_when_requirement_disabled(mock_get_settings):
-    """`WEB_REQUIRE_CONFIRMATION=false` → never gates; returns None."""
+    """``require_confirmation=False`` → never gates; returns None."""
     mock_get_settings.return_value = _settings(require=False)
     # Even with no header, this should not raise.
     require_confirmation(_request())

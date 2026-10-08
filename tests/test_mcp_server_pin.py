@@ -44,12 +44,6 @@ def test_only_an_exact_version_is_accepted(bad: str) -> None:
         AlpacaSettings(mcp_server_version=bad)
 
 
-def test_an_explicit_command_wins() -> None:
-    params = server_parameters(_settings(mcp_server_command="/x/server"), baked_server=NOT_BAKED)
-
-    assert (params.command, params.args) == ("/x/server", [])
-
-
 def test_the_images_build_time_install_is_used_when_present(tmp_path: Path) -> None:
     baked = tmp_path / "alpaca-mcp-server"
     baked.touch()
