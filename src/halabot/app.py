@@ -81,16 +81,12 @@ class _NoThesis:
 
 
 def _make_halt_check(db_engine: AsyncEngine) -> Any:
-    """A coroutine the policy calls to read the operator kill-switch (hb_control).
-    Defined here (not via the api package) to avoid a composition→api dependency."""
-    import sqlalchemy as sa
-
-    from halabot.platform.db import control
+    """A coroutine the policy calls: the operator's one kill-switch
+    (``halal-trader halt``, core/halt.py), the same the bot obeys."""
+    from halal_trader.core.halt import is_halted
 
     async def halted() -> bool:
-        async with db_engine.connect() as conn:
-            row = (await conn.execute(sa.select(control.c.halted).where(control.c.id == 1))).first()
-        return bool(row[0]) if row is not None else False
+        return await is_halted(db_engine)
 
     return halted
 
@@ -312,7 +308,7 @@ async def build_engine(
         prices=prices,
         history=buffer,  # closes() feed the risk engine's correlation pass
         compliance_ttl=timedelta(hours=s.halal.cache_ttl_h),
-        halt_check=_make_halt_check(db_engine),  # operator kill-switch (hb_control)
+        halt_check=_make_halt_check(db_engine),  # the operator's kill-switch
         # Market-regime gate ("don't fight the tape"): reuses the benchmark bars
         # already fed for relative strength. Inert unless that benchmark is fed.
         benchmark=s.cognition.benchmark_symbol if s.cognition.relstrength_enabled else None,

@@ -1,13 +1,12 @@
-"""Read queries + control writes for the API (REARCHITECTURE L9).
+"""Read queries over the engine's tables, for the dashboard (REARCHITECTURE L9).
 
 Pure async functions over the shared engine — unit-tested directly against the
-test DB, independent of FastAPI. Everything is read-only EXCEPT ``set_halt``,
-which toggles the operator kill-switch (``hb_control``)."""
+test DB, independent of FastAPI. Everything is read-only."""
 
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Any
 from uuid import UUID
 
@@ -18,7 +17,6 @@ from halabot.api import plain
 from halabot.belief.serde import belief_from_row
 from halabot.belief.store import PgBeliefStore
 from halabot.platform.db import (
-    control,
     conviction_score,
     event_log,
     open_position,
@@ -268,14 +266,15 @@ async def system_health(engine: AsyncEngine) -> dict[str, Any]:
                 )
             )
         ).scalar()
-    halt = await get_halt(engine)
+    from halal_trader.core.halt import is_halted
+
     return {
         "events": n_events,
         "events_estimated": events_estimated,
         "active_beliefs": int(active_beliefs or 0),
         "outcomes": n_outcomes,
         "last_event_ts": last_ts.isoformat() if last_ts else None,
-        "halted": halt["halted"],
+        "halted": await is_halted(engine),
     }
 
 
@@ -471,33 +470,3 @@ def random_entry_win_rate(
             if series[j][1] / c - 1 > threshold:
                 wins += 1
     return (wins / n if n else None), n
-
-
-# ── control / kill-switch ──
-async def get_halt(engine: AsyncEngine) -> dict[str, Any]:
-    async with engine.connect() as conn:
-        row = (await conn.execute(sa.select(control).where(control.c.id == 1))).first()
-    if row is None:
-        return {"halted": False, "reason": None, "updated_at": None}
-    return {
-        "halted": bool(row.halted),
-        "reason": row.reason,
-        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
-    }
-
-
-async def set_halt(engine: AsyncEngine, *, halted: bool, reason: str | None) -> dict[str, Any]:
-    now = datetime.now(UTC)
-    async with engine.begin() as conn:
-        existing = (await conn.execute(sa.select(control.c.id).where(control.c.id == 1))).first()
-        if existing is None:
-            await conn.execute(
-                sa.insert(control).values(id=1, halted=halted, reason=reason, updated_at=now)
-            )
-        else:
-            await conn.execute(
-                sa.update(control)
-                .where(control.c.id == 1)
-                .values(halted=halted, reason=reason, updated_at=now)
-            )
-    return {"halted": halted, "reason": reason, "updated_at": now.isoformat()}
