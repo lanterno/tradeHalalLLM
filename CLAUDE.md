@@ -10,7 +10,7 @@ LLM-powered halal day-trading bot for **US stocks** (Alpaca paper trading via MC
 
 **Read `docs/OPERATOR_CONTEXT.md` first.** It holds the non-code-derivable context: the working agreement, the stocks strategy intent (**fast in, slow out**), why the sole LLM provider is GLM-5.2 via OpenRouter (don't undo it; the bot won't start without `GLM_API_KEY`), operator-gated issues you can't fix in code (reconcile drift and the destructive fix-drift tool; don't touch `_aggregate_stocks_positions`), and the `src/halabot` engineering lessons (validate every edge with `halabot backtest` on disjoint OOS windows; the engine is shadow-only and never trades).
 
-The roadmap is `docs/MODERNIZATION_PLAN.md` with its evidence in `docs/assessment/2026-10-01/`. Both are **kept local on purpose and not committed**: the repo is public and they map open weaknesses. Read them, update them, but don't `git add` them.
+The roadmap is `docs/MODERNIZATION_PLAN.md`, **kept local on purpose and git-ignored**: the repo is public and it maps open weaknesses. Read it and update it; never force-add it. The previous plan and its evidence (`docs/assessment/`) were lost with the WSL machine on 2026-10-07; the plan restarted on 2026-10-08.
 
 ## Common commands
 
@@ -36,7 +36,7 @@ halabot backtest ... / halabot ab-report      # shadow engine research tools
 
 Every compose recipe goes through `compose` in the justfile (`--env-file .env`, project `halabot`). The compose file binds every port to 127.0.0.1 (dashboard 8082, Postgres 5433): on the public server Docker's port rules bypass ufw, so never publish a port on 0.0.0.0. The host side (bootstrap, the nightly off-site backup, health alerts, systemd units) is `infra/server/`. The previous machine was lost with its database and `.env` in 2026-10; a backup counts only once restic has it off the server (`backup.offsite` heartbeat).
 
-**Database**: Postgres 16 + pgvector, Alembic is the single schema authority (`init_db()` refuses to start on a wrong revision; it never runs DDL). The models must match what the migrations build (`tests/test_alembic_migrations.py` compares them): an index or constraint goes in both the model and its migration, or the next `--autogenerate` proposes dropping it. Tests use per-worker `halal_trader_test*` databases on the same server. `tests/conftest.py` refuses any database name that isn't disposable, runs tests without the operator's `.env` (`HALAL_TRADER_ENV_FILE`), and blocks outbound network (`TEST_ALLOW_NETWORK=1` to opt out once).
+**Database**: Postgres 16 + pgvector, Alembic is the schema authority for every `halal_trader` table (`init_db()` refuses to start on a wrong revision; it never runs DDL). The one exception, by design until the Phase-4 cutover: the shadow engine's `hb_*` tables, which `halabot/platform/db.py:bootstrap_schema` creates additively. The models must match what the migrations build (`tests/test_alembic_migrations.py` compares them): an index or constraint goes in both the model and its migration, or the next `--autogenerate` proposes dropping it. Tests use per-worker `halal_trader_test*` databases on the same server. `tests/conftest.py` refuses any database name that isn't disposable, runs tests without the operator's `.env` (`HALAL_TRADER_ENV_FILE`), and blocks outbound network (`TEST_ALLOW_NETWORK=1` to opt out once).
 
 Dashboard frontend: `cd dashboard && npm install && npm run build` (served from `dashboard/dist` by `web/app.py`); `npm run dev` for hot reload.
 
