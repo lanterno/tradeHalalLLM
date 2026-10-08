@@ -106,7 +106,12 @@ def ema(values: list[float], period: int) -> float | None:
 
 
 def rsi(closes: list[float], period: int = 14) -> float | None:
-    """Wilder-style RSI in [0, 100], or None if < period+1 closes."""
+    """Cutler's RSI in [0, 100] (simple averages of the last ``period`` moves), or
+    None if < period+1 closes.
+
+    Not Wilder's smoothed RSI (signals/indicators.py, the day-trader's): the
+    engine's interpreters were tuned on this one, so it stays until a backtest
+    on out-of-sample windows says otherwise."""
     if len(closes) < period + 1:
         return None
     gains, losses = 0.0, 0.0
@@ -126,7 +131,8 @@ def rsi(closes: list[float], period: int = 14) -> float | None:
 def atr(
     highs: list[float], lows: list[float], closes: list[float], period: int = 14
 ) -> float | None:
-    """Average true range, or None if insufficient data."""
+    """Average true range: the simple mean of the last ``period`` true ranges (not
+    Wilder's smoothing, see :func:`rsi`), or None if insufficient data."""
     n = min(len(highs), len(lows), len(closes))
     if n < period + 1:
         return None
