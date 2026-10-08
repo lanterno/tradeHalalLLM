@@ -37,7 +37,6 @@ def test_repository_bundle_returns_same_impls_as_delegators() -> None:
     assert bundle.stock_halal_cache is repo._stock_halal_cache
     assert bundle.halal_screening is repo._halal_screening
     assert bundle.web_audit is repo._web_audit
-    assert bundle.indicator_snapshots is repo._indicator_snapshots
     assert bundle.llm_decisions is repo._llm_decisions
     assert bundle.strategy_adjustments is repo._strategy_adjustments
 
@@ -67,7 +66,6 @@ def test_from_engine_builds_full_bundle_without_repository() -> None:
         "stock_halal_cache",
         "halal_screening",
         "web_audit",
-        "indicator_snapshots",
         "llm_decisions",
         "strategy_adjustments",
     ):

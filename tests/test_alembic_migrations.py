@@ -75,7 +75,6 @@ def test_initial_revision_creates_expected_tables(scratch_db):
         "daily_pnl",
         "halal_cache",
         "llm_decisions",
-        "indicator_snapshots",
         "strategy_adjustments",
         "kill_switch",
         "reconciliation_log",
