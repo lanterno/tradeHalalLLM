@@ -115,7 +115,7 @@ def test_halal_audit_for_symbol_returns_receipts(client):
                 sa.text(
                     "INSERT INTO halal_screenings "
                     "(timestamp, symbol, asset_class, source, decision, cache_hit) "
-                    "VALUES (:ts, 'AAPL', 'stock', 'zoya', 'halal', false) "
+                    "VALUES (:ts, 'AAPL', 'stock', 'screen', 'halal', false) "
                     "RETURNING id"
                 ),
                 {"ts": ts},

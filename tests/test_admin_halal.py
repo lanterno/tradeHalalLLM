@@ -92,7 +92,7 @@ def test_record_rejects_haram_pct_above_one(client):
 
 def test_the_screener_bypassing_refresh_route_is_gone(client):
     """POST /api/admin/halal/refresh wrote the default 20 symbols as halal
-    without asking Zoya, into the cache the live bot trades from. Deleted."""
+    without screening, into the cache the live bot trades from. Deleted."""
     assert client.post("/api/admin/halal/refresh").status_code in (404, 405)
 
 

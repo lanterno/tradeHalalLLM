@@ -37,7 +37,8 @@ def test_schema_includes_well_known_envvars(client):
     assert "GLM_BASE_URL" in env_names
     assert "LLM_MODEL" in env_names
     assert "ALPACA_API_KEY" in env_names
-    assert "ZOYA_API_KEY" in env_names
+    assert "FINNHUB_API_KEY" in env_names
+    assert "ZOYA_API_KEY" not in env_names
     assert "DAY_TRADER_ENABLED" in env_names
     # Fixed values are not configuration.
     assert "TRADING_INTERVAL_MINUTES" not in env_names

@@ -5,7 +5,7 @@ from __future__ import annotations
 from halal_trader.halal.explainer import explain_screening
 
 
-def _receipt(decision: str, criteria: dict, source: str = "zoya") -> dict:
+def _receipt(decision: str, criteria: dict, source: str = "screen") -> dict:
     return {
         "trade": {"symbol": "AAPL"},
         "screening": {

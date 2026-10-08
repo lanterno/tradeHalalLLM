@@ -13,8 +13,8 @@ async def repo(engine):
 
 @pytest.fixture
 async def screener(repo):
-    """Create a screener without Zoya API (uses defaults)."""
-    return HalalScreener(repo, zoya=None)
+    """A screener without a database engine (uses the default list)."""
+    return HalalScreener(repo)
 
 
 class TestHalalCache:
@@ -44,7 +44,7 @@ class TestHalalCache:
 
 class TestHalalScreener:
     async def test_ensure_cache_defaults(self, screener, repo):
-        """Without Zoya API, should load default symbols."""
+        """Without a database engine, it loads the default symbols."""
         await screener.ensure_cache()
 
         symbols = await screener.get_halal_symbols()
@@ -75,35 +75,3 @@ class TestHalalScreener:
         count_after = len(await screener.get_halal_symbols())
 
         assert count_before == count_after
-
-    async def test_transient_zoya_errors_are_not_cached(self, repo):
-        """A transient Zoya failure must NOT overwrite a good cached verdict
-        — otherwise a momentary outage poisons the cache for the full TTL
-        and starves the universe all day (observed 2026-05-27)."""
-        from unittest.mock import AsyncMock, MagicMock
-
-        # Seed a known-good prior verdict.
-        await repo.cache_halal_status("AAPL", "halal", "prior good verdict")
-
-        zoya = MagicMock()
-        # Zoya blips: AAPL errors (transient), MSFT returns a real verdict.
-        zoya.api_key = "k"
-        zoya.screen_bulk = AsyncMock(
-            return_value=[
-                {
-                    "symbol": "AAPL",
-                    "compliance": "doubtful",
-                    "detail": "ConnectError",
-                    "error": True,
-                },
-                {"symbol": "MSFT", "compliance": "halal", "detail": "ok"},
-            ]
-        )
-        screener = HalalScreener(repo, zoya=zoya)
-        await screener.ensure_cache(symbols=["AAPL", "MSFT"], force=True)
-
-        # AAPL's prior 'halal' verdict survives (error not cached);
-        # MSFT's fresh verdict is written.
-        symbols = await screener.get_halal_symbols()
-        assert "AAPL" in symbols
-        assert "MSFT" in symbols

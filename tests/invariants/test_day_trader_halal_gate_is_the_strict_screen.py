@@ -100,7 +100,7 @@ async def test_the_screener_gates_on_the_strict_screen_not_its_cache(
 ) -> None:
     repo = Repository(screened)
     await repo.cache_halal_status("NVDA", "halal", "the old curated list")
-    screener = HalalScreener(repo, None, engine=screened, today=lambda: TODAY)
+    screener = HalalScreener(repo, engine=screened, today=lambda: TODAY)
 
     # Before any refresh the cache still says NVDA is halal; the gate does not care.
     assert not await screener.is_halal("NVDA")
@@ -114,36 +114,15 @@ async def test_the_screener_gates_on_the_strict_screen_not_its_cache(
 
 async def test_a_stale_screen_empties_the_universe(screened: AsyncEngine) -> None:
     repo = Repository(screened)
-    screener = HalalScreener(repo, None, engine=screened, today=lambda: TODAY)
+    screener = HalalScreener(repo, engine=screened, today=lambda: TODAY)
     await screener.ensure_cache(force=True)
     assert await screener.get_halal_symbols()
 
-    later = HalalScreener(repo, None, engine=screened, today=lambda: TODAY + timedelta(days=30))
+    later = HalalScreener(repo, engine=screened, today=lambda: TODAY + timedelta(days=30))
     await later.ensure_cache(force=True)
 
     assert await later.get_halal_symbols() == []
     assert not await later.is_halal("AAPL")
-
-
-async def test_a_production_zoya_key_can_only_veto(screened: AsyncEngine) -> None:
-    from unittest.mock import AsyncMock, MagicMock
-
-    zoya = MagicMock(api_key="prod")
-    zoya.screen_bulk = AsyncMock(
-        return_value=[
-            {"symbol": "AAPL", "compliance": "halal"},
-            {"symbol": "MSFT", "compliance": "not_halal", "detail": "ratio"},
-            {"symbol": "CSCO", "compliance": "doubtful", "error": True},
-        ]
-    )
-    repo = Repository(screened)
-    screener = HalalScreener(repo, zoya, engine=screened, today=lambda: TODAY)
-    await screener.ensure_cache(force=True)
-
-    assert await screener.is_halal("AAPL")
-    assert not await screener.is_halal("MSFT")  # Zoya vetoed
-    assert not await screener.is_halal("CSCO")  # Zoya could not confirm
-    assert not await screener.is_halal("NVDA")  # Zoya is never asked to pass a strict fail
 
 
 async def test_the_order_boundary_refuses_a_name_the_strict_screen_fails(
@@ -153,7 +132,7 @@ async def test_the_order_boundary_refuses_a_name_the_strict_screen_fails(
 
     from halal_trader.trading.executor import TradeExecutor
 
-    screener = HalalScreener(Repository(screened), None, engine=screened, today=lambda: TODAY)
+    screener = HalalScreener(Repository(screened), engine=screened, today=lambda: TODAY)
     executor = TradeExecutor(
         MagicMock(),
         MagicMock(),

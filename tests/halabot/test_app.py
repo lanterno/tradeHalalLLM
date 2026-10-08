@@ -34,7 +34,7 @@ async def test_engine_builds_and_runs_end_to_end(halabot_engine):
             new_event(
                 clock,
                 EventType.COMPLIANCE_VERDICT,
-                source="zoya",
+                source="screen",
                 asset="NVDA",
                 payload={
                     "status": "halal",
@@ -82,7 +82,7 @@ async def test_engine_blocks_buy_for_non_halal_asset(halabot_engine):
             new_event(
                 clock,
                 EventType.COMPLIANCE_VERDICT,
-                source="zoya",
+                source="screen",
                 asset="HOOD",
                 payload={
                     "status": "not_halal",
@@ -124,7 +124,7 @@ async def test_engine_coalesce_mode_forms_belief_end_to_end(halabot_engine):
             new_event(
                 clock,
                 EventType.COMPLIANCE_VERDICT,
-                source="zoya",
+                source="screen",
                 asset="NVDA",
                 payload={
                     "status": "halal",

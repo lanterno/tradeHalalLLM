@@ -10,7 +10,7 @@ async def test_record_screening_round_trip(engine):
     sid = await repo.record_halal_screening(
         symbol="AAPL",
         asset_class="stock",
-        source="zoya",
+        source="screen",
         decision="halal",
         criteria={"market_cap_usd": 3_000_000_000_000, "category": "technology"},
         cache_hit=False,
@@ -21,7 +21,7 @@ async def test_record_screening_round_trip(engine):
     assert loaded is not None
     assert loaded["symbol"] == "AAPL"
     assert loaded["decision"] == "halal"
-    assert loaded["source"] == "zoya"
+    assert loaded["source"] == "screen"
     assert loaded["cache_hit"] is False
     assert loaded["criteria"]["category"] == "technology"
 
@@ -31,7 +31,7 @@ async def test_stock_trade_carries_screening_fk(engine):
     sid = await repo.record_halal_screening(
         symbol="AAPL",
         asset_class="stock",
-        source="zoya",
+        source="screen",
         decision="halal",
     )
     trade_id = await repo.record_trade(

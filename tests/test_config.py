@@ -11,7 +11,6 @@ from halal_trader.config import (
     Settings,
     StockSettings,
     TelegramSettings,
-    ZoyaSettings,
 )
 
 
@@ -24,7 +23,6 @@ def _isolated_settings(**overrides: Any) -> Settings:
     """
     defaults = {
         "alpaca": AlpacaSettings(_env_file=None),
-        "zoya": ZoyaSettings(_env_file=None),
         "llm": LLMSettings(
             _env_file=None,
             glm=GLMSettings(_env_file=None),

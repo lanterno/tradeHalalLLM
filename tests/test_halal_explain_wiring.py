@@ -75,7 +75,7 @@ async def test_explain_route_returns_markdown_for_trade_with_screening() -> None
         "trade": {"symbol": "AAPL", "id": 42},
         "screening": {
             "decision": "halal",
-            "source": "zoya",
+            "source": "screen",
             "criteria": {"category": "layer-1", "market_cap": 1_000_000_000_000},
         },
         "compliance_status": "halal",

@@ -18,7 +18,7 @@ async def test_export_receipt_joins_screening(engine):
     sid = await repo.record_halal_screening(
         symbol="AAPL",
         asset_class="stock",
-        source="zoya",
+        source="screen",
         decision="halal",
         criteria={"market_cap_usd": 3_000_000_000_000},
     )
@@ -59,7 +59,7 @@ async def test_export_receipt_to_json_serialises_datetimes(engine):
 async def test_export_for_symbol_paginates_and_links_screenings(engine):
     repo = Repository(engine)
     sid = await repo.record_halal_screening(
-        symbol="AAPL", asset_class="stock", source="zoya", decision="halal"
+        symbol="AAPL", asset_class="stock", source="screen", decision="halal"
     )
     for _ in range(3):
         await repo.record_trade(
@@ -97,7 +97,7 @@ def _screening_obj(**overrides) -> HalalScreening:
         symbol="AAPL",
         asset_class="stock",
         decision="HALAL",
-        source="zoya",
+        source="screen",
         timestamp=datetime(2026, 5, 1, 14, 0, tzinfo=UTC),
         criteria='{"debt_ratio": 0.18, "interest_income": 0.02}',
     )
