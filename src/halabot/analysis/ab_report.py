@@ -49,7 +49,7 @@ class ABReport:
     shadow_win_rate: float | None = None
     shadow_weighted_return: float = 0.0  # Σ return_pct × closed_weight (book-level proxy)
     shadow_return_std: float | None = None
-    # Live realized per-trade returns (regret_records.pnl_pct) + the promotion gate.
+    # Live realized per-trade returns (closed round trips in trades) + the promotion gate.
     live_closed: int = 0
     live_avg_return_pct: float | None = None
     promotion: PromotionVerdict | None = None
@@ -125,21 +125,22 @@ async def ab_report(engine: AsyncEngine, *, since: datetime, until: datetime) ->
         )
         labels = [int(r[0]) for r in await conn.execute(sa.select(o.c.label).where(*in_window))]
 
-        # Live realized per-trade returns from the legacy regret_records (raw SQL,
-        # avoids importing the legacy SQLModel). Empty/missing → no live P&L data
-        # (the gate stays "insufficient samples" until it accrues — data-gated).
-        live_returns: list[float] = []
-        try:
-            live_rows2 = await conn.execute(
+        # Live realized per-trade returns: the day-trader's closed round trips,
+        # priced as its analytics price them (entry = the fill, else the
+        # order's price; a row with no entry or no exit has no knowable return).
+        live_returns = [
+            float(r[0])
+            for r in await conn.execute(
                 sa.text(
-                    "SELECT pnl_pct FROM regret_records "
-                    "WHERE closed_at >= :since AND closed_at <= :until"
+                    "SELECT (exit_price - entry) / entry FROM ("
+                    " SELECT exit_price, coalesce(nullif(filled_price, 0), price) AS entry"
+                    " FROM trades WHERE side = 'buy'"
+                    " AND closed_at >= :since AND closed_at <= :until) t "
+                    "WHERE entry > 0 AND exit_price > 0"
                 ),
                 {"since": since, "until": until},
             )
-            live_returns = [float(r[0]) for r in live_rows2 if r[0] is not None]
-        except Exception:  # noqa: BLE001 — table may not exist in a fresh/test DB
-            live_returns = []
+        ]
 
     closed = len(shadow_returns)
     avg_ret = sum(shadow_returns) / closed if closed else None
