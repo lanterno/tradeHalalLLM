@@ -173,7 +173,6 @@ class TradeExecutor:
         reactor_entry_size_fraction: float = 0.5,
         reactor_entry_min_intraday_change_pct: float = 0.002,
         reactor_trailing_stop_distance_pct: float = 0.08,
-        reactor_hold_overnight: bool = True,
         screener: ComplianceScreener | None = None,
     ) -> None:
         self._max_position_pct = max_position_pct
@@ -227,10 +226,6 @@ class TradeExecutor:
         # hard floor at entry so the position is never unprotected even
         # before the monitor's first tick.
         self._reactor_trailing_stop_distance_pct = reactor_trailing_stop_distance_pct
-        # Slow-out: keep reactor positions open through the EOD flatten so
-        # winners run across days, exited only by the monitor's trailing
-        # stop / trend-break. False = flatten them at EOD like the rest.
-        self._reactor_hold_overnight = reactor_hold_overnight
 
     async def execute_reactor_entry(
         self,
@@ -1406,8 +1401,9 @@ class TradeExecutor:
             logger.debug("EOD pre-position snapshot failed: %s", exc)
 
         # Read open DB trades first so we know which symbols carry a
-        # reactor-momentum (slow-out) tag — those are exempt from the
-        # EOD flatten when ``reactor_hold_overnight`` is set.
+        # reactor-momentum (slow-out) tag — those are exempt from the EOD
+        # flatten: winners run across days, exited only by the monitor's
+        # trailing stop / trend-break.
         try:
             opens = await self._repo.get_open_trades()
         except Exception as exc:  # noqa: BLE001
@@ -1424,7 +1420,7 @@ class TradeExecutor:
             if str(getattr(t, "entry_type", "") or "") == EntryType.REACTOR_MOMENTUM
             and getattr(t, "symbol", "")
         }
-        holding_reactor = self._reactor_hold_overnight and bool(reactor_syms)
+        holding_reactor = bool(reactor_syms)
 
         if holding_reactor:
             # Can't use the broker's batch flatten — it would close the
