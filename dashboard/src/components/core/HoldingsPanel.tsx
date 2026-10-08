@@ -1,8 +1,8 @@
 import { useMemo, useState } from "react";
 import type { CoreHolding, CoreStatus } from "../../api/types";
-import { cn, formatPct, formatUsd } from "../../lib/utils";
-import { day, sectorColor, toneOf } from "./format";
-import { Panel } from "./shared";
+import { cn, formatPct, formatUsd, formatDay } from "../../lib/utils";
+import { sectorColor, toneOf } from "./format";
+import { Panel } from "../Panel";
 
 type View = "top" | "sector" | "flat";
 type Sort = "weight" | "drift" | "today" | "since";
@@ -287,11 +287,11 @@ export function HoldingsPanel({ data }: { data: CoreStatus }) {
           <p className="min-w-0 flex-1">
             <b className="text-white">
               {s.symbol}
-              {s.name ? ` · ${s.name}` : ""} fails the {data.screen_as_of ? day(data.screen_as_of) : ""} screen
+              {s.name ? ` · ${s.name}` : ""} fails the {data.screen_as_of ? formatDay(data.screen_as_of) : ""} screen
             </b>
             {s.reason && <span className="text-muted">: {s.reason}</span>}
           </p>
-          <span className="text-muted">sold at the next run, {day(data.next_check)} 15:40</span>
+          <span className="text-muted">sold at the next run, {formatDay(data.next_check)} 15:40</span>
         </div>
       ))}
 

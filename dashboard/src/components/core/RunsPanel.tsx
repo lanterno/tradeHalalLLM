@@ -1,8 +1,8 @@
 import { useState } from "react";
 import type { CoreExecution, CoreRun, CoreStatus } from "../../api/types";
-import { cn, formatQty, formatUsd } from "../../lib/utils";
-import { bps, costTone, day } from "./format";
-import { Panel } from "./shared";
+import { cn, formatQty, formatUsd, formatDay } from "../../lib/utils";
+import { bps, costTone } from "./format";
+import { Panel } from "../Panel";
 
 function kind(r: CoreRun): { label: string; style: string } {
   if (r.halted) return { label: "Halted", style: "bg-loss/15 text-loss" };
@@ -74,7 +74,7 @@ export function RunsPanel({ data }: { data: CoreStatus }) {
     <Panel title="Runs and their orders" right="one row per run · 15:40 ET each trading day">
       {data.runs.length === 0 ? (
         <p className="py-6 text-center text-sm text-muted">
-          No run recorded yet: the first is {day(data.next_check)} at 15:40 ET.
+          No run recorded yet: the first is {formatDay(data.next_check)} at 15:40 ET.
         </p>
       ) : (
         <div className="overflow-x-auto">
@@ -92,7 +92,7 @@ export function RunsPanel({ data }: { data: CoreStatus }) {
             </thead>
             <tbody>
               <tr className="border-t border-border text-muted">
-                <td className="py-2">{day(data.next_check)}</td>
+                <td className="py-2">{formatDay(data.next_check)}</td>
                 <td className="py-2">
                   <span className="rounded bg-border px-1.5 py-0.5 text-xs">
                     {data.monthly_due ? "Monthly" : "Daily"}
@@ -120,7 +120,7 @@ export function RunsPanel({ data }: { data: CoreStatus }) {
                   >
                     <td className="py-2 text-white">
                       {r.order_rows.length > 0 && <span className="mr-1 text-muted">{isOpen ? "▾" : "▸"}</span>}
-                      {day(r.run_on)}
+                      {formatDay(r.run_on)}
                     </td>
                     <td className="py-2">
                       <span className={cn("rounded px-1.5 py-0.5 text-xs", k.style)}>{k.label}</span>
@@ -159,7 +159,7 @@ export function RunsPanel({ data }: { data: CoreStatus }) {
 export function ExecutionPanel({ e }: { e: CoreExecution }) {
   const peak = Math.max(...e.histogram.map((b) => b.value), 1);
   return (
-    <Panel title="Execution quality" right={`since ${day(e.start)}`}>
+    <Panel title="Execution quality" right={`since ${formatDay(e.start)}`}>
       <div className="grid grid-cols-2 gap-3">
         <div className="rounded-lg border border-border p-3">
           <p className="text-[11px] uppercase tracking-wider text-muted">Filled</p>

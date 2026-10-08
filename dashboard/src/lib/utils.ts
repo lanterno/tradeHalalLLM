@@ -148,3 +148,29 @@ export function relativeTime(iso: string): string {
   if (diff < 60_000) return "just now";
   return `${formatDuration(diff)} ago`;
 }
+
+const DAY = new Intl.DateTimeFormat("en-GB", {
+  timeZone: MARKET_TZ,
+  weekday: "short",
+  day: "numeric",
+  month: "short",
+});
+const DAY_TIME = new Intl.DateTimeFormat("en-GB", {
+  timeZone: MARKET_TZ,
+  weekday: "short",
+  day: "numeric",
+  month: "short",
+  hour: "2-digit",
+  minute: "2-digit",
+  hourCycle: "h23",
+});
+
+/** "Thu 8 Oct" for a calendar day (an ISO date, read as that day). */
+export function formatDay(iso: string): string {
+  return DAY.format(new Date(iso.length === 10 ? `${iso}T12:00:00-04:00` : iso));
+}
+
+/** "Thu 8 Oct, 15:40" in New York. */
+export function formatDayTime(iso: string): string {
+  return DAY_TIME.format(new Date(iso));
+}

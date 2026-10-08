@@ -1,6 +1,6 @@
 import type { CoreStatus } from "../../api/types";
-import { cn, formatPct, formatTime, formatUsd } from "../../lib/utils";
-import { day, dayTime, pts, toneOf } from "./format";
+import { cn, formatPct, formatTime, formatUsd, formatDay, formatDayTime } from "../../lib/utils";
+import { pts, toneOf } from "./format";
 import { SignedPct } from "./shared";
 
 function Tile({ label, children }: { label: string; children: React.ReactNode }) {
@@ -47,15 +47,15 @@ export function CoreHeader({ data }: { data: CoreStatus }) {
           <p>
             {data.equity_source === "live" ? "account snapshot" : "ledger close"}{" "}
             <span className="text-white">
-              {data.equity_day.length === 10 ? day(data.equity_day) : formatTime(data.equity_day)}
+              {data.equity_day.length === 10 ? formatDay(data.equity_day) : formatTime(data.equity_day)}
             </span>
           </p>
         )}
         <p>
-          next daily check <span className="text-white">{dayTime(data.next_check)} ET</span>
+          next daily check <span className="text-white">{formatDayTime(data.next_check)} ET</span>
         </p>
         <p>
-          next rebalance <span className="text-white">{dayTime(data.next_rebalance)} ET</span>
+          next rebalance <span className="text-white">{formatDayTime(data.next_rebalance)} ET</span>
         </p>
       </div>
     </div>
@@ -103,7 +103,7 @@ export function TopStrip({ data }: { data: CoreStatus }) {
             </Big>
             <p>
               {formatUsd(data.since.change, { signed: true })} from{" "}
-              {formatUsd(data.since.start_equity)} on {day(data.since.since)}
+              {formatUsd(data.since.start_equity)} on {formatDay(data.since.since)}
             </p>
             <p>
               SPUS <SignedPct v={data.since.spus_pct} /> · book{" "}
@@ -136,10 +136,10 @@ export function TopStrip({ data }: { data: CoreStatus }) {
         {data.paper && (
           <p>
             live after the gate passes, earliest{" "}
-            <span className="text-white">{day(r.earliest)}</span>
+            <span className="text-white">{formatDay(r.earliest)}</span>
           </p>
         )}
-        <p>{data.monthly_due ? "monthly rebalance due" : `rebalance ${day(data.next_rebalance)}`}</p>
+        <p>{data.monthly_due ? "monthly rebalance due" : `rebalance ${formatDay(data.next_rebalance)}`}</p>
       </Tile>
     </div>
   );

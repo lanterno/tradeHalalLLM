@@ -10,9 +10,10 @@ import {
 } from "recharts";
 import type { CoreStatus } from "../../api/types";
 import { AXIS_TICK, CHART, CHART_TOOLTIP } from "../../lib/charts";
-import { formatDate } from "../../lib/utils";
-import { day } from "./format";
-import { Panel, SignedPct } from "./shared";
+import { formatDate, formatDay } from "../../lib/utils";
+
+import { Panel } from "../Panel";
+import { SignedPct } from "./shared";
 
 const LINES = [
   { key: "account", name: "Core", color: CHART.accent, dash: undefined },
@@ -35,7 +36,7 @@ export function PerformancePanel({ data }: { data: CoreStatus }) {
     ...(s
       ? [
           {
-            label: `Since ${day(s.since)}`,
+            label: `Since ${formatDay(s.since)}`,
             core: s.change_pct,
             book: s.book_pct,
             spus: s.spus_pct ?? null,
@@ -48,7 +49,7 @@ export function PerformancePanel({ data }: { data: CoreStatus }) {
     <Panel title="Performance" right="rebased to 100 on the account's first day">
       {data.series.length < 2 ? (
         <p className="py-10 text-center text-sm text-muted">
-          A chart needs two closes of the account; the first came {s ? day(s.since) : "—"}.
+          A chart needs two closes of the account; the first came {s ? formatDay(s.since) : "—"}.
         </p>
       ) : (
         <ResponsiveContainer width="100%" height={220}>

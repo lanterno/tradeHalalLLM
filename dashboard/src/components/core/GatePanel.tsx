@@ -1,8 +1,8 @@
 import { CheckCircle2, Circle } from "lucide-react";
 import type { CoreStatus } from "../../api/types";
-import { cn, formatPct } from "../../lib/utils";
-import { day } from "./format";
-import { Panel } from "./shared";
+import { cn, formatPct, formatDay } from "../../lib/utils";
+
+import { Panel } from "../Panel";
 
 const DAY_STYLE: Record<string, string> = {
   run: "bg-accent",
@@ -71,7 +71,7 @@ export function GatePanel({ data }: { data: CoreStatus }) {
         </p>
         {!r.ready && (
           <p className="text-xs text-muted">
-            earliest pass <span className="text-white">{day(r.earliest)}</span>
+            earliest pass <span className="text-white">{formatDay(r.earliest)}</span>
           </p>
         )}
       </div>
@@ -81,13 +81,13 @@ export function GatePanel({ data }: { data: CoreStatus }) {
           {r.window.map((d) => (
             <div
               key={d.day}
-              title={`${day(d.day)}: ${d.status}`}
+              title={`${formatDay(d.day)}: ${d.status}`}
               className={cn("h-4 flex-1 rounded-sm", DAY_STYLE[d.status])}
             />
           ))}
         </div>
         <div className="mt-1 flex justify-between text-[10px] text-muted">
-          <span>{r.window[0] && day(r.window[0].day)}</span>
+          <span>{r.window[0] && formatDay(r.window[0].day)}</span>
           <span>today</span>
         </div>
         <p className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-muted">
@@ -110,7 +110,7 @@ export function GatePanel({ data }: { data: CoreStatus }) {
           label="Long enough on paper"
           detail={`${r.days} of ${r.min_days} trading days with the account and its book both recorded`}
           progress={r.days / r.min_days}
-          when={`clears ${day(r.earliest_days)}`}
+          when={`clears ${formatDay(r.earliest_days)}`}
         />
         <Check
           ok={passing[1]}
@@ -122,7 +122,7 @@ export function GatePanel({ data }: { data: CoreStatus }) {
                 ? "due at the next run"
                 : "none in the window yet"
           }
-          when={`next ${day(data.next_rebalance)}`}
+          when={`next ${formatDay(data.next_rebalance)}`}
         />
         <Check
           ok={passing[2]}

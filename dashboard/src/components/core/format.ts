@@ -1,5 +1,3 @@
-import { MARKET_TZ } from "../../lib/utils";
-
 /** Sector colours, shared by the strip, the legend and the table's group dots. */
 export const SECTOR_COLORS: Record<string, string> = {
   "Software & internet": "#4ade80",
@@ -42,31 +40,4 @@ export function toneOf(v: number | null | undefined): string {
 export function costTone(v: number | null | undefined, budget: number): string {
   if (v == null) return "text-muted";
   return v <= budget ? "text-accent" : "text-warning";
-}
-
-
-const DAY = new Intl.DateTimeFormat("en-GB", {
-  timeZone: MARKET_TZ,
-  weekday: "short",
-  day: "numeric",
-  month: "short",
-});
-const DAY_TIME = new Intl.DateTimeFormat("en-GB", {
-  timeZone: MARKET_TZ,
-  weekday: "short",
-  day: "numeric",
-  month: "short",
-  hour: "2-digit",
-  minute: "2-digit",
-  hourCycle: "h23",
-});
-
-/** "Thu 8 Oct" for a calendar day (an ISO date, read as that day). */
-export function day(iso: string): string {
-  return DAY.format(new Date(iso.length === 10 ? `${iso}T12:00:00-04:00` : iso));
-}
-
-/** "Thu 8 Oct, 15:40" in New York. */
-export function dayTime(iso: string): string {
-  return DAY_TIME.format(new Date(iso));
 }
