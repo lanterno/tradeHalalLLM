@@ -112,11 +112,11 @@ def test_show_prints_full_record(cli_db):
     assert "$0.0234" in result.output
 
 
-def test_show_unknown_id_prints_message(cli_db):
+def test_show_unknown_id_fails_with_a_message(cli_db):
     runner = CliRunner()
     result = runner.invoke(cli, ["llm-decisions", "show", "9999"])
-    assert result.exit_code == 0
-    assert "No decision found" in result.output
+    assert result.exit_code == 1
+    assert "no decision found" in result.output
 
 
 def test_cost_summary_groups_by_day_and_model(cli_db):

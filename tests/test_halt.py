@@ -89,6 +89,7 @@ async def test_run_cycle_skips_when_killswitch_engaged(engine):
 async def test_close_all_core_liquidates_the_cores_own_account(monkeypatch) -> None:
     from types import SimpleNamespace
 
+    import click
     import pytest
 
     from halal_trader.cli.halt import _close_core
@@ -119,7 +120,7 @@ async def test_close_all_core_liquidates_the_cores_own_account(monkeypatch) -> N
     await _close_core(settings)
     assert built == [("ck", False)] and Core.closed  # the core's keys, its environment
 
-    with pytest.raises(SystemExit):  # no keys: says so, closes nothing
+    with pytest.raises(click.ClickException, match="no core keys"):  # closes nothing
         await _close_core(
             SimpleNamespace(
                 core=SimpleNamespace(alpaca_api_key="", alpaca_secret_key="", paper=True)
