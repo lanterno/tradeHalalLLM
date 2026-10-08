@@ -20,6 +20,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from halal_trader.compliance.runner import UNMAPPED
+from halal_trader.core.num import to_float
 from halal_trader.data.universe import month_starts, universe_at
 
 
@@ -46,10 +47,6 @@ class _Screen:
     unmapped: set[str] = field(default_factory=set)
 
 
-def _float(value: object) -> float | None:
-    return float(value) if isinstance(value, int | float | str) and value != "" else None
-
-
 async def _screens(engine: AsyncEngine) -> dict[date, _Screen]:
     out: dict[date, _Screen] = {}
     async with engine.connect() as conn:
@@ -63,7 +60,7 @@ async def _screens(engine: AsyncEngine) -> dict[date, _Screen]:
         for r in rows:
             screen = out.setdefault(r.as_of, _Screen())
             if r.verdict == "halal":
-                price, shares = _float(r.price), _float(r.shares)
+                price, shares = to_float(r.price), to_float(r.shares)
                 cap = price * shares if price is not None and shares is not None else None
                 screen.halal[r.symbol] = Firm(r.cik, cap, r.as_of)
             if r.sic_description == UNMAPPED:

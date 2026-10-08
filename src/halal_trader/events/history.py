@@ -33,6 +33,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from halal_trader.compliance.sec import SecClient, filed_at
+from halal_trader.core.num import to_float
 from halal_trader.events.store import EventRecord, EventRecorder
 
 logger = logging.getLogger(__name__)
@@ -233,13 +234,6 @@ def _tsv(zf: zipfile.ZipFile, name: str) -> csv.DictReader[str]:
     )
 
 
-def _f(value: str) -> float | None:
-    try:
-        return float(value) if value else None
-    except ValueError:
-        return None
-
-
 def insider_records(blob: bytes, companies: dict[int, str]) -> list[EventRecord]:
     """Open-market purchases and sales (codes P, S) of covered companies from one data set."""
     zf = zipfile.ZipFile(io.BytesIO(blob))
@@ -264,7 +258,7 @@ def insider_records(blob: bytes, companies: dict[int, str]) -> list[EventRecord]
         sub = subs[acc]
         filed = datetime.strptime(sub["FILING_DATE"], "%d-%b-%Y").date()
         published = filed_at(filed)
-        shares, price = _f(row["TRANS_SHARES"]), _f(row["TRANS_PRICEPERSHARE"])
+        shares, price = to_float(row["TRANS_SHARES"]), to_float(row["TRANS_PRICEPERSHARE"])
         people = owners.get(acc, [])
         out.append(
             EventRecord(
@@ -280,7 +274,7 @@ def insider_records(blob: bytes, companies: dict[int, str]) -> list[EventRecord]
                     "shares": shares,
                     "price": price,
                     "value": shares * price if shares and price else None,
-                    "owned_after": _f(row["SHRS_OWND_FOLWNG_TRANS"]),
+                    "owned_after": to_float(row["SHRS_OWND_FOLWNG_TRANS"]),
                     "direct": row["DIRECT_INDIRECT_OWNERSHIP"] == "D",
                     "owners": [o["RPTOWNERCIK"] for o in people],
                     "relationship": sorted({o["RPTOWNER_RELATIONSHIP"] for o in people}),

@@ -352,25 +352,15 @@ class TradeExecutor:
         Returns None when the snapshot lacks a usable reference price —
         the caller treats that as "can't confirm, don't enter".
         """
-        if not isinstance(snapshot, dict):
-            return None
-        data = snapshot.get(symbol, snapshot)
-        if not isinstance(data, dict):
-            return None
+        from halal_trader.trading.bars import parse_snapshot
+
+        s = parse_snapshot(snapshot, symbol)
         latest = self._extract_price(snapshot, symbol)
-        if latest <= 0:
+        if s is None or latest <= 0:
             return None
-        ref = 0.0
-        # Prior session close (real key: prevDailyBar.c), else today's open
-        # (dailyBar.o). Tolerate the snake_case/long-key variants too.
-        prev = data.get("prevDailyBar") or data.get("prev_daily_bar")
-        if isinstance(prev, dict):
-            ref = float(prev.get("c") or prev.get("close") or 0)
-        if ref <= 0:
-            bar = data.get("dailyBar") or data.get("daily_bar")
-            if isinstance(bar, dict):
-                ref = float(bar.get("o") or bar.get("open") or 0)
-        if ref <= 0:
+        # The prior session's close, else today's open.
+        ref = next((p for p in (s.prev_close, s.daily_open) if p and p > 0), None)
+        if ref is None:
             return None
         return (latest - ref) / ref
 
@@ -1597,21 +1587,9 @@ class TradeExecutor:
         ``latest_trade.price`` / ``daily_bar.close`` which never matched the live
         payload, so every reactor entry skipped with "no usable price".
         """
-        from halal_trader.trading.bars import extract_last_price
+        from halal_trader.trading.bars import parse_snapshot
 
-        price = extract_last_price(snapshot, symbol)
-        if price and price > 0:
-            return float(price)
-        if isinstance(snapshot, dict):
-            data = snapshot.get(symbol) or snapshot.get(symbol.upper()) or snapshot
-            if isinstance(data, dict):
-                for bar_key in ("minuteBar", "dailyBar", "minute_bar", "daily_bar"):
-                    bar = data.get(bar_key)
-                    if isinstance(bar, dict):
-                        c = bar.get("c") or bar.get("close")
-                        if c:
-                            try:
-                                return float(c)
-                            except TypeError, ValueError:
-                                pass
-        return 0.0
+        s = parse_snapshot(snapshot, symbol)
+        if s is None:
+            return 0.0
+        return next((p for p in (s.last_trade, s.minute_close, s.daily_close) if p and p > 0), 0.0)

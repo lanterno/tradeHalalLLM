@@ -139,11 +139,13 @@ async def is_halal_now(engine: AsyncEngine, symbol: str, day: date) -> tuple[boo
 
 
 def _prices(snapshot: Any) -> dict[str, float]:
+    """Each symbol's latest trade, else its session's close."""
+    from halal_trader.trading.bars import parse_snapshot
+
     out = {}
-    for symbol, snap in (snapshot or {}).items():
-        trade = (snap or {}).get("latestTrade") or {}
-        bar = (snap or {}).get("dailyBar") or {}
-        price = trade.get("p") or bar.get("c")
+    for symbol in snapshot or {}:
+        s = parse_snapshot(snapshot, symbol)
+        price = s and (s.last_trade or s.daily_close)
         if price:
             out[symbol] = float(price)
     return out

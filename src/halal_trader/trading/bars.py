@@ -9,8 +9,10 @@ response into that shape.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from typing import Any
 
+from halal_trader.core.num import to_float
 from halal_trader.domain.models import Kline
 from halal_trader.signals.indicators import compute_all
 
@@ -104,44 +106,68 @@ def bars_to_klines(bars_for_symbol: Any) -> list[Kline]:
     return out
 
 
-_PRICE_PATHS: tuple[tuple[str, ...], ...] = (
-    ("latestTrade", "p"),
-    ("latestTrade", "price"),
-    ("latest_trade", "p"),
-    ("latest_trade", "price"),
-    ("trade", "p"),
-    ("trade", "price"),
-)
+@dataclass(frozen=True, slots=True)
+class Snapshot:
+    """One symbol's Alpaca snapshot, whatever shape it came in (each field None
+    when absent or unparseable)."""
+
+    last_trade: float | None
+    bid: float | None
+    ask: float | None
+    minute_close: float | None
+    daily_open: float | None
+    daily_close: float | None
+    daily_volume: float | None
+    prev_close: float | None
+
+
+def _field(entry: dict[str, Any], nodes: tuple[str, ...], keys: tuple[str, ...]) -> float | None:
+    """The first parseable value of any ``node.key`` pair, nodes tried in order."""
+    for node in nodes:
+        inner = entry.get(node)
+        if isinstance(inner, dict):
+            for key in keys:
+                value = to_float(inner.get(key))
+                if value is not None:
+                    return value
+    return None
+
+
+def snapshot_entry(payload: Any, symbol: str) -> dict[str, Any] | None:
+    """The per-symbol dict inside a snapshot response: unwraps a ``"data"``
+    envelope and a ``{symbol: {...}}`` map, else takes the payload as the entry."""
+    if not isinstance(payload, dict):
+        return None
+    if isinstance(payload.get("data"), dict):
+        payload = payload["data"]
+    entry = payload.get(symbol) or payload.get(symbol.upper()) or payload
+    return entry if isinstance(entry, dict) else None
+
+
+def parse_snapshot(payload: Any, symbol: str) -> Snapshot | None:
+    """Alpaca's snapshot (``latestTrade.p``, ``latestQuote.bp/ap``, ``minuteBar``,
+    ``dailyBar``, ``prevDailyBar``) as the live server sends it, tolerating the
+    long snake_case keys some SDKs and MCP versions use."""
+    entry = snapshot_entry(payload, symbol)
+    if entry is None:
+        return None
+    daily = ("dailyBar", "daily_bar")
+    return Snapshot(
+        last_trade=_field(entry, ("latestTrade", "latest_trade", "trade"), ("p", "price")),
+        bid=_field(entry, ("latestQuote", "latest_quote"), ("bp", "bid_price")),
+        ask=_field(entry, ("latestQuote", "latest_quote"), ("ap", "ask_price")),
+        minute_close=_field(entry, ("minuteBar", "minute_bar"), ("c", "close")),
+        daily_open=_field(entry, daily, ("o", "open")),
+        daily_close=_field(entry, daily, ("c", "close")),
+        daily_volume=_field(entry, daily, ("v", "volume")),
+        prev_close=_field(entry, ("prevDailyBar", "prev_daily_bar"), ("c", "close")),
+    )
 
 
 def extract_last_price(snap: Any, symbol: str) -> float | None:
-    """Best-effort dig through Alpaca snapshot shapes for the latest price.
-
-    Alpaca returns either a flat dict or a nested ``{symbol: {...}}``
-    depending on whether one or many symbols were requested. Inside
-    each entry, the latest trade lives under ``latestTrade.p`` (or
-    ``latest_trade.price`` in some SDK versions). Returns ``None`` when
-    no parseable price is found.
-    """
-    if not isinstance(snap, dict):
-        return None
-    payload = snap.get(symbol) or snap.get(symbol.upper()) or snap
-    if not isinstance(payload, dict):
-        return None
-    for path in _PRICE_PATHS:
-        node: Any = payload
-        ok = True
-        for key in path:
-            if not isinstance(node, dict) or key not in node:
-                ok = False
-                break
-            node = node[key]
-        if ok and node is not None:
-            try:
-                return float(node)
-            except TypeError, ValueError:
-                continue
-    return None
+    """The latest trade's price in a snapshot response, or None."""
+    s = parse_snapshot(snap, symbol)
+    return s.last_trade if s is not None else None
 
 
 def compute_indicators_by_symbol(

@@ -6,6 +6,7 @@ import logging
 from typing import Any
 
 from halal_trader.core.llm.prompts import register as _register_prompt
+from halal_trader.core.num import to_float
 from halal_trader.core.strategy import BaseStrategy
 from halal_trader.db.repos import LlmDecisionRepo
 from halal_trader.domain.models import Account, Position, TradingPlan
@@ -564,29 +565,6 @@ def _format_symbol_headroom(
     return "\n".join(lines)
 
 
-def _snapshot_for(sym: str, data: Any) -> dict[str, Any] | None:
-    """The per-symbol snapshot dict inside an MCP response, whatever the envelope.
-
-    Live (alpaca-mcp-server 2.3.2) shape, recorded in
-    tests/fixtures/alpaca_mcp_2_3_2/: ``{"AAPL": {"latestTrade": {"p": ..},
-    "latestQuote": {"bp": .., "ap": ..}, "dailyBar": {..}, "prevDailyBar": {..}}}``
-    -- symbol-keyed, short camelCase keys, sometimes wrapped in ``"data"``.
-    """
-    if not isinstance(data, dict):
-        return None
-    if isinstance(data.get("data"), dict):
-        data = data["data"]
-    inner = data.get(sym) or data.get(sym.upper())
-    return inner if isinstance(inner, dict) else data
-
-
-def _num(value: Any) -> float | None:
-    try:
-        return float(value) if value is not None else None
-    except TypeError, ValueError:
-        return None
-
-
 def _format_snapshots(snapshots: dict[str, Any]) -> str:
     """One line per symbol: last price, move vs previous close, quote, volume.
 
@@ -594,23 +572,18 @@ def _format_snapshots(snapshots: dict[str, Any]) -> str:
     the live server never sends -- so every live cycle showed the model
     ``Price=$N/A`` for every symbol (assessment trading#2).
     """
+    from halal_trader.trading.bars import parse_snapshot
+
     if not snapshots:
         return "No snapshot data available."
     lines = []
     for sym, data in snapshots.items():
-        snap = _snapshot_for(sym, data)
+        snap = parse_snapshot(data, sym)
         if snap is None:
             lines.append(f"  {sym}: no snapshot")
             continue
-        trade = snap.get("latestTrade") or snap.get("latest_trade") or {}
-        quote = snap.get("latestQuote") or snap.get("latest_quote") or {}
-        daily = snap.get("dailyBar") or snap.get("daily_bar") or {}
-        prev = snap.get("prevDailyBar") or snap.get("prev_daily_bar") or {}
-        price = _num(trade.get("p", trade.get("price")))
-        bid = _num(quote.get("bp", quote.get("bid_price")))
-        ask = _num(quote.get("ap", quote.get("ask_price")))
-        vol = _num(daily.get("v", daily.get("volume")))
-        prev_close = _num(prev.get("c", prev.get("close")))
+        price, bid, ask = snap.last_trade, snap.bid, snap.ask
+        vol, prev_close = snap.daily_volume, snap.prev_close
         if price is None:
             lines.append(f"  {sym}: no last price in snapshot")
             continue
@@ -646,10 +619,10 @@ def _format_bars(bars: dict[str, Any], *, last_n: int = 5) -> str:
         for bar in rows:
             day = str(bar.get("t", bar.get("timestamp", "")))[:10]
             o, h, low, c = (
-                _num(bar.get(k, bar.get(lk)))
+                to_float(bar.get(k, bar.get(lk)))
                 for k, lk in (("o", "open"), ("h", "high"), ("l", "low"), ("c", "close"))
             )
-            v = _num(bar.get("v", bar.get("volume")))
+            v = to_float(bar.get("v", bar.get("volume")))
             if None in (o, h, low, c):
                 continue
             lines.append(f"    {day}: O={o:.2f} H={h:.2f} L={low:.2f} C={c:.2f} V={(v or 0):,.0f}")

@@ -31,6 +31,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from halal_trader.compliance.aaoifi import DEBT_LIMIT
+from halal_trader.core.num import to_float
 
 RejectionKind = Literal["activity", "veto", "ratio", "data"]
 
@@ -131,19 +132,15 @@ def compare(
     )
 
 
-def _float(value: Any) -> float | None:
-    return float(value) if value not in (None, "") else None
-
-
 def verdict_of(row: Any) -> Verdict:
     """A stored screen row (symbol, verdict, reasons, mc, implied, debt) as a Verdict."""
     return Verdict(
         row.symbol,
         row.verdict,
         list(row.reasons),
-        _float(row.mc),
-        _float(getattr(row, "implied", None)),
-        _float(getattr(row, "debt", None)),
+        to_float(row.mc),
+        to_float(getattr(row, "implied", None)),
+        to_float(getattr(row, "debt", None)),
     )
 
 

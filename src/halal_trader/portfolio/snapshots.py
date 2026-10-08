@@ -18,25 +18,20 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from halal_trader.core.num import to_float
+
 BENCHMARKS = ("SPUS", "HLAL", "SPY")
-
-
-def _f(value: Any) -> float | None:
-    try:
-        return None if value in (None, "") else float(value)
-    except TypeError, ValueError:
-        return None
 
 
 def position_row(p: dict[str, Any]) -> dict[str, Any]:
     return {
         "symbol": str(p["symbol"]),
-        "qty": _f(p.get("qty")),
-        "market_value": _f(p.get("market_value")),
-        "price": _f(p.get("current_price")),
-        "prev_close": _f(p.get("lastday_price")),
-        "change_today": _f(p.get("change_today")),  # a fraction: 0.012 is +1.2%
-        "unrealized_pl": _f(p.get("unrealized_pl")),
+        "qty": to_float(p.get("qty")),
+        "market_value": to_float(p.get("market_value")),
+        "price": to_float(p.get("current_price")),
+        "prev_close": to_float(p.get("lastday_price")),
+        "change_today": to_float(p.get("change_today")),  # a fraction: 0.012 is +1.2%
+        "unrealized_pl": to_float(p.get("unrealized_pl")),
     }
 
 
@@ -47,17 +42,16 @@ def quote_row(
     that is the latest trade; outside it, the session's official close, so the
     change is the familiar close-to-close one and not moved by thin
     extended-hours trades."""
-    snap = snap or {}
-    trade = _f((snap.get("latestTrade") or {}).get("p"))
-    close = _f((snap.get("dailyBar") or {}).get("c"))
+    from halal_trader.trading.bars import parse_snapshot
+
+    s = parse_snapshot(snap or {}, symbol)
+    if s is None:
+        return None
+    trade, close = s.last_trade, s.daily_close
     price = (trade or close) if in_session else (close or trade)
     if not price:
         return None
-    return {
-        "symbol": symbol,
-        "price": price,
-        "prev_close": _f((snap.get("prevDailyBar") or {}).get("c")),
-    }
+    return {"symbol": symbol, "price": price, "prev_close": s.prev_close}
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,9 +106,9 @@ async def snapshot_account(engine: AsyncEngine, account: str, broker: Any) -> No
             {
                 "a": account,
                 "t": datetime.now(UTC),
-                "e": _f(raw.get("equity")) or 0.0,
-                "c": _f(raw.get("cash")) or 0.0,
-                "l": _f(raw.get("last_equity")),
+                "e": to_float(raw.get("equity")) or 0.0,
+                "c": to_float(raw.get("cash")) or 0.0,
+                "l": to_float(raw.get("last_equity")),
                 "p": json.dumps(positions),
             },
         )
