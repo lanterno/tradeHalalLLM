@@ -206,11 +206,12 @@ def test_the_core_trade_is_stale_after_a_missed_1540_run() -> None:
     assert assess(beats, now=now, cycles_due=False)[CORE_TRADE].status == "ok"
 
 
-def test_the_core_trade_reports_disabled_when_the_core_is_off() -> None:
+def test_the_core_trade_reports_disabled_when_the_bot_says_the_core_is_off() -> None:
     from halal_trader.core.heartbeat import CORE_TRADE, assess
 
     now = datetime(2026, 10, 7, 21, 0, tzinfo=UTC)
-    st = assess({}, now=now, cycles_due=False, core_enabled=False)
+    off = {STOCK_PROCESS: Beat(STOCK_PROCESS, now, {"core": False})}
+    st = assess(off, now=now, cycles_due=False)
     assert st[CORE_TRADE].status == "disabled" and not st[CORE_TRADE].failing
 
 
@@ -232,3 +233,33 @@ def test_describe_lists_a_watched_job_that_has_never_run() -> None:
     out = describe({}, st, now=now)
     assert out[CORE_TRADE]["beat_at"] is None
     assert out[CORE_TRADE]["status"] == "unknown"
+
+
+def test_the_core_counts_as_on_until_the_bot_says_otherwise() -> None:
+    from halal_trader.core.heartbeat import core_on
+
+    now = datetime(2026, 10, 7, 21, 0, tzinfo=UTC)
+    assert core_on({}) is True  # no bot yet: a missed core run is not excused
+    assert core_on({STOCK_PROCESS: Beat(STOCK_PROCESS, now, None)}) is True
+    assert core_on({STOCK_PROCESS: Beat(STOCK_PROCESS, now, {"core": True})}) is True
+    assert core_on({STOCK_PROCESS: Beat(STOCK_PROCESS, now, {"core": False})}) is False
+
+
+def test_the_web_reads_the_cores_state_from_the_bots_beat(
+    client: TestClient, database_url: str
+) -> None:
+    """The web never sees the core's keys (compose blanks them), so the bot's
+    process beat is what tells it whether the core runs."""
+
+    async def say(core: bool) -> None:
+        engine = create_async_engine(database_url)
+        try:
+            await beat(engine, STOCK_PROCESS, detail={"core": core})
+        finally:
+            await engine.dispose()
+
+    asyncio.run(say(False))
+    assert client.get("/api/system/status").json()["core_enabled"] is False
+    assert client.get("/api/system/core-config").json()["core_enabled"] is False
+    asyncio.run(say(True))
+    assert client.get("/api/system/status").json()["core_enabled"] is True

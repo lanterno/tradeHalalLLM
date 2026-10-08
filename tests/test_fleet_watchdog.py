@@ -98,8 +98,9 @@ def test_describe_hides_the_alert_ledger_and_says_why() -> None:
     beats = {
         CORE_TRADE: Beat(CORE_TRADE, now - timedelta(days=4), None),
         ALERT_MARKS: Beat(ALERT_MARKS, now, {"x": "y"}),
+        STOCK_PROCESS: Beat(STOCK_PROCESS, now, {"core": False}),
     }
-    st = assess(beats, now=now, cycles_due=False, core_enabled=False)
+    st = assess(beats, now=now, cycles_due=False)
 
     out = describe(beats, st, now=now)
 
