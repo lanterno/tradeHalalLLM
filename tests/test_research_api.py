@@ -93,17 +93,12 @@ def test_prompt_versions_groups_and_aggregates(client):
 
 
 def test_halal_audit_one_trade_404(client):
-    r = client.get("/api/research/halal-audit/stock/9999")
+    r = client.get("/api/research/halal-audit/9999")
     assert r.status_code == 404
 
 
-def test_halal_audit_invalid_asset_class(client):
-    r = client.get("/api/research/halal-audit/crypto/1")
-    assert r.status_code == 400
-
-
 def test_halal_audit_for_symbol_returns_empty_list(client):
-    r = client.get("/api/research/halal-audit/stock/symbol/AAPL")
+    r = client.get("/api/research/halal-audit/symbol/AAPL")
     assert r.status_code == 200
     assert r.json() == []
 
@@ -138,7 +133,7 @@ def test_halal_audit_for_symbol_returns_receipts(client):
     finally:
         eng.dispose()
 
-    r = client.get("/api/research/halal-audit/stock/symbol/AAPL")
+    r = client.get("/api/research/halal-audit/symbol/AAPL")
     assert r.status_code == 200
     receipts = r.json()
     assert len(receipts) == 1

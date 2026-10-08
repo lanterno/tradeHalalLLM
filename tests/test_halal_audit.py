@@ -3,23 +3,14 @@
 import json
 from datetime import UTC, datetime
 
-import pytest
-
 from halal_trader.db.models import HalalScreening, Trade
 from halal_trader.db.repository import Repository
 from halal_trader.halal import audit
 from halal_trader.halal.audit import Receipt, build_receipt
 
 
-async def test_export_refuses_a_non_stock_asset_class(engine):
-    with pytest.raises(ValueError):
-        await audit.export_receipt(engine, trade_id=1, asset_class="crypto")
-    with pytest.raises(ValueError):
-        await audit.export_for_symbol(engine, symbol="AAPL", asset_class="crypto")
-
-
 async def test_export_receipt_returns_none_for_unknown_trade(engine):
-    assert await audit.export_receipt(engine, trade_id=9999, asset_class="stock") is None
+    assert await audit.export_receipt(engine, trade_id=9999) is None
 
 
 async def test_export_receipt_joins_screening(engine):
@@ -38,7 +29,7 @@ async def test_export_receipt_joins_screening(engine):
         price=200.0,
         halal_screening_id=sid,
     )
-    receipt = await audit.export_receipt(engine, trade_id=trade_id, asset_class="stock")
+    receipt = await audit.export_receipt(engine, trade_id=trade_id)
     assert receipt is not None
     assert receipt.payload["compliance_status"] == "halal"
     assert receipt.payload["asset_class"] == "stock"
@@ -50,7 +41,7 @@ async def test_export_receipt_marks_legacy_trade_as_unattested(engine):
     """Trades without a screening FK get an explicit ``unattested`` status."""
     repo = Repository(engine)
     trade_id = await repo.record_trade(symbol="MSFT", side="buy", quantity=5, price=400.0)
-    receipt = await audit.export_receipt(engine, trade_id=trade_id, asset_class="stock")
+    receipt = await audit.export_receipt(engine, trade_id=trade_id)
     assert receipt is not None
     assert receipt.payload["compliance_status"] == "unattested"
     assert receipt.payload["screening"] is None
@@ -59,7 +50,7 @@ async def test_export_receipt_marks_legacy_trade_as_unattested(engine):
 async def test_export_receipt_to_json_serialises_datetimes(engine):
     repo = Repository(engine)
     trade_id = await repo.record_trade(symbol="AAPL", side="buy", quantity=10, price=200.0)
-    receipt = await audit.export_receipt(engine, trade_id=trade_id, asset_class="stock")
+    receipt = await audit.export_receipt(engine, trade_id=trade_id)
     as_json = receipt.to_json()
     parsed = json.loads(as_json)
     assert parsed["trade"]["symbol"] == "AAPL"
@@ -76,7 +67,7 @@ async def test_export_for_symbol_paginates_and_links_screenings(engine):
         )
     await repo.record_trade(symbol="MSFT", side="buy", quantity=5, price=420.0)
 
-    receipts = await audit.export_for_symbol(engine, symbol="AAPL", asset_class="stock", limit=10)
+    receipts = await audit.export_for_symbol(engine, symbol="AAPL", limit=10)
     assert len(receipts) == 3
     for r in receipts:
         assert r.payload["trade"]["symbol"] == "AAPL"
