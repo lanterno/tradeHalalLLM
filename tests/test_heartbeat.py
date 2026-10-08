@@ -92,13 +92,13 @@ def test_health_reports_no_bot_until_it_beats(client: TestClient, database_url: 
     assert body["status"] == "running"  # the web itself is up
     assert body["bot_alive"] is False
     assert client.get("/api/health/bot").status_code == 503
-    assert client.get("/api/system/status").json()["bot_running"] is False
+    assert client.get("/api/operations").json()["fleet"]["alive"] is False
 
     _beat_now(database_url, STOCK_PROCESS)
 
     assert client.get("/api/health").json()["bot_alive"] is True
     assert client.get("/api/health/bot").status_code == 200
-    assert client.get("/api/system/status").json()["bot_running"] is True
+    assert client.get("/api/operations").json()["fleet"]["alive"] is True
 
 
 def test_a_stale_process_beat_is_a_dead_bot(client: TestClient, database_url: str) -> None:
@@ -253,8 +253,11 @@ def test_the_web_reads_the_cores_state_from_the_bots_beat(
         finally:
             await engine.dispose()
 
+    def core_trading() -> str:
+        rows = client.get("/api/operations").json()["config"]["core"]
+        return dict(rows)["Core trading"]
+
     asyncio.run(say(False))
-    assert client.get("/api/system/status").json()["core_enabled"] is False
-    assert client.get("/api/system/core-config").json()["core_enabled"] is False
+    assert core_trading().startswith("off")
     asyncio.run(say(True))
-    assert client.get("/api/system/status").json()["core_enabled"] is True
+    assert core_trading() == "on"

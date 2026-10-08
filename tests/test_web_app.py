@@ -302,13 +302,6 @@ def test_reconcile_recent_caps_limit(client):
     assert r.status_code == 200
 
 
-def test_backups_endpoint_empty(client):
-    """Postgres baseline — backups endpoint returns empty list."""
-    r = client.get("/api/system/backups")
-    assert r.status_code == 200
-    assert r.json() == []
-
-
 # ── Metrics endpoints ─────────────────────────────────────────
 
 
@@ -340,27 +333,14 @@ def test_positions_answer_with_no_account_reported(client):
     assert r.json() == {"accounts": []}
 
 
-# ── /api/system/status cadence ────────────────────
-
-
-def test_system_status_exposes_stocks_cadence(client):
-    """The stocks cycle runs every 15 min; the status route reports it."""
-    r = client.get("/api/system/status")
-    assert r.status_code == 200
-    body = r.json()
-    # Default: 15min * 60 = 900s.
-    assert body["stocks_cycle_interval_seconds"] == 900
-    # Both strategies always run: no switch to report.
-    assert "day_trader_enabled" not in body
-
-
-def test_core_config_lists_the_cores_parameters_and_no_secret(client, monkeypatch):
+def test_operations_lists_the_configuration_and_no_secret(client, monkeypatch):
     from halal_trader.config import get_settings
 
     monkeypatch.setattr(get_settings().core, "alpaca_api_key", "core-key")
     monkeypatch.setattr(get_settings().core, "alpaca_secret_key", "sk-secret-value")
-    body = client.get("/api/system/core-config").json()
-    assert body["core_enabled"] is True and body["core_paper"] is True
-    assert body["core_top_n"] == 100 and body["core_rebalance_band"] == 0.25
-    assert body["core_trades_at_et"] == "15:40"
-    assert "sk-secret-value" not in str(body)
+    config = client.get("/api/operations").json()["config"]
+    core = dict(config["core"])
+    assert core["Account"] == "paper" and core["Holdings targeted"].startswith("100 ")
+    assert core["Trades at"].startswith("15:40 ET")
+    assert dict(config["day_trader"])["Cycle"] == "every 15 min in market hours"
+    assert "sk-secret-value" not in str(config) and "core-key" not in str(config)
