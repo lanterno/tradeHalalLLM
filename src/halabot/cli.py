@@ -170,8 +170,23 @@ async def _run_shadow(
         fred_fetcher = FREDReleaseCalendarSource(api_key=fred_key)
         sources.append(MacroCatalystSource(fred_fetcher, universe, clock, dedup_store=dedup))
 
-    supervisor = SourceSupervisor()
-    heartbeat = Supervisor()
+    # A crashed loop restarts, and the process keeps beating, so the watchdog
+    # would never see a crash loop: each crash goes to Telegram (rate-limited
+    # per task, like the bot's alerts).
+    from halal_trader.notifications.telegram import AlertSink, TelegramNotifier
+
+    notifier = TelegramNotifier(
+        bot_token=settings.telegram.bot_token, chat_id=settings.telegram.chat_id
+    )
+    alerts = AlertSink(notifier)
+
+    async def on_crash(name: str, exc: Exception) -> bool:
+        return await alerts.notify(
+            f"shadow.{name}.crashed", f"shadow task {name} crashed: {exc!r}; restarting"
+        )
+
+    supervisor = SourceSupervisor(on_crash=on_crash)
+    heartbeat = Supervisor(on_crash=on_crash)
 
     try:
         syms = await universe()
@@ -213,6 +228,7 @@ async def _run_shadow(
             await news_source.aclose()
         if fred_fetcher is not None:
             await fred_fetcher.aclose()
+        await notifier.close()
         await mcp.disconnect()
         await engine.stop()
         await ht_engine.dispose()

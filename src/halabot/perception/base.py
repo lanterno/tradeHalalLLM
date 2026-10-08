@@ -14,7 +14,7 @@ from collections.abc import Awaitable, Callable
 from typing import Protocol
 
 from halabot.platform.events import Event
-from halabot.platform.supervisor import Supervisor
+from halabot.platform.supervisor import OnCrash, Supervisor
 
 Emit = Callable[[Event], Awaitable[None]]
 Sleep = Callable[[float], Awaitable[None]]
@@ -34,8 +34,14 @@ class SourceSupervisor:
     Kept as a thin source-specialized facade over the general supervisor so the
     restart/backoff/isolation logic lives in one place (INV-1/INV-2)."""
 
-    def __init__(self, *, restart_backoff_s: float = 5.0, sleep: Sleep = asyncio.sleep) -> None:
-        self._sup = Supervisor(restart_backoff_s=restart_backoff_s, sleep=sleep)
+    def __init__(
+        self,
+        *,
+        restart_backoff_s: float = 5.0,
+        sleep: Sleep = asyncio.sleep,
+        on_crash: OnCrash | None = None,
+    ) -> None:
+        self._sup = Supervisor(restart_backoff_s=restart_backoff_s, sleep=sleep, on_crash=on_crash)
 
     def start(self, sources: list[Source], emit: Emit) -> None:
         for source in sources:

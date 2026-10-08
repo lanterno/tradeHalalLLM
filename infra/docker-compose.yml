@@ -32,7 +32,8 @@
 # core account's broker keys. Which process reads what (checked 2026-10-06):
 #
 #   trader-stocks  everything except WEB_API_TOKEN
-#   trader-shadow  ALPACA_* (bars via the MCP server), GLM_*, FINNHUB, FRED
+#   trader-shadow  ALPACA_* (bars via the MCP server), GLM_*, FINNHUB, FRED,
+#                  TELEGRAM_* (a crashed loop's alert)
 #   trader-web     WEB_API_TOKEN, TELEGRAM_* (the watchdog), ALPACA_* and
 #                  GLM_* (the dashboard's "generate recommendation" button)
 #   trader-migrate nothing but the database
@@ -155,9 +156,6 @@ services:
     environment:
       <<: [*database-url, *no-core-keys]
       WEB_API_TOKEN: ""
-      TELEGRAM_BOT_TOKEN: ""
-      TELEGRAM_CHAT_ID: ""
-      # Only `--rescreen-compliance` reads it, and the command below omits it.
     volumes:
       - trader-data:/app/data
       - trader-logs:/app/logs
