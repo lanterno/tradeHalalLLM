@@ -89,3 +89,30 @@ async def test_heartbeat_loop_emits_heartbeats():
 
 async def _record(sink: list, e: Event) -> None:
     sink.append(e)
+
+
+@pytest.mark.asyncio
+async def test_each_crash_is_reported_and_a_failed_report_does_not_stop_the_restart():
+    calls = {"n": 0}
+    reported: list[tuple[str, str]] = []
+
+    async def flaky() -> None:
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise RuntimeError(f"boom {calls['n']}")
+        await asyncio.Event().wait()
+
+    async def on_crash(name: str, exc: Exception) -> None:
+        reported.append((name, str(exc)))
+        raise ConnectionError("telegram down")  # the alert itself fails
+
+    sup = Supervisor(restart_backoff_s=0.0, sleep=_noop_sleep, on_crash=on_crash)
+    sup.spawn("flaky", flaky)
+    for _ in range(50):
+        await asyncio.sleep(0)
+        if calls["n"] >= 3:
+            break
+    assert calls["n"] == 3  # restarted despite the failing alert
+    assert reported == [("flaky", "boom 1"), ("flaky", "boom 2")]
+    await sup.shutdown()
+    assert len(reported) == 2  # shutdown is not a crash
