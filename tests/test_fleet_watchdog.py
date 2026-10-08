@@ -46,7 +46,7 @@ def _fresh_processes(now: datetime) -> dict[str, Beat]:
 # ── assess ────────────────────────────────────────────────────────────
 
 
-def test_a_retired_day_traders_cycle_is_disabled_never_stale() -> None:
+def test_a_switched_off_day_traders_cycle_is_disabled_never_stale() -> None:
     now = et(2026, 10, 6, 11)  # a Tuesday, mid-session
     beats = _fresh_processes(now) | {STOCK_CYCLE: Beat(STOCK_CYCLE, now - timedelta(days=4), None)}
 
@@ -113,7 +113,7 @@ def test_describe_hides_the_alert_ledger_and_says_why() -> None:
     assert ALERT_MARKS not in out
     assert out[STOCK_CYCLE]["status"] == "disabled"
     assert out[STOCK_CYCLE]["stale"] is False
-    assert "retired" in out[STOCK_CYCLE]["reason"]
+    assert "switched off" in out[STOCK_CYCLE]["reason"]
 
 
 # ── claim_once ────────────────────────────────────────────────────────

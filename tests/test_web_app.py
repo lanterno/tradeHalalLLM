@@ -162,9 +162,9 @@ def test_analytics_returns_zeros_with_no_trades(client):
 def test_risk_state_unavailable_when_unset(client):
     r = client.get("/api/risk/state")
     assert r.status_code == 200
-    # Whether the day-trader runs at all comes along, so a retired one's last
-    # read can be shown as retired rather than stale.
-    assert r.json() == {"available": False, "day_trader_enabled": False}
+    # Whether the day-trader runs at all comes along, so a switched-off one's
+    # last read can be shown as such rather than as stale.
+    assert r.json() == {"available": False, "day_trader_enabled": True}
 
 
 def test_risk_state_round_trips_cached_value(client, database_url):
@@ -351,7 +351,7 @@ def test_system_status_exposes_stocks_cadence(client):
     # Default: 15min * 60 = 900s.
     assert body["stocks_cycle_interval_seconds"] == 900
     # Which strategies run, so the dashboard can ignore a retired one's beats.
-    assert body["day_trader_enabled"] is False and body["core_enabled"] is False
+    assert body["day_trader_enabled"] is True and body["core_enabled"] is True
 
 
 def test_core_config_lists_the_cores_parameters_and_no_secret(client, monkeypatch):
@@ -359,7 +359,7 @@ def test_core_config_lists_the_cores_parameters_and_no_secret(client, monkeypatc
 
     monkeypatch.setattr(get_settings().core, "alpaca_secret_key", "sk-secret-value")
     body = client.get("/api/system/core-config").json()
-    assert body["core_enabled"] is False and body["core_paper"] is True
+    assert body["core_enabled"] is True and body["core_paper"] is True
     assert body["core_top_n"] == 100 and body["core_rebalance_band"] == 0.25
     assert body["core_trades_at_et"] == "15:40" and body["core_keys_set"] is False
     assert "sk-secret-value" not in str(body)
