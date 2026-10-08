@@ -189,6 +189,11 @@ async def run_research(engine: AsyncEngine, settings: Settings, *, today: date) 
         logger.error("research: backup check failed: %r", exc)
 
     try:
+        run.errors += await _calendar_check(settings, today)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("research: calendar check failed: %r", exc)
+
+    try:
         run.core_ready_now = await _core_readiness(engine, today)
     except Exception as exc:  # noqa: BLE001
         logger.error("research: core readiness failed: %r", exc)
@@ -343,6 +348,32 @@ async def _backup_health(engine: AsyncEngine) -> list[str]:
     if drill is not None and (now - drill.beat_at).days > RESTORE_DRILL_MAX_AGE_D:
         problems.append(f"backup: last restore drill {drill.beat_at:%Y-%m-%d}, over 40 days ago")
     return problems
+
+
+CALENDAR_HORIZON = timedelta(days=90)
+
+
+async def _calendar_check(settings: Settings, today: date) -> list[str]:
+    """Days in the next 90 where market_hours' static calendar disagrees with
+    the broker's (empty when they agree). Every schedule, gate and catch-up
+    trusts market_hours; a missing holiday or early close there would run
+    jobs on a closed market or miss a session, and the table ends in 2027."""
+    from halal_trader.execution.alpaca_broker import AlpacaRestBroker
+    from halal_trader.market_hours import calendar_mismatches
+
+    a = settings.alpaca
+    if not a.api_key:
+        return []
+    end = today + CALENDAR_HORIZON
+    broker = AlpacaRestBroker(a.api_key, a.secret_key, paper=a.paper_trade)
+    try:
+        days = await broker.get_calendar(today.isoformat(), end.isoformat())
+    finally:
+        await broker.disconnect()
+    found = calendar_mismatches(days, today, end)
+    if found:
+        logger.error("market_hours disagrees with the broker's calendar: %s", "; ".join(found))
+    return [f"calendar: {m} (fix market_hours.py)" for m in found[:5]]
 
 
 async def _validate_screen(engine: AsyncEngine, today: date) -> list[str]:

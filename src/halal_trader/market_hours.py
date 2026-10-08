@@ -11,7 +11,10 @@ Design decisions
 * DB timestamps remain UTC — this module provides helpers to convert
   between the two when querying by trading day.
 * The holiday / early-close calendar is maintained as a static set.
-  It covers 2025-2027 and should be extended annually.
+  It covers 2025-2027 and should be extended annually; the evening research
+  run compares the next 90 days with the broker's calendar
+  (:func:`calendar_mismatches`) and alerts on any difference, so a wrong
+  entry, or the table running out, is caught months ahead.
 """
 
 from __future__ import annotations
@@ -214,3 +217,31 @@ def trading_day_end_utc(d: date) -> datetime:
     """
     next_midnight_et = datetime.combine(d + timedelta(days=1), time.min, tzinfo=MARKET_TZ)
     return next_midnight_et.astimezone(UTC)
+
+
+def calendar_mismatches(broker_days: list[dict[str, str]], start: date, end: date) -> list[str]:
+    """Where this module's calendar disagrees with the broker's in [start, end].
+
+    ``broker_days`` is Alpaca's ``/v2/calendar``: one ``{"date", "open",
+    "close"}`` per session. A day either side calls a session but the other
+    does not, or a session whose close differs, is a mismatch.
+    """
+    sessions = {
+        date.fromisoformat(d["date"]): time.fromisoformat(d["close"])
+        for d in broker_days
+        if start.isoformat() <= d["date"] <= end.isoformat()
+    }
+    out = []
+    d = start
+    while d <= end:
+        theirs = sessions.get(d)
+        ours = effective_close_time(d) if is_trading_day(d) else None
+        if theirs != ours:
+            out.append(
+                f"{d:%a %d %b %Y}: broker "
+                + (f"closes {theirs:%H:%M}" if theirs else "closed")
+                + ", market_hours "
+                + (f"closes {ours:%H:%M}" if ours else "closed")
+            )
+        d += timedelta(days=1)
+    return out
