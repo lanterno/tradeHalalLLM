@@ -85,6 +85,15 @@ churn kills this bot.
 - **News:** live news moves to Alpaca (Benzinga), the feed the research
   is backtested on; Finnhub stays as a fallback.
 
+## Operator decisions of 2026-10-08
+
+- **Zoya removed.** The in-house strict screen is the only halal screen.
+- **Mixed-activity sectors need a Shariah board's inclusion** (screen v12):
+  restaurants, grocers, convenience, variety and warehouse stores, drug
+  stores, grocery wholesale and food manufacturing pass only if SPUS or HLAL
+  holds them, since their alcohol, tobacco or pork revenue is not in SEC
+  data; otherwise doubtful. Bars and tobacco stores are excluded.
+
 ## Decisions taken under the operator's delegation (2026-10-04)
 
 The operator asked the agent to take the open decisions itself and to

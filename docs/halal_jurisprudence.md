@@ -278,6 +278,12 @@ practice:
 - Interest income a company does not report is estimated (cash and
   securities at 5%) rather than taken as zero.
 - A REIT whose assets are mostly loans fails as a lender.
+- Where a company commonly earns impermissible revenue that SEC data
+  does not separate (a restaurant's alcohol, a grocer's, convenience
+  store's or drugstore's alcohol and tobacco, pork in processed food),
+  passing the ratios is not enough: SPUS or HLAL, whose Shariah boards
+  reviewed the company's revenue, must hold it, or the verdict is
+  `doubtful`. Bars and tobacco stores are excluded outright.
 
 Only the newest screen counts, and only while it is fresh: a stale
 or missing screen makes nothing halal (`halal/strict.py`). Every
