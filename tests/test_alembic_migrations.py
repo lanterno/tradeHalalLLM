@@ -110,3 +110,27 @@ def test_initial_revision_includes_post_phase0_columns(scratch_db):
         "cost_usd",
     ):
         assert col in llm_cols, f"llm_decisions missing {col}"
+
+
+def test_models_match_the_migrations_at_head(scratch_db):
+    """No drift between the models and the schema the migrations build.
+
+    Drift makes every ``--autogenerate`` propose undoing it (it once
+    proposed dropping eleven indexes the models never declared).
+    """
+    from alembic.autogenerate import compare_metadata
+    from alembic.migration import MigrationContext
+    from sqlalchemy import create_engine
+    from sqlmodel import SQLModel
+
+    import halal_trader.db.models  # noqa: F401  (registers every table)
+
+    _, sync_url = scratch_db
+    command.upgrade(_alembic_cfg(sync_url), "head")
+    engine = create_engine(sync_url)
+    try:
+        with engine.connect() as conn:
+            diff = compare_metadata(MigrationContext.configure(conn), SQLModel.metadata)
+    finally:
+        engine.dispose()
+    assert diff == []
