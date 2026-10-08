@@ -12,7 +12,7 @@ async def test_rag_store_add_and_size(engine) -> None:
     assert await store.size() == 0
     row = await store.add(
         trade_id="t1",
-        symbol="BTCUSDT",
+        symbol="AAPL",
         text="rsi 35 oversold",
         outcome_pnl_pct=0.02,
     )
@@ -31,13 +31,13 @@ async def test_rag_store_query_returns_sorted_hits(engine) -> None:
     store = DBRationaleStore(engine=engine)
     await store.add(
         trade_id="match",
-        symbol="BTCUSDT",
+        symbol="AAPL",
         text="rsi 35 oversold bb lower",
         outcome_pnl_pct=0.02,
     )
     await store.add(
         trade_id="other",
-        symbol="BTCUSDT",
+        symbol="AAPL",
         text="vwap rejection volume spike",
         outcome_pnl_pct=-0.01,
     )
@@ -49,10 +49,10 @@ async def test_rag_store_query_returns_sorted_hits(engine) -> None:
 
 async def test_rag_store_query_filters_by_symbol(engine) -> None:
     store = DBRationaleStore(engine=engine)
-    await store.add(trade_id="btc", symbol="BTCUSDT", text="rsi 35", outcome_pnl_pct=0.02)
-    await store.add(trade_id="eth", symbol="ETHUSDT", text="rsi 35", outcome_pnl_pct=-0.02)
-    hits = await store.query("rsi 35", k=5, symbol="BTCUSDT", min_similarity=0.0)
-    assert all(r.symbol == "BTCUSDT" for r, _ in hits)
+    await store.add(trade_id="aapl", symbol="AAPL", text="rsi 35", outcome_pnl_pct=0.02)
+    await store.add(trade_id="msft", symbol="MSFT", text="rsi 35", outcome_pnl_pct=-0.02)
+    hits = await store.query("rsi 35", k=5, symbol="AAPL", min_similarity=0.0)
+    assert all(r.symbol == "AAPL" for r, _ in hits)
     assert len(hits) == 1
 
 

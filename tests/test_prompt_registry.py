@@ -16,10 +16,10 @@ def _empty_registry():
 
 
 def test_register_returns_stable_hash():
-    pv = register("crypto.test.system", "You are an expert trader.\nFollow the rules.")
+    pv = register("stocks.test.system", "You are an expert trader.\nFollow the rules.")
     # 12-char prefix of sha256 — known fixture so we catch silent algo changes.
     assert pv.version_id == "2c8a650bf4b8"
-    assert pv.short == "crypto.test.system@2c8a650bf4b8"
+    assert pv.short == "stocks.test.system@2c8a650bf4b8"
 
 
 def test_register_is_idempotent_for_identical_template():

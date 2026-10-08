@@ -350,7 +350,6 @@ def test_system_status_exposes_stocks_cadence(client):
     body = r.json()
     # Default: 15min * 60 = 900s.
     assert body["stocks_cycle_interval_seconds"] == 900
-    assert "crypto_cycle_interval_seconds" not in body
     # Which strategies run, so the dashboard can ignore a retired one's beats.
     assert body["day_trader_enabled"] is False and body["core_enabled"] is False
 

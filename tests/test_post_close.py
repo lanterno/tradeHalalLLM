@@ -17,7 +17,7 @@ from halal_trader.halal.round_trip_purification import (
 def _event(pnl: float = 0.02, gain_usd: float = 50.0, **kwargs) -> CloseEvent:
     base = dict(
         trade_id="t1",
-        symbol="BTCUSDT",
+        symbol="AAPL",
         side="buy",
         entry_price=100.0,
         exit_price=100.0 * (1.0 + pnl),
@@ -37,7 +37,7 @@ def _event(pnl: float = 0.02, gain_usd: float = 50.0, **kwargs) -> CloseEvent:
 
 async def test_purification_recorded_on_winning_trade(engine) -> None:
     led = RoundTripLedger(engine=engine)
-    rules = {"BTCUSDT": RoundTripRule(symbol="BTCUSDT", impure_ratio=0.02)}
+    rules = {"AAPL": RoundTripRule(symbol="AAPL", impure_ratio=0.02)}
     rec = CloseRecorders(purification_ledger=led, purification_rules=rules)
     summary = await record_close(_event(gain_usd=100.0), rec)
     assert summary.get("purification_due_usd") == 2.0
@@ -46,7 +46,7 @@ async def test_purification_recorded_on_winning_trade(engine) -> None:
 
 async def test_purification_skipped_on_loss(engine) -> None:
     led = RoundTripLedger(engine=engine)
-    rules = {"BTCUSDT": RoundTripRule(symbol="BTCUSDT", impure_ratio=0.02)}
+    rules = {"AAPL": RoundTripRule(symbol="AAPL", impure_ratio=0.02)}
     rec = CloseRecorders(purification_ledger=led, purification_rules=rules)
     summary = await record_close(_event(gain_usd=-50.0), rec)
     assert "purification_due_usd" not in summary
@@ -77,7 +77,7 @@ async def test_full_fan_out(engine) -> None:
     """End-to-end: every recorder fires for one event."""
     rag = DBRationaleStore(engine=engine)
     led = RoundTripLedger(engine=engine)
-    rules = {"BTCUSDT": RoundTripRule(symbol="BTCUSDT", impure_ratio=0.02)}
+    rules = {"AAPL": RoundTripRule(symbol="AAPL", impure_ratio=0.02)}
     rec = CloseRecorders(
         rag_store=rag,
         purification_ledger=led,

@@ -48,12 +48,12 @@ def test_format_empty_returns_empty() -> None:
 def test_format_renders_top_hits() -> None:
     row = RationaleRow(
         trade_id="t1",
-        symbol="BTCUSDT",
+        symbol="AAPL",
         text="rsi 35",
         vector=[],
         outcome_pnl_pct=0.02,
         outcome_win=True,
     )
     text = format_rag_for_prompt([(row, 0.85)])
-    assert "BTCUSDT" in text
+    assert "AAPL" in text
     assert "WIN" in text

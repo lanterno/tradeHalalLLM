@@ -39,9 +39,9 @@ async def test_full_post_close_flow(engine) -> None:
     rec = CloseRecorders(
         rag_store=rag,
         purification_ledger=ledger,
-        purification_rules={"BTCUSDT": RoundTripRule(symbol="BTCUSDT", impure_ratio=0.02)},
+        purification_rules={"AAPL": RoundTripRule(symbol="AAPL", impure_ratio=0.02)},
     )
-    summary = await record_close(_e("BTCUSDT", pnl=0.02, gain=100.0), rec)
+    summary = await record_close(_e("AAPL", pnl=0.02, gain=100.0), rec)
 
     assert await rag.size() == 1
     assert await ledger.outstanding() == 2.0
@@ -54,9 +54,9 @@ async def test_loss_close_skips_purification(engine) -> None:
     rec = CloseRecorders(
         rag_store=rag,
         purification_ledger=ledger,
-        purification_rules={"BTCUSDT": RoundTripRule(symbol="BTCUSDT", impure_ratio=0.02)},
+        purification_rules={"AAPL": RoundTripRule(symbol="AAPL", impure_ratio=0.02)},
     )
-    await record_close(_e("BTCUSDT", pnl=-0.02, gain=-100.0), rec)
+    await record_close(_e("AAPL", pnl=-0.02, gain=-100.0), rec)
     assert await ledger.outstanding() == 0.0
     assert await rag.size() == 1
 

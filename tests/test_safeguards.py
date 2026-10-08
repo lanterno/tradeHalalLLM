@@ -78,7 +78,7 @@ def test_is_live_mode_true_when_paper_off():
 
 def test_is_live_mode_rejects_unknown_market():
     with pytest.raises(ValueError):
-        is_live_mode(_settings(), market="crypto")
+        is_live_mode(_settings(), market="futures")
 
 
 def test_check_live_mode_token_skips_when_paper():

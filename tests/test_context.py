@@ -47,7 +47,7 @@ def test_runtime_view_collection_defaults_are_independent():
     a = RuntimeView()
     b = RuntimeView()
     a.stock_positions.append({"symbol": "AAPL"})
-    a.open_positions_by_asset["BTCUSDT"] = []
+    a.open_positions_by_asset["AAPL"] = []
     assert b.stock_positions == []  # b is unaffected
     assert b.open_positions_by_asset == {}
 
@@ -66,9 +66,9 @@ def test_runtime_view_is_mutable():
     `risk_state`, `last_cycle`, etc. on each tick."""
     rv = RuntimeView()
     rv.bot_running = True
-    rv.risk_state = {"drawdown": 0.05, "market": "crypto"}
+    rv.risk_state = {"drawdown": 0.05, "market": "stocks"}
     assert rv.bot_running is True
-    assert rv.risk_state == {"drawdown": 0.05, "market": "crypto"}
+    assert rv.risk_state == {"drawdown": 0.05, "market": "stocks"}
 
 
 def test_runtime_view_llm_cost_optional_float():

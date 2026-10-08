@@ -17,7 +17,7 @@ from halal_trader.db.models import RationaleRow
 def _row(**overrides) -> RationaleRow:
     base = dict(
         trade_id="trade-1",
-        symbol="BTCUSDT",
+        symbol="AAPL",
         text="bullish breakout on rising volume",
         embedding=[0.1, 0.2, 0.3],
         outcome_pnl_pct=0.025,
@@ -35,7 +35,7 @@ def _row(**overrides) -> RationaleRow:
 def test_row_to_dc_copies_all_simple_fields():
     out = _row_to_dc(_row())
     assert out.trade_id == "trade-1"
-    assert out.symbol == "BTCUSDT"
+    assert out.symbol == "AAPL"
     assert out.text == "bullish breakout on rising volume"
     assert out.outcome_pnl_pct == 0.025
     assert out.outcome_win is True

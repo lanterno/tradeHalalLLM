@@ -2,7 +2,7 @@
 
 Pins the knob menu shape, repo wiring, prompt asset label, the
 ``daily_loss_limit`` knob clamping correctly, and that knobs outside
-the menu (e.g. leftover crypto rows) are dropped.
+the menu are dropped.
 """
 
 from __future__ import annotations
@@ -80,8 +80,8 @@ def test_system_prompt_mentions_stock_trading():
     don't exist on the stocks strategy)."""
     review, *_ = _review()
     assert "stock trading decisions" in review._SYSTEM_PROMPT
-    # And the JSON schema only lists the 2 stocks knobs — no crypto
-    # leftovers like rsi_buy_threshold or stop_loss_pct.
+    # And the JSON schema only lists the 2 stocks knobs — nothing like
+    # rsi_buy_threshold or stop_loss_pct that the strategy doesn't have.
     assert "max_position_pct" in review._SYSTEM_PROMPT
     assert "daily_loss_limit" in review._SYSTEM_PROMPT
     assert "rsi_buy_threshold" not in review._SYSTEM_PROMPT
@@ -93,9 +93,8 @@ def test_system_prompt_mentions_stock_trading():
 
 @pytest.mark.asyncio
 async def test_fetch_round_trips_calls_stock_repo_method():
-    """The subclass dispatches to ``TradeRepo.get_completed_stock_round_trips``
-    — NOT to ``CryptoTradeRepo.get_completed_round_trips``. Wrong
-    repo method = silently empty review for stocks."""
+    """The review reads ``TradeRepo.get_completed_stock_round_trips``;
+    a wrong repo method would mean a silently empty review."""
     review, _, _, trades = _review()
     await review._fetch_round_trips(limit=10, lookback_days=1)
     trades.get_completed_stock_round_trips.assert_awaited_once_with(limit=10, lookback_days=1)
@@ -103,19 +102,18 @@ async def test_fetch_round_trips_calls_stock_repo_method():
 
 @pytest.mark.asyncio
 async def test_load_from_db_filters_to_stocks_safe_bounds():
-    """A leftover crypto adjustment row in the DB (e.g. ``stop_loss_pct``)
-    must NOT load onto the stocks review state — the param-name space
-    is asset-specific and feeding a crypto knob to a stocks strategy
-    would either no-op or worse, write to the wrong attribute."""
+    """An adjustment row for a knob the stock strategy doesn't have (e.g.
+    ``stop_loss_pct``) must NOT load onto the review state — it would
+    either no-op or, worse, write to the wrong attribute."""
     review, _, strategy_adjustments, _ = _review()
-    # Simulate a DB with mixed crypto + stocks rows (in practice the
-    # query is scoped, but the filter is defense-in-depth).
+    # Simulate a DB with rows off the menu (in practice the query is
+    # scoped, but the filter is defense-in-depth).
     strategy_adjustments.get_latest_strategy_adjustments = AsyncMock(
         return_value={
             "max_position_pct": 0.22,  # stocks knob — keep
             "daily_loss_limit": 0.025,  # stocks knob — keep
-            "stop_loss_pct": 0.008,  # crypto-only — DROP
-            "rsi_buy_threshold": 35.0,  # crypto-only — DROP
+            "stop_loss_pct": 0.008,  # not a stocks knob — DROP
+            "rsi_buy_threshold": 35.0,  # not a stocks knob — DROP
         }
     )
     await review.load_from_db()
@@ -173,8 +171,8 @@ async def test_review_clamps_max_position_pct_to_stocks_bounds():
 
 
 @pytest.mark.asyncio
-async def test_review_drops_crypto_only_knobs_silently():
-    """LLM (perhaps confused by a stale prompt) emits crypto knobs
+async def test_review_drops_knobs_off_the_menu_silently():
+    """LLM (perhaps confused by a stale prompt) emits knobs the stock strategy lacks
     on a stocks review. The ``param not in _SAFE_BOUNDS``
     guard drops them — must not appear in persisted adjustments,
     must not be applied to the strategy."""
@@ -183,8 +181,8 @@ async def test_review_drops_crypto_only_knobs_silently():
         llm_response={
             "observations": [],
             "parameter_adjustments": {
-                "stop_loss_pct": 0.012,  # crypto-only — DROP
-                "rsi_buy_threshold": 30.0,  # crypto-only — DROP
+                "stop_loss_pct": 0.012,  # not a stocks knob — DROP
+                "rsi_buy_threshold": 30.0,  # not a stocks knob — DROP
                 "max_position_pct": 0.18,  # valid stocks knob
             },
             "symbols_to_avoid": [],
@@ -212,7 +210,7 @@ async def test_review_drops_crypto_only_knobs_silently():
         c.kwargs["parameter"]
         for c in strategy_adjustments.record_strategy_adjustment.await_args_list
     }
-    assert persisted == {"max_position_pct"}  # the crypto-only knobs never made it
+    assert persisted == {"max_position_pct"}  # the off-menu knobs never made it
     assert {a.parameter for a in result.adjustments} == {"max_position_pct"}
     # And the strategy didn't sprout a phantom stop_loss_pct attribute.
     assert not hasattr(strategy, "_stop_loss_pct")

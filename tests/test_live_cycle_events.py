@@ -153,7 +153,7 @@ async def test_bus_subscriber_can_filter_by_trade_glob() -> None:
     await asyncio.sleep(0)
     # Mix matching and non-matching events.
     await bus.publish("cycle.stage.start", {"name": "x"})
-    await bus.publish("trade.buy.placed", {"pair": "BTCUSDT"})
+    await bus.publish("trade.buy.placed", {"symbol": "AAPL"})
     await bus.publish("cycle.stage.end", {"name": "x"})
     await bus.publish("trade.exit.stop_loss", {"trade_id": 1})
     try:

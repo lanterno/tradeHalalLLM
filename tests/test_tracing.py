@@ -52,11 +52,11 @@ def test_span_records_duration() -> None:
 def test_span_attrs_and_events() -> None:
     exp = InMemorySpanExporter()
     tr = Tracer(exporters=[exp])
-    with tr.span("test.op", pair="BTCUSDT") as sp:
+    with tr.span("test.op", symbol="AAPL") as sp:
         sp.set_attr("klines", 100)
         sp.add_event("fetched", count=100)
     span = exp.spans()[0]
-    assert span.attrs["pair"] == "BTCUSDT"
+    assert span.attrs["symbol"] == "AAPL"
     assert span.attrs["klines"] == 100
     assert span.events[0].name == "fetched"
     assert span.events[0].attrs["count"] == 100

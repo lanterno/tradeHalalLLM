@@ -18,7 +18,7 @@ from halal_trader.core.llm.rag import (
 
 def _row(
     *,
-    symbol: str = "BTCUSDT",
+    symbol: str = "AAPL",
     text: str = "rsi 35 oversold",
     outcome_pnl_pct: float = 0.02,
     outcome_win: bool = True,
@@ -89,9 +89,9 @@ def test_format_truncates_text_at_80_chars():
     (the comment says < 100 to avoid bloating the prompt)."""
     long_text = "a" * 200
     out = format_rag_for_prompt([(_row(text=long_text), 0.5)])
-    # Line shape: `  · sim=+0.50 | WIN +2.00% (BTCUSDT): aaaa...`
+    # Line shape: `  · sim=+0.50 | WIN +2.00% (AAPL): aaaa...`
     # Count consecutive 'a's after the colon to verify truncation.
-    rationale_part = out.split("BTCUSDT): ", 1)[1]
+    rationale_part = out.split("AAPL): ", 1)[1]
     a_count = sum(1 for c in rationale_part if c == "a")
     assert a_count <= 80
 
@@ -112,15 +112,15 @@ def test_format_strips_text_whitespace():
     out = format_rag_for_prompt([(_row(text="   padded   "), 0.5)])
     # The stripped text should appear, no leading whitespace inside the
     # parenthesised label.
-    assert "BTCUSDT): padded" in out
+    assert "AAPL): padded" in out
 
 
 def test_format_handles_none_text_gracefully():
     """Defensive: a row with `text=None` (legacy or malformed) renders
-    as the BTCUSDT-prefixed empty rationale rather than crashing."""
+    as the AAPL-prefixed empty rationale rather than crashing."""
     out = format_rag_for_prompt([(_row(text=""), 0.5)])
     # No crash; the text part is empty after the colon.
-    assert "BTCUSDT)" in out
+    assert "AAPL)" in out
 
 
 def test_format_preserves_input_order():

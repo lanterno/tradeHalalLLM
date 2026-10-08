@@ -176,13 +176,13 @@ async def test_multiple_tool_calls_all_returned():
         llm,
         _stub_response(
             [
-                _tc("analyze_pair", '{"symbol": "BTCUSDT"}', id="t1"),
+                _tc("analyze_symbol", '{"symbol": "AAPL"}', id="t1"),
                 _tc("submit_plan", '{"buys": []}', id="t2"),
             ]
         ),
     )
     calls = await llm.generate_tool_call("hi", tools=[_tool()])
-    assert [c.name for c in calls] == ["analyze_pair", "submit_plan"]
+    assert [c.name for c in calls] == ["analyze_symbol", "submit_plan"]
     assert [c.id for c in calls] == ["t1", "t2"]
 
 
@@ -202,9 +202,9 @@ async def test_arguments_json_string_parsed_into_args_dict():
     """OpenAI-compat endpoints deliver arguments as a JSON *string* —
     the provider parses it so downstream consumers get a dict."""
     llm = _llm()
-    _wire(llm, _stub_response([_tc("submit_plan", '{"decisions": [{"symbol": "BTCUSDT"}]}')]))
+    _wire(llm, _stub_response([_tc("submit_plan", '{"decisions": [{"symbol": "AAPL"}]}')]))
     calls = await llm.generate_tool_call("hi", tools=[_tool()])
-    assert calls[0].args == {"decisions": [{"symbol": "BTCUSDT"}]}
+    assert calls[0].args == {"decisions": [{"symbol": "AAPL"}]}
 
 
 @pytest.mark.asyncio
