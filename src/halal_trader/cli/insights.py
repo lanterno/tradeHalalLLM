@@ -210,9 +210,8 @@ def exceptions_cmd(status: str) -> None:
 
 
 @insights.command("explain")
-@click.argument("asset_class", type=click.Choice(["stock"]))
 @click.argument("trade_id", type=int)
-def explain_cmd(asset_class: str, trade_id: int) -> None:
+def explain_cmd(trade_id: int) -> None:
     """Render the halal-compliance explanation for one trade."""
 
     async def _run() -> None:
@@ -225,9 +224,9 @@ def explain_cmd(asset_class: str, trade_id: int) -> None:
         settings = get_settings()
         engine = await init_db(settings.database_url)
         try:
-            receipt = await export_receipt(engine, trade_id=trade_id, asset_class=asset_class)
+            receipt = await export_receipt(engine, trade_id=trade_id)
             if receipt is None:
-                console.print(f"[red]No {asset_class} trade with id {trade_id}[/]")
+                console.print(f"[red]No trade with id {trade_id}[/]")
                 return
             explanation = explain_screening(receipt.payload)
             console.print(explanation.body_md)

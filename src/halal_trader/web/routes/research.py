@@ -60,29 +60,21 @@ def register(app: FastAPI) -> None:
         out.sort(key=lambda r: r["count"], reverse=True)
         return JSONResponse(out)
 
-    @app.get("/api/research/halal-audit/{asset_class}/{trade_id}")
+    @app.get("/api/research/halal-audit/{trade_id}")
     async def audit_one_trade(
-        asset_class: str,
         trade_id: int,
         ctx: DashboardContext = Depends(get_ctx),
     ) -> Response:
-        if asset_class != "stock":
-            raise HTTPException(400, "asset_class must be 'stock'")
-        receipt = await export_receipt(ctx.engine, trade_id=trade_id, asset_class=asset_class)
+        receipt = await export_receipt(ctx.engine, trade_id=trade_id)
         if receipt is None:
-            raise HTTPException(404, f"no {asset_class} trade with id={trade_id}")
+            raise HTTPException(404, f"no trade with id={trade_id}")
         return Response(content=receipt.to_json(), media_type="application/json")
 
-    @app.get("/api/research/halal-audit/{asset_class}/symbol/{symbol}")
+    @app.get("/api/research/halal-audit/symbol/{symbol}")
     async def audit_for_symbol(
-        asset_class: str,
         symbol: str,
         limit: int = 50,
         ctx: DashboardContext = Depends(get_ctx),
     ) -> JSONResponse:
-        if asset_class != "stock":
-            raise HTTPException(400, "asset_class must be 'stock'")
-        receipts = await export_for_symbol(
-            ctx.engine, symbol=symbol, asset_class=asset_class, limit=limit
-        )
+        receipts = await export_for_symbol(ctx.engine, symbol=symbol, limit=limit)
         return JSONResponse([r.payload for r in receipts])

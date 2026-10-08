@@ -75,18 +75,10 @@ def build_receipt(trade: Trade, screening: HalalScreening | None) -> Receipt:
     return Receipt(payload=payload)
 
 
-def _check_asset_class(asset_class: str) -> None:
-    # Stocks are the only asset class traded; the parameter stays because the
-    # routes and CLI carry it in their paths and arguments.
-    if asset_class != "stock":
-        raise ValueError(f"asset_class must be 'stock'; got {asset_class!r}")
-
-
 async def export_receipt(
     engine: AsyncEngine,
     *,
     trade_id: int,
-    asset_class: str,
     sign: bool = False,
     data_dir: Any = None,
 ) -> Receipt | Any:
@@ -100,7 +92,6 @@ async def export_receipt(
     returned instead. The signature lets a scholar / auditor verify
     the receipt without trusting our codebase. Defaults to off.
     """
-    _check_asset_class(asset_class)
     async with AsyncSession(engine) as session:
         trade = await session.get(Trade, trade_id)
         if trade is None:
@@ -125,14 +116,12 @@ async def export_for_symbol(
     engine: AsyncEngine,
     *,
     symbol: str,
-    asset_class: str,
     limit: int = 50,
 ) -> list[Receipt]:
     """Bulk receipts for the most recent ``limit`` trades on ``symbol``.
 
     Useful for "give me the audit trail for AAPL this quarter."
     """
-    _check_asset_class(asset_class)
     receipts: list[Receipt] = []
     async with AsyncSession(engine) as session:
         stmt = select(Trade).where(Trade.symbol == symbol).order_by(Trade.id.desc()).limit(limit)

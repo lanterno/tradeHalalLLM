@@ -23,18 +23,12 @@ def halal_group() -> None:
 
 @halal_group.command("explain")
 @click.argument("trade_id", type=int)
-@click.option(
-    "--asset-class",
-    type=click.Choice(["stock"]),
-    default="stock",
-    show_default=True,
-)
-def explain(trade_id: int, asset_class: str) -> None:
+def explain(trade_id: int) -> None:
     """Render the Sharia-compliance explanation for one trade."""
-    asyncio.run(_run_explain(trade_id=trade_id, asset_class=asset_class))
+    asyncio.run(_run_explain(trade_id=trade_id))
 
 
-async def _run_explain(*, trade_id: int, asset_class: str) -> None:
+async def _run_explain(*, trade_id: int) -> None:
     from halal_trader.config import get_settings
     from halal_trader.db import init_db
     from halal_trader.halal.audit import export_receipt
@@ -42,9 +36,9 @@ async def _run_explain(*, trade_id: int, asset_class: str) -> None:
 
     settings = get_settings()
     engine = await init_db(settings.database_url)
-    receipt = await export_receipt(engine, trade_id=trade_id, asset_class=asset_class)
+    receipt = await export_receipt(engine, trade_id=trade_id)
     if receipt is None:
-        console.print(f"[red]Trade {trade_id} ({asset_class}) not found.[/red]")
+        console.print(f"[red]Trade {trade_id} not found.[/red]")
         return
     explanation = explain_screening(receipt.payload)
     console.print(Markdown(explanation.body_md))
