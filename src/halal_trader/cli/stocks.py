@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 
 import click
 from rich.panel import Panel
@@ -15,6 +16,7 @@ from halal_trader.cli._display import (
     print_positions,
     print_trades,
 )
+from halal_trader.cli._run import run_db
 from halal_trader.logging import console
 
 
@@ -69,21 +71,14 @@ def status() -> None:
 def history(limit: int) -> None:
     """Show stock trade history and daily P&L."""
 
-    async def _history() -> None:
-        from halal_trader.config import get_settings
-        from halal_trader.db.models import init_db
+    async def _history(engine: Any, settings: Any) -> None:
         from halal_trader.db.repository import Repository
 
-        settings = get_settings()
-        engine = await init_db(settings.database_url)
         repo = Repository(engine)
-        try:
-            print_trades(await repo.get_recent_trades(limit))
-            print_pnl(await repo.get_pnl_history(limit=14))
-        finally:
-            await engine.dispose()
+        print_trades(await repo.get_recent_trades(limit))
+        print_pnl(await repo.get_pnl_history(limit=14))
 
-    asyncio.run(_history())
+    run_db(_history)
 
 
 @click.command()

@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-import asyncio
 from datetime import date
+from typing import Any
 
 import click
 
+from halal_trader.cli._run import run_db
 from halal_trader.logging import console
 
 
@@ -19,14 +20,10 @@ def ledger() -> None:
 def sync_cmd() -> None:
     """Copy new Alpaca activities and recent daily equity into the ledger."""
 
-    async def _run() -> None:
-        from halal_trader.config import get_settings
-        from halal_trader.db.models import init_db
+    async def _run(engine: Any, settings: Any) -> None:
         from halal_trader.execution.alpaca_rest import AlpacaRestClient
         from halal_trader.execution.ledger import sync_broker_ledger
 
-        settings = get_settings()
-        engine = await init_db(settings.database_url)
         client = AlpacaRestClient(
             settings.alpaca.api_key,
             settings.alpaca.secret_key,
@@ -36,13 +33,12 @@ def sync_cmd() -> None:
             r = await sync_broker_ledger(engine, client)
         finally:
             await client.aclose()
-            await engine.dispose()
         console.print(
             f"activities: {r.activities_fetched} fetched, {r.activities_new} new; "
             f"equity days: {r.equity_days}"
         )
 
-    asyncio.run(_run())
+    run_db(_run)
 
 
 @ledger.command("reconcile")
@@ -52,19 +48,12 @@ def sync_cmd() -> None:
 def reconcile_cmd(day: object) -> None:
     """Compare one day's broker fills with the fills the bot recorded."""
 
-    async def _run() -> int:
-        from halal_trader.config import get_settings
-        from halal_trader.db.models import init_db
+    async def _run(engine: Any, settings: Any) -> int:
         from halal_trader.execution.ledger import reconcile_fills
         from halal_trader.market_hours import today_eastern
 
-        settings = get_settings()
-        engine = await init_db(settings.database_url)
-        try:
-            when: date = day.date() if day is not None else today_eastern()  # type: ignore[attr-defined]
-            rec = await reconcile_fills(engine, when)
-        finally:
-            await engine.dispose()
+        when: date = day.date() if day is not None else today_eastern()  # type: ignore[attr-defined]
+        rec = await reconcile_fills(engine, when)
         if rec.clean:
             console.print(f"[green]{rec.day}: {rec.broker_fills} broker fills, books agree[/green]")
             return 0
@@ -76,7 +65,7 @@ def reconcile_cmd(day: object) -> None:
             )
         return 1
 
-    raise SystemExit(asyncio.run(_run()))
+    raise SystemExit(run_db(_run))
 
 
 @ledger.command("performance")
@@ -84,18 +73,11 @@ def reconcile_cmd(day: object) -> None:
 def performance_cmd(since: object) -> None:
     """Account performance from broker equity alone (net of deposits)."""
 
-    async def _run() -> None:
-        from halal_trader.config import get_settings
-        from halal_trader.db.models import init_db
+    async def _run(engine: Any, settings: Any) -> None:
         from halal_trader.execution.ledger import performance
 
-        settings = get_settings()
-        engine = await init_db(settings.database_url)
-        try:
-            start = since.date() if since is not None else None  # type: ignore[attr-defined]
-            p = await performance(engine, start=start)
-        finally:
-            await engine.dispose()
+        start = since.date() if since is not None else None  # type: ignore[attr-defined]
+        p = await performance(engine, start=start)
         if p is None:
             console.print(
                 "[yellow]Fewer than two equity days on record; run `ledger sync`.[/yellow]"
@@ -111,4 +93,4 @@ def performance_cmd(since: object) -> None:
             f"  best / worst  {p.best_day:+.2%} / {p.worst_day:+.2%}"
         )
 
-    asyncio.run(_run())
+    run_db(_run)

@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 
 import click
 
 from halal_trader.cli._display import print_liquidation
+from halal_trader.cli._run import fail, run_db
 from halal_trader.logging import console
 
 
@@ -37,41 +37,33 @@ def halt(reason: str, close_all: str | None) -> None:
     only its forced (screen) sales through.
     """
 
-    async def _halt() -> None:
-        from halal_trader.config import get_settings
+    async def _halt(engine: Any, settings: Any) -> None:
         from halal_trader.core import halt as halt_module
         from halal_trader.core.liquidate import liquidate_stocks
-        from halal_trader.db.models import init_db
 
-        settings = get_settings()
-        engine = await init_db(settings.database_url)
-        try:
-            status = await halt_module.set_halt(engine, reason=reason)
-            console.print(
-                f"[red]KILL-SWITCH ENGAGED[/red] "
-                f"(by {status.set_by} at {status.set_at}): {status.reason}"
-            )
-            if close_all == "stocks":
-                from halal_trader.mcp.client import AlpacaMCPClient
+        status = await halt_module.set_halt(engine, reason=reason)
+        console.print(
+            f"[red]KILL-SWITCH ENGAGED[/red] "
+            f"(by {status.set_by} at {status.set_at}): {status.reason}"
+        )
+        if close_all == "stocks":
+            from halal_trader.mcp.client import AlpacaMCPClient
 
-                mcp = AlpacaMCPClient()
-                try:
-                    await mcp.connect()
-                    print_liquidation(await liquidate_stocks(mcp))
-                except Exception as exc:  # noqa: BLE001 -- the halt already holds
-                    console.print(
-                        f"[red]Liquidation failed ({type(exc).__name__}: {exc}).[/red] "
-                        "The kill-switch IS engaged; close positions by hand or retry."
-                    )
-                    raise SystemExit(1) from exc
-                finally:
-                    await mcp.disconnect()
-            elif close_all == "core":
-                await _close_core(settings)
-        finally:
-            await engine.dispose()
+            mcp = AlpacaMCPClient()
+            try:
+                await mcp.connect()
+                print_liquidation(await liquidate_stocks(mcp))
+            except Exception as exc:  # noqa: BLE001 -- the halt already holds
+                fail(
+                    f"liquidation failed ({type(exc).__name__}: {exc}). "
+                    "The kill-switch IS engaged; close positions by hand or retry."
+                )
+            finally:
+                await mcp.disconnect()
+        elif close_all == "core":
+            await _close_core(settings)
 
-    asyncio.run(_halt())
+    run_db(_halt)
 
 
 async def _close_core(settings: Any) -> None:
@@ -81,8 +73,7 @@ async def _close_core(settings: Any) -> None:
 
     core = settings.core
     if not (core.alpaca_api_key and core.alpaca_secret_key):
-        console.print("[red]No core keys (CORE_ALPACA_API_KEY/SECRET): nothing closed.[/red]")
-        raise SystemExit(1)
+        fail("no core keys (CORE_ALPACA_API_KEY/SECRET): nothing closed")
     where = "paper" if core.paper else "LIVE"
     console.print(f"Closing every position of the core's {where} account...")
     broker = AlpacaRestBroker(core.alpaca_api_key, core.alpaca_secret_key, paper=core.paper)
@@ -90,17 +81,15 @@ async def _close_core(settings: Any) -> None:
         held = await broker.get_all_positions()
         results = await liquidate_stocks(broker)
     except Exception as exc:  # noqa: BLE001 -- the halt already holds
-        console.print(
-            f"[red]Core liquidation failed ({type(exc).__name__}: {exc}).[/red] "
+        fail(
+            f"core liquidation failed ({type(exc).__name__}: {exc}). "
             "The kill-switch IS engaged; close the core's positions by hand or retry."
         )
-        raise SystemExit(1) from exc
     finally:
         await broker.disconnect()
     if any(r.status == "error" for r in results):
         print_liquidation(results)
-        console.print("[red]The kill-switch IS engaged; the core's positions may be open.[/red]")
-        raise SystemExit(1)
+        fail("the kill-switch IS engaged; the core's positions may be open")
     # What was held when the close went out; the broker fills the sells.
     print_liquidation(
         [
@@ -114,46 +103,32 @@ async def _close_core(settings: Any) -> None:
 def resume() -> None:
     """Disengage the operator kill-switch."""
 
-    async def _resume() -> None:
-        from halal_trader.config import get_settings
+    async def _resume(engine: Any, settings: Any) -> None:
         from halal_trader.core import halt as halt_module
-        from halal_trader.db.models import init_db
 
-        settings = get_settings()
-        engine = await init_db(settings.database_url)
-        try:
-            status = await halt_module.clear_halt(engine)
-            console.print(
-                f"[green]Kill-switch cleared[/green] "
-                f"(was set by {status.set_by} at {status.set_at} — "
-                f"reason: {status.reason})"
-            )
-        finally:
-            await engine.dispose()
+        status = await halt_module.clear_halt(engine)
+        console.print(
+            f"[green]Kill-switch cleared[/green] "
+            f"(was set by {status.set_by} at {status.set_at} — "
+            f"reason: {status.reason})"
+        )
 
-    asyncio.run(_resume())
+    run_db(_resume)
 
 
 @click.command("halt-status")
 def halt_status() -> None:
     """Show the current kill-switch state."""
 
-    async def _status() -> None:
-        from halal_trader.config import get_settings
+    async def _status(engine: Any, settings: Any) -> None:
         from halal_trader.core.halt import get_status
-        from halal_trader.db.models import init_db
 
-        settings = get_settings()
-        engine = await init_db(settings.database_url)
-        try:
-            s = await get_status(engine)
-            if s.enabled:
-                console.print(f"[red]HALTED[/red] (by {s.set_by} at {s.set_at}): {s.reason}")
-            else:
-                console.print("[green]Running[/green] — kill-switch is off.")
-                if s.set_by:
-                    console.print(f"[dim]Last set by {s.set_by} at {s.set_at}: {s.reason}[/dim]")
-        finally:
-            await engine.dispose()
+        s = await get_status(engine)
+        if s.enabled:
+            console.print(f"[red]HALTED[/red] (by {s.set_by} at {s.set_at}): {s.reason}")
+        else:
+            console.print("[green]Running[/green] — kill-switch is off.")
+            if s.set_by:
+                console.print(f"[dim]Last set by {s.set_by} at {s.set_at}: {s.reason}[/dim]")
 
-    asyncio.run(_status())
+    run_db(_status)

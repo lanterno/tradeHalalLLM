@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import asyncio
 from collections import Counter
 from typing import Any
 
 import click
 
+from halal_trader.cli._run import fail, run_db
 from halal_trader.logging import console
 
 
@@ -21,18 +21,14 @@ def compliance() -> None:
 def screen_cmd(symbols: str) -> None:
     """Screen symbols against AAOIFI business-activity and financial-ratio rules."""
 
-    async def _run() -> list[Any]:
+    async def _run(engine: Any, settings: Any) -> list[Any]:
         from sqlalchemy import text
 
         from halal_trader.compliance.runner import run_screen
         from halal_trader.compliance.sec import SecClient
-        from halal_trader.config import get_settings
         from halal_trader.data.store import BENCHMARKS
-        from halal_trader.db.models import init_db
         from halal_trader.market_hours import today_eastern
 
-        settings = get_settings()
-        engine = await init_db(settings.database_url)
         sec = SecClient(settings.edgar.user_agent)
         try:
             chosen = [s.strip().upper() for s in symbols.split(",") if s.strip()]
@@ -41,13 +37,12 @@ def screen_cmd(symbols: str) -> None:
                     rows = await conn.execute(text("SELECT DISTINCT symbol FROM daily_bars"))
                     chosen = sorted(r.symbol for r in rows if r.symbol not in BENCHMARKS)
             if not chosen:
-                raise click.ClickException("no symbols: pass --symbols or run `data backfill`")
+                fail("no symbols: pass --symbols or run `data backfill`")
             return await run_screen(sec, engine, chosen, today_eastern())
         finally:
             await sec.aclose()
-            await engine.dispose()
 
-    results = asyncio.run(_run())
+    results = run_db(_run)
     counts = Counter(r.verdict for r in results)
     console.print(
         f"screened {len(results)}: [green]{counts['halal']} halal[/green], "
@@ -72,15 +67,11 @@ def screen_cmd(symbols: str) -> None:
 def screen_history_cmd(since: Any, top: int) -> None:
     """Screen every past quarter end's point-in-time universe (resumable)."""
 
-    async def _run() -> dict[Any, int]:
+    async def _run(engine: Any, settings: Any) -> dict[Any, int]:
         from halal_trader.compliance.history import screen_history
         from halal_trader.compliance.sec import SecClient
-        from halal_trader.config import get_settings
-        from halal_trader.db.models import init_db
         from halal_trader.market_hours import today_eastern
 
-        settings = get_settings()
-        engine = await init_db(settings.database_url)
         sec = SecClient(settings.edgar.user_agent)
         try:
             return await screen_history(
@@ -88,9 +79,8 @@ def screen_history_cmd(since: Any, top: int) -> None:
             )
         finally:
             await sec.aclose()
-            await engine.dispose()
 
-    done = asyncio.run(_run())
+    done = run_db(_run)
     for as_of, halal in sorted(done.items()):
         console.print(f"  {as_of}: {halal} halal")
     console.print(f"{len(done)} quarter(s) screened")
@@ -100,16 +90,12 @@ def screen_history_cmd(since: Any, top: int) -> None:
 def map_delisted_cmd() -> None:
     """Match tickers SEC no longer lists to their filer by name, then re-screen them."""
 
-    async def _run() -> tuple[list[Any], dict[Any, int]]:
+    async def _run(engine: Any, settings: Any) -> tuple[list[Any], dict[Any, int]]:
         from halal_trader.compliance.delisted import map_unmapped, rescreen_mapped
         from halal_trader.compliance.sec import SecClient
-        from halal_trader.config import get_settings
         from halal_trader.data.alpaca_market import AlpacaMarketData
-        from halal_trader.db.models import init_db
         from halal_trader.market_hours import today_eastern
 
-        settings = get_settings()
-        engine = await init_db(settings.database_url)
         sec = SecClient(settings.edgar.user_agent)
         market = AlpacaMarketData(settings.alpaca.api_key, settings.alpaca.secret_key)
         try:
@@ -119,9 +105,8 @@ def map_delisted_cmd() -> None:
         finally:
             await market.aclose()
             await sec.aclose()
-            await engine.dispose()
 
-    matches, rescreened = asyncio.run(_run())
+    matches, rescreened = run_db(_run)
     by_status: dict[str, int] = {}
     for m in matches:
         by_status[m.status] = by_status.get(m.status, 0) + 1
@@ -139,22 +124,17 @@ def map_delisted_cmd() -> None:
 def rescreen_cmd() -> None:
     """Re-screen every stored verdict made under an older screening method (resumable)."""
 
-    async def _run() -> dict[Any, int]:
+    async def _run(engine: Any, settings: Any) -> dict[Any, int]:
         from halal_trader.compliance.history import rescreen_stale
         from halal_trader.compliance.sec import SecClient
-        from halal_trader.config import get_settings
-        from halal_trader.db.models import init_db
 
-        settings = get_settings()
-        engine = await init_db(settings.database_url)
         sec = SecClient(settings.edgar.user_agent)
         try:
             return await rescreen_stale(sec, engine)
         finally:
             await sec.aclose()
-            await engine.dispose()
 
-    done = asyncio.run(_run())
+    done = run_db(_run)
     console.print(f"re-screened {sum(done.values())} verdict(s) across {len(done)} screen date(s)")
 
 
@@ -162,39 +142,30 @@ def rescreen_cmd() -> None:
 def etf_history_cmd() -> None:
     """Store every N-PORT holdings filing of SPUS and HLAL (the index veto's input)."""
 
-    async def _run() -> int:
+    async def _run(engine: Any, settings: Any) -> int:
         from halal_trader.compliance.etf_holdings import sync_holdings
         from halal_trader.compliance.sec import SecClient
-        from halal_trader.config import get_settings
-        from halal_trader.db.models import init_db
 
-        settings = get_settings()
-        engine = await init_db(settings.database_url)
         sec = SecClient(settings.edgar.user_agent)
         try:
             return await sync_holdings(sec, engine)
         finally:
             await sec.aclose()
-            await engine.dispose()
 
-    console.print(f"{asyncio.run(_run())} holdings filing(s) stored")
+    console.print(f"{run_db(_run)} holdings filing(s) stored")
 
 
 @compliance.command("validate")
 def validate_cmd() -> None:
     """Compare the latest screen with SPUS and HLAL holdings (SEC N-PORT)."""
 
-    async def _run() -> tuple[Any, list[Any]]:
+    async def _run(engine: Any, settings: Any) -> tuple[Any, list[Any]]:
         from sqlalchemy import text
 
         from halal_trader.compliance.etf_holdings import HALAL_ETFS, latest_holdings
         from halal_trader.compliance.sec import SecClient
         from halal_trader.compliance.validate import compare, verdict_of
-        from halal_trader.config import get_settings
-        from halal_trader.db.models import init_db
 
-        settings = get_settings()
-        engine = await init_db(settings.database_url)
         sec = SecClient(settings.edgar.user_agent)
         try:
             holdings = [await latest_holdings(sec, etf) for etf in HALAL_ETFS]
@@ -210,13 +181,12 @@ def validate_cmd() -> None:
                 verdicts = {r.symbol: verdict_of(r) for r in rows}
         finally:
             await sec.aclose()
-            await engine.dispose()
         if not verdicts:
-            raise click.ClickException("no screen results yet: run `compliance screen` first")
+            fail("no screen results yet: run `compliance screen` first")
         tickers: set[str] = set().union(*(h.tickers for h in holdings))
         return compare(verdicts, tickers), holdings
 
-    v, holdings = asyncio.run(_run())
+    v, holdings = run_db(_run)
     for h in holdings:
         console.print(f"{h.etf}: {len(h.holdings)} equity holdings as of {h.period_end}")
     console.print(

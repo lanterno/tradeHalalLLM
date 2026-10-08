@@ -8,11 +8,12 @@ criteria blob as Markdown with citations to
 
 from __future__ import annotations
 
-import asyncio
+from typing import Any
 
 import click
 from rich.markdown import Markdown
 
+from halal_trader.cli._run import fail, run_db
 from halal_trader.logging import console
 
 
@@ -25,21 +26,16 @@ def halal_group() -> None:
 @click.argument("trade_id", type=int)
 def explain(trade_id: int) -> None:
     """Render the Sharia-compliance explanation for one trade."""
-    asyncio.run(_run_explain(trade_id=trade_id))
+    run_db(lambda engine, settings: _run_explain(engine, trade_id=trade_id))
 
 
-async def _run_explain(*, trade_id: int) -> None:
-    from halal_trader.config import get_settings
-    from halal_trader.db import init_db
+async def _run_explain(engine: Any, *, trade_id: int) -> None:
     from halal_trader.halal.audit import export_receipt
     from halal_trader.halal.explainer import explain_screening
 
-    settings = get_settings()
-    engine = await init_db(settings.database_url)
     receipt = await export_receipt(engine, trade_id=trade_id)
     if receipt is None:
-        console.print(f"[red]Trade {trade_id} not found.[/red]")
-        return
+        fail(f"trade {trade_id} not found")
     explanation = explain_screening(receipt.payload)
     console.print(Markdown(explanation.body_md))
     if explanation.sources:

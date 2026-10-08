@@ -102,9 +102,8 @@ async def _run_shadow(
     # Coalesce belief writes in the continuous loop (per-asset ts-ordering,
     # Appendix F); inline + synchronous for --once so the summary is immediate.
     # Bootstrap warms beliefs from the event log before the live stream starts.
-    engine = await build_engine(
-        database_url=settings.database_url, settings=hb, coalesce=not once, bootstrap=True
-    )
+    # One pool for the process: the engine shares the legacy DB's.
+    engine = await build_engine(db_engine=ht_engine, settings=hb, coalesce=not once, bootstrap=True)
     repo = Repository(ht_engine)
     mcp = AlpacaMCPClient()
     await mcp.connect()

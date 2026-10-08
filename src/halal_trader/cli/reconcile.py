@@ -7,12 +7,13 @@ Trade rows so the reconciler stops flagging them as phantom positions.
 
 from __future__ import annotations
 
-import asyncio
+from typing import Any
 
 import click
 from rich.table import Table
 from rich.text import Text
 
+from halal_trader.cli._run import run_db
 from halal_trader.logging import console
 
 
@@ -32,56 +33,47 @@ def reconcile() -> None:
 def reconcile_check(market: str, threshold: float) -> None:
     """Compare DB open trades to broker balances and surface drift."""
 
-    async def _run() -> None:
-        from halal_trader.config import get_settings
+    async def _run(engine: Any, settings: Any) -> None:
         from halal_trader.core import reconcile as recon
-        from halal_trader.db.models import init_db
+        from halal_trader.mcp.client import AlpacaMCPClient
 
-        settings = get_settings()
-        engine = await init_db(settings.database_url)
+        broker = AlpacaMCPClient()
+        await broker.connect()
         try:
-            from halal_trader.mcp.client import AlpacaMCPClient
-
-            broker = AlpacaMCPClient()
-            await broker.connect()
-            try:
-                report = await recon.reconcile_stocks(
-                    engine=engine, broker=broker, threshold_pct=threshold
-                )
-            finally:
-                await broker.disconnect()
-
-            console.print(
-                f"[dim]Checked {report.checked_symbols} symbol(s) at "
-                f"threshold {threshold:.1%}[/dim]"
+            report = await recon.reconcile_stocks(
+                engine=engine, broker=broker, threshold_pct=threshold
             )
-            if not report.has_drift:
-                console.print(f"[green]No drift detected for {market}.[/green]")
-                return
-
-            tbl = Table(title=f"Reconciliation Drift ({market})", header_style="bold cyan")
-            tbl.add_column("Symbol")
-            tbl.add_column("DB Qty", justify="right")
-            tbl.add_column("Broker Qty", justify="right")
-            tbl.add_column("Drift %", justify="right")
-            tbl.add_column("Drift $", justify="right")
-            tbl.add_column("Notes")
-
-            for d in report.drifts:
-                usd = f"${d.drift_usd:,.2f}" if d.drift_usd is not None else "-"
-                tbl.add_row(
-                    d.symbol,
-                    f"{d.db_quantity:g}",
-                    f"{d.broker_quantity:g}",
-                    Text(f"{d.drift_pct * 100:.2f}%", style="red"),
-                    usd,
-                    d.notes or ("settling" if d.is_settling else ""),
-                )
-            console.print(tbl)
         finally:
-            await engine.dispose()
+            await broker.disconnect()
 
-    asyncio.run(_run())
+        console.print(
+            f"[dim]Checked {report.checked_symbols} symbol(s) at threshold {threshold:.1%}[/dim]"
+        )
+        if not report.has_drift:
+            console.print(f"[green]No drift detected for {market}.[/green]")
+            return
+
+        tbl = Table(title=f"Reconciliation Drift ({market})", header_style="bold cyan")
+        tbl.add_column("Symbol")
+        tbl.add_column("DB Qty", justify="right")
+        tbl.add_column("Broker Qty", justify="right")
+        tbl.add_column("Drift %", justify="right")
+        tbl.add_column("Drift $", justify="right")
+        tbl.add_column("Notes")
+
+        for d in report.drifts:
+            usd = f"${d.drift_usd:,.2f}" if d.drift_usd is not None else "-"
+            tbl.add_row(
+                d.symbol,
+                f"{d.db_quantity:g}",
+                f"{d.broker_quantity:g}",
+                Text(f"{d.drift_pct * 100:.2f}%", style="red"),
+                usd,
+                d.notes or ("settling" if d.is_settling else ""),
+            )
+        console.print(tbl)
+
+    run_db(_run)
 
 
 @reconcile.command("fix-orphans")
@@ -116,13 +108,9 @@ def reconcile_fix_orphans(dry_run: bool, min_age_minutes: int, no_broker: bool) 
     so the reconciler stops counting it.
     """
 
-    async def _run() -> None:
-        from halal_trader.config import get_settings
+    async def _run(engine: Any, settings: Any) -> None:
         from halal_trader.core import reconcile as recon
-        from halal_trader.db.models import init_db
 
-        settings = get_settings()
-        engine = await init_db(settings.database_url)
         broker = None
         try:
             if not no_broker:
@@ -193,9 +181,8 @@ def reconcile_fix_orphans(dry_run: bool, min_age_minutes: int, no_broker: bool) 
                     await broker.disconnect()
                 except Exception:  # noqa: BLE001
                     pass
-            await engine.dispose()
 
-    asyncio.run(_run())
+    run_db(_run)
 
 
 @reconcile.command("fix-drift")
@@ -223,14 +210,10 @@ def reconcile_fix_drift(dry_run: bool, threshold_shares: float) -> None:
     positions. Always dry-run first.
     """
 
-    async def _run() -> None:
-        from halal_trader.config import get_settings
+    async def _run(engine: Any, settings: Any) -> None:
         from halal_trader.core import reconcile as recon
-        from halal_trader.db.models import init_db
         from halal_trader.mcp.client import AlpacaMCPClient
 
-        settings = get_settings()
-        engine = await init_db(settings.database_url)
         broker = AlpacaMCPClient()
         try:
             await broker.connect()
@@ -270,6 +253,5 @@ def reconcile_fix_drift(dry_run: bool, threshold_shares: float) -> None:
                 await broker.disconnect()
             except Exception:  # noqa: BLE001
                 pass
-            await engine.dispose()
 
-    asyncio.run(_run())
+    run_db(_run)

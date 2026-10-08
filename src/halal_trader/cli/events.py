@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 
 import click
 
+from halal_trader.cli._run import run_db
 from halal_trader.logging import console
 
 
@@ -20,30 +20,21 @@ def events() -> None:
 def report_cmd(threshold: float) -> None:
     """Label matured events, then show each scorer's IC against abnormal returns."""
 
-    async def _run() -> tuple[int, list[Any], dict[str, int]]:
+    async def _run(engine: Any, settings: Any) -> tuple[int, list[Any], dict[str, int]]:
         from sqlalchemy import text
 
-        from halal_trader.config import get_settings
-        from halal_trader.db.models import init_db
         from halal_trader.events.labels import label_events, report
 
-        engine = await init_db(get_settings().database_url)
-        try:
-            written = await label_events(engine)
-            async with engine.connect() as conn:
-                counts = {
-                    "events": (await conn.execute(text("SELECT count(*) FROM events"))).scalar()
-                    or 0,
-                    "scored": (
-                        await conn.execute(text("SELECT count(*) FROM event_scores"))
-                    ).scalar()
-                    or 0,
-                }
-            return written, await report(engine, threshold=threshold), counts
-        finally:
-            await engine.dispose()
+        written = await label_events(engine)
+        async with engine.connect() as conn:
+            counts = {
+                "events": (await conn.execute(text("SELECT count(*) FROM events"))).scalar() or 0,
+                "scored": (await conn.execute(text("SELECT count(*) FROM event_scores"))).scalar()
+                or 0,
+            }
+        return written, await report(engine, threshold=threshold), counts
 
-    written, rows, counts = asyncio.run(_run())
+    written, rows, counts = run_db(_run)
     console.print(f"{counts['events']} events, {counts['scored']} scores; {written} new label(s)")
     if not rows:
         console.print("[yellow]no labelled scores yet: horizons need sessions to elapse[/yellow]")
@@ -68,15 +59,11 @@ def report_cmd(threshold: float) -> None:
 def backfill_cmd(what: str, rate: int) -> None:
     """Fill the event store's history (resumable; finished units are skipped)."""
 
-    async def _run() -> dict[str, int]:
+    async def _run(engine: Any, settings: Any) -> dict[str, int]:
         from halal_trader.compliance.sec import SecClient
-        from halal_trader.config import get_settings
         from halal_trader.data.alpaca_market import AlpacaMarketData
-        from halal_trader.db.models import init_db
         from halal_trader.events import history
 
-        settings = get_settings()
-        engine = await init_db(settings.database_url)
         sec = SecClient(settings.edgar.user_agent)
         out: dict[str, int] = {}
         try:
@@ -100,10 +87,9 @@ def backfill_cmd(what: str, rate: int) -> None:
                     await market.aclose()
         finally:
             await sec.aclose()
-            await engine.dispose()
         return out
 
-    for name, n in asyncio.run(_run()).items():
+    for name, n in run_db(_run).items():
         console.print(f"{name}: {n} new")
 
 
@@ -111,36 +97,24 @@ def backfill_cmd(what: str, rate: int) -> None:
 def extract_cmd() -> None:
     """Read earnings results and guidance vs consensus out of stored headlines."""
 
-    async def _run() -> int:
-        from halal_trader.config import get_settings
-        from halal_trader.db.models import init_db
+    async def _run(engine: Any, settings: Any) -> int:
         from halal_trader.events.earnings_parse import extract_all
 
-        engine = await init_db(get_settings().database_url)
-        try:
-            return await extract_all(engine)
-        finally:
-            await engine.dispose()
+        return await extract_all(engine)
 
-    console.print(f"{asyncio.run(_run())} earnings fact(s) extracted")
+    console.print(f"{run_db(_run)} earnings fact(s) extracted")
 
 
 @events.command("quality")
 def quality_cmd() -> None:
     """Coverage by year and source, earnings-timestamp agreement, duplicate rate."""
 
-    async def _run() -> tuple[list[Any], Any, float | None]:
-        from halal_trader.config import get_settings
-        from halal_trader.db.models import init_db
+    async def _run(engine: Any, settings: Any) -> tuple[list[Any], Any, float | None]:
         from halal_trader.events.quality import coverage, duplicate_share, timing
 
-        engine = await init_db(get_settings().database_url)
-        try:
-            return await coverage(engine), await timing(engine), await duplicate_share(engine)
-        finally:
-            await engine.dispose()
+        return await coverage(engine), await timing(engine), await duplicate_share(engine)
 
-    rows, t, dup = asyncio.run(_run())
+    rows, t, dup = run_db(_run)
     console.print("year  source      kind           events  companies / universe")
     for c in rows:
         share = f"{c.companies / c.universe:.0%}" if c.universe else "  -"
@@ -168,26 +142,20 @@ def quality_cmd() -> None:
 def study_cmd(signal: str, start: int, end: int, by: str) -> None:
     """Event study of a free signal: net abnormal return by signal decile and horizon."""
 
-    async def _run() -> Any:
-        from halal_trader.config import get_settings
-        from halal_trader.db.models import init_db
+    async def _run(engine: Any, settings: Any) -> Any:
         from halal_trader.events.history import covered_companies
         from halal_trader.events.study import Observation, evaluate, summarise
         from halal_trader.events.sue import sue_observations
 
-        engine = await init_db(get_settings().database_url)
-        try:
-            raw = await sue_observations(engine, await covered_companies(engine))
-            obs = [
-                Observation(o.symbol, o.announced_at, o.sue)
-                for o in raw
-                if start <= o.announced_at.year <= end
-            ]
-            return summarise(await evaluate(engine, obs), by=None if by == "all" else by)
-        finally:
-            await engine.dispose()
+        raw = await sue_observations(engine, await covered_companies(engine))
+        obs = [
+            Observation(o.symbol, o.announced_at, o.sue)
+            for o in raw
+            if start <= o.announced_at.year <= end
+        ]
+        return summarise(await evaluate(engine, obs), by=None if by == "all" else by)
 
-    result = asyncio.run(_run())
+    result = run_db(_run)
     console.print(f"{signal} {start}-{end}: net abnormal return vs SPY by decile (t-stat)")
     groups = sorted({r.group for r in result.rows})
     for group in groups:
@@ -217,22 +185,15 @@ def _research_meter(engine: Any, settings: Any) -> None:
 def cutoff_probe_cmd(start: Any, end: Any, per_month: int) -> None:
     """Find the LLM's training cutoff: its recall of reported EPS, by filing month."""
 
-    async def _run() -> list[Any]:
-        from halal_trader.config import get_settings
+    async def _run(engine: Any, settings: Any) -> list[Any]:
         from halal_trader.core.llm import create_classifier_llm
-        from halal_trader.db.models import init_db
         from halal_trader.events.llm_cutoff import probes, run
 
-        settings = get_settings()
-        engine = await init_db(settings.database_url)
-        try:
-            _research_meter(engine, settings)
-            items = await probes(engine, start=start.date(), end=end.date(), per_month=per_month)
-            return await run(create_classifier_llm(settings), items)
-        finally:
-            await engine.dispose()
+        _research_meter(engine, settings)
+        items = await probes(engine, start=start.date(), end=end.date(), per_month=per_month)
+        return await run(create_classifier_llm(settings), items)
 
-    for m in asyncio.run(_run()):
+    for m in run_db(_run):
         bar = "#" * m.correct
         console.print(
             f"  {m.month:%Y-%m}  asked {m.asked:2}  answered {m.answered:2}  "
@@ -245,44 +206,31 @@ def cutoff_probe_cmd(start: Any, end: Any, per_month: int) -> None:
 def llm_score_cmd(max_pairs: int) -> None:
     """Score post-cutoff company headlines with the LLM, in batches (research budget)."""
 
-    async def _run() -> int:
-        from halal_trader.config import get_settings
+    async def _run(engine: Any, settings: Any) -> int:
         from halal_trader.core.llm import create_classifier_llm
-        from halal_trader.db.models import init_db
         from halal_trader.events.llm_score import score_all
 
-        settings = get_settings()
-        engine = await init_db(settings.database_url)
-        try:
-            _research_meter(engine, settings)
-            return await score_all(
-                create_classifier_llm(settings),
-                engine,
-                model=settings.llm.model,
-                max_pairs=max_pairs,
-            )
-        finally:
-            await engine.dispose()
+        _research_meter(engine, settings)
+        return await score_all(
+            create_classifier_llm(settings),
+            engine,
+            model=settings.llm.model,
+            max_pairs=max_pairs,
+        )
 
-    console.print(f"{asyncio.run(_run())} headline/symbol pairs scored")
+    console.print(f"{run_db(_run)} headline/symbol pairs scored")
 
 
 @events.command("llm-eval")
 def llm_eval_cmd() -> None:
     """LLM vs lexicon scores of post-cutoff news: IC and deciles of net abnormal return."""
 
-    async def _run() -> Any:
-        from halal_trader.config import get_settings
-        from halal_trader.db.models import init_db
+    async def _run(engine: Any, settings: Any) -> Any:
         from halal_trader.events.llm_eval import compare
 
-        engine = await init_db(get_settings().database_url)
-        try:
-            return await compare(engine)
-        finally:
-            await engine.dispose()
+        return await compare(engine)
 
-    c = asyncio.run(_run())
+    c = run_db(_run)
     console.print(f"{c.days} (symbol, day) readings of post-cutoff news")
     for label, result in (
         ("llm", c.llm),
@@ -307,14 +255,10 @@ def llm_eval_cmd() -> None:
 def intraday_cmd(rate: int) -> None:
     """The pre-registered "fast in" test: minute-bar entries 60 s after in-session headlines."""
 
-    async def _run() -> list[Any]:
-        from halal_trader.config import get_settings
+    async def _run(engine: Any, settings: Any) -> list[Any]:
         from halal_trader.data.alpaca_market import AlpacaMarketData
-        from halal_trader.db.models import init_db
         from halal_trader.events.intraday import first_in_session, run, selection, summarise
 
-        settings = get_settings()
-        engine = await init_db(settings.database_url)
         market = AlpacaMarketData(
             settings.alpaca.api_key, settings.alpaca.secret_key, min_interval_s=60.0 / rate
         )
@@ -324,7 +268,6 @@ def intraday_cmd(rate: int) -> None:
             return summarise(await run(engine, market, chosen))
         finally:
             await market.aclose()
-            await engine.dispose()
 
-    for b in asyncio.run(_run()):
+    for b in run_db(_run):
         console.print(f"  {b.label:20} {b.horizon:9} n={b.n:<5} mean {b.mean:+.2%}  t {b.t:+.1f}")

@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 
 import click
 
+from halal_trader.cli._run import fail, run_db
 from halal_trader.logging import console
 
 
@@ -27,32 +27,23 @@ def zakat() -> None:
 def assess_cmd(account: str, as_of: Any, record: bool) -> None:
     """Show zakat for the latest hawl by both methods, and which is higher."""
 
-    async def _run() -> Any:
+    async def _run(engine: Any, settings: Any) -> Any:
         from halal_trader.compliance import zakat as z
-        from halal_trader.config import get_settings
-        from halal_trader.db.models import init_db
         from halal_trader.market_hours import today_eastern
 
-        settings = get_settings()
         if not settings.zakat.hawl_hijri:
-            raise click.ClickException(
-                "set ZAKAT_HAWL_HIJRI (MM-DD, the Hijri day your zakat year ends) in .env"
-            )
+            fail("set ZAKAT_HAWL_HIJRI (MM-DD, the Hijri day your zakat year ends) in .env")
         day = as_of.date() if as_of else today_eastern()
         start, end = z.hawl_period(z.parse_hawl(settings.zakat.hawl_hijri), day)
-        engine = await init_db(settings.database_url)
-        try:
-            a = await z.assess(engine, account, period_start=start, hawl_date=end)
-            if record:
-                await z.record(engine, a)
-            return a
-        finally:
-            await engine.dispose()
+        a = await z.assess(engine, account, period_start=start, hawl_date=end)
+        if record:
+            await z.record(engine, a)
+        return a
 
     from halal_trader.compliance.purification import BOOK_NOTIONAL
     from halal_trader.compliance.zakat import SOURCE, hijri_label
 
-    a = asyncio.run(_run())
+    a = run_db(_run)
     unit = f" (per ${BOOK_NOTIONAL:,.0f} following the book)" if account.startswith("book:") else ""
     console.print(
         f"[bold]{account}[/bold]{unit}: zakat year {a.period_start} -> {a.hawl_date} "

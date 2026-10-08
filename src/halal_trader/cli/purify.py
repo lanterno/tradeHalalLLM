@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import asyncio
 from datetime import timedelta
 from typing import Any
 
 import click
 
+from halal_trader.cli._run import run_db
 from halal_trader.logging import console
 
 
@@ -26,7 +26,7 @@ def purify() -> None:
 def sync_cmd(days: int, recompute_unpaid: bool) -> None:
     """Fetch dividends of everything held, then accrue the paper account and every book."""
 
-    async def _run() -> tuple[int, dict[str, int]]:
+    async def _run(engine: Any, settings: Any) -> tuple[int, dict[str, int]]:
         from halal_trader.compliance.purification import (
             accrue_book,
             accrue_paper,
@@ -34,14 +34,10 @@ def sync_cmd(days: int, recompute_unpaid: bool) -> None:
             held_symbols,
             sync_dividends,
         )
-        from halal_trader.config import get_settings
         from halal_trader.data.alpaca_market import AlpacaMarketData
-        from halal_trader.db.models import init_db
         from halal_trader.market_hours import today_eastern
         from halal_trader.research.forward_book import book_names
 
-        settings = get_settings()
-        engine = await init_db(settings.database_url)
         market = AlpacaMarketData(settings.alpaca.api_key, settings.alpaca.secret_key)
         today = today_eastern()
         try:
@@ -57,9 +53,8 @@ def sync_cmd(days: int, recompute_unpaid: bool) -> None:
             return n, accrued
         finally:
             await market.aclose()
-            await engine.dispose()
 
-    n, accrued = asyncio.run(_run())
+    n, accrued = run_db(_run)
     console.print(
         f"{n} new dividend(s); accrued " + ", ".join(f"{k}: {v}" for k, v in accrued.items())
     )
@@ -74,20 +69,14 @@ def report_cmd(account: str, year: int | None) -> None:
 
     year = year or today_eastern().year
 
-    async def _run() -> list[Any]:
+    async def _run(engine: Any, settings: Any) -> list[Any]:
         from halal_trader.compliance.purification import report
-        from halal_trader.config import get_settings
-        from halal_trader.db.models import init_db
 
-        engine = await init_db(get_settings().database_url)
-        try:
-            return await report(engine, account, year)
-        finally:
-            await engine.dispose()
+        return await report(engine, account, year)
 
     from halal_trader.compliance.purification import BOOK_NOTIONAL
 
-    lines = asyncio.run(_run())
+    lines = run_db(_run)
     unit = f" (per ${BOOK_NOTIONAL:,.0f} following the book)" if account.startswith("book:") else ""
     console.print(f"[bold]{account}[/bold], dividends payable in {year}{unit}")
     if not lines:
@@ -121,15 +110,9 @@ def report_cmd(account: str, year: int | None) -> None:
 def paid_cmd(through: Any, paid_to: str, account: str) -> None:
     """Record that you have given the outstanding purification away."""
 
-    async def _run() -> float:
+    async def _run(engine: Any, settings: Any) -> float:
         from halal_trader.compliance.purification import mark_paid
-        from halal_trader.config import get_settings
-        from halal_trader.db.models import init_db
 
-        engine = await init_db(get_settings().database_url)
-        try:
-            return await mark_paid(engine, account, through=through.date(), paid_to=paid_to)
-        finally:
-            await engine.dispose()
+        return await mark_paid(engine, account, through=through.date(), paid_to=paid_to)
 
-    console.print(f"marked ${asyncio.run(_run()):.2f} paid to {paid_to}")
+    console.print(f"marked ${run_db(_run):.2f} paid to {paid_to}")

@@ -1,6 +1,8 @@
 """SQLModel table definitions and database initialization."""
 
 import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -586,6 +588,19 @@ class SchemaError(RuntimeError):
     """Raised when the DB schema is not at the expected Alembic revision."""
 
 
+def create_engine(database_url: str) -> AsyncEngine:
+    """The one way every process opens the database.
+
+    pool_pre_ping: liveness-check each pooled connection on checkout and
+    transparently replace dead ones -- fixes the recurring "connection is
+    closed" / "ConnectionDoesNotExist" InterfaceErrors that surfaced in the
+    long-lived loops when Postgres (or a proxy) dropped an idle asyncpg
+    connection out from under the pool. pool_recycle: retire connections
+    older than 30 min, below typical server-side idle timeouts.
+    """
+    return create_async_engine(database_url, pool_pre_ping=True, pool_recycle=1800)
+
+
 async def init_db(database_url: str) -> AsyncEngine:
     """Open the async engine after verifying Alembic is at head.
 
@@ -601,18 +616,7 @@ async def init_db(database_url: str) -> AsyncEngine:
     """
     import sqlalchemy as sa
 
-    # pool_pre_ping: liveness-check each pooled connection on checkout and
-    # transparently replace dead ones — fixes the recurring
-    # "connection is closed" / "ConnectionDoesNotExist" InterfaceErrors that
-    # surfaced in the long-lived monitor/cycle loops when Postgres (or a proxy)
-    # dropped an idle asyncpg connection out from under the pool.
-    # pool_recycle: proactively retire connections older than 30 min, below
-    # typical server-side idle timeouts, so stale ones are rare to begin with.
-    engine = create_async_engine(
-        database_url,
-        pool_pre_ping=True,
-        pool_recycle=1800,
-    )
+    engine = create_engine(database_url)
 
     expected_head = _alembic_head_revision()
     expected_tables = set(SQLModel.metadata.tables.keys())
@@ -649,6 +653,16 @@ async def init_db(database_url: str) -> AsyncEngine:
         f"Database is at revision {current_revision!r}, expected {expected_head!r}. "
         f"Run `halal-trader db migrate`."
     )
+
+
+@asynccontextmanager
+async def open_db(database_url: str) -> AsyncIterator[AsyncEngine]:
+    """:func:`init_db`, disposed when the block ends: for one-shot work."""
+    engine = await init_db(database_url)
+    try:
+        yield engine
+    finally:
+        await engine.dispose()
 
 
 def _alembic_head_revision() -> str:

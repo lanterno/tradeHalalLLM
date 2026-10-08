@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Awaitable, Callable
 from datetime import date
 from typing import Any, TypeVar
 
 import click
 
+from halal_trader.cli._run import run_db
 from halal_trader.logging import console
 
 T = TypeVar("T")
@@ -17,21 +17,16 @@ T = TypeVar("T")
 def _with_store(work: Callable[[Any, Any], Awaitable[T]]) -> T:
     """Run ``work(engine, client)`` with a DB engine and a market-data client."""
 
-    async def _run() -> T:
-        from halal_trader.config import get_settings
+    async def _run(engine: Any, settings: Any) -> T:
         from halal_trader.data.alpaca_market import AlpacaMarketData
-        from halal_trader.db.models import init_db
 
-        settings = get_settings()
-        engine = await init_db(settings.database_url)
         client = AlpacaMarketData(settings.alpaca.api_key, settings.alpaca.secret_key)
         try:
             return await work(engine, client)
         finally:
             await client.aclose()
-            await engine.dispose()
 
-    return asyncio.run(_run())
+    return run_db(_run)
 
 
 @click.group("data")
@@ -140,21 +135,16 @@ def pit_universe_cmd(top: int, since: Any) -> None:
 def fundamentals_cmd(since: int) -> None:
     """Sync annual gross profit and total assets for every SEC filer (the quality input)."""
 
-    async def _run() -> int:
+    async def _run(engine: Any, settings: Any) -> int:
         from halal_trader.compliance.sec import SecClient
-        from halal_trader.config import get_settings
         from halal_trader.data.fundamentals import sync_annual, usable_year
-        from halal_trader.db.models import init_db
         from halal_trader.market_hours import today_eastern
 
-        settings = get_settings()
-        engine = await init_db(settings.database_url)
         sec = SecClient(settings.edgar.user_agent)
         try:
             last = usable_year(today_eastern())
             return await sync_annual(sec, engine, range(since, last + 1))
         finally:
             await sec.aclose()
-            await engine.dispose()
 
-    console.print(f"{asyncio.run(_run())} filer-years stored")
+    console.print(f"{run_db(_run)} filer-years stored")

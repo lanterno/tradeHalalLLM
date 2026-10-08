@@ -16,6 +16,7 @@ from typing import Any
 
 import click
 
+from halal_trader.cli._run import fail, run_db
 from halal_trader.logging import console
 
 _CACHE_DIR = Path("data/bar_cache")
@@ -91,12 +92,11 @@ async def _record_trial(**kwargs: Any) -> None:
     """Best-effort write to the quant_trials ledger (never blocks the tool)."""
     try:
         from halal_trader.config import get_settings
-        from halal_trader.db.models import init_db
+        from halal_trader.db.models import open_db
         from halal_trader.db.repos.quant_trials import QuantTrialRepoImpl
 
-        engine = await init_db(get_settings().database_url)
-        await QuantTrialRepoImpl(engine).record_trial(**kwargs)
-        await engine.dispose()
+        async with open_db(get_settings().database_url) as engine:
+            await QuantTrialRepoImpl(engine).record_trial(**kwargs)
     except Exception as exc:  # noqa: BLE001 — the ledger must not block research
         console.print(f"[yellow]trials ledger write failed: {exc}[/yellow]")
 
@@ -112,16 +112,12 @@ def quant() -> None:
 def trials(prefix: str | None, limit: int) -> None:
     """List the quant trials ledger (the honest variant count for DSR)."""
 
-    async def _run() -> None:
-        from halal_trader.config import get_settings
-        from halal_trader.db.models import init_db
+    async def _run(engine: Any, settings: Any) -> None:
         from halal_trader.db.repos.quant_trials import QuantTrialRepoImpl
 
-        engine = await init_db(get_settings().database_url)
         repo = QuantTrialRepoImpl(engine)
         rows = await repo.get_trials(name_prefix=prefix, limit=limit)
         total = await repo.count_trials(name_prefix=prefix)
-        await engine.dispose()
         scope = f" matching {prefix!r}" if prefix else ""
         console.print(f"[bold]{total}[/bold] recorded trials{scope} (showing {len(rows)})")
         for r in rows:
@@ -133,7 +129,7 @@ def trials(prefix: str | None, limit: int) -> None:
                 f"[dim]{r['kind']} · {r['window']} · {created} · cfg {r['config_hash']}[/dim]"
             )
 
-    asyncio.run(_run())
+    run_db(_run)
 
 
 @quant.command()
@@ -158,8 +154,7 @@ def overnight(days: int, cache_read: bool) -> None:
         )
         ohlc = _payloads_to_ohlc(payloads)
         if not ohlc:
-            console.print("[red]No usable bar data — aborting.[/red]")
-            return
+            fail("no usable bar data")
         total_on = 0.0
         total_in = 0.0
         n = 0
@@ -233,13 +228,11 @@ def compare_bands(days: int, horizon: int, windows: int, sims: int, cache_read: 
             )
         rows_by_symbol = {s: r for s, r in rows_by_symbol.items() if r}
         if not rows_by_symbol:
-            console.print("[red]No usable rows — need ~900d of bars per symbol.[/red]")
-            return
+            fail("no usable rows — need ~900d of bars per symbol")
         try:
             results = compare_band_sources(rows_by_symbol, horizon=horizon, n_windows=windows)
         except ValueError as exc:
-            console.print(f"[red]{exc}[/red]")
-            return
+            fail(str(exc))
         for label, scores in results.items():
             console.print(f"[bold]{label}[/bold]")
             for src, sc in scores.items():
@@ -328,8 +321,7 @@ def validate_levels(days: int, horizon: int, cache_read: bool, placebo_seed: int
                 np.asarray([r[4] for r in rows]),
             )
         if not series:
-            console.print("[red]No usable bar data — aborting.[/red]")
-            return
+            fail("no usable bar data")
         console.print(
             f"[dim]{len(series)} symbols · horizon {horizon} bars · daily-bar "
             f"approximation (touch=±0.25·ATR, reject=1·ATR, reach ≤3·ATR)[/dim]"
@@ -432,8 +424,7 @@ def calibrate(days: int, coverage: float, cache_read: bool) -> None:
         payloads = await _fetch_universe_bars(symbols, days, cache_read=cache_read)
         ohlc = _payloads_to_ohlc(payloads)
         if not ohlc:
-            console.print("[red]No usable bar data — aborting.[/red]")
-            return
+            fail("no usable bar data")
         artifact, report = run_pooled_calibration(ohlc, horizons=(1, 5), target_coverage=coverage)
         save_artifact(artifact)
         console.print(f"[green]Saved {artifact.version}[/green] → {DEFAULT_ARTIFACT_PATH}")
@@ -483,8 +474,7 @@ def outlook(symbol: str, days: int) -> None:
         ohlc = _payloads_to_ohlc(payloads)
         data = ohlc.get(symbol.upper())
         if data is None:
-            console.print(f"[red]No usable bars for {symbol.upper()}.[/red]")
-            return
+            fail(f"no usable bars for {symbol.upper()}")
         out = build_outlook(*data, calibration=load_default_artifact())
         if out is None:
             console.print(f"[yellow]{symbol.upper()}: series too thin for an outlook.[/yellow]")

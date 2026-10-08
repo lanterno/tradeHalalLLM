@@ -7,11 +7,11 @@ body so ``--help`` stays fast (matches the rest of the CLI).
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 
 import click
 
+from halal_trader.cli._run import run_db
 from halal_trader.logging import console
 
 
@@ -186,13 +186,9 @@ def _print_scorecard(sc: dict[str, Any], backfill: dict[str, int], whatif: dict[
 def recommend(show: bool, scorecard: bool, audit_outcomes: bool) -> None:
     """Generate (or --show / --scorecard) the daily halal stock-of-the-day."""
 
-    async def _run() -> None:
-        from halal_trader.config import get_settings
-        from halal_trader.db.models import init_db
+    async def _run(engine: Any, settings: Any) -> None:
         from halal_trader.db.repository import Repository
 
-        settings = get_settings()
-        engine = await init_db(settings.database_url)
         repo = Repository(engine)
 
         if show:
@@ -257,4 +253,4 @@ def recommend(show: bool, scorecard: bool, audit_outcomes: bool) -> None:
             await mcp.disconnect()
         _print_rec(rec)
 
-    asyncio.run(_run())
+    run_db(_run)

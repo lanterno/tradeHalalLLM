@@ -2,32 +2,17 @@
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 
 import click
 
+from halal_trader.cli._run import run_db
 from halal_trader.logging import console
 
 
 @click.group("books")
 def books() -> None:
     """Strategies run forward on real closing prices, with no orders."""
-
-
-def _with_engine(work: Any) -> Any:
-    async def _run() -> Any:
-        from halal_trader.config import get_settings
-        from halal_trader.db.models import init_db
-
-        settings = get_settings()
-        engine = await init_db(settings.database_url)
-        try:
-            return await work(engine, settings)
-        finally:
-            await engine.dispose()
-
-    return asyncio.run(_run())
 
 
 @books.command("create")
@@ -45,7 +30,7 @@ def create_cmd(name: str, strategy: str, top: int, cost_bps: float) -> None:
         await create_book(engine, name, strategy=strategy, top_n=top, cost_bps=cost_bps)
         return await advance_book(engine, name, through=today_eastern())
 
-    rows = _with_engine(work)
+    rows = run_db(work)
     console.print(f"book {name} starts on {rows[0].day}; it rebalances at the next close")
 
 
@@ -59,7 +44,7 @@ def run_cmd() -> None:
 
         return await run_research(engine, settings, today=today_eastern())
 
-    run = _with_engine(work)
+    run = run_db(work)
     console.print(f"bars stored: {run.bars_stored}")
     console.print(f"screened: {run.screened if run.screened is not None else 'skipped (fresh)'}")
     for name, n in run.books.items():
@@ -78,7 +63,7 @@ def show_cmd(name: str) -> None:
 
         return await report(engine, name)
 
-    r = _with_engine(work)
+    r = run_db(work)
     console.print(f"{r.name}: started {r.started}, {r.days} session(s), NAV {r.nav:.4f}")
 
     def line(label: str, s: Any) -> str:

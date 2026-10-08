@@ -2,55 +2,52 @@
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 
 import click
 
+from halal_trader.cli._run import fail, run_db
 from halal_trader.logging import console
 
 
-async def _run(execute: bool, monthly: bool | None) -> Any:
+def _run(execute: bool, monthly: bool | None) -> Any:
     """One core run through core_executor.run, the scheduled job's own path:
     kill-switch, market clock, open orders and the live gates included.
     ``core plan`` (execute=False) reads only and records nothing."""
     from halal_trader.config import get_settings
-    from halal_trader.db.models import init_db
-    from halal_trader.execution.alpaca_broker import AlpacaRestBroker
-    from halal_trader.market_hours import today_eastern
-    from halal_trader.portfolio import core_executor as ce
 
-    settings = get_settings()
-    core = settings.core
-    if not (core.alpaca_api_key and core.alpaca_secret_key):
-        raise click.ClickException(
-            "set CORE_ALPACA_API_KEY and CORE_ALPACA_SECRET_KEY (the core's own paper account)"
-        )
-    engine = await init_db(settings.database_url)
-    broker = AlpacaRestBroker(core.alpaca_api_key, core.alpaca_secret_key, paper=core.paper)
-    try:
-        return await ce.run(
-            engine,
-            broker,
-            settings,
-            today=today_eastern(),
-            execute_orders=execute,
-            monthly=monthly,
-            check_token=True,
-        )
-    finally:
-        await broker.disconnect()
-        await engine.dispose()
+    core = get_settings().core
+    if not core.enabled:
+        fail("set CORE_ALPACA_API_KEY and CORE_ALPACA_SECRET_KEY (the core's own paper account)")
+
+    async def work(engine: Any, settings: Any) -> Any:
+        from halal_trader.execution.alpaca_broker import AlpacaRestBroker
+        from halal_trader.market_hours import today_eastern
+        from halal_trader.portfolio import core_executor as ce
+
+        broker = AlpacaRestBroker(core.alpaca_api_key, core.alpaca_secret_key, paper=core.paper)
+        try:
+            return await ce.run(
+                engine,
+                broker,
+                settings,
+                today=today_eastern(),
+                execute_orders=execute,
+                monthly=monthly,
+                check_token=True,
+            )
+        finally:
+            await broker.disconnect()
+
+    return run_db(work)
 
 
 def _refusal(outcome: Any) -> None:
     """Stop with the reason when a run never reached a plan."""
     if outcome.market_closed:
-        raise click.ClickException("the market is closed: the core trades in the session only")
+        fail("the market is closed: the core trades in the session only")
     if outcome.refused:
-        raise click.ClickException(
-            "the core is not allowed to trade now:\n  - " + "\n  - ".join(outcome.refused)
-        )
+        fail("the core is not allowed to trade now:\n  - " + "\n  - ".join(outcome.refused))
 
 
 def _show(p: Any) -> None:
@@ -86,7 +83,7 @@ def core() -> None:
 )
 def plan_cmd(monthly: bool | None) -> None:
     """Show the orders the core would place now, without placing or recording any."""
-    outcome = asyncio.run(_run(False, monthly))
+    outcome = _run(False, monthly)
     _show(outcome.plan)
 
 
@@ -101,7 +98,7 @@ def run_cmd(monthly: bool | None) -> None:
     screen failures are sold; nothing runs while the account has open orders;
     live money needs today's CORE_LIVE_CONFIRMATION and the paper gate.
     """
-    outcome = asyncio.run(_run(True, monthly))
+    outcome = _run(True, monthly)
     _refusal(outcome)
     _show(outcome.plan)
     console.print(f"  {len(outcome.submitted)} submitted, {len(outcome.rejected)} refused")
@@ -111,19 +108,13 @@ def run_cmd(monthly: bool | None) -> None:
 def readiness_cmd() -> None:
     """Has the core earned real money? Its live-money gate, criterion by criterion."""
 
-    async def _run() -> Any:
-        from halal_trader.config import get_settings
-        from halal_trader.db.models import init_db
+    async def _run(engine: Any, settings: Any) -> Any:
         from halal_trader.market_hours import today_eastern
         from halal_trader.portfolio.readiness import check
 
-        engine = await init_db(get_settings().database_url)
-        try:
-            return await check(engine, today=today_eastern())
-        finally:
-            await engine.dispose()
+        return await check(engine, today=today_eastern())
 
-    r = asyncio.run(_run())
+    r = run_db(_run)
     te = f"{r.tracking_error:.2%}" if r.tracking_error is not None else "n/a"
     gap = f"{r.gap:+.2%}" if r.gap is not None else "n/a"
     console.print(
@@ -141,29 +132,22 @@ def readiness_cmd() -> None:
 def slippage_cmd(days: int) -> None:
     """How the core's orders filled: against the arrival price and against the close."""
 
-    async def _run() -> Any:
+    async def _run(engine: Any, settings: Any) -> Any:
         from datetime import timedelta
 
-        from halal_trader.config import get_settings
-        from halal_trader.db.models import init_db
         from halal_trader.market_hours import today_eastern
         from halal_trader.portfolio.core_account import core_account
         from halal_trader.portfolio.execution_quality import report
 
-        settings = get_settings()
-        engine = await init_db(settings.database_url)
-        try:
-            today = today_eastern()
-            return await report(
-                engine,
-                today - timedelta(days=days),
-                today,
-                account=core_account(settings.core.paper),
-            )
-        finally:
-            await engine.dispose()
+        today = today_eastern()
+        return await report(
+            engine,
+            today - timedelta(days=days),
+            today,
+            account=core_account(settings.core.paper),
+        )
 
-    r = asyncio.run(_run())
+    r = run_db(_run)
     if not r.orders:
         console.print(f"no core orders since {r.start}")
         return
@@ -197,24 +181,17 @@ def slippage_cmd(days: int) -> None:
 def digest_cmd(send: bool) -> None:
     """The weekly digest, now (it is sent automatically every Friday 17:15 New York)."""
 
-    async def _run() -> str:
-        from halal_trader.config import get_settings
-        from halal_trader.db.models import init_db
+    async def _run(engine: Any, settings: Any) -> str:
         from halal_trader.market_hours import today_eastern
         from halal_trader.notifications.digest import build
 
-        settings = get_settings()
-        engine = await init_db(settings.database_url)
-        try:
-            message = await build(engine, settings, today=today_eastern())
-            if send:
-                from halal_trader.notifications.telegram import TelegramNotifier
+        message = await build(engine, settings, today=today_eastern())
+        if send:
+            from halal_trader.notifications.telegram import TelegramNotifier
 
-                notifier = TelegramNotifier(settings.telegram.bot_token, settings.telegram.chat_id)
-                await notifier.send(message)
-                await notifier.close()
-            return message
-        finally:
-            await engine.dispose()
+            notifier = TelegramNotifier(settings.telegram.bot_token, settings.telegram.chat_id)
+            await notifier.send(message)
+            await notifier.close()
+        return message
 
-    console.print(asyncio.run(_run()), markup=False)
+    console.print(run_db(_run), markup=False)

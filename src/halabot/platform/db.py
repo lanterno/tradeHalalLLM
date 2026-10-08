@@ -35,7 +35,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PgUUID
-from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncEngine
 
 metadata = MetaData()
 
@@ -219,8 +219,11 @@ _ADDED_COLUMNS = (("hb_outcome", "cohort"), ("hb_open_position", "cohort"))
 
 
 def make_engine(database_url: str) -> AsyncEngine:
-    """Async engine over the (shared) Postgres URL — same DB as the legacy bot."""
-    return create_async_engine(database_url)
+    """Async engine over the (shared) Postgres URL — same DB and pool settings
+    as the legacy bot."""
+    from halal_trader.db.models import create_engine
+
+    return create_engine(database_url)
 
 
 __all__ = [
