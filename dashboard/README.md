@@ -51,10 +51,11 @@ What the SPA reads (one `src/api/*.ts` client per group):
 ## Auth
 
 Every mutation needs the `X-Trader-Token` header matching `WEB_API_TOKEN`
-(unset, the dashboard is read-only), and halt/resume additionally need
-`X-Halt-Confirm: yes`. The SPA sends only the confirm header, so the Halt
-button works only behind a proxy that adds the token. Read-only routes
-are open to whatever reaches the socket.
+(unset, the dashboard is read-only), and a destructive one (halt/resume
+among them) also `X-Trader-Confirm: true`. The SPA asks for the token the
+first time a change is refused, keeps it in that browser's local storage,
+and sends both headers. Read-only routes are open to whatever reaches the
+socket.
 
 ## Build commands
 
