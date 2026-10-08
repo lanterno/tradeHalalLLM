@@ -190,7 +190,7 @@ class ReconciliationLog(SQLModel, table=True):
     timestamp: datetime = Field(
         default_factory=lambda: datetime.now(UTC), sa_type=sa.DateTime(timezone=True)
     )
-    market: str  # 'stocks' ('crypto' on rows from before 2026-10-01)
+    market: str  # 'stocks'
     symbol: str  # asset/ticker affected
     db_quantity: float
     broker_quantity: float
@@ -357,8 +357,8 @@ class HalalScreening(SQLModel, table=True):
         default_factory=lambda: datetime.now(UTC), sa_type=sa.DateTime(timezone=True)
     )
     symbol: str = Field(index=True)
-    asset_class: str  # 'stock' ('crypto' on rows from before 2026-10-01)
-    source: str  # 'zoya' | 'override' | 'cache' | … ('coingecko_rules' on old crypto rows)
+    asset_class: str  # 'stock'
+    source: str  # 'zoya' | 'override' | 'cache' | …
     decision: str  # 'halal' | 'not_halal' | 'doubtful'
     criteria: dict | None = Field(
         default=None, sa_column=sa.Column("criteria", JSONB, nullable=True)

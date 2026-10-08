@@ -138,7 +138,7 @@ def verify_receipt(signed: SignedReceipt) -> bool:
     secret material — just the public key (which travels with the
     signed receipt) and the canonical payload bytes (re-derived from
     the receipt dict). Returns ``False`` on signature mismatch, key
-    decode error, or any other crypto failure rather than raising —
+    decode error, or any other cryptographic failure rather than raising —
     the caller decides whether a verification miss is fatal.
     """
     if signed.algorithm != "ed25519":

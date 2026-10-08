@@ -59,10 +59,9 @@ that hasn't moved into the DB yet.
 prebuilt dashboard JSON (`halal-trader.json`) covering:
 
 * per-stage cycle latency (p50 / p95)
-* portfolio drawdown % (`max` across markets) and portfolio heat per
-  market — `halal_trader_drawdown_pct{market="crypto"|"stocks"}` and
-  `halal_trader_portfolio_heat_pct{market="…"}` are emitted with a
-  market discriminator so co-hosted bots show as separate series.
+* portfolio drawdown % and portfolio heat —
+  `halal_trader_drawdown_pct{market="stocks"}` and
+  `halal_trader_portfolio_heat_pct{market="stocks"}`
 * LLM call cost rate per provider
 * broker error rate
 * kill-switch state

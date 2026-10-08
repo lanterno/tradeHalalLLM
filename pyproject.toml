@@ -163,7 +163,7 @@ files = [
     # Already strict-clean when measured on 2026-10-01; gated so they stay so.
     "src/halal_trader/quant",
     "src/halal_trader/mcp",
-    # Folded out of core/ (the stock/crypto base classes); strict-clean.
+    # Strict-clean.
     "src/halal_trader/trading/portfolio.py",
     "src/halal_trader/trading/self_improve.py",
 ]
