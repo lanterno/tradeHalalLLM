@@ -1,11 +1,9 @@
 import { Link } from "react-router-dom";
 import type { HomeStatus } from "../../api/types";
-import { cn, parseDay } from "../../lib/utils";
+import { cn, formatPct, parseDay } from "../../lib/utils";
 
 const COLORS = ["#4ade80", "#60a5fa", "#c084fc", "#facc15", "#fb923c", "#f87171", "#2dd4bf"];
 const OTHER = "#374151";
-const pct = (v: number, d = 1) => `${(v * 100).toFixed(d)}%`;
-
 function shortDate(iso: string): string {
   return parseDay(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short" });
 }
@@ -44,7 +42,7 @@ export function PortfolioPanel({ portfolio }: { portfolio: HomeStatus["portfolio
                     <td className="w-1/3 py-1.5 pl-2.5">
                       <div className="h-1.5 rounded bg-accent/85" style={{ width: `${(h.weight / top) * 100}%` }} />
                     </td>
-                    <td className="py-1.5 pl-2.5 text-right text-sm">{pct(h.weight)}</td>
+                    <td className="py-1.5 pl-2.5 text-right text-sm">{formatPct(h.weight)}</td>
                     <td
                       className={cn(
                         "py-1.5 pl-2.5 text-right text-sm",
@@ -60,7 +58,7 @@ export function PortfolioPanel({ portfolio }: { portfolio: HomeStatus["portfolio
               </tbody>
             </table>
             <p className="mt-2 text-xs text-muted">
-              Top {holdings.length} = {portfolio.top_weight !== null ? pct(portfolio.top_weight) : "—"} of the
+              Top {holdings.length} = {portfolio.top_weight !== null ? formatPct(portfolio.top_weight) : "—"} of the
               portfolio{portfolio.count > holdings.length ? ` · ${portfolio.count - holdings.length} more holdings` : ""}
             </p>
           </div>
@@ -69,7 +67,7 @@ export function PortfolioPanel({ portfolio }: { portfolio: HomeStatus["portfolio
             <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-muted">By sector</p>
             <div className="mb-3.5 flex h-3.5 overflow-hidden rounded-full">
               {legend.map((s) => (
-                <i key={s.sector} style={{ width: pct(s.weight, 2), background: s.color }} />
+                <i key={s.sector} style={{ width: formatPct(s.weight, 2), background: s.color }} />
               ))}
             </div>
             <div className="grid gap-1.5 text-xs tabular-nums">
@@ -77,7 +75,7 @@ export function PortfolioPanel({ portfolio }: { portfolio: HomeStatus["portfolio
                 <div key={s.sector} className="flex items-center gap-2">
                   <i className="h-2.5 w-2.5 shrink-0 rounded-sm" style={{ background: s.color }} />
                   <span>{s.sector}</span>
-                  <span className="ml-auto text-white">{pct(s.weight)}</span>
+                  <span className="ml-auto text-white">{formatPct(s.weight)}</span>
                 </div>
               ))}
             </div>

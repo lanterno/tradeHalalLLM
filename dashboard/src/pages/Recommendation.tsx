@@ -9,7 +9,7 @@ import { StatCard } from "../components/StatCard";
 import { ErrorState } from "../components/ErrorState";
 import { VerdictBadge } from "../components/PickVerdict";
 import { verdictSummary } from "../lib/scorecard";
-import { cn, formatUsd, formatPct } from "../lib/utils";
+import { cn, formatPct, formatUsd } from "../lib/utils";
 
 /** A history row's thesis: two lines, the rest on a click. */
 function Thesis({ text }: { text?: string }) {
@@ -28,12 +28,9 @@ function Thesis({ text }: { text?: string }) {
   );
 }
 
-function usd(v?: number | null) {
-  return typeof v === "number" ? formatUsd(v) : "—";
-}
-
+/** The API reports these moves in percent already (2.5 is 2.5%). */
 function pct(v?: number | null) {
-  return typeof v === "number" ? `${v >= 0 ? "+" : ""}${v.toFixed(2)}%` : "—";
+  return formatPct(v == null ? v : v / 100, 2, { signed: true });
 }
 
 function pctColor(v?: number | null) {
@@ -276,11 +273,11 @@ export default function Recommendation() {
                       {r.symbol}
                     </td>
                     <td className="py-2 pr-4">{formatPct(r.conviction ?? 0)}</td>
-                    <td className="py-2 pr-4">{usd(r.suggested_entry)}</td>
+                    <td className="py-2 pr-4">{formatUsd(r.suggested_entry)}</td>
                     <td className="py-2 pr-4 text-accent">
-                      {usd(r.suggested_target)}
+                      {formatUsd(r.suggested_target)}
                     </td>
-                    <td className="py-2 pr-4 text-loss">{usd(r.suggested_stop)}</td>
+                    <td className="py-2 pr-4 text-loss">{formatUsd(r.suggested_stop)}</td>
                     <td className={`py-2 pr-4 ${pctColor(r.fwd_return_5d)}`}>
                       {pct(r.fwd_return_5d)}
                     </td>

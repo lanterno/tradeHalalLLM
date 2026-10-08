@@ -1,12 +1,10 @@
 import { Area, AreaChart, ResponsiveContainer, YAxis } from "recharts";
 import type { HomeAccount, HomeStatus } from "../../api/types";
 import { CHART } from "../../lib/charts";
-import { cn, formatUsd, parseDay } from "../../lib/utils";
+import { cn, formatPct, formatUsd, parseDay } from "../../lib/utils";
 import { readClock } from "../../lib/marketClock";
 import { useNow } from "../../hooks/useNow";
 
-const signed = (v: number) => `${v >= 0 ? "+" : "−"}${formatUsd(Math.abs(v))}`;
-const pct = (v: number) => `${v >= 0 ? "+" : "−"}${Math.abs(v * 100).toFixed(2)}%`;
 
 /** Alpaca's change is against the previous session's close, so outside the
  *  session it is the last session's move, not today's. */
@@ -23,8 +21,8 @@ function Change({
   return (
     <p className="text-xs tabular-nums">
       <span className={change >= 0 ? "text-accent" : "text-loss"}>
-        {signed(change)}
-        {changePct !== null && ` (${pct(changePct)})`}
+        {formatUsd(change, { signed: true })}
+        {changePct !== null && ` (${formatPct(changePct, 2, { signed: true })})`}
       </span>{" "}
       <span className="text-muted">{label}</span>
     </p>
@@ -136,7 +134,7 @@ export function MoneyPanel({ data }: { data: HomeStatus }) {
             </div>
           )}
           {total.change_30d_pct !== null && (
-            <Row label="30 days" value={pct(total.change_30d_pct)} />
+            <Row label="30 days" value={formatPct(total.change_30d_pct, 2, { signed: true })} />
           )}
         </div>
         {accounts.map((a) => (

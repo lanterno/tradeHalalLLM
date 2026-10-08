@@ -4,17 +4,38 @@ export function cn(...inputs: ClassValue[]) {
   return clsx(inputs);
 }
 
-export function formatUsd(value: number): string {
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD",
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(value);
+const USD = new Intl.NumberFormat("en-US", {
+  style: "currency",
+  currency: "USD",
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+});
+
+// One sign convention everywhere: "+", a typographic minus, no sign on zero.
+function sign(v: number, shown: string): string {
+  if (Number(shown.replace(/[^0-9.]/g, "")) === 0) return "";
+  return v >= 0 ? "+" : "−";
 }
 
-export function formatPct(value: number): string {
-  return `${(value * 100).toFixed(1)}%`;
+/** Dollars to the cent, "$1,234.50"; "—" when missing. ``signed``: "+$12.00" / "−$3.10". */
+export function formatUsd(v: number | null | undefined, opts: { signed?: boolean } = {}): string {
+  if (v == null) return "—";
+  if (!opts.signed) return USD.format(v);
+  const shown = USD.format(Math.abs(v));
+  return `${sign(v, shown)}${shown}`;
+}
+
+/** A fraction as a percent, "12.3%" (``digits`` decimals); "—" when missing.
+ *  ``signed``: "+2.24%" / "−0.38%". */
+export function formatPct(
+  v: number | null | undefined,
+  digits = 1,
+  opts: { signed?: boolean } = {},
+): string {
+  if (v == null) return "—";
+  const shown = `${(Math.abs(v) * 100).toFixed(digits)}%`;
+  if (opts.signed) return `${sign(v, shown)}${shown}`;
+  return v < 0 && Number(shown.slice(0, -1)) !== 0 ? `−${shown}` : shown;
 }
 
 export function formatQty(value: number, decimals = 6): string {

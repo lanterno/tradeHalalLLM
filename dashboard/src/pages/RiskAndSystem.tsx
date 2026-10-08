@@ -11,12 +11,7 @@ import {
 import { StatCard } from "../components/StatCard";
 import { ErrorState } from "../components/ErrorState";
 import type { CoreRisk, RiskState } from "../api/types";
-import { cn, formatDate, formatDuration, formatTime, formatUsd } from "../lib/utils";
-
-function formatPct(v: number | null | undefined, digits = 2): string {
-  if (v == null) return "—";
-  return `${(v * 100).toFixed(digits)}%`;
-}
+import { cn, formatDate, formatDuration, formatPct, formatTime, formatUsd } from "../lib/utils";
 
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
@@ -38,7 +33,7 @@ function CoreRiskPanel({ risk }: { risk: CoreRisk }) {
       <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
         <StatCard
           label="Drawdown from peak"
-          value={<span className={dd != null && dd < 0 ? "text-loss" : "text-accent"}>{formatPct(dd)}</span>}
+          value={<span className={dd != null && dd < 0 ? "text-loss" : "text-accent"}>{formatPct(dd, 2)}</span>}
           sub={
             risk.peak_day
               ? `peak ${formatUsd(risk.peak_equity ?? 0)} on ${formatDate(risk.peak_day)}`
@@ -68,9 +63,9 @@ function CoreRiskPanel({ risk }: { risk: CoreRisk }) {
           <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-muted">Sector concentration</p>
           <div className="mb-3 flex h-3 overflow-hidden rounded-full bg-border">
             {shown.map((s, i) => (
-              <i key={s.sector} style={{ width: formatPct(s.weight), background: SECTOR_COLORS[i] }} />
+              <i key={s.sector} style={{ width: formatPct(s.weight, 2), background: SECTOR_COLORS[i] }} />
             ))}
-            {rest > 0 && <i className="bg-gray-700" style={{ width: formatPct(rest) }} />}
+            {rest > 0 && <i className="bg-gray-700" style={{ width: formatPct(rest, 2) }} />}
           </div>
           <div className="grid gap-1 text-xs tabular-nums">
             {shown.map((s, i) => (
@@ -139,8 +134,8 @@ function DayTraderRisk({ data, fetchedAt }: { data: RiskState; fetchedAt: number
           value={data.is_halted ? <span className="text-loss">HALTED</span> : <span className="text-muted">OK</span>}
           sub={data.halt_reason || undefined}
         />
-        <StatCard label="Heat (unrealized)" value={formatPct(data.portfolio_heat_pct)} />
-        <StatCard label="Drawdown from peak" value={formatPct(data.drawdown_pct)} />
+        <StatCard label="Heat (unrealized)" value={formatPct(data.portfolio_heat_pct, 2)} />
+        <StatCard label="Drawdown from peak" value={formatPct(data.drawdown_pct, 2)} />
         <StatCard
           label="Avg correlation"
           value={data.avg_correlation != null ? data.avg_correlation.toFixed(2) : "—"}
@@ -340,7 +335,7 @@ export default function RiskAndSystem() {
                       {row.broker_quantity.toFixed(8)}
                     </td>
                     <td className="px-3 py-2 text-right text-loss">
-                      {formatPct(row.drift_pct)}
+                      {formatPct(row.drift_pct, 2)}
                     </td>
                     <td className="px-3 py-2 text-right font-mono">
                       {row.drift_usd != null ? `$${row.drift_usd.toFixed(2)}` : "—"}

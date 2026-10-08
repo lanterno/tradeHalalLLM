@@ -3,20 +3,11 @@ import { usePositions } from "../hooks/usePositions";
 import { StatCard } from "../components/StatCard";
 import { ErrorState } from "../components/ErrorState";
 import type { AccountPositions, Holding } from "../api/types";
-import { cn, formatDate, formatDuration, formatQty, formatTime, formatUsd, pnlColor } from "../lib/utils";
+import { cn, formatDate, formatDuration, formatPct, formatQty, formatTime, formatUsd, pnlColor } from "../lib/utils";
 
 const SHOWN = 15;
 // Snapshots stop outside the session; flag only marks older than a long weekend.
 const STALE_SECONDS = 3 * 86_400;
-
-function usd(v: number | null | undefined): string {
-  return v == null ? "—" : formatUsd(v);
-}
-
-function signedPct(v: number | null | undefined, digits = 2): string {
-  if (v == null) return "—";
-  return `${v >= 0 ? "+" : "−"}${Math.abs(v * 100).toFixed(digits)}%`;
-}
 
 const STATUS_STYLE: Record<string, string> = {
   active: "border-accent/35 bg-accent/5 text-accent",
@@ -82,23 +73,23 @@ function HoldingsTable({ account }: { account: AccountPositions }) {
               <tr key={p.symbol} className="border-b border-border/50 hover:bg-surface-hover/50 transition-colors">
                 <td className="px-3 py-2 font-medium text-white">{p.symbol}</td>
                 <td className="px-3 py-2 text-right font-mono">{p.qty == null ? "—" : formatQty(p.qty, 4)}</td>
-                <td className="px-3 py-2 text-right font-mono text-muted">{usd(p.avg_entry)}</td>
-                <td className="px-3 py-2 text-right font-mono">{usd(p.price)}</td>
-                <td className="px-3 py-2 text-right font-mono">{usd(p.market_value)}</td>
+                <td className="px-3 py-2 text-right font-mono text-muted">{formatUsd(p.avg_entry)}</td>
+                <td className="px-3 py-2 text-right font-mono">{formatUsd(p.price)}</td>
+                <td className="px-3 py-2 text-right font-mono">{formatUsd(p.market_value)}</td>
                 <td className="px-3 py-2 text-right font-mono text-muted">
                   {p.weight == null ? "—" : `${(p.weight * 100).toFixed(1)}%`}
                 </td>
                 <td className={cn("px-3 py-2 text-right font-mono font-semibold", pnlColor(p.unrealized_pl ?? 0))}>
-                  {usd(p.unrealized_pl)}
-                  <span className="ml-1 text-[10px] font-normal">({signedPct(p.unrealized_pl_pct)})</span>
+                  {formatUsd(p.unrealized_pl)}
+                  <span className="ml-1 text-[10px] font-normal">({formatPct(p.unrealized_pl_pct, 2, { signed: true })})</span>
                 </td>
                 <td className={cn("px-3 py-2 text-right font-mono", pnlColor(p.change_today ?? 0))}>
-                  {signedPct(p.change_today, 1)}
+                  {formatPct(p.change_today, 1, { signed: true })}
                 </td>
                 {dayTrader && (
                   <>
-                    <td className="px-3 py-2 text-right font-mono text-loss">{usd(p.stop_loss)}</td>
-                    <td className="px-3 py-2 text-right font-mono text-accent">{usd(p.target_price)}</td>
+                    <td className="px-3 py-2 text-right font-mono text-loss">{formatUsd(p.stop_loss)}</td>
+                    <td className="px-3 py-2 text-right font-mono text-accent">{formatUsd(p.target_price)}</td>
                     <td className="whitespace-nowrap px-3 py-2 text-muted">{formatTime(p.opened_at)}</td>
                   </>
                 )}
@@ -145,13 +136,13 @@ function AccountSection({ account }: { account: AccountPositions }) {
         <StatCard label="Market value" value={formatUsd(account.invested)} />
         <StatCard
           label="Unrealized P&L"
-          value={<span className={pnlColor(pl ?? 0)}>{usd(pl)}</span>}
-          sub={plPct == null ? undefined : `${signedPct(plPct)} on cost`}
+          value={<span className={pnlColor(pl ?? 0)}>{formatUsd(pl)}</span>}
+          sub={plPct == null ? undefined : `${formatPct(plPct, 2, { signed: true })} on cost`}
         />
         <StatCard label="Positions" value={account.positions.length} />
         <StatCard
           label="Cash"
-          value={usd(account.cash)}
+          value={formatUsd(account.cash)}
           sub={account.equity != null ? `equity ${formatUsd(account.equity)}` : undefined}
         />
       </div>

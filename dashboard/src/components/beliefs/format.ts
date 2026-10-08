@@ -1,16 +1,12 @@
 // Shared wording and number formats for the Belief Board.
 import type { Belief, Stance, StrictVerdict } from "../../api/types";
-import { MARKET_TZ } from "../../lib/utils";
+import { MARKET_TZ, formatPct, formatUsd } from "../../lib/utils";
 
 /** A share as "62%" (d=0) or "10.7%". */
-export const pct = (v: number, d = 1) => `${(v * 100).toFixed(d)}%`;
+export const pct = (v: number, d = 1) => formatPct(v, d);
 
 /** A signed change, typographic minus: "+2.24%", "−0.38%". */
-export function signedPct(v: number, d = 2): string {
-  const s = (Math.abs(v) * 100).toFixed(d);
-  if (Number(s) === 0) return `${(0).toFixed(d)}%`;
-  return `${v >= 0 ? "+" : "−"}${s}%`;
-}
+export const signedPct = (v: number, d = 2) => formatPct(v, d, { signed: true });
 
 /** The New York day of an instant: "6 Oct", or "Wed 14 Oct" with the weekday. */
 export function etDay(iso: string, weekday = false): string {
@@ -22,9 +18,7 @@ export function etDay(iso: string, weekday = false): string {
   });
 }
 
-export function usd(v: number): string {
-  return `$${v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-}
+export const usd = (v: number) => formatUsd(v);
 
 export const STANCE: Record<Stance, { label: string; short: string; pill: string }> = {
   long: { label: "Long", short: "Long", pill: "bg-accent/10 text-accent" },

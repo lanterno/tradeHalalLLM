@@ -116,7 +116,6 @@ function TrackingChart({ series }: { series: CoreStatus["series"] }) {
   );
 }
 
-const pct = (v: number | null) => (v === null ? "—" : formatPct(v));
 const bps = (v: number | null) => (v === null ? "—" : `${v > 0 ? "+" : ""}${v.toFixed(1)} bps`);
 
 function Execution({ e }: { e: NonNullable<CoreStatus["execution"]> }) {
@@ -262,8 +261,8 @@ export default function Core() {
                         <td className="px-4 py-2 text-right">
                           {h.value ? formatUsd(h.value) : "—"}
                         </td>
-                        <td className="px-4 py-2 text-right">{pct(h.weight)}</td>
-                        <td className="px-4 py-2 text-right">{pct(h.target)}</td>
+                        <td className="px-4 py-2 text-right">{formatPct(h.weight)}</td>
+                        <td className="px-4 py-2 text-right">{formatPct(h.target)}</td>
                         <td
                           className={cn(
                             "px-4 py-2 text-right",
