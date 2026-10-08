@@ -45,3 +45,7 @@ htmlcov/
 coverage.xml
 .env.*.bak
 *.dump
+
+# Local planning notes: they map open weaknesses of a public repo (CLAUDE.md).
+docs/MODERNIZATION_PLAN.md
+docs/assessment/
