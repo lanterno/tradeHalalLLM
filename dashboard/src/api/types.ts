@@ -126,33 +126,20 @@ export interface HealthStatus {
       stale?: boolean;
       age_seconds?: number;
       reason?: string | null;
-      // "disabled": the component is switched off on purpose (e.g. the
-      // day-trader's cycle with DAY_TRADER_ENABLED=false), so its old beat is not a fault.
+      // "disabled": the component is not configured (the core's daily trade
+      // without its own keys), so its old beat is not a fault.
       status?: string;
     }
   >;
 }
 
-/** The day-trader's cycle beat; it stops while the day-trader is switched off. */
-export const DAY_TRADER_CYCLE = "stock.cycle";
-
 /**
  * Components whose heartbeat is stale for real: bot alive and none of these is
- * what "healthy" means. A component the backend reports as disabled is skipped,
- * and so is the day-trader's cycle while the day-trader is switched off (an
- * older backend reports that beat as plainly stale).
+ * what "healthy" means. A component the backend reports as disabled is skipped.
  */
-export function staleComponents(
-  h: HealthStatus,
-  opts: { dayTraderEnabled?: boolean } = {},
-): string[] {
+export function staleComponents(h: HealthStatus): string[] {
   return Object.entries(h.bot ?? {})
-    .filter(([name, b]) => {
-      if (name.startsWith("_") || !b.stale) return false;
-      if (b.status === "disabled") return false;
-      if (name === DAY_TRADER_CYCLE && opts.dayTraderEnabled === false) return false;
-      return true;
-    })
+    .filter(([name, b]) => !name.startsWith("_") && b.stale && b.status !== "disabled")
     .map(([name]) => name);
 }
 
@@ -161,7 +148,6 @@ export interface SystemStatus {
   last_cycle: string | null;
   stocks_cycle_interval_seconds: number;
   uptime_seconds: number | null;
-  day_trader_enabled?: boolean;
   core_enabled?: boolean;
 }
 
@@ -258,8 +244,6 @@ export interface RiskState {
   // ISO timestamp of when the cycle wrote this snapshot — useful
   // for surfacing staleness if the cycle has stopped running.
   pushed_at?: string;
-  // False while the day-trader is switched off: its last read then stays as it was.
-  day_trader_enabled?: boolean;
 }
 
 /** The core portfolio's risk (GET /api/risk/core). Weights are of equity. */

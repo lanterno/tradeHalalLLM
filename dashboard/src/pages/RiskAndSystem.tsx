@@ -120,14 +120,13 @@ function CoreRiskPanel({ risk }: { risk: CoreRisk }) {
 }
 
 function DayTraderRisk({ data, fetchedAt }: { data: RiskState; fetchedAt: number }) {
-  const off = data.day_trader_enabled === false;
   const ageMs = data.pushed_at ? fetchedAt - new Date(data.pushed_at).getTime() : NaN;
-  // A running day-trader cycles every 15 minutes; a gap past 20 is a fault.
-  const stale = !off && Number.isFinite(ageMs) && ageMs > 20 * 60 * 1000;
+  // The day-trader cycles every 15 minutes; a gap past 20 is a fault.
+  const stale = Number.isFinite(ageMs) && ageMs > 20 * 60 * 1000;
   return (
     <>
       <p className="mb-3 text-xs text-muted">
-        {off ? "Switched off: it opens nothing new and runs no cycles, so this is its last read, " : "Last cycle's read, "}
+        Last cycle's read,{" "}
         taken {data.pushed_at ? formatTime(data.pushed_at) : "—"}
         {Number.isFinite(ageMs) ? ` (${formatDuration(ageMs)} ago)` : ""}.
         {stale && (
@@ -268,9 +267,9 @@ export default function RiskAndSystem() {
 
       {/* The day-trader */}
       <section className="rounded-xl border border-border bg-surface p-4">
-        <details open={risk.data?.day_trader_enabled === true}>
+        <details open>
           <summary className="cursor-pointer text-sm font-medium uppercase tracking-wider text-muted">
-            Day-trader risk{risk.data?.day_trader_enabled === false ? " · switched off" : ""}
+            Day-trader risk
           </summary>
           <div className="mt-3">
             {risk.isError ? (

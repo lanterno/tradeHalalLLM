@@ -7,9 +7,8 @@ type Value = string | number | boolean | null | undefined | (string | number)[];
 
 /** What each core parameter means, so the table reads without the source. */
 const CORE_LABELS: Record<string, [string, (v: Value) => string]> = {
-  core_enabled: ["Core trading enabled", (v) => (v ? "yes" : "no")],
+  core_enabled: ["Core trading", (v) => (v ? "on" : "off: its Alpaca keys are not set")],
   core_paper: ["Account", (v) => (v ? "paper" : "LIVE money")],
-  core_keys_set: ["Broker keys set", (v) => (v ? "yes" : "no")],
   core_top_n: ["Holdings targeted (largest that pass the screen)", (v) => String(v)],
   core_rebalance_band: [
     "Rebalance band (a holding trades only this far off target)",
@@ -21,7 +20,6 @@ const CORE_LABELS: Record<string, [string, (v: Value) => string]> = {
   core_cash_buffer: ["Cash left uninvested", (v) => `${(Number(v) * 100).toFixed(0)}% of equity`],
   core_max_screen_age_days: ["Oldest halal screen it will trade on", (v) => `${v} days`],
   core_trades_at_et: ["Trades at", (v) => `${v} ET, monthly rebalance + daily forced sales`],
-  day_trader_enabled: ["Day-trader", (v) => (v ? "running" : "switched off")],
 };
 
 function ConfigTable({ rows }: { rows: [string, string][] }) {

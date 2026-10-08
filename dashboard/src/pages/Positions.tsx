@@ -141,12 +141,6 @@ function AccountSection({ account }: { account: AccountPositions }) {
           <MarkedAt account={account} />
         </p>
       </div>
-      {account.account === "paper" && account.status !== "active" && (
-        <p className="text-xs text-muted">
-          Switched off (DAY_TRADER_ENABLED=false): it opens nothing new. What it still holds is closed by
-          its own exits (stop, trailing stop), which keep running.
-        </p>
-      )}
       <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
         <StatCard label="Market value" value={formatUsd(account.invested)} />
         <StatCard

@@ -1,6 +1,6 @@
 import { Link } from "react-router-dom";
 import { useHome } from "../hooks/useHome";
-import { useHealth, useSystemStatus } from "../hooks/useSystem";
+import { useHealth } from "../hooks/useSystem";
 import { useAnalytics } from "../hooks/useAnalytics";
 import { useRecommendationScorecard, useStockOfTheDay } from "../hooks/useRecommendation";
 import { ErrorState } from "../components/ErrorState";
@@ -40,8 +40,8 @@ function Badge({ ok, children }: { ok: boolean | "paper"; children: React.ReactN
   );
 }
 
-function HealthBadge({ health, dayTraderEnabled }: { health: HealthStatus; dayTraderEnabled?: boolean }) {
-  const stale = staleComponents(health, { dayTraderEnabled });
+function HealthBadge({ health }: { health: HealthStatus }) {
+  const stale = staleComponents(health);
   if (!health.bot_alive) return <Badge ok={false}>Bot not reporting</Badge>;
   if (stale.length) return <Badge ok={false}>Stale: {stale.join(", ")}</Badge>;
   return <Badge ok>All systems healthy</Badge>;
@@ -143,14 +143,6 @@ function DayTraderRecord() {
 export default function Dashboard() {
   const { data, isLoading, isError, error, refetch } = useHome();
   const { data: health } = useHealth();
-  const { data: status, isError: statusError } = useSystemStatus();
-  // Whether the day-trader runs: the backend says so directly; the home
-  // payload's account status is the fallback for an older backend.
-  const paper = data?.accounts.find((a) => a.account === "paper");
-  const dayTraderEnabled = status?.day_trader_enabled ?? (paper ? paper.status === "active" : undefined);
-  // Wait for that answer before judging staleness, so a switched-off day-trader's
-  // old cycle beat never flashes the badge red on load.
-  const healthReady = health && (status || statusError || data);
   // The market's day (New York), like the Hijri date beside it from the API.
   const todayLong = new Date().toLocaleDateString("en-GB", {
     weekday: "long",
@@ -172,7 +164,7 @@ export default function Dashboard() {
         </div>
         <div className="flex flex-wrap gap-2">
           {data && data.accounts.every((a) => a.paper) && <Badge ok="paper">Paper money</Badge>}
-          {healthReady && <HealthBadge health={health} dayTraderEnabled={dayTraderEnabled} />}
+          {health && <HealthBadge health={health} />}
         </div>
       </div>
 
