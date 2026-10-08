@@ -138,25 +138,19 @@ async def core_risk(engine: AsyncEngine) -> dict[str, Any]:
 def register(app: FastAPI) -> None:
     @app.get("/api/risk/state")
     async def api_risk_state(ctx: DashboardContext = Depends(get_ctx)) -> JSONResponse:
-        """The risk read the day-trader's last cycle published (via its heartbeat).
-
-        With DAY_TRADER_ENABLED=false its last read stays as it was, and
-        ``day_trader_enabled`` says why.
-        """
+        """The risk read the day-trader's last cycle published (via its heartbeat)."""
         from halal_trader.core.heartbeat import cycle_risk
 
         try:
             state, at = await cycle_risk(ctx.engine)
         except Exception:  # noqa: BLE001 -- an unreadable table is "not available"
             state, at = None, None
-        enabled = ctx.settings.stocks.day_trader_enabled
         if state is None:
-            return JSONResponse({"available": False, "day_trader_enabled": enabled})
+            return JSONResponse({"available": False})
         return JSONResponse(
             {
                 "available": True,
                 "market": "stocks",
-                "day_trader_enabled": enabled,
                 "pushed_at": at.isoformat() if at else None,
                 **state,
             }

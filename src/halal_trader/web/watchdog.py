@@ -71,7 +71,6 @@ async def check_once(
     engine: AsyncEngine,
     sender: Sender | None,
     *,
-    day_trader_enabled: bool,
     core_enabled: bool = True,
     now: datetime | None = None,
 ) -> dict[str, list[str]]:
@@ -83,7 +82,6 @@ async def check_once(
         beats,
         now=now,
         cycles_due=cycles_due_at(now),
-        day_trader_enabled=day_trader_enabled,
         core_enabled=core_enabled,
     )
     failing = {c for c in WATCHED if statuses.get(c, Status("ok")).failing}
@@ -131,7 +129,6 @@ async def run(
     engine: AsyncEngine,
     sender: Sender | None,
     *,
-    day_trader_enabled: bool,
     core_enabled: bool = True,
     interval_s: float,
 ) -> None:
@@ -143,8 +140,6 @@ async def run(
     while True:
         await asyncio.sleep(interval_s)
         try:
-            await check_once(
-                engine, sender, day_trader_enabled=day_trader_enabled, core_enabled=core_enabled
-            )
+            await check_once(engine, sender, core_enabled=core_enabled)
         except Exception as exc:  # noqa: BLE001 -- the watchdog must outlive a bad pass
             logger.warning("watchdog pass failed: %r", exc)

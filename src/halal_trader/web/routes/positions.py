@@ -141,7 +141,7 @@ def register(app: FastAPI) -> None:
         open_trades = await ctx.repo.get_open_trades()
         status = {
             "core": "active" if settings.core.enabled else "disabled",
-            "paper": "active" if settings.stocks.day_trader_enabled else "disabled",
+            "paper": "active",
         }
         out = []
         for account, label in ACCOUNTS:

@@ -288,14 +288,13 @@ async def build(
         )
 
     # ── accounts ──
-    stocks = settings.stocks
     meta = {
         core_name: (
             "Core portfolio",
             "active" if settings.core.enabled else "disabled",
             settings.core.paper,
         ),
-        "paper": ("Day-trader", "active" if stocks.day_trader_enabled else "paused", True),
+        "paper": ("Day-trader", "active", True),
     }
     ledger: dict[str, list[tuple[date, float]]] = {}
     for account, day, equity in equity_rows:

@@ -28,18 +28,11 @@ async def _bot_liveness(ctx: DashboardContext) -> tuple[bool, dict[str, Any] | N
     now = datetime.now(UTC)
     # Cycles are due once the session has run long enough for one to finish
     # (the first runs at 09:30 ET; allow until 10:00 before judging).
-    # A switched-off day-trader (DAY_TRADER_ENABLED=false) runs no cycles, so none
-    # is due, and its stock.cycle row reports status "disabled", never stale.
     from halal_trader.config import get_settings
 
-    day_trader = get_settings().stocks.day_trader_enabled
-    cycles_due = day_trader and is_market_open_local() and now_eastern().time() >= time(10, 0)
+    cycles_due = is_market_open_local() and now_eastern().time() >= time(10, 0)
     statuses = assess(
-        beats,
-        now=now,
-        cycles_due=cycles_due,
-        day_trader_enabled=day_trader,
-        core_enabled=get_settings().core.enabled,
+        beats, now=now, cycles_due=cycles_due, core_enabled=get_settings().core.enabled
     )
     components: dict[str, Any] = describe(beats, statuses, now=now)
     alive, reason = bot_liveness(beats, now=now, cycles_due=cycles_due)
@@ -108,9 +101,7 @@ def register(app: FastAPI) -> None:
                 "last_cycle": ctx.runtime.last_cycle
                 or (cycle_beat["beat_at"] if cycle_beat else None),
                 "stocks_cycle_interval_seconds": ctx.settings.stocks.trading_interval_minutes * 60,
-                # Which strategies run: a switched-off day-trader beats no cycles,
-                # so the dashboard must not read its old cycle beat as stale.
-                "day_trader_enabled": ctx.settings.stocks.day_trader_enabled,
+                # The core runs only with its own account's keys set.
                 "core_enabled": ctx.settings.core.enabled,
                 "classifier_health": classifier_health,
                 "uptime_seconds": uptime,
@@ -129,7 +120,6 @@ def register(app: FastAPI) -> None:
             {
                 "core_enabled": core.enabled,
                 "core_paper": core.paper,
-                "core_keys_set": bool(core.alpaca_api_key and core.alpaca_secret_key),
                 "core_top_n": core.top_n,
                 "core_rebalance_band": strict_core.BAND,
                 "core_band_floor": strict_core.BAND_FLOOR,
@@ -138,7 +128,6 @@ def register(app: FastAPI) -> None:
                 "core_cash_buffer": core_executor.CASH_BUFFER,
                 "core_max_screen_age_days": core_executor.MAX_SCREEN_AGE.days,
                 "core_trades_at_et": CORE_TRADE.strftime("%H:%M"),
-                "day_trader_enabled": ctx.settings.stocks.day_trader_enabled,
             }
         )
 

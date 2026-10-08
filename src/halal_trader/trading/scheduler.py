@@ -168,8 +168,7 @@ class TradingBot:
         # News-momentum reactor + background task — wired in
         # ``_create_components`` (when FINNHUB_API_KEY is set), spawned
         # in ``run()``, cancelled in ``shutdown()``. The "fast in" half of
-        # the fast-in/slow-out strategy; it places entries only when
-        # ``reactor_entries_enabled`` is on.
+        # the fast-in/slow-out strategy.
         self._news_reactor: Any | None = None
         self._news_reactor_task: asyncio.Task[None] | None = None
         # Intra-cycle SL/TP + trailing-stop monitor — runs between the
@@ -277,7 +276,6 @@ class TradingBot:
             reactor_trailing_stop_distance_pct=(
                 self.settings.stocks.reactor_trailing_stop_distance_pct
             ),
-            reactor_hold_overnight=self.reactor_holds_overnight(),
             screener=self.screener,
         )
         self.portfolio = PortfolioTracker(
@@ -404,8 +402,8 @@ class TradingBot:
         # polls Finnhub per halal symbol, classifies each new headline
         # through the dedicated classifier chain, and fires
         # ``_on_news_event`` on score >= threshold (0.85). The callback
-        # places a half-size, price-confirmed paper entry when
-        # ``reactor_entries_enabled`` (the "fast in" side); the position
+        # places a half-size, price-confirmed paper entry (the "fast in"
+        # side); the position
         # monitor then manages the slow-out exit.
         finnhub_cfg = getattr(self.settings, "finnhub", None)
         finnhub_key = getattr(finnhub_cfg, "api_key", "") if finnhub_cfg else ""
@@ -493,11 +491,10 @@ class TradingBot:
                 )
                 logger.info(
                     "StockNewsEventReactor wired (%d symbols, threshold=%.2f, "
-                    "daily_classify_cap=%d, entries=%s, size=%.0f%% of cap)",
+                    "daily_classify_cap=%d, entries of %.0f%% of cap)",
                     len(watchlist),
                     StockNewsEventReactor._DEFAULT_SCORE_THRESHOLD,
                     self.settings.stocks.reactor_daily_classify_cap,
-                    "ON" if self.settings.stocks.reactor_entries_enabled else "OFF",
                     self.settings.stocks.reactor_entry_size_fraction * 100,
                 )
 
@@ -730,12 +727,10 @@ class TradingBot:
     async def _on_news_event(self, event: Any) -> None:
         """Reactor callback — the "fast in" half of the strategy.
 
-        Logs the scored catalyst, then (when
-        ``stocks.reactor_entries_enabled``) places a half-size paper BUY
-        through ``executor.execute_reactor_entry`` — gated on market
-        being open, the kill-switch being clear, and the executor's own
-        price-confirmation + risk gates. Disabled / closed-market /
-        halted falls back to observation-only.
+        Logs the scored catalyst, then places a half-size paper BUY through
+        ``executor.execute_reactor_entry`` — gated on market being open, the
+        kill-switch being clear, and the executor's own price-confirmation +
+        risk gates. A closed market or a halt falls back to observation-only.
         """
         cls = event.classification
         logger.info(
@@ -786,8 +781,6 @@ class TradingBot:
         executor's result dict (or None when no order was attempted) and
         ``status_note`` is a short human string for the Telegram card.
         """
-        if not self.settings.stocks.reactor_entries_enabled:
-            return None, "Observation only — reactor entries disabled"
         if self.executor is None:
             return None, "Observation only — executor not initialized"
 
@@ -1135,15 +1128,6 @@ class TradingBot:
         except Exception as exc:  # noqa: BLE001 -- a digest must never take the bot down
             logger.error("weekly digest failed: %r", exc)
 
-    def reactor_holds_overnight(self) -> bool:
-        """Is a reactor entry spared the 15:50 flatten (its slow exit)?
-
-        Only while the day-trader runs to manage that exit. Switched off, a
-        held entry would stay forever (MSFT from 20 Jul to 6 Oct 2026), so the
-        flatten takes everything.
-        """
-        return self.settings.stocks.day_trader_enabled
-
     async def market_snapshot(self) -> None:
         """Each minute of the session: both accounts' values and the benchmarks'
         prices, for the dashboard's home page (portfolio/snapshots.py).
@@ -1236,9 +1220,7 @@ class TradingBot:
         from halal_trader.portfolio import core_executor as ce
 
         core = self.settings.core
-        if self._engine is None or not (
-            core.enabled and core.alpaca_api_key and core.alpaca_secret_key
-        ):
+        if self._engine is None or not (core.enabled):
             return
         token = getattr(self, "_core_token_problem", "the live token was not checked at start")
         if not core.paper and token:
@@ -1326,9 +1308,7 @@ class TradingBot:
         core = self.settings.core
         self._core_token_problem = core_token_problem(self.settings)
         problems = [self._core_token_problem] if self._core_token_problem else []
-        if self._engine is None or not (
-            core.enabled and core.alpaca_api_key and core.alpaca_secret_key
-        ):
+        if self._engine is None or not (core.enabled):
             return problems
         broker = AlpacaRestBroker(core.alpaca_api_key, core.alpaca_secret_key, paper=core.paper)
         try:
@@ -1627,9 +1607,7 @@ class TradingBot:
         from sqlalchemy import text
 
         core = self.settings.core
-        if self._engine is None or not (
-            core.enabled and core.alpaca_api_key and core.alpaca_secret_key
-        ):
+        if self._engine is None or not (core.enabled):
             return False
         async with self._engine.connect() as conn:
             ran = (
@@ -1796,10 +1774,7 @@ class TradingBot:
             # The cycle's run_cycle() performs its own is_market_open_local() check,
             # so holidays and early-close days are handled even though cron fires.
             # Use hour 10-15 for the bulk, plus a separate job for the 9:30-9:45 window.
-            if not self.settings.stocks.day_trader_enabled:
-                logger.info("Day-trader switched off (DAY_TRADER_ENABLED=false): no cycles")
-            else:
-                self._schedule_cycles(interval)
+            self._schedule_cycles(interval)
 
             # Schedule end-of-day at 3:50 PM ET (before regular 4:00 close).
             # On early-close days (1:00 PM close), the trading cycle's local
@@ -1916,7 +1891,7 @@ class TradingBot:
 
             self.scheduler.start()
             # One line naming every job and its next run, so a job that should be
-            # there (core_trade with CORE_ENABLED) can be checked from the logs.
+            # there (core_trade once the core has keys) can be checked from the logs.
             logger.info(
                 "Scheduled jobs: %s",
                 ", ".join(

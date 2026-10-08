@@ -172,7 +172,6 @@ class CoreSettings(_Group):
     model_config = SettingsConfigDict(**_BASE_CONFIG, env_prefix="CORE_")
     ENV = frozenset(
         {
-            "enabled",
             "alpaca_api_key",
             "alpaca_secret_key",
             "paper",
@@ -181,7 +180,6 @@ class CoreSettings(_Group):
         }
     )
 
-    enabled: bool = True  # orders only when enabled and both keys are set
     alpaca_api_key: str = ""
     alpaca_secret_key: str = ""
     paper: bool = True
@@ -190,6 +188,11 @@ class CoreSettings(_Group):
     # The most the live core holds invested, in dollars.
     live_max_notional: float = Field(default=1_000.0, gt=0)
     top_n: int = Field(default=100, ge=10, le=500)
+
+    @property
+    def enabled(self) -> bool:
+        """The core trades whenever its own account's keys are set."""
+        return bool(self.alpaca_api_key and self.alpaca_secret_key)
 
 
 class ZakatSettings(_Group):
@@ -201,16 +204,13 @@ class ZakatSettings(_Group):
 
 
 class StockSettings(_Group):
-    """The LLM day-trader and the news reactor (unprefixed env names)."""
+    """The LLM day-trader and its news reactor, on the ALPACA_* account.
+
+    Both always run beside the core (operator, 2026-10-08); nothing here is
+    read from the environment.
+    """
 
     model_config = SettingsConfigDict(**_BASE_CONFIG)
-    ENV = frozenset({"day_trader_enabled", "reactor_entries_enabled"})
-
-    # Run beside the core (operator, 2026-10-08). Off, the position monitor
-    # still manages open positions and the reactor still scores and records
-    # news.
-    day_trader_enabled: bool = True
-    reactor_entries_enabled: bool = True
 
     trading_interval_minutes: int = 15
     daily_return_target: float = Field(default=0.01, gt=0, le=0.5)

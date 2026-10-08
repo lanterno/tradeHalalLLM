@@ -26,8 +26,6 @@ async def _run(execute: bool, monthly: bool | None) -> Any:
         raise click.ClickException(
             "set CORE_ALPACA_API_KEY and CORE_ALPACA_SECRET_KEY (the core's own paper account)"
         )
-    if execute and not core.enabled:
-        raise click.ClickException("CORE_ENABLED is false: preview with `halal-trader core plan`")
     engine = await init_db(settings.database_url)
     broker = AlpacaRestBroker(core.alpaca_api_key, core.alpaca_secret_key, paper=core.paper)
     try:
@@ -97,7 +95,7 @@ def plan_cmd(monthly: bool | None) -> None:
     "--monthly/--forced-only", default=None, help="Default: monthly if not yet run this month."
 )
 def run_cmd(monthly: bool | None) -> None:
-    """Place the core's orders now (needs CORE_ENABLED=true and an open market).
+    """Place the core's orders now (needs an open market).
 
     The scheduled job's path exactly: with the kill-switch engaged only
     screen failures are sold; nothing runs while the account has open orders;

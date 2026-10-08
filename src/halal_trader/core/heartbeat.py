@@ -198,8 +198,8 @@ class Status:
     * ``ok`` -- fresh, or not due;
     * ``stale`` -- too old, or a daily run it owed is missing;
     * ``missing`` -- a continuously-beating component with no row at all;
-    * ``disabled`` -- switched off by configuration (the day-trader's
-      cycle when DAY_TRADER_ENABLED=false): never stale, whatever its age;
+    * ``disabled`` -- not configured (the core's daily trade without its
+      own Alpaca keys): never stale, whatever its age;
     * ``unknown`` -- nothing to judge by (a daily job that never ran yet).
     """
 
@@ -260,7 +260,6 @@ def assess(
     *,
     now: datetime,
     cycles_due: bool,
-    day_trader_enabled: bool,
     core_enabled: bool = True,
 ) -> dict[str, Status]:
     """A verdict for every watched component, and for every other row on record.
@@ -272,9 +271,7 @@ def assess(
     for component in CONTINUOUS:
         out[component] = _by_age(beats.get(component), component, now, missing="missing")
 
-    if not day_trader_enabled:
-        out[STOCK_CYCLE] = Status("disabled", "the day-trader is switched off (DAY_TRADER_ENABLED)")
-    elif cycles_due:
+    if cycles_due:
         out[STOCK_CYCLE] = _by_age(beats.get(STOCK_CYCLE), STOCK_CYCLE, now, missing="stale")
     else:
         out[STOCK_CYCLE] = Status("ok")
@@ -288,7 +285,7 @@ def assess(
 
     for component, job in DAILY_JOBS.items():
         if component == CORE_TRADE and not core_enabled:
-            out[component] = Status("disabled", "core trading is off (CORE_ENABLED)")
+            out[component] = Status("disabled", "the core's Alpaca keys are not set")
             continue
         b = beats.get(component)
         due = last_due(job, now)
