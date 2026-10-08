@@ -22,6 +22,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from halal_trader import __version__
 from halal_trader.config import Settings, get_settings
 from halal_trader.core.context import DashboardContext, RuntimeView
 from halal_trader.core.event_bus import EventBus
@@ -112,7 +113,7 @@ def create_app() -> Any:
                 await notifier.close()
             await engine.dispose()
 
-    app = FastAPI(title="Halal Trader Dashboard", version="0.3.0", lifespan=lifespan)
+    app = FastAPI(title="Halal Trader Dashboard", version=__version__, lifespan=lifespan)
 
     # No CORS: the built SPA is same-origin, and the Vite dev server
     # (`npm run dev`) proxies /api and /ws.

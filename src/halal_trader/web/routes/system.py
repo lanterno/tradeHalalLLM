@@ -8,6 +8,7 @@ from typing import Any
 from fastapi import Body, Depends, FastAPI
 from fastapi.responses import JSONResponse
 
+from halal_trader import __version__
 from halal_trader.core.context import DashboardContext
 from halal_trader.web.dependencies import get_ctx
 from halal_trader.web.middleware.confirm import require_confirmation
@@ -54,7 +55,7 @@ def register(app: FastAPI) -> None:
             {
                 "status": "running",
                 "timestamp": datetime.now(UTC).isoformat(),
-                "version": "0.3.0",
+                "version": __version__,
                 "bot_alive": alive,
                 "bot": components,
             }
