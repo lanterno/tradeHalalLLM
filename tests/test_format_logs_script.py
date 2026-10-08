@@ -103,10 +103,10 @@ def test_format_includes_cycle_id_when_present():
     assert "[cycle-abc123]" in out
 
 
-def test_format_falls_back_to_monitor_id_when_no_cycle():
-    """`monitor_id` is the fallback (per-trade exit ids use this)."""
-    out = _format({"level": "INFO", "monitor_id": "mon-xyz"})
-    assert "[mon-xyz]" in out
+def test_format_falls_back_to_job_id_when_no_cycle():
+    """`job_id` is the fallback (a scheduled job's run)."""
+    out = _format({"level": "INFO", "job_id": "end_of_day-1a2b3c4d"})
+    assert "[end_of_day-1a2b3c4d]" in out
 
 
 def test_format_falls_back_to_request_id_when_no_cycle_or_monitor():
@@ -121,7 +121,7 @@ def test_format_cycle_wins_over_monitor_and_request():
         {
             "level": "INFO",
             "cycle_id": "C",
-            "monitor_id": "M",
+            "job_id": "M",
             "request_id": "R",
         }
     )

@@ -52,7 +52,7 @@ def test_observability_filter_attaches_only_set_ids():
     )
     filt.filter(rec_outside)
     assert not hasattr(rec_outside, "cycle_id")
-    assert not hasattr(rec_outside, "monitor_id")
+    assert not hasattr(rec_outside, "job_id")
     assert not hasattr(rec_outside, "request_id")
 
     with cycle_context("cycle-x"):
@@ -67,7 +67,7 @@ def test_observability_filter_attaches_only_set_ids():
         )
         filt.filter(rec_in)
         assert rec_in.cycle_id == "cycle-x"
-        assert not hasattr(rec_in, "monitor_id")
+        assert not hasattr(rec_in, "job_id")
 
 
 def test_observability_filter_attaches_service_when_set():
