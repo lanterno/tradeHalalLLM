@@ -592,11 +592,20 @@ export interface PurificationYear {
 
 export interface CoreHolding {
   symbol: string;
+  name: string | null;
+  sector: string;
   shares: number | null;
   value: number | null;
   weight: number | null;
   target: number | null;
   drift: number | null;
+  band: number | null; // how far it may drift from its target before it trades
+  in_band: boolean | null;
+  today: number | null;
+  since_buy: number | null;
+  verdict: string | null;
+  to_sell: boolean;
+  reason: string | null;
 }
 
 export interface CoreOrder {
@@ -608,10 +617,14 @@ export interface CoreOrder {
   notional: number | null;
   reason: string;
   screen_as_of: string | null;
+  screen_method: string | null;
   status: string;
   fill_price: number | null;
+  filled_qty: number | null;
   fill_status: string | null;
+  close: number | null;
   vs_arrival_bps: number | null;
+  vs_close_bps: number | null;
 }
 
 export interface CoreExecution {
@@ -627,6 +640,7 @@ export interface CoreExecution {
   book_cost_bps: number;
   cost_vs_close_usd: number | null;
   worst: { symbol: string; side: string; vs_arrival_bps: number | null }[];
+  histogram: { from_bps: number; to_bps: number; value: number }[];
 }
 
 export interface CoreRun {
@@ -638,15 +652,62 @@ export interface CoreRun {
   orders: number;
   halted: string | null;
   screen_as_of: string | null;
+  notes: string[];
+  notional: number | null;
+  filled: number;
+  vs_arrival_bps: number | null;
+  vs_close_bps: number | null;
+  order_rows: CoreOrder[];
+}
+
+export interface CoreSector {
+  sector: string;
+  value: number | null;
+  weight: number | null;
+  count: number;
+  names: string[];
 }
 
 export interface CoreStatus {
+  now: string;
   enabled: boolean;
   paper: boolean;
+  account: string;
   equity: number | null;
   equity_day: string | null;
+  equity_source: "live" | "ledger";
+  cash: number | null;
+  invested: number | null;
+  change: number | null;
+  change_pct: number | null;
+  today_vs: { symbol: string; change_pct: number | null; diff_pts: number | null }[];
+  since: {
+    since: string;
+    start_equity: number | null;
+    change: number | null;
+    change_pct: number | null;
+    book_pct: number | null;
+    spus_pct?: number | null;
+    hlal_pct?: number | null;
+    spy_pct?: number | null;
+  } | null;
+  positions: number;
+  top10_weight: number | null;
+  to_sell: { symbol: string; name: string | null; reason: string | null }[];
+  screen_as_of: string | null;
+  next_check: string;
+  next_rebalance: string;
+  monthly_due: boolean;
   holdings: CoreHolding[];
-  series: { date: string; account: number | null; book: number | null }[];
+  sectors: CoreSector[];
+  series: {
+    date: string;
+    account: number | null;
+    book: number | null;
+    spus?: number | null;
+    hlal?: number | null;
+    spy?: number | null;
+  }[];
   readiness: {
     ready: boolean;
     days: number;
@@ -658,8 +719,13 @@ export interface CoreStatus {
     max_gap: number;
     refused: number;
     unfilled: number;
+    partial: number;
     halted: number;
+    missing_runs: string[];
     failures: string[];
+    window: { day: string; status: "run" | "missed" | "pending" | "before" }[];
+    earliest: string;
+    earliest_days: string;
   };
   execution: CoreExecution | null;
   orders: CoreOrder[];
