@@ -60,26 +60,21 @@ def register(app: FastAPI) -> None:
     async def api_recommendation_generate(
         ctx: DashboardContext = Depends(get_ctx),
     ) -> JSONResponse:
+        from halal_trader.mcp.client import AlpacaMCPClient
         from halal_trader.recommendation.engine import DailyRecommendationEngine
 
-        # Prefer the live bot's broker if co-hosted; else spin up a throwaway
-        # Alpaca MCP client for this request (the web process usually has none).
-        broker = ctx.runtime.stock_broker
-        own_broker = None
+        # The web has no broker of its own: a throwaway client for this request.
+        own_broker = AlpacaMCPClient()
         try:
-            if broker is None:
-                from halal_trader.mcp.client import AlpacaMCPClient
-
-                own_broker = AlpacaMCPClient()
-                await own_broker.connect()
-                broker = own_broker
-            engine = DailyRecommendationEngine(broker=broker, repo=ctx.repo, settings=ctx.settings)
+            await own_broker.connect()
+            engine = DailyRecommendationEngine(
+                broker=own_broker, repo=ctx.repo, settings=ctx.settings
+            )
             rec = await engine.generate()
         except Exception as exc:  # noqa: BLE001 — surface as a structured 502
             raise HTTPException(
                 status_code=502, detail=f"recommendation generation failed: {exc}"
             ) from exc
         finally:
-            if own_broker is not None:
-                await own_broker.disconnect()
+            await own_broker.disconnect()
         return JSONResponse(serialize({"available": True, **rec}))

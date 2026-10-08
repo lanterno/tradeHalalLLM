@@ -75,20 +75,6 @@ def register(app: FastAPI) -> None:
         started = ctx.runtime.started_at
         uptime = (datetime.now(UTC) - started).total_seconds() if started else None
 
-        # Classifier health — added after the 2026-05-22 quota incident
-        # so "is the brain healthy" is one HTTP call instead of grepping
-        # JSON logs. None when bot is dashboard-only or reactor isn't
-        # configured (no Finnhub key / empty halal watchlist).
-        classifier_health: dict[str, Any] | None = None
-        reactor = getattr(ctx.runtime, "stocks_news_reactor", None)
-        if reactor is not None:
-            classifier = getattr(reactor, "classifier", None)
-            if classifier is not None and hasattr(classifier, "get_telemetry"):
-                try:
-                    classifier_health = classifier.get_telemetry()
-                except Exception:  # noqa: BLE001
-                    classifier_health = None
-
         from halal_trader.core.heartbeat import STOCK_CYCLE, core_running
 
         alive, components = await _bot_liveness(ctx)
@@ -98,13 +84,11 @@ def register(app: FastAPI) -> None:
                 # From the bot's heartbeat rows, not in-process state this
                 # container never had (which always read "Bot Running: No").
                 "bot_running": alive,
-                "last_cycle": ctx.runtime.last_cycle
-                or (cycle_beat["beat_at"] if cycle_beat else None),
+                "last_cycle": cycle_beat["beat_at"] if cycle_beat else None,
                 "stocks_cycle_interval_seconds": ctx.settings.stocks.trading_interval_minutes * 60,
                 # The core runs only with its own account's keys set; the bot
                 # says so in its process beat (the web never sees those keys).
                 "core_enabled": await core_running(ctx.engine),
-                "classifier_health": classifier_health,
                 "uptime_seconds": uptime,
             }
         )

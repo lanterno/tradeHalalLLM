@@ -12,9 +12,9 @@ it was never wired and was deleted on 2026-10-01.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncEngine
@@ -27,32 +27,14 @@ if TYPE_CHECKING:
 
 @dataclass
 class RuntimeView:
-    """The few fields the cycle / monitor pushes during a live run.
+    """What the web process knows about itself: when it started.
 
-    Mutable on purpose — these are what the dashboard polls /
-    streams to show "what is the bot doing right now". Each field is
-    optional because the dashboard can run without a live bot in the
-    same process.
+    The bot runs in another container, so nothing it holds in memory
+    reaches the web; its state comes from the database (heartbeats,
+    snapshots, the ledger).
     """
 
-    bot_running: bool = False
     started_at: datetime | None = None
-    last_cycle: dict[str, Any] | None = None
-    risk_state: dict[str, Any] | None = None
-    account_snapshot: dict[str, Any] | None = None
-    stock_equity: float | None = None
-    stock_positions: list[dict[str, Any]] = field(default_factory=list)
-    open_positions_by_asset: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
-    llm_cost_today_usd: float | None = None
-    # Stocks news-momentum reactor — populated by the trading scheduler
-    # when the bot is co-hosted with the web app, so /api/system/status
-    # can surface classifier health (provider rotation, quota state,
-    # daily call volume) without grepping JSON logs.
-    stocks_news_reactor: Any = None
-    # Broker handle for the operator-intervention endpoints
-    # (force-close, cancel-orders). Only populated when the bot is
-    # co-hosted with the web app.
-    stock_broker: Any = None
 
 
 @dataclass(frozen=True, slots=True)
