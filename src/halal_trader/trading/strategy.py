@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from halal_trader.core.llm.prompts import register as _register_prompt
@@ -429,6 +430,7 @@ def _format_sector_exposure(
     positions: list[Position],
     equity: float,
     max_sector_pct: float,
+    sector_map: dict[str, str] | None = None,
 ) -> str:
     """Render current sector breakdown + warn when any sector approaches
     the halal sector-rotation cap.
@@ -454,7 +456,7 @@ def _format_sector_exposure(
     positions_value = {
         p.symbol: float(p.qty) * float(p.current_price or p.avg_entry_price) for p in positions
     }
-    allocation = compute_allocation(positions_value, total_equity=equity)
+    allocation = compute_allocation(positions_value, total_equity=equity, sector_map=sector_map)
     if not allocation.by_sector:
         exempt_note = (
             f" Exempt: {', '.join(sorted(DEFAULT_EXEMPT_SECTORS))} (no cap)."
@@ -643,6 +645,7 @@ class TradingStrategy(BaseStrategy):
         daily_return_target: float,
         max_simultaneous_positions: int,
         max_sector_pct: float = 0.40,
+        sectors: Callable[[list[str]], Awaitable[dict[str, str]]] | None = None,
     ) -> None:
         super().__init__(
             llm,
@@ -659,6 +662,9 @@ class TradingStrategy(BaseStrategy):
         # executor's 0.40 default) rather than read from Settings —
         # ``Settings.stocks`` doesn't carry a sector-cap field yet.
         self._max_sector_pct = max_sector_pct
+        # The executor's sector lookup (HalalScreener.sectors), so the prompt
+        # shows the exposure the cap will actually count.
+        self._sectors = sectors
 
     async def analyze(
         self,
@@ -706,7 +712,12 @@ class TradingStrategy(BaseStrategy):
                 )
                 if part
             ),
-            sector_text=_format_sector_exposure(positions, portfolio_value, self._max_sector_pct),
+            sector_text=_format_sector_exposure(
+                positions,
+                portfolio_value,
+                self._max_sector_pct,
+                await self._sectors([p.symbol for p in positions]) if self._sectors else None,
+            ),
             recent_closed_text=recent_closed_text,
             slippage_text=slippage_text,
             learnings_text=learnings_text,

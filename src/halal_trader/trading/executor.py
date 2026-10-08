@@ -1561,12 +1561,17 @@ class TradeExecutor:
         positions_value = {
             p.symbol: float(p.qty) * float(p.current_price or p.avg_entry_price) for p in positions
         }
-        allocation = compute_allocation(positions_value, total_equity=equity_usd)
+        sectors = getattr(self._screener, "sectors", None)
+        sector_map = await sectors([*positions_value, symbol]) if sectors else None
+        allocation = compute_allocation(
+            positions_value, total_equity=equity_usd, sector_map=sector_map
+        )
         ok, reason = check_buy_against_limits(
             symbol=symbol,
             notional_usd=notional_usd,
             allocation=allocation,
             max_sector_pct=self._max_sector_pct,
+            sector_map=sector_map,
         )
         if not ok:
             logger.warning("Sector cap rejection for %s: %s", symbol, reason)

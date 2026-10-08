@@ -282,6 +282,7 @@ class TradingBot:
             daily_loss_limit=self.settings.stocks.daily_loss_limit,
             daily_return_target=self.settings.stocks.daily_return_target,
             max_simultaneous_positions=self.settings.stocks.max_simultaneous_positions,
+            sectors=self.screener.sectors,
         )
         # Operator alert on strategy-LLM credit exhaustion (rate-limited
         # by the sink). The classifier already had this; the strategy

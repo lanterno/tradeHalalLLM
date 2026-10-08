@@ -3,13 +3,14 @@
 Even when every individual ticker passes Shariah screening, a portfolio
 that's 100% in one sector breaches diversification guidance and (more
 practically) concentrates idiosyncratic risk against us. This module
-caps the % of equity allocated to any single GICS-style sector and
-returns a reason when a candidate buy would breach the cap.
+caps the % of equity allocated to any single sector and returns a reason
+when a candidate buy would breach the cap.
 
-Sectors are looked up via a small in-process map (extend with Alpaca
-``get_stock_snapshot`` sector field over time). Symbols missing from the
-map default to ``"unknown"`` and are bucketed together — operators can
-still trade them but they share the unknown-sector cap.
+A symbol's sector is its industry on the newest strict screen (its SEC SIC
+code, grouped by compliance/sectors.py), so every name the bot can trade
+has one; ``SECTOR_OVERRIDES`` corrects the few large names whose SIC code
+misleads. The three technology industries form one exempt "Technology"
+sector. A symbol the screen does not hold is ``"unknown"``.
 """
 
 from __future__ import annotations
@@ -17,66 +18,45 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
+from halal_trader.compliance.sectors import sector_of
+
+TECHNOLOGY = "Technology"
+
 # Sectors that are NOT subject to the per-sector cap. The halal stocks
 # universe is structurally heavy on US large-cap Technology (most of
 # the Shariah-compliant tickers are software / semis / cloud); capping
 # Tech at the same threshold as every other sector would force the bot
 # to leave most of its high-conviction setups on the table. Operator
 # policy as of 2026-05-21: exempt Technology only.
-DEFAULT_EXEMPT_SECTORS: frozenset[str] = frozenset({"Technology"})
+DEFAULT_EXEMPT_SECTORS: frozenset[str] = frozenset({TECHNOLOGY})
 
-# A small, hand-maintained seed map. Real symbols/sectors should come
-# from Alpaca's snapshot or a fundamentals provider; this keeps tests
-# meaningful without a live data dependency. Only SYMBOLS already in the
-# fallback halal whitelist are listed.
-_DEFAULT_SECTOR_MAP: dict[str, str] = {
-    "AAPL": "Technology",
-    "MSFT": "Technology",
-    "GOOGL": "Technology",
-    "GOOG": "Technology",
-    "META": "Technology",
-    "NVDA": "Technology",
-    "ORCL": "Technology",
-    "CRM": "Technology",
-    "AMD": "Technology",
-    "INTC": "Technology",
-    "ADBE": "Technology",
-    "CSCO": "Technology",
-    "QCOM": "Technology",
-    "AVGO": "Technology",
-    "TXN": "Technology",
-    "NOW": "Technology",
-    "TSM": "Technology",
-    "TSLA": "Consumer Discretionary",
-    "AMZN": "Consumer Discretionary",
-    "HD": "Consumer Discretionary",
-    "MCD": "Consumer Discretionary",
-    "NKE": "Consumer Discretionary",
-    "JNJ": "Healthcare",
-    "PFE": "Healthcare",
-    "MRK": "Healthcare",
-    "LLY": "Healthcare",
-    "UNH": "Healthcare",
-    "ABBV": "Healthcare",
-    "DHR": "Healthcare",
+# The screen's industries that make up Technology.
+_TECH_INDUSTRIES = frozenset({"Software & internet", "Semiconductors", "Computer hardware"})
+
+# Large halal names whose SIC code says the wrong thing: life-science tool
+# makers filed as measuring or lab instruments (they are healthcare, and
+# must not ride the Technology exemption), chip-equipment makers filed as
+# machinery or optics, an industrial filed as surgical instruments.
+SECTOR_OVERRIDES: dict[str, str] = {
     "TMO": "Healthcare",
-    "XOM": "Energy",
-    "CVX": "Energy",
-    "COP": "Energy",
-    "WMT": "Consumer Staples",
-    "PG": "Consumer Staples",
-    "KO": "Consumer Staples",
-    "PEP": "Consumer Staples",
-    "VZ": "Communication Services",
-    "T": "Communication Services",
-    "DIS": "Communication Services",
-    "CMCSA": "Communication Services",
-    "LMT": "Industrials",
-    "RTX": "Industrials",
-    "BA": "Industrials",
-    "CAT": "Industrials",
-    "DE": "Industrials",
+    "DHR": "Healthcare",
+    "A": "Healthcare",
+    "WAT": "Healthcare",
+    "LRCX": TECHNOLOGY,
+    "KLAC": TECHNOLOGY,
+    "ROP": TECHNOLOGY,
+    "MMM": "Industrials",
+    "ROK": "Industrials",
 }
+
+
+def cap_sector(symbol: str, sic_description: str | None) -> str:
+    """The sector the cap counts ``symbol`` in, from its SIC description."""
+    if symbol.upper() in SECTOR_OVERRIDES:
+        return SECTOR_OVERRIDES[symbol.upper()]
+    industry = sector_of(sic_description)
+    return TECHNOLOGY if industry in _TECH_INDUSTRIES else industry
+
 
 UNKNOWN_SECTOR = "unknown"
 
@@ -95,8 +75,12 @@ class SectorAllocation:
 
 
 def sector_for(symbol: str, *, sector_map: Mapping[str, str] | None = None) -> str:
-    table = sector_map or _DEFAULT_SECTOR_MAP
-    return table.get(symbol.upper(), UNKNOWN_SECTOR)
+    """``symbol``'s cap sector: from ``sector_map`` (HalalScreener.sectors, the
+    screen's view), else an override, else unknown."""
+    upper = symbol.upper()
+    if sector_map and upper in sector_map:
+        return sector_map[upper]
+    return SECTOR_OVERRIDES.get(upper, UNKNOWN_SECTOR)
 
 
 def compute_allocation(

@@ -73,6 +73,19 @@ class HalalScreener:
         self._engine = engine
         self._today = today
 
+    async def sectors(self, symbols: list[str]) -> dict[str, str]:
+        """Each symbol's sector for the sector cap, from the newest strict
+        screen (halal/sector_limits.py); a symbol it does not hold is absent."""
+        from halal_trader.halal.sector_limits import cap_sector
+
+        if self._engine is None or not symbols:
+            return {}
+        as_of = await strict.newest_screen(self._engine, on_or_before=self._today())
+        if as_of is None:
+            return {}
+        rows = await strict.screen_rows(self._engine, as_of, symbols=[s.upper() for s in symbols])
+        return {r.symbol: cap_sector(r.symbol, r.sic_description) for r in rows}
+
     async def ensure_cache(self, symbols: list[str] | None = None, *, force: bool = False) -> None:
         """Populate the halal cache from the strict screen, or the default list.
 
