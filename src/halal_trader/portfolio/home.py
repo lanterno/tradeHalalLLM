@@ -216,7 +216,6 @@ async def build(
         screen_view,
         sector_values,
     )
-    from halal_trader.portfolio.snapshots import BENCHMARKS
 
     core_name = core_account(settings.core.paper)  # "core" on paper, "core-live" live
     core_on = await core_running(engine)  # the web never sees the core's keys
@@ -231,18 +230,6 @@ async def build(
                 {"d": today - timedelta(days=45)},
             )
         ]
-        quotes = {r.symbol: r for r in await conn.execute(text("SELECT * FROM quotes"))}
-        closes: dict[str, list[tuple[date, float]]] = {}
-        for r in await conn.execute(
-            text(
-                "SELECT symbol, day, close FROM ("
-                " SELECT symbol, day, close, row_number() OVER "
-                " (PARTITION BY symbol ORDER BY day DESC) AS n FROM daily_bars "
-                " WHERE adjustment = 'raw' AND symbol = ANY(:s)) x WHERE n <= 2"
-            ),
-            {"s": list(BENCHMARKS)},
-        ):
-            closes.setdefault(r.symbol, []).append((r.day, float(r.close)))
         screen_as_of = await strict.newest_screen(engine)
         screen_counts = Counter(
             r.verdict
@@ -259,29 +246,7 @@ async def build(
             )
         ).first()
 
-    # ── benchmarks: the bot's quote while it is fresh, else the last two closes ──
-    benchmarks = []
-    for symbol in BENCHMARKS:
-        q = quotes.get(symbol)
-        hist = sorted(closes.get(symbol, []))
-        if q is not None and q.taken_at.astimezone(MARKET_TZ).date() == today:
-            price, prev, as_of, live = float(q.price), q.prev_close, q.taken_at.isoformat(), True
-        elif q is not None and hist and q.taken_at.astimezone(MARKET_TZ).date() > hist[-1][0]:
-            price, prev, as_of, live = float(q.price), q.prev_close, q.taken_at.isoformat(), False
-        elif hist:
-            price, as_of, live = hist[-1][1], hist[-1][0].isoformat(), False
-            prev = hist[-2][1] if len(hist) > 1 else None
-        else:
-            continue
-        benchmarks.append(
-            {
-                "symbol": symbol,
-                "price": round(price, 2),
-                "change_pct": round(price / float(prev) - 1, 5) if prev else None,
-                "as_of": as_of,
-                "live": live,
-            }
-        )
+    benchmarks = await snapshots.benchmark_moves(engine, today)
 
     # ── accounts ──
     meta = {

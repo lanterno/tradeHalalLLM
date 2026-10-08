@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 
 from sqlalchemy import text
@@ -134,3 +134,46 @@ async def snapshot_quotes(
                 [{**r, "t": datetime.now(UTC)} for r in rows],
             )
     return len(rows)
+
+
+async def benchmark_moves(engine: AsyncEngine, today: date) -> list[dict[str, Any]]:
+    """Each benchmark's price and move: the bot's quote while it is today's
+    (``live``), else the last two stored closes."""
+    from halal_trader.market_hours import MARKET_TZ
+
+    async with engine.connect() as conn:
+        quotes = {r.symbol: r for r in await conn.execute(text("SELECT * FROM quotes"))}
+        closes: dict[str, list[tuple[date, float]]] = {}
+        for r in await conn.execute(
+            text(
+                "SELECT symbol, day, close FROM ("
+                " SELECT symbol, day, close, row_number() OVER "
+                " (PARTITION BY symbol ORDER BY day DESC) AS n FROM daily_bars "
+                " WHERE adjustment = 'raw' AND symbol = ANY(:s)) x WHERE n <= 2"
+            ),
+            {"s": list(BENCHMARKS)},
+        ):
+            closes.setdefault(r.symbol, []).append((r.day, float(r.close)))
+    out = []
+    for symbol in BENCHMARKS:
+        q = quotes.get(symbol)
+        hist = sorted(closes.get(symbol, []))
+        if q is not None and q.taken_at.astimezone(MARKET_TZ).date() == today:
+            price, prev, as_of, live = float(q.price), q.prev_close, q.taken_at.isoformat(), True
+        elif q is not None and hist and q.taken_at.astimezone(MARKET_TZ).date() > hist[-1][0]:
+            price, prev, as_of, live = float(q.price), q.prev_close, q.taken_at.isoformat(), False
+        elif hist:
+            price, as_of, live = hist[-1][1], hist[-1][0].isoformat(), False
+            prev = hist[-2][1] if len(hist) > 1 else None
+        else:
+            continue
+        out.append(
+            {
+                "symbol": symbol,
+                "price": round(price, 2),
+                "change_pct": round(price / float(prev) - 1, 5) if prev else None,
+                "as_of": as_of,
+                "live": live,
+            }
+        )
+    return out
