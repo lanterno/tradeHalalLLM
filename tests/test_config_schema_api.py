@@ -66,7 +66,7 @@ def test_schema_never_sends_a_secrets_default(client):
     # Its default holds the repo-default Postgres password.
     assert by_name["DATABASE_URL"]["secret"] is True
     assert by_name["DATABASE_URL"]["default"] is None
-    for name in ("SLACK_WEBHOOK_URL", "LIVE_MODE_CONFIRMATION", "TELEGRAM_BOT_TOKEN"):
+    for name in ("GLM_API_KEY", "LIVE_MODE_CONFIRMATION", "TELEGRAM_BOT_TOKEN"):
         assert by_name[name]["secret"] is True
     assert all(r["default"] is None for r in rows if r["secret"])
     assert "trader-dev-only" not in str(rows)
