@@ -11,7 +11,6 @@ from bisect import bisect_left
 from collections import defaultdict
 from collections.abc import Sequence
 from datetime import datetime, time, timedelta
-from zoneinfo import ZoneInfo
 
 import numpy as np
 from sqlalchemy import text
@@ -19,8 +18,8 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from halal_trader.events.portfolio import Candidate
 from halal_trader.events.study import Bars, entry_point
+from halal_trader.market_hours import MARKET_TZ
 
-_ET = ZoneInfo("America/New_York")
 TRAILING = timedelta(days=365)
 PERCENTILE = 90.0
 _MIN_WINDOW = 200  # trailing values needed before a percentile means anything
@@ -95,7 +94,7 @@ def announcement_returns(
         if not (c.get(before) and c.get(after) and b.get(before) and b.get(after)):
             continue
         abn = (c[after] / c[before] - 1) - (b[after] / b[before] - 1)
-        known = datetime.combine(after, time(16, 1), _ET)
+        known = datetime.combine(after, time(16, 1), MARKET_TZ)
         out.append((known, symbol, abn))
     return out
 

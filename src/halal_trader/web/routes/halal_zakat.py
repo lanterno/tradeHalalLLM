@@ -97,9 +97,10 @@ def register(app: FastAPI) -> None:
         year: int | None = None, ctx: DashboardContext = Depends(get_ctx)
     ) -> JSONResponse:
         from halal_trader.compliance.purification import report
+        from halal_trader.market_hours import today_eastern
         from halal_trader.portfolio.core_account import CORE_ACCOUNTS
 
-        y = year or date.today().year
+        y = year or today_eastern().year
         lines = [
             (account, line)
             for account in (*CORE_ACCOUNTS, "paper")

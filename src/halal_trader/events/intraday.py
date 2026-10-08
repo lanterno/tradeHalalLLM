@@ -25,19 +25,18 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from typing import Any
-from zoneinfo import ZoneInfo
 
 import numpy as np
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from halal_trader.events.study import cost_bps
+from halal_trader.market_hours import MARKET_OPEN, MARKET_TZ
 
 logger = logging.getLogger(__name__)
 
-_ET = ZoneInfo("America/New_York")
 LATENCY = timedelta(seconds=60)
-SESSION = (time(9, 30), time(15, 30))
+SESSION = (MARKET_OPEN, time(15, 30))
 STRONG = 0.4
 CONTROL_SAMPLE = 1500
 _PLAUSIBLE = (0.5, 2.0)
@@ -63,7 +62,7 @@ async def first_in_session(
         )
         first: dict[tuple[str, date], Headline] = {}
         for r in rows:
-            local = r.published_at.astimezone(_ET)
+            local = r.published_at.astimezone(MARKET_TZ)
             if local.weekday() >= 5 or not SESSION[0] <= local.time() < SESSION[1]:
                 continue
             key = (r.symbol, local.date())
@@ -79,7 +78,7 @@ def selection(headlines: list[Headline], seed: int = 11) -> list[Headline]:
 
 
 async def _stored(engine: AsyncEngine, symbol: str, day: date) -> list[Any]:
-    lo = datetime.combine(day, time(9, 30), _ET)
+    lo = datetime.combine(day, MARKET_OPEN, MARKET_TZ)
     async with engine.connect() as conn:
         return (
             await conn.execute(
@@ -96,7 +95,7 @@ async def minute_series(engine: AsyncEngine, market: Any, symbol: str, day: date
     rows = await _stored(engine, symbol, day)
     if rows:
         return rows
-    lo = datetime.combine(day, time(9, 30), _ET)
+    lo = datetime.combine(day, MARKET_OPEN, MARKET_TZ)
     raw = await market.minute_bars(symbol, start=lo, end=lo + timedelta(hours=6, minutes=30))
     if raw:
         async with engine.begin() as conn:
@@ -161,7 +160,7 @@ async def run(engine: AsyncEngine, market: Any, headlines: list[Headline]) -> li
     ranks: dict[date, dict[str, int]] = {}
     out = []
     for n, h in enumerate(headlines):
-        day = h.published_at.astimezone(_ET).date()
+        day = h.published_at.astimezone(MARKET_TZ).date()
         if day not in sessions:
             continue
         month = day.replace(day=1)

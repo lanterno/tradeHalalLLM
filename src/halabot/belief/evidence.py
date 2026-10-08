@@ -15,11 +15,10 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import datetime, timedelta
-from datetime import time as dt_time
 from typing import Protocol
-from zoneinfo import ZoneInfo
 
 from halabot.belief.schema import EvidenceItem
+from halal_trader.market_hours import MARKET_CLOSE, MARKET_OPEN, MARKET_TZ
 
 # Sources that act as conviction *flags* (down-weight) rather than directional
 # evidence. They are excluded from the signed vector and surfaced via has_flag.
@@ -43,11 +42,6 @@ class ContinuousCalendar:
         return max(0.0, (end - start).total_seconds() / 60.0)
 
 
-_ET = ZoneInfo("America/New_York")
-_RTH_OPEN = dt_time(9, 30)
-_RTH_CLOSE = dt_time(16, 0)
-
-
 class RegularHoursCalendar:
     """US equity regular trading hours (Mon–Fri 09:30–16:00 ET), DST-aware via
     zoneinfo. This is the ``evidence_decay_trading_time=True`` calendar for stocks:
@@ -59,14 +53,14 @@ class RegularHoursCalendar:
     def minutes_between(self, start: datetime, end: datetime) -> float:
         if end <= start:
             return 0.0
-        s = start.astimezone(_ET)
-        e = end.astimezone(_ET)
+        s = start.astimezone(MARKET_TZ)
+        e = end.astimezone(MARKET_TZ)
         total = 0.0
         day = s.date()
         while day <= e.date():
             if day.weekday() < 5:  # Mon–Fri
-                open_dt = datetime.combine(day, _RTH_OPEN, tzinfo=_ET)
-                close_dt = datetime.combine(day, _RTH_CLOSE, tzinfo=_ET)
+                open_dt = datetime.combine(day, MARKET_OPEN, tzinfo=MARKET_TZ)
+                close_dt = datetime.combine(day, MARKET_CLOSE, tzinfo=MARKET_TZ)
                 lo = max(s, open_dt)
                 hi = min(e, close_dt)
                 if hi > lo:

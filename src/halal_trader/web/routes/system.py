@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, time
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import Body, Depends, FastAPI, Header
@@ -18,17 +18,20 @@ async def _bot_liveness(ctx: DashboardContext) -> tuple[bool, dict[str, Any] | N
     The web runs in its own container, so this is the only honest answer it
     can give. ``(False, None)`` when the heartbeats cannot be read at all.
     """
-    from halal_trader.core.heartbeat import assess, bot_liveness, describe, read_beats
-    from halal_trader.market_hours import is_market_open_local, now_eastern
+    from halal_trader.core.heartbeat import (
+        assess,
+        bot_liveness,
+        cycles_due_at,
+        describe,
+        read_beats,
+    )
 
     try:
         beats = await read_beats(ctx.engine)
     except Exception:  # noqa: BLE001 -- health must answer even when the DB can't
         return False, None
     now = datetime.now(UTC)
-    # Cycles are due once the session has run long enough for one to finish
-    # (the first runs at 09:30 ET; allow until 10:00 before judging).
-    cycles_due = is_market_open_local() and now_eastern().time() >= time(10, 0)
+    cycles_due = cycles_due_at(now)
     statuses = assess(beats, now=now, cycles_due=cycles_due)
     components: dict[str, Any] = describe(beats, statuses, now=now)
     alive, reason = bot_liveness(beats, now=now, cycles_due=cycles_due)

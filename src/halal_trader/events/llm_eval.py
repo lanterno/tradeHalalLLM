@@ -20,15 +20,14 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime
-from zoneinfo import ZoneInfo
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from halal_trader.events.study import Observation, StudyResult, evaluate, summarise
+from halal_trader.market_hours import MARKET_TZ
 from halal_trader.sentiment.headline_polarity import score_headline
 
-_ET = ZoneInfo("America/New_York")
 HORIZONS = (1, 5, 20)
 
 
@@ -54,7 +53,7 @@ async def day_readings(engine: AsyncEngine, scorer_prefix: str = "llm-batch:") -
         grouped: dict[tuple[str, date], list[tuple[datetime, float, float]]] = defaultdict(list)
         for r in rows:
             pos, neg = score_headline(r.h or "")
-            day = r.published_at.astimezone(_ET).date()
+            day = r.published_at.astimezone(MARKET_TZ).date()
             grouped[(r.symbol, day)].append((r.published_at, float(r.score), pos - neg))
     out = []
     for (symbol, day), items in grouped.items():

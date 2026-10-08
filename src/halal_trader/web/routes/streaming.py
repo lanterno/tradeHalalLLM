@@ -6,7 +6,7 @@ import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator
-from datetime import datetime
+from datetime import UTC, datetime
 
 from fastapi import Depends, FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
@@ -54,7 +54,7 @@ def register(app: FastAPI) -> None:
             await websocket.send_json(
                 {
                     "topic": "_error",
-                    "ts": datetime.utcnow().isoformat(),
+                    "ts": datetime.now(UTC).isoformat(),
                     "payload": {"error": "no context — bot not running in this process"},
                 }
             )

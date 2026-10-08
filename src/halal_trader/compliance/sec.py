@@ -23,10 +23,12 @@ import email.utils
 import logging
 from collections import OrderedDict
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, time
 from typing import Any
 
 import httpx
+
+from halal_trader.market_hours import MARKET_TZ
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +60,15 @@ def retry_after(response: httpx.Response) -> float | None:
     if when.tzinfo is None:
         when = when.replace(tzinfo=UTC)
     return max((when - datetime.now(UTC)).total_seconds(), 0.0)
+
+
+def filed_at(filed: date, accepted: str | None = None) -> datetime:
+    """When a filing became public, in UTC: EDGAR's acceptance time when it
+    has one, else 17:00 ET on the filing date (after the close, so nothing
+    reads it as known during that session)."""
+    if accepted:
+        return datetime.fromisoformat(accepted.replace("Z", "+00:00"))
+    return datetime.combine(filed, time(17), MARKET_TZ).astimezone(UTC)
 
 
 @dataclass(frozen=True, slots=True)

@@ -22,13 +22,13 @@ from bisect import bisect_left
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
-from zoneinfo import ZoneInfo
 
 import numpy as np
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-_ET = ZoneInfo("America/New_York")
+from halal_trader.compliance.sec import filed_at
+
 _QUARTER_DAYS = (80, 100)
 _YEAR_DAYS = (350, 380)
 _MIN_HISTORY = 4  # differences needed for the standard deviation
@@ -132,10 +132,6 @@ async def sue_observations(engine: AsyncEngine, companies: dict[int, str]) -> li
             lo = datetime.combine(q.end, time(0), UTC)
             hi = datetime.combine(q.filed + timedelta(days=1), time(23, 59), UTC)
             i = bisect_left(times, lo)
-            announced = (
-                times[i]
-                if i < len(times) and times[i] <= hi
-                else datetime.combine(q.filed, time(17), _ET).astimezone(UTC)
-            )
+            announced = times[i] if i < len(times) and times[i] <= hi else filed_at(q.filed)
             out.append(SueObs(cik, symbol, q.end, announced, sue, q.eps))
     return out

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime
 from typing import Any
 
 from fastapi import Depends, FastAPI
@@ -75,11 +75,9 @@ async def core_risk(engine: AsyncEngine) -> dict[str, Any]:
         age: int | None = round((now - snap.taken_at).total_seconds())
         if snap.last_equity:
             # The previous session's close, which the daily ledger may not hold yet.
-            from halal_trader.market_hours import MARKET_TZ, is_trading_day
+            from halal_trader.market_hours import MARKET_TZ, previous_trading_day
 
-            prev_day = snap.taken_at.astimezone(MARKET_TZ).date() - timedelta(days=1)
-            while not is_trading_day(prev_day):
-                prev_day -= timedelta(days=1)
+            prev_day = previous_trading_day(snap.taken_at.astimezone(MARKET_TZ).date())
             if not history or history[-1][0] < prev_day:
                 history.append((prev_day, float(snap.last_equity)))
     else:

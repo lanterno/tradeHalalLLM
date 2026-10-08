@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import date, timedelta
+from datetime import timedelta
 from typing import Any
 
 import click
@@ -70,6 +70,9 @@ def sync_cmd(days: int, recompute_unpaid: bool) -> None:
 @click.option("--year", type=int, default=None, help="Payment year (default: this year).")
 def report_cmd(account: str, year: int | None) -> None:
     """Dividends and the amount to purify, per holding, for one payment year."""
+    from halal_trader.market_hours import today_eastern
+
+    year = year or today_eastern().year
 
     async def _run() -> list[Any]:
         from halal_trader.compliance.purification import report
@@ -78,7 +81,7 @@ def report_cmd(account: str, year: int | None) -> None:
 
         engine = await init_db(get_settings().database_url)
         try:
-            return await report(engine, account, year or date.today().year)
+            return await report(engine, account, year)
         finally:
             await engine.dispose()
 
@@ -86,7 +89,7 @@ def report_cmd(account: str, year: int | None) -> None:
 
     lines = asyncio.run(_run())
     unit = f" (per ${BOOK_NOTIONAL:,.0f} following the book)" if account.startswith("book:") else ""
-    console.print(f"[bold]{account}[/bold], dividends payable in {year or date.today().year}{unit}")
+    console.print(f"[bold]{account}[/bold], dividends payable in {year}{unit}")
     if not lines:
         console.print("  nothing accrued")
         return

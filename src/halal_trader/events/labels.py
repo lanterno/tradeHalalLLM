@@ -17,28 +17,26 @@ import logging
 from bisect import bisect_right
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, time
-from zoneinfo import ZoneInfo
+from datetime import UTC, date, datetime
 
 import numpy as np
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from halal_trader.core.signal_eval import information_coefficient
+from halal_trader.market_hours import MARKET_CLOSE, MARKET_TZ
 
 logger = logging.getLogger(__name__)
 
 HORIZONS = (1, 5, 20)
 BENCHMARK = "SPUS"
-_ET = ZoneInfo("America/New_York")
-_CLOSE = time(16, 0)
 
 
 def first_close_session(published: datetime, sessions: list[date]) -> int | None:
     """Index in ``sessions`` of the first close at or after ``published``."""
-    local = published.astimezone(_ET)
+    local = published.astimezone(MARKET_TZ)
     i = bisect_right(sessions, local.date()) - 1
-    if i >= 0 and sessions[i] == local.date() and local.time() < _CLOSE:
+    if i >= 0 and sessions[i] == local.date() and local.time() < MARKET_CLOSE:
         return i
     j = bisect_right(sessions, local.date())
     return j if j < len(sessions) else None
@@ -138,7 +136,7 @@ async def report(engine: AsyncEngine, *, threshold: float = 0.85) -> list[Scorer
         ).all()
     best: dict[tuple[str, str, date, int], tuple[float, float]] = {}
     for r in rows:
-        key = (r.scorer, r.symbol, r.published_at.astimezone(_ET).date(), r.horizon)
+        key = (r.scorer, r.symbol, r.published_at.astimezone(MARKET_TZ).date(), r.horizon)
         if key not in best or r.score > best[key][0]:
             best[key] = (float(r.score), float(r.abn_ret))
     grouped: dict[tuple[str, int], list[tuple[float, float]]] = defaultdict(list)

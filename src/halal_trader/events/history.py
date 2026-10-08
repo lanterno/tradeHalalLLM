@@ -28,12 +28,11 @@ import zipfile
 from collections.abc import Iterable
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
-from zoneinfo import ZoneInfo
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from halal_trader.compliance.sec import SecClient
+from halal_trader.compliance.sec import SecClient, filed_at
 from halal_trader.events.store import EventRecord, EventRecorder
 
 logger = logging.getLogger(__name__)
@@ -41,7 +40,6 @@ logger = logging.getLogger(__name__)
 NEWS_FROM = date(2016, 1, 1)
 FILINGS_FROM = date(2015, 6, 1)
 FILING_FORMS = {"8-K", "8-K/A", "10-Q", "10-K"}
-_ET = ZoneInfo("America/New_York")
 _INSIDER_URL = (
     "https://www.sec.gov/files/structureddata/data/insider-transactions-data-sets/{q}_form345.zip"
 )
@@ -170,12 +168,7 @@ def filing_records(payload: dict[str, Any], symbol: str) -> list[EventRecord]:
         filed = date.fromisoformat(payload["filingDate"][i])
         if filed < FILINGS_FROM:
             continue
-        accepted = str(payload["acceptanceDateTime"][i] or "")
-        published = (
-            datetime.fromisoformat(accepted.replace("Z", "+00:00"))
-            if accepted
-            else datetime.combine(filed, time(17), _ET).astimezone(UTC)
-        )
+        published = filed_at(filed, str(payload["acceptanceDateTime"][i] or ""))
         items = [x for x in str((payload.get("items") or [""] * len(forms))[i]).split(",") if x]
         out.append(
             EventRecord(
@@ -270,7 +263,7 @@ def insider_records(blob: bytes, companies: dict[int, str]) -> list[EventRecord]
             continue
         sub = subs[acc]
         filed = datetime.strptime(sub["FILING_DATE"], "%d-%b-%Y").date()
-        published = datetime.combine(filed, time(17), _ET).astimezone(UTC)
+        published = filed_at(filed)
         shares, price = _f(row["TRANS_SHARES"]), _f(row["TRANS_PRICEPERSHARE"])
         people = owners.get(acc, [])
         out.append(

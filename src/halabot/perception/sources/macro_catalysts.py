@@ -24,12 +24,12 @@ import logging
 from collections.abc import Awaitable, Callable, Sequence
 from datetime import UTC, datetime, time, timedelta
 from typing import Any, Protocol
-from zoneinfo import ZoneInfo
 
 from halabot.perception.dedup import DedupStore
 from halabot.perception.poll import PollingSource
 from halabot.platform.clock import Clock
 from halabot.platform.events import Event, EventType, new_event
+from halal_trader.market_hours import MARKET_OPEN, MARKET_TZ
 
 logger = logging.getLogger(__name__)
 
@@ -64,14 +64,13 @@ _KIND_NAMES: dict[str, str] = {
 # entirely (found in adversarial review, 2026-07-03). Anchor date-only
 # schedules to the release's canonical ET clock time instead; zoneinfo
 # handles DST. Timestamps that already carry a real time pass through.
-_ET = ZoneInfo("America/New_York")
 _KIND_RELEASE_TIME_ET: dict[str, time] = {
     "cpi": time(8, 30),
     "nfp": time(8, 30),
     "gdp": time(8, 30),
     "fomc": time(14, 0),
 }
-_DEFAULT_RELEASE_TIME_ET = time(9, 30)  # market open — neutral anchor
+_DEFAULT_RELEASE_TIME_ET = MARKET_OPEN  # a neutral anchor
 
 
 class CatalystFetcher(Protocol):
@@ -119,7 +118,9 @@ class MacroCatalystSource(PollingSource):
         # release's canonical ET time so imminence covers the real print.
         if ts.astimezone(UTC).timetz() == time(0, 0, tzinfo=UTC):
             et_time = _KIND_RELEASE_TIME_ET.get(kind_raw, _DEFAULT_RELEASE_TIME_ET)
-            ts = datetime.combine(ts.astimezone(UTC).date(), et_time, tzinfo=_ET).astimezone(UTC)
+            ts = datetime.combine(ts.astimezone(UTC).date(), et_time, tzinfo=MARKET_TZ).astimezone(
+                UTC
+            )
         # catalysts_pending is about UPCOMING releases; a release already
         # >1h in the past is stale calendar noise, not a pending catalyst.
         if ts < self._clock.now() - timedelta(hours=1):

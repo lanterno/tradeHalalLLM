@@ -11,11 +11,11 @@ import logging
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
-from zoneinfo import ZoneInfo
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from halal_trader.compliance.sec import filed_at
 from halal_trader.config import Settings
 from halal_trader.data.alpaca_market import AlpacaMarketData
 from halal_trader.data.store import BENCHMARKS
@@ -418,14 +418,11 @@ def _accepted(recent: dict[str, Any], i: int) -> datetime | None:
     """When filing ``i`` of a submissions page was accepted (UTC); its date at 17:00 ET
     if the time is missing, as the filings history records it."""
     stamps = recent.get("acceptanceDateTime") or []
-    stamp = str(stamps[i] or "") if i < len(stamps) else ""
-    if stamp:
-        return datetime.fromisoformat(stamp.replace("Z", "+00:00"))
     dates = recent.get("filingDate") or []
-    if i >= len(dates) or not dates[i]:
+    filed = str(dates[i] or "") if i < len(dates) else ""
+    if not filed:
         return None
-    filed = date.fromisoformat(str(dates[i]))
-    return datetime.combine(filed, time(17), ZoneInfo("America/New_York")).astimezone(UTC)
+    return filed_at(date.fromisoformat(filed), str(stamps[i] or "") if i < len(stamps) else "")
 
 
 async def _holdings_reported(engine: AsyncEngine, sec: Any, screened: datetime) -> list[str]:

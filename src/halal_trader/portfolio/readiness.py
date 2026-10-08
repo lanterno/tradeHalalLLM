@@ -38,7 +38,7 @@ from datetime import date, timedelta
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from halal_trader.market_hours import is_trading_day
+from halal_trader.market_hours import is_trading_day, trading_days_back
 from halal_trader.portfolio.core_account import CORE_LIVE, CORE_PAPER
 
 MIN_DAYS = 20
@@ -65,17 +65,6 @@ class Readiness:
     @property
     def ready(self) -> bool:
         return not self.failures
-
-
-def trading_days_back(end: date, n: int) -> list[date]:
-    """The ``n`` trading days ending on ``end`` (inclusive when it is one), oldest first."""
-    out: list[date] = []
-    d = end
-    while len(out) < n:
-        if is_trading_day(d):
-            out.append(d)
-        d -= timedelta(days=1)
-    return out[::-1]
 
 
 async def check(

@@ -27,14 +27,14 @@ from bisect import bisect_left
 from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from datetime import date, datetime, time
-from zoneinfo import ZoneInfo
+from datetime import date, datetime
 
 import numpy as np
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from halal_trader.core.signal_eval import information_coefficient
+from halal_trader.market_hours import MARKET_CLOSE, MARKET_OPEN, MARKET_TZ
 
 # The market an event study measures against, and its calendar. SPY, not
 # SPUS: SPUS starts 2019-12-18, and a calendar taken from its bars once
@@ -43,8 +43,6 @@ from halal_trader.core.signal_eval import information_coefficient
 # judged against SPUS in the trials ledger.
 BENCHMARK = "SPY"
 HORIZONS = (1, 5, 20, 60)
-_ET = ZoneInfo("America/New_York")
-_OPEN, _CLOSE = time(9, 30), time(16, 0)
 # One-way cost in basis points by liquidity rank in the month's universe:
 # half the typical quoted spread plus 5 bps of impact for a small order.
 COST_BPS = ((300, 7.0), (1000, 15.0), (10**9, 30.0))
@@ -68,16 +66,16 @@ class Bars:
 
 def entry_point(published: datetime, sessions: Sequence[date]) -> tuple[int, str] | None:
     """(session index, "open" | "close") of the first price tradable after ``published``."""
-    local = published.astimezone(_ET)
+    local = published.astimezone(MARKET_TZ)
     # Before the calendar starts (beyond a weekend or holiday gap) there is no
     # price to enter at; the next stored session may be months away.
     if not sessions or (sessions[0] - local.date()).days > 5:
         return None
     i = bisect_left(sessions, local.date())
     if i < len(sessions) and sessions[i] == local.date():
-        if local.time() < _OPEN:
+        if local.time() < MARKET_OPEN:
             return i, "open"
-        if local.time() < _CLOSE:
+        if local.time() < MARKET_CLOSE:
             return i, "close"
         i += 1
     return (i, "open") if i < len(sessions) else None
@@ -203,7 +201,7 @@ async def evaluate(
     ranks: dict[date, dict[str, int]] = {}
     out: list[tuple[Observation, int, float]] = []
     for obs in observations:
-        month = obs.published_at.astimezone(_ET).date().replace(day=1)
+        month = obs.published_at.astimezone(MARKET_TZ).date().replace(day=1)
         if month not in ranks:
             names = await universe_at(engine, month, top_n=3000)
             ranks[month] = {s: i for i, s in enumerate(names)}

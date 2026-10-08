@@ -21,6 +21,7 @@ from halal_trader.market_hours import (
     MARKET_TZ,
     US_MARKET_HOLIDAYS,
     is_trading_day,
+    next_trading_day,
 )
 
 SESSION = {
@@ -67,13 +68,6 @@ def trading_days_in_month(today: date) -> tuple[int, int]:
     days = [today.replace(day=i) for i in range(1, monthrange(today.year, today.month)[1] + 1)]
     trading = [d for d in days if is_trading_day(d)]
     return len(trading), sum(1 for d in trading if d > today)
-
-
-def next_trading_day(after: date) -> date:
-    d = after + timedelta(days=1)
-    while not is_trading_day(d):
-        d += timedelta(days=1)
-    return d
 
 
 def first_trading_day_of_next_month(today: date) -> date:

@@ -11,9 +11,7 @@ for the dashboard / CLI / API.
 from __future__ import annotations
 
 import logging
-from datetime import datetime
 from typing import Any
-from zoneinfo import ZoneInfo
 
 from sqlalchemy.ext.asyncio import AsyncEngine
 
@@ -23,11 +21,11 @@ from halal_trader.core.llm.factory import create_llm
 from halal_trader.core.llm.prompts import register as _register_prompt
 from halal_trader.db.repository import Repository
 from halal_trader.domain.ports import Broker
+from halal_trader.market_hours import today_eastern
 from halal_trader.signals.indicators import compute_all
 from halal_trader.trading.bars import bars_to_klines
 
 logger = logging.getLogger(__name__)
-_ET = ZoneInfo("America/New_York")
 # How many of the screen's largest halal names the pick chooses from: liquid
 # enough to act on, small enough for one prompt and ~2 bar fetches each.
 UNIVERSE_SIZE = 30
@@ -120,7 +118,7 @@ class DailyRecommendationEngine:
         if self._engine is None:
             raise RuntimeError("no database to read the halal screen from")
         as_of, names = await halal_universe(
-            self._engine, today=datetime.now(_ET).date(), limit=UNIVERSE_SIZE
+            self._engine, today=today_eastern(), limit=UNIVERSE_SIZE
         )
         if not names:
             raise RuntimeError(f"no fresh strict halal screen (newest: {as_of})")
@@ -132,7 +130,7 @@ class DailyRecommendationEngine:
         if not candidates:
             raise RuntimeError("no candidate market data available")
         pick = await self._pick(candidates)
-        date = datetime.now(_ET).strftime("%Y-%m-%d")
+        date = today_eastern().isoformat()
         rec: dict[str, Any] = {
             "date": date,
             "symbol": pick["symbol"],
@@ -205,11 +203,10 @@ class DailyRecommendationEngine:
         both the % move and its DTE are surfaced — disagreement between the
         implied and statistical ranges flags an event premium.
         """
-        from datetime import datetime as _dt
 
         from halal_trader.quant.expected_move import fetch_expected_move
 
-        today = _dt.now(_ET).date()
+        today = today_eastern()
         em = await fetch_expected_move(self._broker, symbol, spot, today=today)
         if em is None:
             return {}
@@ -324,7 +321,7 @@ class DailyRecommendationEngine:
     async def _pick(self, candidates: dict[str, dict[str, Any]]) -> dict[str, Any]:
         from halal_trader.quant.calibration import load_default_artifact
 
-        date = datetime.now(_ET).strftime("%Y-%m-%d")
+        date = today_eastern().isoformat()
         factor_block = self._apply_factors(candidates)
         artifact = load_default_artifact()
         if artifact is not None:

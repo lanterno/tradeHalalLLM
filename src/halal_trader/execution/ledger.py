@@ -28,6 +28,8 @@ from typing import TYPE_CHECKING
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from halal_trader.market_hours import today_eastern
+
 if TYPE_CHECKING:
     from halal_trader.execution.alpaca_rest import AlpacaRestClient
 
@@ -150,7 +152,7 @@ async def sync_broker_ledger(
                     {"a": account},
                 )
             ).scalar()
-        start = first.date() if first else date.today() - timedelta(days=365)
+        start = first.date() if first else today_eastern() - timedelta(days=365)
     points = await client.equity_history(start=start)
     async with engine.begin() as conn:
         for p in points:

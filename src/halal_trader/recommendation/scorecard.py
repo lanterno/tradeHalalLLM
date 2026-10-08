@@ -30,6 +30,7 @@ from typing import Any
 
 from halal_trader.core.sample_guard import SampleGate
 from halal_trader.core.signal_eval import information_coefficient
+from halal_trader.market_hours import today_eastern
 from halal_trader.quant.diagnostics import SPLIT_GAP_THRESHOLD
 
 logger = logging.getLogger(__name__)
@@ -414,7 +415,7 @@ async def audit_scored_outcomes(broker: Any, repo: Any, *, limit: int = 500) -> 
     audited = 0
     repaired = 0
     skipped = 0
-    today = datetime.now(UTC).date()
+    today = today_eastern()  # recommendation dates are New York trading days
     for rec in scored_rows:
         try:
             rec_day = datetime.strptime(rec["date"], "%Y-%m-%d").date()

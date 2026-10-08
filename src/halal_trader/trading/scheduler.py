@@ -1350,7 +1350,7 @@ class TradingBot:
             # richer Telegram summary fields fire.
             summary["market"] = "stocks"
 
-            summary["date"] = datetime.now(UTC).date().isoformat()
+            summary["date"] = today_eastern().isoformat()
             if self._engine is not None:
                 try:
                     from sqlalchemy import text

@@ -21,7 +21,10 @@ from zoneinfo import ZoneInfo
 
 # ── Constants ────────────────────────────────────────────────────
 
-MARKET_TZ = ZoneInfo("America/New_York")
+MARKET_TZ_NAME = "America/New_York"
+"""The zone's IANA name, for SQL (``AT TIME ZONE``)."""
+
+MARKET_TZ = ZoneInfo(MARKET_TZ_NAME)
 """Canonical timezone for US equity markets (Eastern Time)."""
 
 MARKET_OPEN = time(9, 30)
@@ -135,6 +138,33 @@ def is_trading_day(d: date) -> bool:
     A trading day is a weekday that is not a market holiday.
     """
     return d.weekday() < 5 and d not in US_MARKET_HOLIDAYS
+
+
+def next_trading_day(after: date) -> date:
+    """The first trading day after ``after``."""
+    d = after + timedelta(days=1)
+    while not is_trading_day(d):
+        d += timedelta(days=1)
+    return d
+
+
+def previous_trading_day(before: date) -> date:
+    """The last trading day before ``before``."""
+    d = before - timedelta(days=1)
+    while not is_trading_day(d):
+        d -= timedelta(days=1)
+    return d
+
+
+def trading_days_back(end: date, n: int) -> list[date]:
+    """The ``n`` trading days ending on ``end`` (inclusive when it is one), oldest first."""
+    out: list[date] = []
+    d = end
+    while len(out) < n:
+        if is_trading_day(d):
+            out.append(d)
+        d -= timedelta(days=1)
+    return out[::-1]
 
 
 def effective_close_time(d: date) -> time:
