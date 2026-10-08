@@ -13,7 +13,6 @@ from halal_trader.quant.level_eval import (
 from halal_trader.quant.levels import (
     Level,
     atr_series,
-    level_map,
     prior_extreme_levels,
     round_number_levels,
     swing_zones,
@@ -120,28 +119,6 @@ class TestSwingZones:
 
     def test_short_series_empty(self):
         assert swing_zones(np.ones(4), np.ones(4), atr=1.0, confirm=3) == []
-
-
-class TestLevelMap:
-    def test_snaps_to_round_numbers(self):
-        dates = [f"2026-05-{d:02d}" for d in range(1, 11)]
-        highs = np.full(10, 100.2)  # prior-day high 100.2, near round 100
-        lows = np.full(10, 95.7)
-        closes = np.full(10, 98.0)
-        levels = level_map(dates, highs, lows, closes, atr=2.0)
-        pdh = next(lvl for lvl in levels if lvl.kind.startswith("prior_day_high"))
-        assert pdh.price == 100.0  # snapped (|100.2-100| = 0.2 <= 0.15*2.0)
-        assert "+round" in pdh.kind
-
-    def test_sorted_by_price(self):
-        dates = [f"2026-05-{d:02d}" for d in range(1, 11)]
-        rng = np.random.default_rng(0)
-        closes = 100 + rng.normal(0, 1, 10).cumsum()
-        highs = closes + 1
-        lows = closes - 1
-        levels = level_map(dates, highs, lows, closes, atr=1.5)
-        prices = [lvl.price for lvl in levels]
-        assert prices == sorted(prices)
 
 
 def _flat_dates(n: int) -> list[str]:

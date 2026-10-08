@@ -52,8 +52,8 @@ async def test_decide_approve(engine: AsyncEngine) -> None:
     q = ExceptionQueue(engine=engine)
     await q.add(instrument="X", kind="k", reasoning="x")
     assert await q.decide("X:k", status="approved", decided_by="ops") is True
-    assert await q.is_approved("X", "k") is True
-    assert await q.is_approved("X", "other_kind") is False
+    (row,) = await q.all()
+    assert row.status == "approved"
 
 
 async def test_decide_unknown_entry_returns_false(engine: AsyncEngine) -> None:

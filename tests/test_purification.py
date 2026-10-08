@@ -14,7 +14,6 @@ from halal_trader.halal.round_trip_purification import (
     RoundTripLedger,
     RoundTripRule,
     compute_round_trip_purification,
-    load_rules_from_dicts,
     outstanding_round_trip_due,
     record_round_trip,
 )
@@ -49,21 +48,6 @@ def test_rule_invalid_ratio_raises() -> None:
         RoundTripRule(symbol="X", impure_ratio=-0.1)
 
 
-def test_load_rules_from_dicts() -> None:
-    rules = load_rules_from_dicts(
-        [
-            {"symbol": "aapl", "impure_ratio": 0.02, "source": "aaoifi"},
-            {"symbol": "msft", "impure_ratio": 0.005},
-            {"symbol": "", "impure_ratio": 0.5},
-            {"symbol": "junk", "impure_ratio": "not-a-number"},
-        ]
-    )
-    assert "AAPL" in rules
-    assert rules["AAPL"].impure_ratio == 0.02
-    assert "MSFT" in rules
-    assert "JUNK" not in rules
-
-
 # ── Ledger ───────────────────────────────────────────────────────
 
 
@@ -80,25 +64,6 @@ async def test_ledger_record_idempotent(engine) -> None:
     assert await led.record(e) is True
     assert await led.record(e) is False
     assert await led.outstanding() == 2.0
-
-
-async def test_ledger_disburse_marks_entry(engine) -> None:
-    led = RoundTripLedger(engine=engine)
-    e = RoundTripEntry(
-        entry_id="X:1",
-        symbol="X",
-        gain_amount_usd=100,
-        impure_ratio=0.05,
-        purification_due_usd=5.0,
-        timestamp="2026-04-26T00:00:00+00:00",
-    )
-    await led.record(e)
-    assert await led.outstanding() == 5.0
-    assert await led.disbursed_total() == 0.0
-    assert await led.mark_disbursed("X:1", to="charity-x") is True
-    assert await led.outstanding() == 0.0
-    assert await led.disbursed_total() == 5.0
-    assert await led.mark_disbursed("X:1") is False
 
 
 async def test_ledger_by_symbol_aggregates_outstanding(engine) -> None:
@@ -118,9 +83,8 @@ async def test_ledger_by_symbol_aggregates_outstanding(engine) -> None:
                 timestamp="2026-04-26T00:00:00+00:00",
             )
         )
-    await led.mark_disbursed("AAPL:2")
     by_sym = await led.by_symbol()
-    assert by_sym == {"AAPL": 2.0, "MSFT": 1.0}
+    assert by_sym == {"AAPL": 6.0, "MSFT": 1.0}
 
 
 # ── record_round_trip ────────────────────────────────────────────

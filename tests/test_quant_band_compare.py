@@ -11,7 +11,6 @@ from halal_trader.quant.band_compare import (
     _score,
     build_rows,
     compare_band_sources,
-    garch_verdict,
 )
 
 
@@ -147,20 +146,6 @@ class TestVerdict:
             "atr": s(a_wink, 0.65),
         }
         return {"window_1": window, "window_2": window, "aggregate": window}
-
-    def test_pass_when_beats_har_and_atr(self):
-        assert garch_verdict(self._results(8.0, 9.0, 12.0)) == "pass"
-
-    def test_fail_when_worse_than_naive_atr(self):
-        assert garch_verdict(self._results(13.0, 9.0, 12.0)) == "fail"
-
-    def test_inconclusive_when_between(self):
-        assert garch_verdict(self._results(9.5, 9.0, 12.0)) == "inconclusive"
-
-    def test_inconclusive_when_coverage_error_worse(self):
-        # garch coverage 0.71 (err 0.09) vs har 0.78 (err 0.02).
-        r = self._results(8.0, 9.0, 12.0, g_cov=0.71, h_cov=0.78)
-        assert garch_verdict(r) == "inconclusive"
 
 
 class TestEmbargoAndQgbm:

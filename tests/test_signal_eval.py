@@ -5,7 +5,6 @@ from __future__ import annotations
 import pytest
 
 from halal_trader.core.signal_eval import (
-    icir,
     information_coefficient,
 )
 
@@ -45,14 +44,3 @@ def test_ic_degenerate_inputs():
 def test_ic_filters_nan():
     ic = information_coefficient([1, 2, float("nan"), 4, 5], [10, 20, 30, 40, 50])
     assert ic == pytest.approx(1.0)  # the nan pair is dropped, rest perfect
-
-
-def test_icir_rewards_consistency():
-    consistent = icir([0.05, 0.06, 0.04, 0.05, 0.05])  # steady positive IC
-    erratic = icir([0.20, -0.15, 0.18, -0.10, 0.12])  # same-ish mean, high variance
-    assert consistent > erratic
-
-
-def test_icir_degenerate():
-    assert icir([0.1]) == 0.0  # < 2 values
-    assert icir([0.1, 0.1, 0.1]) == 0.0  # zero dispersion

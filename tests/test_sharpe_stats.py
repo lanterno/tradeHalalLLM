@@ -8,7 +8,6 @@ import pytest
 from halal_trader.core.sharpe_stats import (
     deflated_sharpe_ratio,
     expected_max_sharpe,
-    passes_sharpe_gate,
     probabilistic_sharpe_ratio,
 )
 
@@ -64,13 +63,3 @@ def test_dsr_not_above_psr_under_multiple_testing():
     assert dsr <= psr  # deflation can only lower (or equal) the probability
     # single trial → DSR == PSR
     assert deflated_sharpe_ratio(returns, n_trials=1) == pytest.approx(psr)
-
-
-def test_gate_uses_dsr_when_multi_trial():
-    # A track that clears PSR but not the multiple-testing-deflated bar.
-    returns = _series(0.004, 0.01, 120, seed=3)
-    assert passes_sharpe_gate(returns, n_trials=1, min_prob=0.9) in (True, False)
-    # With many trials the same track is held to a higher bar.
-    gate_single = passes_sharpe_gate(returns, n_trials=1, min_prob=0.95)
-    gate_many = passes_sharpe_gate(returns, n_trials=200, min_prob=0.95)
-    assert not (gate_many and not gate_single)  # many-trial gate is never easier
