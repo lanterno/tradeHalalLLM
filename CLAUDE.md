@@ -8,7 +8,7 @@ LLM-powered halal day-trading bot for **US stocks** (Alpaca paper trading via MC
 
 **Crypto trading was abandoned on 2026-10-01**: its code was deleted then, and its tables dropped on 2026-10-08 (migration `732583ae4034`).
 
-**Read `docs/OPERATOR_CONTEXT.md` first.** It holds the non-code-derivable context: the working agreement, the stocks strategy intent (**fast in, slow out**), why the sole LLM provider is GLM-5.2 via OpenRouter (don't undo it; the bot won't start without `GLM_API_KEY`), operator-gated issues you can't fix in code (Zoya sandbox, reconcile drift and the destructive fix-drift tool; don't touch `_aggregate_stocks_positions`), and the `src/halabot` engineering lessons (validate every edge with `halabot backtest` on disjoint OOS windows; the engine is shadow-only and never trades).
+**Read `docs/OPERATOR_CONTEXT.md` first.** It holds the non-code-derivable context: the working agreement, the stocks strategy intent (**fast in, slow out**), why the sole LLM provider is GLM-5.2 via OpenRouter (don't undo it; the bot won't start without `GLM_API_KEY`), operator-gated issues you can't fix in code (reconcile drift and the destructive fix-drift tool; don't touch `_aggregate_stocks_positions`), and the `src/halabot` engineering lessons (validate every edge with `halabot backtest` on disjoint OOS windows; the engine is shadow-only and never trades).
 
 The roadmap is `docs/MODERNIZATION_PLAN.md` with its evidence in `docs/assessment/2026-10-01/`. Both are **kept local on purpose and not committed**: the repo is public and they map open weaknesses. Read them, update them, but don't `git add` them.
 
@@ -46,7 +46,7 @@ Authoritative diagrams: `docs/ARCHITECTURE.md` (where it and the code differ, tr
 
 **One live bot, one shadow engine, one dashboard; three containers, one database.** `trading/scheduler.py:TradingBot` (APScheduler cron, 15-min cycles in market hours) drives `TradingCycleService` → `TradingStrategy` (one GLM tool call) → `TradeExecutor` (Alpaca via the MCP stdio subprocess). Between cycles, `StockPositionMonitor` enforces SL/TP and trailing stops every 30 s, and `StockNewsEventReactor` can place half-size "fast in" momentum entries. `src/halabot` runs alongside as `halabot shadow` and only logs proposals. The web (`web/app.py`) is a separate process: **the database is the only contract between them**. In-process state (`RuntimeView`, `EventBus`) does not reach the web.
 
-**Hex-ish layering.** `domain/ports.py` holds the Protocols (`Broker`, `ComplianceScreener`, `LLMBackend`, …); adapters live in `mcp/` (Alpaca), `halal/` (Zoya + cache), `core/llm/` (GLM). Shared maths lives in `signals/` (indicators, multi-timeframe) and `portfolio/` (risk engine, performance analytics).
+**Hex-ish layering.** `domain/ports.py` holds the Protocols (`Broker`, `ComplianceScreener`, `LLMBackend`, …); adapters live in `mcp/` (Alpaca), `halal/` (the strict screen's gate + cache), `core/llm/` (GLM). Shared maths lives in `signals/` (indicators, multi-timeframe) and `portfolio/` (risk engine, performance analytics).
 
 **Single LLM provider: GLM-5.2** via `core/llm/factory.py:create_llm`, OpenAI-compatible (OpenRouter by default; `FallbackLLM` chains a second endpoint if `GLM_FALLBACK_BASE_URL` is set). Strips `<think>…</think>`. A tool call with unparseable arguments, or missing the schema's required keys, is a **failed** call recorded as such, never a silent empty plan.
 

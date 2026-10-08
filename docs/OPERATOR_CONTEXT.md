@@ -149,8 +149,8 @@ choice (verified research verdict, 2026-07-01):
    in the evening research run): the core's order boundary, and since then the
    day-trader's and reactor's (`halal/strict.py` via `HalalScreener`), whose
    universe is the screen's 20 largest halal names (`settings.halal.universe_size`). A stale
-   (>10 days) or missing screen makes nothing halal. Sandbox Zoya verdicts are
-   ignored; a production key could only veto. The old curated 20-name list
+   (>10 days) or missing screen makes nothing halal. Zoya was removed on
+   2026-10-08: the in-house screen is the only one. The old curated 20-name list
    (`DEFAULT_HALAL_SYMBOLS`) is research-only now: seven of its names fail the
    strict screen.
 2. **Chronic ~100% stock reconcile drift** is **ledger hygiene, not a trading

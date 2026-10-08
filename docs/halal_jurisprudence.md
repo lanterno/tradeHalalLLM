@@ -152,8 +152,7 @@ filings:
 - Section 2 financial ratios.
 
 Its verdicts are checked weekly against the holdings of the SPUS and
-HLAL halal ETFs. A production Zoya key, if one is ever set, can only
-veto on top of it.
+HLAL halal ETFs.
 
 ### 3.2 Commodities (gold, silver)
 
@@ -214,8 +213,7 @@ audit row (`HalalScreening`) records which.
 | `not_halal` | Fails one or more hard rules | Refused; never in the candidate set |
 
 The rule is conservative throughout: `doubtful` is not halal, and an
-index board's exclusion, or a production Zoya key's `not_halal`,
-vetoes a `halal` from the screen (Section 6).
+index board's exclusion vetoes a `halal` from the screen (Section 6).
 
 ---
 
