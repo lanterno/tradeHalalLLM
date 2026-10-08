@@ -176,3 +176,29 @@ async def test_unpaid_purification_is_held_back_from_buys(engine: AsyncEngine) -
     spend = sum(o.notional for o in p.orders)
     assert spend == pytest.approx(1_000 - ce.CASH_BUFFER * 1_000 - 2.0)
     assert any("purification" in n for n in p.notes)
+
+
+async def test_each_order_names_the_method_of_the_verdict_it_relied_on(
+    engine: AsyncEngine,
+) -> None:
+    as_of = TODAY - timedelta(days=3)
+    await screen(engine, as_of, {"BIG": ("halal", 100, 3e9), "SMALL": ("halal", 100, 1e9)})
+    async with engine.begin() as conn:  # a newer method re-screened BIG only
+        await conn.execute(
+            text(
+                "INSERT INTO halal_screen_results (as_of, symbol, cik, sic_description, verdict, "
+                "reasons, metrics, method, screened_at) SELECT as_of, symbol, cik, "
+                "sic_description, verdict, reasons, metrics, 'aaoifi-sec-v12', now() "
+                "FROM halal_screen_results WHERE symbol = 'BIG'"
+            )
+        )
+    broker = FakeCoreBroker(cash=10_000, prices={"BIG": 100, "SMALL": 100})
+    await ce.execute(
+        engine, broker, await ce.plan(engine, broker, today=TODAY, monthly=True), today=TODAY
+    )
+
+    async with engine.connect() as conn:
+        rows = dict(
+            (await conn.execute(text("SELECT symbol, screen_method FROM core_orders"))).all()
+        )
+    assert rows == {"BIG": "aaoifi-sec-v12", "SMALL": "t"}
