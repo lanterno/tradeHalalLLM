@@ -10,9 +10,8 @@ compliance ruling back to the section that produced it.
 This handbook is not a substitute for a personal scholar. It encodes
 **one** widely-followed methodology (AAOIFI default with optional
 operator-selectable variants) and surfaces every disagreement as a
-configuration choice the operator owns. Borderline cases route to
-the exception queue for explicit human acknowledgement before the
-bot trades.
+configuration choice the operator owns. A borderline case is not
+halal: the bot does not buy it, and no override exists.
 
 > **Reviewing this handbook:** the project commits to a quarterly
 > review by an independent scholar. The "Last reviewed" footer at the
@@ -209,7 +208,7 @@ audit row (`HalalScreening`) records which.
 | Decision | Meaning | Bot behaviour |
 |---|---|---|
 | `halal` | Compliant under the strict screen | Tradable |
-| `doubtful` | Insufficient data, edge case, or borderline | Exception queue (Section 7) |
+| `doubtful` | Insufficient data, edge case, or borderline | Not bought (Section 7) |
 | `not_halal` | Fails one or more hard rules | Refused; never in the candidate set |
 
 The rule is conservative throughout: `doubtful` is not halal, and an
@@ -291,27 +290,19 @@ verdict is stored with its metrics, so each decision can be audited.
 
 ---
 
-## Section 7: Exception queue
+## Section 7: Doubtful names
 
-Decisions tagged `doubtful` flow to the operator's exception
-queue (`halal/exception_queue.py`). The operator can:
+A `doubtful` verdict is treated as `not_halal` at the order boundary:
+neither strategy buys the name, and the core sells a holding whose
+verdict is no longer `halal`. There is no operator override. The
+weekly screen re-runs every name, so a doubt that resolves (filings
+arrive, or SPUS or HLAL comes to hold the company) clears on its own
+at the next screen.
 
-1. **Approve** — typical for a newly listed company whose filings
-   are too thin for the ratios but whose business is clearly
-   permissible.
-2. **Reject** — for borderline cases the operator wants to
-   wait on.
-3. **Defer** — explicit "ask a scholar before acting". The
-   queue records this distinctly so a follow-up review can
-   filter to deferred-and-still-unresolved.
-
-Approved overrides are logged with `decided_by` (the operator's
-identifier) and a free-form `reason` so a future scholar
-challenge has the audit trail. **Approving an override does not
-auto-promote the symbol to `halal` for future cycles** — it
-only authorises *this* cycle's trade. The next refresh re-runs
-the screener and queues the symbol again if it's still
-borderline.
+An exception queue for operator approvals existed until 2026-10-08.
+Nothing ever fed it and no order path read it, so it never authorised
+a trade; it was removed rather than wired, because an approval path
+would be a manual override of the strict screen.
 
 ---
 
@@ -326,10 +317,8 @@ Every trade carries:
   (`core_orders.screen_as_of`), whose verdicts stay in
   `halal_screen_results` per method.
 
-For trades where the operator overrode an exception (Section 7),
-the chain extends to the queue row and the operator's free-form
-reason. A future scholar reviewer can replay any historical
-trade and answer "why was this allowed?" without reading code.
+A future scholar reviewer can replay any historical trade and
+answer "why was this allowed?" without reading code.
 
 The post-trade `halal/audit.py:export_receipt(...)` builds a
 JSON receipt joining the trade row with its screening — used
@@ -348,13 +337,7 @@ operator or trade. The operator's personal scholar may
 disagree with one or more rulings here; the configuration
 options in Section 6 are the lever for adapting.
 
-### 9.2 No auto-promotion of overrides
-
-An operator approving a `doubtful` override (Section 7)
-authorises *that single cycle's trade*, not the symbol's
-ongoing status. The screener re-runs every cycle.
-
-### 9.3 The kill-switch is not Sharia compliance
+### 9.2 The kill-switch is not Sharia compliance
 
 The bot's `core/halt.py` kill-switch (engage with `halal-trader
 halt --reason "..."`) stops new entries immediately. This is a
@@ -362,7 +345,7 @@ halt --reason "..."`) stops new entries immediately. This is a
 halt does not retroactively un-trade a non-compliant symbol.
 That's why the screener runs *before* the strategy, not after.
 
-### 9.4 Real money
+### 9.3 Real money
 
 The bot trades paper by default (`ALPACA_PAPER_TRADE=true` and
 `CORE_PAPER=true` in `.env.example`), and going live needs that day's
