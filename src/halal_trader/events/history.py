@@ -1,4 +1,4 @@
-"""The event store's history (docs/EVENT_DRIVEN_ROADMAP.md, Phase A).
+"""The event store's history (the event-driven research plan, Phase A).
 
 Four resumable backfills, each recording what it finished in
 ``backfill_progress`` so an interrupted run picks up where it stopped:

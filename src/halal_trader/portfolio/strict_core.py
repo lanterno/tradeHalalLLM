@@ -1,4 +1,4 @@
-"""The strict-halal core portfolio's rules (docs/CORE_PORTFOLIO_ROADMAP.md).
+"""The strict-halal core portfolio's rules.
 
 Pure functions, shared by the forward book (research/forward_book.py) and,
 later, by execution, so the record and the orders follow one rule:

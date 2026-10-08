@@ -1,4 +1,4 @@
-"""Writing events and their scores (docs/EVENT_DRIVEN_ROADMAP.md, Phase 0).
+"""Writing events and their scores (the event-driven research plan, Phase 0).
 
 The news reactor records every headline it sees and every score it
 computes, so the live classifier's judgements can be measured against

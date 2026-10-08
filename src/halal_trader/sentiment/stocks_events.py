@@ -22,7 +22,7 @@ The reactor is event-driven on the entry side per the operator's
 the slower 15-min cron stays for scheduled scans / risk pruning,
 the reactor wins for time-sensitive moves.
 
-Since 2026-10-02 (docs/EVENT_DRIVEN_ROADMAP.md, Phase 0) the reactor also
+Since 2026-10-02 (the event-driven research plan, Phase 0) the reactor also
 **records** every headline it sees and every score it computes in the
 event store (events/store.py), including an observe-only list of halal
 names it scores but never trades, and it ignores headlines older than
