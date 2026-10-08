@@ -13,83 +13,17 @@ price, which showed a $2,963 gain as $0 and a holding under its own stop.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import Depends, FastAPI
 from fastapi.responses import JSONResponse
-from sqlalchemy.ext.asyncio import AsyncEngine
 
 from halal_trader.core.context import DashboardContext
-from halal_trader.core.num import money, ratio, rounded
-from halal_trader.data.store import last_closes
+from halal_trader.core.num import money, ratio
 from halal_trader.portfolio.core_account import DAY_TRADER, core_account
+from halal_trader.portfolio.holdings import broker_position, ledger_positions
 from halal_trader.web.dependencies import get_ctx
-
-
-def broker_position(p: dict[str, Any]) -> dict[str, Any]:
-    """One snapshot position (portfolio/snapshots.position_row) with its cost.
-
-    The snapshot carries the broker's market value and unrealized P&L, so the
-    cost basis is their difference and the average entry that over the qty.
-    """
-    qty = float(p.get("qty") or 0.0)
-    value = p.get("market_value")
-    upl = p.get("unrealized_pl")
-    cost = float(value) - float(upl) if value is not None and upl is not None else None
-    return {
-        "symbol": str(p["symbol"]),
-        "qty": rounded(qty, 6),
-        "avg_entry": rounded(cost / qty, 4) if cost is not None and qty else None,
-        "price": rounded(p.get("price"), 4),
-        "market_value": money(value),
-        "cost_basis": money(cost),
-        "unrealized_pl": money(upl),
-        "unrealized_pl_pct": ratio(float(upl) / cost) if cost and upl is not None else None,
-        "change_today": ratio(p.get("change_today")),
-    }
-
-
-async def ledger_positions(
-    engine: AsyncEngine, account: str, open_trades: list[Any]
-) -> tuple[list[dict[str, Any]], str | None]:
-    """Holdings without a snapshot: the ledger's quantities at the last close."""
-    from halal_trader.compliance.purification import paper_positions
-    from halal_trader.market_hours import today_eastern
-
-    if account == DAY_TRADER:
-        qty: dict[str, float] = {}
-        cost: dict[str, float] = {}
-        for t in open_trades:
-            q = float(t.filled_quantity or t.quantity or 0.0)
-            qty[t.symbol] = qty.get(t.symbol, 0.0) + q
-            cost[t.symbol] = cost.get(t.symbol, 0.0) + q * float(t.filled_price or t.price or 0.0)
-    else:
-        qty = await paper_positions(engine, today_eastern() + timedelta(days=1), account)
-        cost = {}
-    closes = await last_closes(engine, sorted(qty))
-    rows = []
-    for symbol, q in qty.items():
-        day_close = closes.get(symbol)
-        price = day_close[1] if day_close else None
-        value = q * price if price is not None else None
-        basis = cost.get(symbol)
-        upl = value - basis if value is not None and basis else None
-        rows.append(
-            {
-                "symbol": symbol,
-                "qty": rounded(q, 6),
-                "avg_entry": rounded(basis / q, 4) if basis and q else None,
-                "price": rounded(price, 4),
-                "market_value": money(value),
-                "cost_basis": money(basis),
-                "unrealized_pl": money(upl),
-                "unrealized_pl_pct": ratio(upl / basis) if upl is not None and basis else None,
-                "change_today": None,
-            }
-        )
-    days = [c[0] for c in closes.values()]
-    return rows, (max(days).isoformat() if days else None)
 
 
 def _ledger_levels(open_trades: list[Any]) -> dict[str, dict[str, Any]]:

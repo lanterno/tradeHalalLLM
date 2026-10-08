@@ -11,7 +11,6 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from halal_trader.core.context import DashboardContext
 from halal_trader.core.num import money, ratio
-from halal_trader.halal import strict
 from halal_trader.web.dependencies import get_ctx
 
 TOP = 10
@@ -42,10 +41,15 @@ async def core_risk(engine: AsyncEngine, account: str) -> dict[str, Any]:
     """The core account's concentration and drawdown, from the bot's minute
     snapshot (falling back to its ledger at the last close) and its daily
     equity history. ``account`` is its ledger name (core_account())."""
-    from halal_trader.compliance.sectors import sector_of
     from halal_trader.execution.ledger import equity_history
+    from halal_trader.portfolio.holdings import (
+        broker_position,
+        failing_screen,
+        ledger_positions,
+        screen_view,
+        sector_values,
+    )
     from halal_trader.portfolio.snapshots import read_snapshot
-    from halal_trader.web.routes.positions import broker_position, ledger_positions
 
     snap = await read_snapshot(engine, account)
     history = await equity_history(engine, account)
@@ -77,20 +81,8 @@ async def core_risk(engine: AsyncEngine, account: str) -> dict[str, Any]:
         return {"available": False}
     positions.sort(key=lambda p: -(p["market_value"] or 0.0))
     symbols = [p["symbol"] for p in positions]
-    # The newest screen, as the home page and the order boundary read it: a
-    # holding it does not pass (or does not hold) counts as failing.
-    screen_as_of = await strict.newest_screen(engine)
-    screen = {
-        r.symbol: (r.verdict, r.sic_description)
-        for r in (
-            await strict.screen_rows(engine, screen_as_of, symbols=symbols) if screen_as_of else []
-        )
-    }
-    sectors: dict[str, float] = {}
-    for p in positions:
-        s = sector_of(screen.get(p["symbol"], (None, None))[1])
-        sectors[s] = sectors.get(s, 0.0) + (p["market_value"] or 0.0)
-    ranked = sorted(sectors.items(), key=lambda kv: -kv[1])
+    screen = await screen_view(engine, symbols)
+    ranked = sector_values({p["symbol"]: p["market_value"] or 0.0 for p in positions}, screen)
     largest = positions[0] if positions else None
     return {
         "available": True,
@@ -109,7 +101,7 @@ async def core_risk(engine: AsyncEngine, account: str) -> dict[str, Any]:
         if largest
         else None,
         "sectors": [{"sector": s, "weight": ratio(v / base)} for s, v in ranked],
-        "failing_screen": [s for s in symbols if screen.get(s, ("",))[0] != "halal"],
+        "failing_screen": failing_screen(symbols, screen),
         **drawdown(history, equity if equity is not None else invested),
     }
 

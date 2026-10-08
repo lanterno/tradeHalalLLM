@@ -22,7 +22,6 @@ from halal_trader.core.heartbeat import CORE_TRADE as CORE_TRADE_JOB
 from halal_trader.core.heartbeat import DAILY_JOBS
 from halal_trader.core.heartbeat import RESEARCH as RESEARCH_JOB
 from halal_trader.core.heartbeat import WEEKLY_DIGEST as DIGEST_JOB
-from halal_trader.data.store import last_closes
 from halal_trader.halal import strict
 from halal_trader.market_hours import (
     EARLY_CLOSE,
@@ -205,13 +204,18 @@ async def build(
     engine: AsyncEngine, settings: Any, *, now: datetime | None = None
 ) -> dict[str, Any]:
     from halal_trader.compliance import zakat as z
-    from halal_trader.compliance.purification import paper_positions
-    from halal_trader.compliance.sectors import sector_of
     from halal_trader.core.heartbeat import core_running
     from halal_trader.portfolio import readiness as gate
     from halal_trader.portfolio import snapshots
     from halal_trader.portfolio.core_account import DAY_TRADER, core_account
     from halal_trader.portfolio.core_executor import monthly_due
+    from halal_trader.portfolio.holdings import (
+        broker_position,
+        failing_screen,
+        ledger_positions,
+        screen_view,
+        sector_values,
+    )
     from halal_trader.portfolio.snapshots import BENCHMARKS
 
     core_name = core_account(settings.core.paper)  # "core" on paper, "core-live" live
@@ -349,22 +353,19 @@ async def build(
     # ── the core portfolio ──
     core_snap = snaps.get(core_name)
     core_equity = next((a["equity"] for a in accounts if a["account"] == core_name), None)
-    if core_snap is not None and core_snap.positions:
-        held = [
-            {
-                "symbol": p["symbol"],
-                "value": p.get("market_value") or 0.0,
-                "change_today": p.get("change_today"),
-            }
-            for p in core_snap.positions
-        ]
-    else:  # before the first snapshot: the ledger's shares at the last close
-        shares = await paper_positions(engine, today + timedelta(days=1), core_name)
-        last_close = {s: c for s, (_, c) in (await last_closes(engine, sorted(shares))).items()}
-        held = [
-            {"symbol": s, "value": q * last_close.get(s, 0.0), "change_today": None}
-            for s, q in shares.items()
-        ]
+    rows = (
+        [broker_position(p) for p in core_snap.positions]
+        if core_snap is not None and core_snap.positions
+        else (await ledger_positions(engine, core_name, []))[0]
+    )
+    held = [
+        {
+            "symbol": r["symbol"],
+            "value": r["market_value"] or 0.0,
+            "change_today": r["change_today"],
+        }
+        for r in rows
+    ]
     symbols = sorted(h["symbol"] for h in held)
     async with engine.connect() as conn:
         names = {
@@ -374,22 +375,12 @@ async def build(
                 {"s": symbols},
             )
         }
-        verdicts = {
-            r.symbol: (r.verdict, r.sic_description)
-            for r in (
-                await strict.screen_rows(engine, screen_as_of, symbols=symbols)
-                if screen_as_of
-                else []
-            )
-        }
+    verdicts = await screen_view(engine, symbols)
     invested = sum(h["value"] for h in held) or 0.0
     denominator = core_equity or invested or 1.0
     held.sort(key=lambda h: -h["value"])
-    sectors: dict[str, float] = {}
-    for h in held:
-        s = sector_of(verdicts.get(h["symbol"], (None, None))[1])
-        sectors[s] = sectors.get(s, 0.0) + h["value"]
-    failing = [h["symbol"] for h in held if verdicts.get(h["symbol"], ("",))[0] != "halal"]
+    sectors = sector_values({h["symbol"]: h["value"] for h in held}, verdicts)
+    failing = failing_screen((h["symbol"] for h in held), verdicts)
     top = held[:TOP]
 
     # ── zakat and the gate ──
@@ -456,10 +447,7 @@ async def build(
             ],
             "count": len(held),
             "top_weight": round(sum(h["value"] for h in top) / denominator, 5) if held else None,
-            "sectors": [
-                {"sector": s, "weight": round(v / denominator, 5)}
-                for s, v in sorted(sectors.items(), key=lambda kv: -kv[1])
-            ],
+            "sectors": [{"sector": s, "weight": round(v / denominator, 5)} for s, v in sectors],
             "screen": {
                 "as_of": screen_as_of.isoformat() if screen_as_of else None,
                 "halal": screen_counts.get("halal", 0),
