@@ -25,8 +25,8 @@ bot trades.
 
 These are the hard floors under every methodology in this handbook.
 A trade that violates any of them cannot be reached by any operator
-configuration; the screeners refuse the symbol regardless of
-scholar profile (Section 6).
+configuration; the screen refuses the symbol whatever the
+configuration (Section 6).
 
 ### 1.1 Riba (interest)
 
@@ -34,18 +34,11 @@ Any product that pays or charges interest as a function of the
 holding period itself is forbidden. This rules out:
 
 - Conventional bonds and preferred shares paying interest coupons.
-- Stablecoins that pay yield from interest-bearing reserves
-  (most "savings" tokens that aren't a Mudarabah / Wakalah
-  structure).
-- Lending-protocol "deposit yield" where the underlying is
-  conventional debt.
 - Margin / leverage products that charge a periodic interest
   rate to hold the position.
 
-The bot's `crypto/screener.py` rules engine flags interest-bearing
-features in a token's economics; the stock screener catches
-interest-bearing debt via the AAOIFI 30%-of-market-cap ratio
-(Section 2.4).
+The screen catches interest-bearing debt and interest income through
+the financial ratios (Section 2).
 
 ### 1.2 Maysir (gambling)
 
@@ -57,11 +50,11 @@ binary; the bot's screening catches the most-clear cases:
   obligation.
 - Prediction markets whose payouts depend on event outcomes
   unrelated to a real-world economic activity.
-- Lottery tokens.
 
-The bot **does not** trade leveraged products (the brokers it
-talks to are configured paper-only and spot-only). This is the
-strongest mechanical guarantee against Maysir.
+The bot **does not** trade leveraged products: it is long-only
+(`core/long_only.py`), never shorts, and the core portfolio's live
+gate requires a cash account with no margin. This is the strongest
+mechanical guarantee against Maysir.
 
 ### 1.3 Gharar (excessive uncertainty)
 
@@ -70,9 +63,6 @@ underlying — or where the underlying isn't deliverable — fall
 under Gharar. Practical implications:
 
 - Naked options and naked swaps are forbidden.
-- Tokens whose redemption mechanism is opaque or
-  counterparty-dependent (most algorithmic stablecoins after
-  the 2022 collapses) are flagged `doubtful`.
 - Synthetic assets whose backing is unverifiable.
 
 ### 1.4 Prohibited industries
@@ -89,10 +79,10 @@ Companies whose primary revenue is from forbidden activities:
 - Conventional weapons (the bot does not exempt
   defense-contractor primes)
 
-The Zoya stock screener's sector-classification rejects these at
-the GICS-sector level. The crypto screener's category rules
-(`crypto/screener.py`) enforce the same with a token-category
-table.
+The in-house screen (`compliance/aaoifi.py`) rejects these by the
+company's SEC SIC code, conservatively (casinos *and* general hotels,
+since SIC 7011 does not separate them), and every exclusion names its
+reason.
 
 ---
 
@@ -101,14 +91,14 @@ table.
 The Accounting and Auditing Organization for Islamic Financial
 Institutions (AAOIFI) publishes the most-cited international
 standards for Sharia screening. Standards 21 and 30 set the
-financial-ratio bars the bot's default profile uses.
+financial-ratio bars the bot's screen builds on; where S&P Shariah
+is stricter, the stricter bar applies (Section 6).
 
 ### 2.1 Interest-bearing debt ≤ 30% of market cap
 
 Companies whose interest-bearing debt exceeds 30% of trailing
 12-month-average market capitalisation are **not halal**. Tightening
-this further is a scholar's prerogative (see the Taqi Usmani profile
-in Section 6.2).
+this further is a scholar's prerogative; the bot keeps the 30% bar.
 
 The market-cap denominator is deliberately a backward-looking
 average rather than spot price — it makes the ratio less
@@ -128,29 +118,25 @@ A company whose balance sheet is dominated by cash + receivables
 debt rather than a business — outside the spirit of equity
 investing. AAOIFI 21 caps the ratio.
 
-The bot treats this check as **informational** by default — the
-DeLorenzo profile (Section 6.3) flips it to a hard reject. Most
-operators leave it informational because real businesses can
-legitimately hold large cash balances during M&A or capital-
-return phases.
+The bot's strict screen makes it a hard limit, and a stricter one:
+cash and interest-bearing securities at most 30% of market cap, and
+accounts receivable separately at most 49% (Section 6).
 
 ### 2.4 Implementation in the bot
 
-`halal/scholar_profiles.py:ScreeningThresholds` carries the three
-ratios as configurable fields:
+`compliance/aaoifi.py` applies the ratios to SEC filings, taking the
+stricter of AAOIFI and S&P Shariah on every axis (Section 6):
 
 ```python
-ScreeningThresholds(
-    debt_to_marketcap_max=0.30,         # Section 2.1
-    non_permissible_income_max=0.05,    # Section 2.2
-    cash_and_receivables_max=0.33,      # Section 2.3
-)
+DEBT_LIMIT = 0.30           # interest-bearing debt / market cap
+CASH_LIMIT = 0.30           # cash + interest-bearing securities / market cap
+IMPURE_INCOME_LIMIT = 0.05  # impermissible income / revenue
+RECEIVABLES_LIMIT = 0.49    # accounts receivable / market cap (S&P)
 ```
 
-`halal/scholar_profiles.py:evaluate_thresholds(...)` applies them
-and returns `(passed, violations)`. Missing inputs are *skipped*
-(treated as "not measured" rather than "passes") — pin so a
-partial filing can't silently approve.
+Anything that cannot be computed makes the verdict `doubtful`, which
+is not halal: the screen fails closed rather than letting a partial
+filing approve a company.
 
 ---
 
@@ -158,42 +144,18 @@ partial filing can't silently approve.
 
 ### 3.1 Equities
 
-Stock screening follows AAOIFI standards via Zoya:
+Stocks are screened by the in-house AAOIFI-style screen
+(`compliance/aaoifi.py`, run by `compliance/runner.py`) from SEC
+filings:
 
-- Section 1.4 sector exclusions.
+- Section 1.4 business-activity exclusions.
 - Section 2 financial ratios.
 
-The `Settings.zoya_*` fields configure the API endpoint and
-sandbox mode; cached compliance lives in
-`db/repos/stock_halal_cache.py`.
+Its verdicts are checked weekly against the holdings of the SPUS and
+HLAL halal ETFs. A production Zoya key, if one is ever set, can only
+veto on top of it.
 
-### 3.2 Cryptocurrencies
-
-A crypto asset is permissible when **all** of the following hold:
-
-1. **Utility-bearing.** It represents a network utility (gas /
-   fee token, governance token, storage credit, compute
-   payment). Pure-speculation tokens with no utility (most
-   "memecoins") fail.
-2. **Non-interest-bearing.** No automatic yield from holding.
-   Staking *with locked-up tokens used to validate the chain*
-   is permissible (it's compensation for productive
-   service); staking *that's pure interest on a deposit* is
-   not.
-3. **Issuer revenue from halal activities.** A privacy coin
-   whose primary use is contraband payments fails; a
-   payments coin with mixed legal/illegal use stays
-   `doubtful` until the operator makes a call.
-4. **Material liquidity.** Market cap above ~$1B is the
-   default proxy for "the asset has counterparty solvency on
-   the exchange and a real secondary market"; smaller caps
-   route to the exception queue.
-
-The bot's `crypto/screener.py` is inspired by **Mufti Faraz Adam's
-Crypto Shariah Screening Framework** (4-pillar classification:
-category / token type / legitimacy / utility).
-
-### 3.3 Commodities (gold, silver)
+### 3.2 Commodities (gold, silver)
 
 Gold and silver are explicitly permissible for halal trade per
 classical jurisprudence — the prophet's hadith about fair
@@ -207,20 +169,18 @@ Modern considerations:
 - **Synthetic / paper gold** (futures with no delivery) is
   Maysir-adjacent and the bot rejects.
 
-Wave 1.G is the upcoming integration; until it lands, gold /
-silver are not in the bot's tradable universe.
+Gold and silver are not in the bot's tradable universe.
 
-### 3.4 Sukuk (Islamic bonds)
+### 3.3 Sukuk (Islamic bonds)
 
 Sukuk represent fractional ownership of a real asset, with
 profit derived from rental / project cash-flow rather than
 interest. They are permissible by construction (the structure
 is the ruling).
 
-The bot does not currently trade sukuk; Wave 1.H scopes the
-integration.
+The bot does not trade sukuk.
 
-### 3.5 REITs
+### 3.4 REITs
 
 Real Estate Investment Trusts are permissible if **and only if**:
 
@@ -230,15 +190,15 @@ Real Estate Investment Trusts are permissible if **and only if**:
   conventional bank.
 - The REIT's debt structure passes Section 2's ratios.
 
-Wave 1.I scopes the integration. Until then, REITs are
-treated like any other equity by the Zoya screener.
+The in-house screen applies Section 2's ratios to a REIT like any
+other company, and fails one whose assets are mostly loans as a
+lender.
 
-### 3.6 International equities
+### 3.5 International equities
 
 The framework extends naturally — local-currency company
 disclosures feed the same ratio engine. The bot does not
-currently support international equities (London / Tokyo /
-DIFC); Wave 1.J scopes Saxo Bank integration.
+currently support international equities.
 
 ---
 
@@ -249,14 +209,13 @@ audit row (`HalalScreening`) records which.
 
 | Decision | Meaning | Bot behaviour |
 |---|---|---|
-| `halal` | Compliant under the active profile | Tradable |
+| `halal` | Compliant under the strict screen | Tradable |
 | `doubtful` | Insufficient data, edge case, or borderline | Exception queue (Section 7) |
 | `not_halal` | Fails one or more hard rules | Refused; never in the candidate set |
 
-The conservative-default tiebreak is pinned across every consensus
-policy in `halal/consensus.py`: when providers disagree,
-`not_halal > doubtful > halal`. A single rejection by any provider
-overrides any number of `halal` votes (Section 6.4).
+The rule is conservative throughout: `doubtful` is not halal, and an
+index board's exclusion, or a production Zoya key's `not_halal`,
+vetoes a `halal` from the screen (Section 6).
 
 ---
 
@@ -281,22 +240,15 @@ The result is recorded in `purification_entries` against the
 original trade. **Negative gains do not produce a credit** — the
 operator never owes themselves charity from a loss.
 
-### 5.2 Periodic disbursement
+### 5.2 Dividend purification ledger
 
-Wave 2.D `halal/purification_schedule.py` groups outstanding
-purification entries into monthly / quarterly / yearly
-disbursement bundles (default quarterly). `schedule_disbursements`
-returns one `DisbursementReceipt` per period with:
-
-- Total USD owed
-- Per-symbol breakdown (sorted by descending USD so the
-  operator's eye lands on concentration first)
-- Markdown receipt body suitable for emailing the operator
-  / charity
-
-The scheduler **never auto-marks entries paid** — that's a
-one-way audit-trail commitment that needs explicit operator
-acknowledgement after the disbursement actually settles.
+`compliance/purification.py` keeps one ledger per account: for every
+dividend on a held position it accrues shares held × dividend per
+share × the company's impure-income ratio (5%, the most a passing
+company may have, where the screen has none), once per dividend. The
+operator records donations against it (`halal-trader purify`); nothing
+is marked paid automatically, since that needs explicit acknowledgement
+after the disbursement actually settles.
 
 ### 5.3 Charity choice
 
@@ -310,81 +262,28 @@ prefer any particular charity but the recommended pattern is:
 - Records retained for tax purposes — purification is **not**
   Zakat, but jurisdictions vary on whether it's tax-deductible.
 
-### 5.4 Dividend purification
-
-Dividend purification (separate from capital-gain purification)
-is computed per-dividend by `halal/purification.py`:
-
-```
-dividend_purification = dividend × non_permissible_revenue_pct
-```
-
-The same disbursement scheduler handles both kinds.
-
 ---
 
-## Section 6: Scholar profiles (Wave 2.C)
+## Section 6: The strict screen
 
-Different scholars hold different positions on edge cases.
-`halal/scholar_profiles.py` ships three named profiles. The
-operator picks one via configuration; the audit row records
-which profile gated each trade so a future scholar challenge has
-the chain of accountability.
+Scholars and index providers differ on edge cases. On 2026-10-02 the
+operator chose the strict option: wherever AAOIFI and S&P Shariah
+differ, the stricter rule applies, and an index Shariah board's
+exclusion of a company is a veto (`compliance/index_veto.py`). In
+practice:
 
-### 6.1 `aaoifi_default` (default)
+- Cash is held to 30% of market cap (S&P) rather than AAOIFI's 33%,
+  and accounts receivable to 49% (S&P's fourth ratio).
+- Market cap is shares outstanding times the 36-month average
+  month-end price where that history exists (S&P's method), so a
+  name near a limit does not flip verdict with every price swing.
+- Interest income a company does not report is estimated (cash and
+  securities at 5%) rather than taken as zero.
+- A REIT whose assets are mostly loans fails as a lender.
 
-The international standard. Debt 30% / non-permissible income
-5% / cash-and-receivables 33% (informational). STRICT consensus
-across screening providers.
-
-```python
-AAOIFI_DEFAULT.thresholds == ScreeningThresholds()
-AAOIFI_DEFAULT.default_policy == ConsensusPolicy.STRICT
-```
-
-### 6.2 `taqi_usmani`
-
-Stricter than the AAOIFI default. Debt cap 25%, non-permissible
-income 3%. Under the WEIGHTED consensus path, weights Musaffa +
-IdealRatings 1.5× (operators in this tradition often weight the
-more conservative providers heavier on borderline tech-sector
-cases).
-
-The rationale: Mufti Taqi Usmani has at times argued the AAOIFI
-thresholds were a starting concession for a market lacking
-sufficient Sharia-compliant financing, not a target. Profiles
-following this view tighten the cuts.
-
-### 6.3 `delorenzo_djim`
-
-Sheikh Yusuf Talal DeLorenzo's DJIM-era methodology. Debt cap
-33% (slightly more permissive than AAOIFI default), MAJORITY
-consensus policy. Useful for operators following the older Dow
-Jones Islamic Market screening tradition.
-
-### 6.4 Multi-source consensus
-
-When multiple providers screen the same symbol, three policies
-combine their opinions (`halal/consensus.py`):
-
-| Policy | Rule |
-|---|---|
-| `STRICT` (default) | Any `not_halal` rejects. Any `doubtful` (without `not_halal`) yields `doubtful`. Only unanimous `halal` yields `halal`. |
-| `MAJORITY` | Most-common decision wins. Ties resolve to most-conservative. |
-| `WEIGHTED` | Per-provider weight sums; largest wins. Ties resolve to most-conservative. |
-
-All three share the **conservative-wins-on-ties** rule:
-`not_halal > doubtful > halal`. The default STRICT policy is the
-safest interpretation when scholars themselves disagree. An
-operator who explicitly opts into MAJORITY / WEIGHTED takes
-responsibility for the looser stance and can record their
-reasoning in the audit trail.
-
-### 6.5 Empty input
-
-A symbol with **no** opinions returns `doubtful` rather than
-`halal` — pin: "no opinions = unattested = refuse to trade",
-the safest fail-shut default.
+Only the newest screen counts, and only while it is fresh: a stale
+or missing screen makes nothing halal (`halal/strict.py`). Every
+verdict is stored with its metrics, so each decision can be audited.
 
 ---
 
@@ -393,11 +292,9 @@ the safest fail-shut default.
 Decisions tagged `doubtful` flow to the operator's exception
 queue (`halal/exception_queue.py`). The operator can:
 
-1. **Approve** — typical for newly-listed tokens with
-   insufficient screener data but a halal sector (e.g. a new
-   layer-1 with no DeFi features, where the bot's category
-   rules can't yet classify the token but the sector is
-   clearly utility).
+1. **Approve** — typical for a newly listed company whose filings
+   are too thin for the ratios but whose business is clearly
+   permissible.
 2. **Reject** — for borderline cases the operator wants to
    wait on.
 3. **Defer** — explicit "ask a scholar before acting". The
@@ -421,8 +318,9 @@ Every trade carries:
 - `halal_screening_id` → `HalalScreening` row recording the
   decision, the source(s), the criteria (JSONB blob with the
   ratios that produced the decision), the cache hit flag.
-- The active scholar profile name at decision time.
-- The active consensus policy at decision time.
+- For the core portfolio, the screen date each order relied on
+  (`core_orders.screen_as_of`), whose verdicts stay in
+  `halal_screen_results` per method.
 
 For trades where the operator overrode an exception (Section 7),
 the chain extends to the queue row and the operator's free-form
@@ -431,8 +329,8 @@ trade and answer "why was this allowed?" without reading code.
 
 The post-trade `halal/audit.py:export_receipt(...)` builds a
 JSON receipt joining the trade row with its screening — used
-for compliance reporting and the Wave 2.A signed-receipt
-workflow.
+for compliance reporting, which `halal/signing.py` can sign so an
+auditor can verify it without trusting the code.
 
 ---
 
@@ -462,9 +360,9 @@ That's why the screener runs *before* the strategy, not after.
 
 ### 9.4 Real money
 
-The bot is paper-trade only by design (`ALPACA_PAPER_TRADE=true`,
-`BINANCE_TESTNET=true` are pinned in `.env.example`; `crypto/`
-and `trading/` modules abort if these flip). Fiqh rulings on
+The bot trades paper by default (`ALPACA_PAPER_TRADE=true` and
+`CORE_PAPER=true` in `.env.example`), and going live needs that day's
+confirmation token (`core/safeguards.py`). Fiqh rulings on
 paper trading are softer than on live trading — but the screener
 applies the same rules either way, so the operator can study
 the ruleset's behaviour without a real-money commitment.
@@ -475,24 +373,15 @@ the ruleset's behaviour without a real-money commitment.
 
 - AAOIFI Sharia Standards 21 (Financial Papers, Shares and Bonds)
   and 30 (Financial Indices) — the international framework this
-  handbook's default profile follows.
+  handbook's screen builds on.
 - *Introduction to Islamic Finance* — Mufti Taqi Usmani.
 - *Islamic Capital Markets: Products and Strategies* — Kabir
   Hassan & Michael Mahlknecht (eds.).
-- Mufti Faraz Adam's *Crypto Shariah Screening Framework* — the
-  basis for `crypto/screener.py`'s 4-pillar classification.
-- Shariah Review Bureau, IFG, Mufti Menk, and Mufti Ismail Menk
-  have all published frameworks for crypto screening with
-  significant overlap; the bot's screener is closest to the IFG
-  / Faraz Adam model.
-
-For scholarly disagreements not captured by the three Wave 2.C
-profiles, the operator may register a custom profile via
-`halal.scholar_profiles.register_profile(...)` — the audit row
-records the custom profile's name like any built-in.
+- S&P Dow Jones Indices, *Shariah Indices Methodology* — the source
+  of the strict screen's market-cap averaging and receivables ratio.
 
 ---
 
-_Last reviewed: 2026-05-01 (project-internal review). Pending
+_Last reviewed: 2026-10-08 (project-internal review). Pending
 external scholar sign-off; the handbook sections aim to be
 ready for review without further engineering work._
