@@ -316,32 +316,6 @@ class WebAction(SQLModel, table=True):
     error: str | None = None
 
 
-class PurificationEntry(SQLModel, table=True):
-    """Legacy: persistent record of a dividend's haram-portion purification obligation.
-
-    Never written by anything; ``purification_accruals`` (compliance/purification.py)
-    is the dividend ledger since 2026-10-04. Still summed by the compliance summary
-    so no row entered by hand could be lost.
-
-    One row per received dividend. ``paid_at`` stays NULL until the
-    operator records the donation; ``outstanding_total`` queries filter
-    on ``paid_at IS NULL``.
-    """
-
-    __tablename__ = "purification_entries"
-
-    id: int | None = Field(default=None, primary_key=True)
-    timestamp: datetime = Field(
-        default_factory=lambda: datetime.now(UTC), sa_type=sa.DateTime(timezone=True)
-    )
-    symbol: str = Field(index=True)
-    dividend_usd: float
-    haram_pct: float
-    purification_usd: float
-    notes: str | None = None
-    paid_at: datetime | None = Field(default=None, sa_type=sa.DateTime(timezone=True))
-
-
 class HalalScreening(SQLModel, table=True):
     """Per-decision audit row for a Shariah-compliance screening.
 
@@ -371,8 +345,8 @@ class HalalScreening(SQLModel, table=True):
 class RoundTripPurificationRow(SQLModel, table=True):
     """One round-trip purification accrual on a closed-and-realised gain.
 
-    Capital-gains side of the purification accounting (the dividend-side
-    lives in :class:`PurificationEntry`). Idempotent on
+    Capital-gains side of the purification accounting (the dividend side is
+    ``purification_accruals``, compliance/purification.py). Idempotent on
     ``(symbol, source_ref)`` so the close hook can call freely.
     """
 
