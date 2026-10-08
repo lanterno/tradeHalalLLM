@@ -199,25 +199,6 @@ class ReconciliationLog(SQLModel, table=True):
     notes: str | None = None
 
 
-class ResearchJob(SQLModel, table=True):
-    """One backtest / walk-forward / Monte Carlo job, queued or completed."""
-
-    __tablename__ = "research_jobs"
-
-    id: int | None = Field(default=None, primary_key=True)
-    timestamp: datetime = Field(
-        default_factory=lambda: datetime.now(UTC), sa_type=sa.DateTime(timezone=True)
-    )
-    kind: str  # 'backtest' | 'walk_forward' | 'monte_carlo'
-    name: str | None = None  # operator-supplied label
-    params: dict = Field(sa_column=sa.Column("params", JSONB, nullable=False))
-    status: str = Field(default="queued")  # 'queued' | 'running' | 'ok' | 'error'
-    result: dict | None = Field(default=None, sa_column=sa.Column("result", JSONB, nullable=True))
-    error: str | None = None
-    finished_at: datetime | None = Field(default=None, sa_type=sa.DateTime(timezone=True))
-    pinned: bool = Field(default=False)
-
-
 class DailyRecommendation(SQLModel, table=True):
     """LLM-picked "stock of the day" — the single most promising halal stock.
 
@@ -308,43 +289,6 @@ class QuantTrial(SQLModel, table=True):
     verdict: str | None = None  # pass | fail | inconclusive
 
 
-class RuntimeConfig(SQLModel, table=True):
-    """Runtime overlay for ``Settings`` knobs — never wired up.
-
-    Meant as an operator-set overlay over the .env-derived values. Nothing
-    reads or writes it (its repository was removed as dead code on
-    2026-10-06); the model stays so the schema matches the migrations.
-    """
-
-    __tablename__ = "runtime_config"
-
-    key: str = Field(primary_key=True)  # uppercase env-var name
-    # Raw scalar / list / dict — JSONB so we can round-trip any
-    # ``Settings`` value without a parse-on-read step.
-    value: Any = Field(sa_column=sa.Column("value", JSONB, nullable=False))
-    set_by: str | None = None
-    set_at: datetime = Field(
-        default_factory=lambda: datetime.now(UTC), sa_type=sa.DateTime(timezone=True)
-    )
-
-
-class PairPause(SQLModel, table=True):
-    """Per-pair operator pause toggle from the crypto bot.
-
-    Nothing reads or writes it since crypto trading was abandoned on
-    2026-10-01; the model stays so the schema matches the migrations.
-    """
-
-    __tablename__ = "pair_pauses"
-
-    pair: str = Field(primary_key=True)
-    set_by: str | None = None
-    set_at: datetime = Field(
-        default_factory=lambda: datetime.now(UTC), sa_type=sa.DateTime(timezone=True)
-    )
-    reason: str | None = None
-
-
 class WebAction(SQLModel, table=True):
     """Audit log row for one dashboard mutation request.
 
@@ -422,25 +366,6 @@ class HalalScreening(SQLModel, table=True):
     cache_hit: bool = Field(default=False)
 
 
-class ThesisTagRow(SQLModel, table=True):
-    """One thesis tag attached to a closed trade.
-
-    Nothing writes this table since ``core/thesis`` was deleted on 2026-10-01;
-    the model stays so the schema matches the migrations.
-    """
-
-    __tablename__ = "thesis_tags"
-
-    trade_id: str = Field(primary_key=True)
-    tag: str  # one of THESIS_TAGS
-    confidence: float = 0.0
-    reason: str | None = None
-    method: str = Field(default="heuristic")  # heuristic | llm
-    set_at: datetime = Field(
-        default_factory=lambda: datetime.now(UTC), sa_type=sa.DateTime(timezone=True)
-    )
-
-
 class RoundTripPurificationRow(SQLModel, table=True):
     """One round-trip purification accrual on a closed-and-realised gain.
 
@@ -515,32 +440,6 @@ class RationaleRow(SQLModel, table=True):
     )
 
 
-class ReplaySnapshotRow(SQLModel, table=True):
-    """One cycle's frozen input bundle.
-
-    The full ``CycleSnapshot`` lives in the ``payload`` JSONB column —
-    treating it as opaque keeps schema churn out of the cycle path
-    (snapshot fields can come and go via the dataclass). The top-level
-    columns are extracted from the snapshot for cheap listing /
-    filtering by the dashboard.
-
-    Nothing writes this table since ``core/replay`` was deleted on 2026-10-01;
-    the model stays so the schema matches the migrations.
-    """
-
-    __tablename__ = "replay_snapshots"
-
-    cycle_id: str = Field(primary_key=True)
-    created_at: datetime = Field(
-        default_factory=lambda: datetime.now(UTC),
-        sa_type=sa.DateTime(timezone=True),
-        index=True,
-    )
-    market: str
-    schema_version: int
-    payload: dict = Field(sa_column=sa.Column("payload", JSONB, nullable=False))
-
-
 class ShariaExceptionRow(SQLModel, table=True):
     """One pending Sharia ruling for an ambiguous instrument.
 
@@ -563,99 +462,6 @@ class ShariaExceptionRow(SQLModel, table=True):
     decided_at: datetime | None = Field(default=None, sa_type=sa.DateTime(timezone=True))
     decided_by: str = ""
     operator_note: str = ""
-
-
-class RegimeSnapshotRow(SQLModel, table=True):
-    """One day's regime snapshot (features + outcome).
-
-    Nothing reads or writes this table since ``ml/regime_memory`` was
-    deleted on 2026-10-01; the model stays so the schema matches the
-    migrations.
-
-    Features are JSON-serialised; the embedding vector lives next to
-    them so cosine similarity queries don't have to recompute it.
-    The pgvector(N) promotion is one alembic migration away — the
-    stored JSON list[float] format ports cleanly to a vector column.
-    """
-
-    __tablename__ = "regime_snapshots"
-
-    date: str = Field(primary_key=True)
-    features_json: dict = Field(sa_column=sa.Column("features_json", JSONB, nullable=False))
-    embedding: list[float] = Field(
-        sa_column=sa.Column("embedding", Vector(REGIME_EMBEDDING_DIM), nullable=False)
-    )
-    outcome_pnl_pct: float = 0.0
-    outcome_win_rate: float = 0.0
-    outcome_n_trades: int = 0
-    note: str = ""
-    created_at: datetime = Field(
-        default_factory=lambda: datetime.now(UTC), sa_type=sa.DateTime(timezone=True)
-    )
-
-
-class PromptGenome(SQLModel, table=True):
-    """One candidate prompt produced by the prompt-evolution GA.
-
-    The GA was deleted on 2026-10-01 (its fitness never depended on the
-    prompt, and no strategy read a promoted genome). Nothing writes this
-    table; the model stays so the schema matches the migrations.
-    """
-
-    __tablename__ = "prompt_genomes"
-
-    id: int | None = Field(default=None, primary_key=True)
-    created_at: datetime = Field(
-        default_factory=lambda: datetime.now(UTC),
-        sa_type=sa.DateTime(timezone=True),
-        index=True,
-    )
-    name: str = Field(index=True)  # which prompt slot is being evolved
-    genome: dict = Field(sa_column=sa.Column("genome", JSONB, nullable=False))
-    fitness: float = 0.0
-    n_cycles: int = 0  # how many replay snapshots the fitness was measured over
-    parent_ids: list = Field(
-        default_factory=list,
-        sa_column=sa.Column("parent_ids", JSONB, nullable=False, default="[]"),
-    )
-    promoted_at: datetime | None = Field(default=None, sa_type=sa.DateTime(timezone=True))
-    notes: str = ""
-
-
-class MlArtefact(SQLModel, table=True):
-    """Versioned ML model blob.
-
-    Nothing reads or writes this table since the ``ml/`` stack was
-    deleted on 2026-10-01; the model stays so the schema matches the
-    migrations.
-
-    It replaced ``models/*.pkl`` so the bot's state replicated with the
-    DB and rolled back atomically alongside the schema. Each row is one
-    (name, version); the highest version for a name was the live one.
-
-    The payload stores either a sklearn pickle (BYTEA) or a small
-    JSON blob (slippage model, calibration curve), keyed by
-    ``payload_format``. HuggingFace caches (~GBs of Chronos
-    weights) intentionally stay on the filesystem.
-    """
-
-    __tablename__ = "ml_artefacts"
-
-    id: int | None = Field(default=None, primary_key=True)
-    name: str = Field(index=True)
-    version: int
-    payload_format: str  # "json" | "pickle"
-    payload_bytes: bytes | None = Field(
-        default=None, sa_column=sa.Column("payload_bytes", sa.LargeBinary, nullable=True)
-    )
-    payload_json: dict | None = Field(
-        default=None, sa_column=sa.Column("payload_json", JSONB, nullable=True)
-    )
-    sklearn_version: str = ""
-    feature_hash: str = ""
-    created_at: datetime = Field(
-        default_factory=lambda: datetime.now(UTC), sa_type=sa.DateTime(timezone=True)
-    )
 
 
 class BrokerActivity(SQLModel, table=True):
