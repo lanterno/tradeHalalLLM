@@ -111,6 +111,7 @@ async def test_the_page_names_every_problem_and_judges_jobs_by_the_calendar(engi
     assert any(p.startswith("Shadow engine") for p in fleet["problems"])
     assert any(p.startswith("Evening research") for p in fleet["problems"])
     assert body["halt"]["enabled"] is False and body["market"]["open"] is True
+    assert body["paper"] is True
 
     jobs = {j["component"]: j for j in body["jobs"]}
     assert jobs[hb.RESEARCH]["status"] == "stale"
@@ -119,6 +120,8 @@ async def test_the_page_names_every_problem_and_judges_jobs_by_the_calendar(engi
     assert jobs[hb.CORE_TRADE]["status"] == "unknown" and not jobs[hb.CORE_TRADE]["due_today"]
     assert jobs[hb.CORE_TRADE]["next"] == "2026-10-08T15:40:00-04:00"
     assert jobs[hb.WEEKLY_DIGEST]["today_at"] is None  # Fridays only
+    # Tuesday's research beat is no run of today's, nor would a catch-up at dawn be.
+    assert not jobs[hb.RESEARCH]["ran_today"]
 
     procs = {p["component"]: p for p in body["processes"]}
     assert procs[hb.SHADOW_PROCESS]["status"] == "missing"
