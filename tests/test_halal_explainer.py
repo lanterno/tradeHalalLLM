@@ -27,7 +27,9 @@ def test_explain_pass_includes_decision_and_category() -> None:
     assert "HALAL" in out.body_md
     assert "Technology" in out.body_md
     assert "$800,000,000,000" in out.body_md
-    assert any("section-1" in s for s in out.sources)
+    assert out.sources == [
+        "docs/halal_jurisprudence.md#section-2-aaoifi-financial-ratios-default-profile"
+    ]
 
 
 def test_explain_fail_lists_failures() -> None:
@@ -38,7 +40,7 @@ def test_explain_fail_lists_failures() -> None:
     out = explain_screening(receipt)
     assert out.decision == "not_halal"
     assert "❌ interest-bearing yield" in out.body_md
-    assert any("section-3" in s for s in out.sources)
+    assert "docs/halal_jurisprudence.md#14-prohibited-industries" in out.sources
 
 
 def test_explain_doubtful_points_to_exception_queue() -> None:
@@ -60,3 +62,22 @@ def test_explain_includes_notes_as_blockquote() -> None:
     receipt = _receipt("halal", {"notes": "Approved by scholar council 2026-04-01."})
     out = explain_screening(receipt)
     assert "> Approved by scholar council" in out.body_md
+
+
+def test_every_cited_section_exists_in_the_handbook() -> None:
+    """Each source is a heading anchor docs/halal_jurisprudence.md produces."""
+    import re
+    from pathlib import Path
+
+    handbook = Path(__file__).resolve().parent.parent / "docs" / "halal_jurisprudence.md"
+
+    def slug(heading: str) -> str:
+        text = re.sub(r"[^\w\s-]", "", heading.lstrip("#").strip().lower())
+        return re.sub(r"\s", "-", text)
+
+    anchors = {slug(line) for line in handbook.read_text().splitlines() if line.startswith("#")}
+    for decision in ("halal", "not_halal", "doubtful"):
+        for source in explain_screening(_receipt(decision, {})).sources:
+            path, _, anchor = source.partition("#")
+            assert path == "docs/halal_jurisprudence.md"
+            assert anchor in anchors, f"{decision}: no heading for #{anchor}"
