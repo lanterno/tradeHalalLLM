@@ -81,7 +81,7 @@ export default function Trades() {
         <div>
           <h1 className="text-2xl font-bold text-white">Day-trader trades</h1>
           <p className="mt-1 text-xs text-muted">
-            The retired intraday day-trader's orders. The core portfolio's orders are on the Core page.
+            The intraday day-trader's orders. The core portfolio's orders are on the Core page.
           </p>
         </div>
         <button

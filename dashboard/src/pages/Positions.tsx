@@ -20,7 +20,6 @@ function signedPct(v: number | null | undefined, digits = 2): string {
 
 const STATUS_STYLE: Record<string, string> = {
   active: "border-accent/35 bg-accent/5 text-accent",
-  retired: "border-border bg-bg/40 text-muted",
   disabled: "border-border bg-bg/40 text-muted",
 };
 
@@ -142,10 +141,10 @@ function AccountSection({ account }: { account: AccountPositions }) {
           <MarkedAt account={account} />
         </p>
       </div>
-      {account.account === "paper" && account.status === "retired" && (
+      {account.account === "paper" && account.status !== "active" && (
         <p className="text-xs text-muted">
-          Retired: it opens nothing new. What it still holds is closed by its own exits (stop, trailing
-          stop), which keep running.
+          Switched off (DAY_TRADER_ENABLED=false): it opens nothing new. What it still holds is closed by
+          its own exits (stop, trailing stop), which keep running.
         </p>
       )}
       <div className="grid grid-cols-2 gap-4 md:grid-cols-4">

@@ -58,8 +58,7 @@ function Account({ a, label }: { a: HomeAccount; label: string }) {
             BADGE[a.status] ?? BADGE.disabled,
           )}
         >
-          {/* The day-trader switched off is retired, not paused: nothing turns it back on. */}
-          {a.account === "paper" && a.status !== "active" ? "retired" : a.status}
+          {a.status === "active" ? "active" : "off"}
         </span>
       </div>
       <p className="mt-1.5 text-[22px] font-bold tabular-nums text-white">{formatUsd(a.equity)}</p>

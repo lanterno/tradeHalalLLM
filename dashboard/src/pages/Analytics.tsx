@@ -20,7 +20,7 @@ const RANGES = [
 ] as const;
 
 export default function Analytics() {
-  // The day-trader is retired: a short window would mostly be empty.
+  // 90 days: enough closed round-trips to read a record from.
   const [days, setDays] = useState(90);
   const { data: stats, isLoading, isError, error, refetch } = useAnalytics(days);
   const {
@@ -49,8 +49,8 @@ export default function Analytics() {
         <div>
           <h1 className="text-2xl font-bold text-white">Day-trader analytics</h1>
           <p className="mt-1 max-w-2xl text-xs text-muted">
-            The retired intraday day-trader's record (its own paper account), kept as research. It opens
-            nothing new; the core portfolio is the product and has its own page.
+            The intraday day-trader's record on its own paper account. The core portfolio has its own
+            page.
           </p>
         </div>
         <div className="flex gap-1 rounded-lg border border-border bg-surface p-0.5">

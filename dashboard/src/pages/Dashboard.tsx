@@ -112,7 +112,7 @@ function DayTraderRecord() {
     <div className="rounded-xl border border-border bg-surface p-4">
       <details>
         <summary className="flex cursor-pointer list-none items-baseline justify-between text-xs font-semibold uppercase tracking-widest text-muted">
-          Day-trader record (retired)
+          Day-trader record
           <span className="text-xs font-normal normal-case tracking-normal">closed in the last 30 days ▾</span>
         </summary>
         {stats ? (
@@ -148,7 +148,7 @@ export default function Dashboard() {
   // payload's account status is the fallback for an older backend.
   const paper = data?.accounts.find((a) => a.account === "paper");
   const dayTraderEnabled = status?.day_trader_enabled ?? (paper ? paper.status === "active" : undefined);
-  // Wait for that answer before judging staleness, so a retired day-trader's
+  // Wait for that answer before judging staleness, so a switched-off day-trader's
   // old cycle beat never flashes the badge red on load.
   const healthReady = health && (status || statusError || data);
   // The market's day (New York), like the Hijri date beside it from the API.

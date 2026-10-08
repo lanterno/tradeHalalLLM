@@ -35,8 +35,7 @@ export default function Decisions() {
       <div>
         <h1 className="text-2xl font-bold text-white">Day-trader decisions</h1>
         <p className="mt-1 text-xs text-muted">
-          The retired day-trader's LLM calls, guard rejections and self-review. It runs no cycles now; this is
-          its record.
+          The day-trader's LLM calls, guard rejections and self-review.
         </p>
       </div>
 

@@ -29,8 +29,8 @@ interface NavItem {
   end?: boolean;
 }
 
-// The core portfolio is the product and comes first; the advisory research
-// and the retired day-trader keep their pages, under headings that say so.
+// The core portfolio comes first; the day-trader, which runs beside it on its
+// own account, and the advisory research have their own groups.
 const NAV_GROUPS: { heading: string | null; note?: string; items: NavItem[] }[] = [
   {
     heading: null,
@@ -53,7 +53,6 @@ const NAV_GROUPS: { heading: string | null; note?: string; items: NavItem[] }[] 
   },
   {
     heading: "Day-trader",
-    note: "retired",
     items: [
       { to: "/trades", icon: ArrowLeftRight, label: "Trades" },
       { to: "/analytics", icon: BarChart3, label: "Analytics" },

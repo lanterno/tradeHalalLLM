@@ -98,7 +98,7 @@ export interface Holding {
 export interface AccountPositions {
   account: "core" | "paper" | string;
   label: string;
-  status: "active" | "disabled" | "retired" | string;
+  status: "active" | "disabled" | string;
   /** "snapshot": the broker's marks, as of `as_of`; "ledger": fills at the last close. */
   source: "snapshot" | "ledger";
   as_of: string | null;
@@ -126,14 +126,14 @@ export interface HealthStatus {
       stale?: boolean;
       age_seconds?: number;
       reason?: string | null;
-      // "disabled": the component is switched off on purpose (e.g. the retired
-      // day-trader's cycle), so its old beat is not a fault.
+      // "disabled": the component is switched off on purpose (e.g. the
+      // day-trader's cycle with DAY_TRADER_ENABLED=false), so its old beat is not a fault.
       status?: string;
     }
   >;
 }
 
-/** The day-trader's cycle beat; it stops for good when the day-trader is retired. */
+/** The day-trader's cycle beat; it stops while the day-trader is switched off. */
 export const DAY_TRADER_CYCLE = "stock.cycle";
 
 /**
@@ -258,7 +258,7 @@ export interface RiskState {
   // ISO timestamp of when the cycle wrote this snapshot — useful
   // for surfacing staleness if the cycle has stopped running.
   pushed_at?: string;
-  // False once the day-trader is retired: its last read then stays as it was.
+  // False while the day-trader is switched off: its last read then stays as it was.
   day_trader_enabled?: boolean;
 }
 

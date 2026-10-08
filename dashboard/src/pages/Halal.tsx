@@ -26,7 +26,7 @@ const VERDICT_CLS: Record<string, string> = {
   unscreened: "bg-muted",
 };
 
-const LABEL: Record<string, string> = { core: "Core portfolio", paper: "Day-trader (retired)" };
+const LABEL: Record<string, string> = { core: "Core portfolio", paper: "Day-trader" };
 
 function AccountCard({ a }: { a: AccountCompliance }) {
   const s = STATUS[a.status] ?? STATUS.compliant;

@@ -120,14 +120,14 @@ function CoreRiskPanel({ risk }: { risk: CoreRisk }) {
 }
 
 function DayTraderRisk({ data, fetchedAt }: { data: RiskState; fetchedAt: number }) {
-  const retired = data.day_trader_enabled === false;
+  const off = data.day_trader_enabled === false;
   const ageMs = data.pushed_at ? fetchedAt - new Date(data.pushed_at).getTime() : NaN;
   // A running day-trader cycles every 15 minutes; a gap past 20 is a fault.
-  const stale = !retired && Number.isFinite(ageMs) && ageMs > 20 * 60 * 1000;
+  const stale = !off && Number.isFinite(ageMs) && ageMs > 20 * 60 * 1000;
   return (
     <>
       <p className="mb-3 text-xs text-muted">
-        {retired ? "Retired: it opens nothing new and runs no cycles, so this is its last read, " : "Last cycle's read, "}
+        {off ? "Switched off: it opens nothing new and runs no cycles, so this is its last read, " : "Last cycle's read, "}
         taken {data.pushed_at ? formatTime(data.pushed_at) : "—"}
         {Number.isFinite(ageMs) ? ` (${formatDuration(ageMs)} ago)` : ""}.
         {stale && (
@@ -244,7 +244,7 @@ export default function RiskAndSystem() {
         </div>
         <p className="mt-3 text-xs text-muted">
           While engaged, the core makes no buys, monthly rebalance included; its runs still sell any holding
-          that fails the halal screen. The retired day-trader opens nothing either way, and its stop exits
+          that fails the halal screen. The day-trader opens nothing while halted either, and its stop exits
           keep running. <code className="font-mono">halal-trader halt --close-all stocks</code> also
           liquidates the day-trader's account (not the core's).
         </p>
@@ -266,11 +266,11 @@ export default function RiskAndSystem() {
         )}
       </section>
 
-      {/* The retired day-trader */}
+      {/* The day-trader */}
       <section className="rounded-xl border border-border bg-surface p-4">
         <details open={risk.data?.day_trader_enabled === true}>
           <summary className="cursor-pointer text-sm font-medium uppercase tracking-wider text-muted">
-            Day-trader risk{risk.data?.day_trader_enabled === false ? " · retired" : ""}
+            Day-trader risk{risk.data?.day_trader_enabled === false ? " · switched off" : ""}
           </summary>
           <div className="mt-3">
             {risk.isError ? (

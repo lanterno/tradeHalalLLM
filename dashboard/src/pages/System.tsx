@@ -21,7 +21,7 @@ const CORE_LABELS: Record<string, [string, (v: Value) => string]> = {
   core_cash_buffer: ["Cash left uninvested", (v) => `${(Number(v) * 100).toFixed(0)}% of equity`],
   core_max_screen_age_days: ["Oldest halal screen it will trade on", (v) => `${v} days`],
   core_trades_at_et: ["Trades at", (v) => `${v} ET, monthly rebalance + daily forced sales`],
-  day_trader_enabled: ["Day-trader", (v) => (v ? "running" : "retired")],
+  day_trader_enabled: ["Day-trader", (v) => (v ? "running" : "switched off")],
 };
 
 function ConfigTable({ rows }: { rows: [string, string][] }) {
@@ -125,7 +125,7 @@ export default function System() {
       {/* The day-trader and the LLM */}
       <div className="rounded-xl border border-border bg-surface p-4">
         <h3 className="mb-4 text-sm font-medium uppercase tracking-wider text-muted">
-          Configuration · day-trader (retired) &amp; LLM
+          Configuration · day-trader &amp; LLM
         </h3>
         {config ? (
           <ConfigTable
