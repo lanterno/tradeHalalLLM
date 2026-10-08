@@ -5,13 +5,8 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
-from halal_trader.core.context import RuntimeView
 from halal_trader.web import app as web_app
-from halal_trader.web.prometheus import (
-    MetricSnapshot,
-    collect_default_snapshots,
-    render_metrics,
-)
+from halal_trader.web.prometheus import MetricSnapshot, collect, render_metrics
 
 # ── render_metrics ────────────────────────────────────────────
 
@@ -48,101 +43,68 @@ def test_render_empty_returns_empty_string():
     assert render_metrics([]) == ""
 
 
-# ── collect_default_snapshots ─────────────────────────────────
+# ── collect: every gauge from the database ────────────────────
 
 
-def test_collector_emits_bot_running():
-    rt = RuntimeView(bot_running=True)
-    snaps = collect_default_snapshots(rt)
-    names = [s.name for s in snaps]
-    assert "halal_trader_bot_running" in names
-    assert next(s for s in snaps if s.name == "halal_trader_bot_running").value == 1.0
+async def test_the_gauges_are_read_from_the_database(engine) -> None:  # type: ignore[no-untyped-def]
+    import json
+    from datetime import UTC, datetime
 
+    from sqlalchemy import text
 
-def test_collector_emits_open_positions_per_asset():
-    rt = RuntimeView(open_positions_by_asset={"stock": [{}, {}, {}], "etf": [{}]})
-    snaps = collect_default_snapshots(rt)
-    by_label = {s.labels["asset_class"]: s.value for s in snaps if s.labels}
-    assert by_label == {"stock": 3, "etf": 1}
+    from halal_trader.core.heartbeat import STOCK_CYCLE, STOCK_PROCESS, beat
 
+    await beat(engine, STOCK_PROCESS)
+    await beat(engine, STOCK_CYCLE, {"risk": {"drawdown_pct": -0.02, "portfolio_heat_pct": 0.01}})
+    async with engine.begin() as conn:
+        for consumer, usd in (("stock", 0.3), ("shadow", 0.1), ("research", 0.5)):
+            await conn.execute(
+                text(
+                    "INSERT INTO llm_spend (day, consumer, spent_usd, calls) VALUES (:d, :c, :u, 1)"
+                ),
+                {"d": datetime.now(UTC).date(), "c": consumer, "u": usd},
+            )
+        await conn.execute(
+            text(
+                "INSERT INTO account_snapshots (account, taken_at, equity, cash, positions) "
+                "VALUES ('core', now(), 1000, 10, CAST(:p AS JSONB))"
+            ),
+            {"p": json.dumps([{"symbol": "MSFT"}, {"symbol": "AAPL"}])},
+        )
 
-def test_collector_skips_none_drawdown():
-    rt = RuntimeView(
-        risk_state={"drawdown_pct": None, "portfolio_heat_pct": 0.02},
-    )
-    snaps = collect_default_snapshots(rt)
-    names = [s.name for s in snaps]
-    assert "halal_trader_drawdown_pct" not in names
-    assert "halal_trader_portfolio_heat_pct" in names
+    got = {(s.name, tuple(sorted(s.labels.items()))): s.value for s in await collect(engine)}
 
-
-def test_collector_labels_risk_metrics_with_market():
-    """The ``market`` key on ``risk_state`` flows through to a
-    Prometheus ``market="…"`` label."""
-    rt = RuntimeView(
-        risk_state={
-            "market": "stocks",
-            "drawdown_pct": 0.012,
-            "portfolio_heat_pct": 0.04,
-        },
-    )
-    snaps = collect_default_snapshots(rt)
-    by_name = {s.name: s for s in snaps if s.labels.get("market") == "stocks"}
-    assert "halal_trader_drawdown_pct" in by_name
-    assert "halal_trader_portfolio_heat_pct" in by_name
-    assert by_name["halal_trader_drawdown_pct"].value == 0.012
-
-
-def test_collector_falls_back_to_unknown_market_label():
-    """Pre-discriminator runtime pushes (no ``market`` key) still emit
-    the metric — labelled ``market="unknown"`` so the collector path
-    stays consistent."""
-    rt = RuntimeView(risk_state={"drawdown_pct": 0.005})
-    snaps = collect_default_snapshots(rt)
-    matches = [s for s in snaps if s.name == "halal_trader_drawdown_pct"]
-    assert matches and matches[0].labels.get("market") == "unknown"
-
-
-# ── /metrics endpoint ─────────────────────────────────────────
+    assert got[("halal_trader_bot_running", ())] == 1.0
+    assert ("halal_trader_heartbeat_age_seconds", (("component", STOCK_PROCESS),)) in got
+    assert got[("halal_trader_drawdown_pct", ())] == -0.02
+    assert got[("halal_trader_llm_spend_today_usd", (("pool", "live"),))] == 0.4
+    assert got[("halal_trader_llm_spend_today_usd", (("pool", "research"),))] == 0.5
+    assert got[("halal_trader_account_equity_usd", (("account", "core"),))] == 1000.0
+    assert got[("halal_trader_open_positions", (("account", "core"),))] == 2.0
 
 
 @pytest.fixture
-def client(tmp_path, monkeypatch, database_url):
-    """Test client backed by a fresh migrated test DB.
-
-    Depending on ``database_url`` (provided by ``tests/conftest.py``)
-    ensures the test DB is created + migrated before
-    ``web_app.create_app()`` runs its lifespan, which calls
-    ``init_db()`` and validates the schema is at head.
-    """
+def client(tmp_path, monkeypatch, database_url):  # type: ignore[no-untyped-def]
     monkeypatch.setenv("LOG_DIR", str(tmp_path / "logs"))
-    app = web_app.create_app()
-
-    with TestClient(app) as c:
-        c.app.state.ctx.runtime.bot_running = True
-        c.app.state.ctx.runtime.llm_cost_today_usd = 0.42
+    with TestClient(web_app.create_app()) as c:
         yield c
 
 
-def test_metrics_endpoint_returns_text(client):
+def test_metrics_endpoint_returns_text(client) -> None:  # type: ignore[no-untyped-def]
     r = client.get("/metrics")
     assert r.status_code == 200
     assert r.headers["content-type"].startswith("text/plain")
-    assert "halal_trader_bot_running 1" in r.text
-    assert "halal_trader_llm_cost_today_usd 0.42" in r.text
+    assert "halal_trader_bot_running 0" in r.text  # no bot has beaten
 
 
-async def test_bot_running_comes_from_the_heartbeat(engine):
+async def test_bot_running_comes_from_the_heartbeat(engine) -> None:  # type: ignore[no-untyped-def]
     from datetime import UTC, datetime, timedelta
 
     from halal_trader.core.heartbeat import STOCK_PROCESS, beat
     from halal_trader.web.prometheus import bot_alive
 
-    assert await bot_alive(engine) is False  # the web never runs the bot in-process
+    assert await bot_alive(engine) is False
     await beat(engine, STOCK_PROCESS)
     assert await bot_alive(engine) is True
     await beat(engine, STOCK_PROCESS, now=datetime.now(UTC) - timedelta(minutes=10))
     assert await bot_alive(engine) is False
-
-    snaps = collect_default_snapshots(RuntimeView(bot_running=False), bot_running=True)
-    assert next(s for s in snaps if s.name == "halal_trader_bot_running").value == 1.0

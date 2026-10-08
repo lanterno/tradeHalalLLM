@@ -8,6 +8,7 @@ the lifespan attached.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
 import pytest
@@ -41,18 +42,6 @@ def test_no_app_state_dict_reads_in_src() -> None:
     )
 
 
-def test_runtime_view_defaults_are_safe() -> None:
-    """A bare RuntimeView is constructible — the dashboard process
-    creates one before any cycle has run."""
-    from halal_trader.core.context import RuntimeView
-
-    rv = RuntimeView()
-    assert rv.bot_running is False
-    assert rv.started_at is None
-    assert rv.last_cycle is None
-    assert rv.stock_broker is None
-
-
 # ── Dashboard ctx wiring (smoke) ────────────────────────────────
 
 
@@ -68,7 +57,7 @@ async def test_get_ctx_returns_attached_context() -> None:
     from halal_trader.core.context import DashboardContext, RuntimeView
     from halal_trader.web.dependencies import get_ctx
 
-    runtime = RuntimeView(bot_running=True)
+    runtime = RuntimeView(started_at=datetime.now(UTC))
     ctx = DashboardContext(
         engine=MagicMock(),
         repo=MagicMock(),
@@ -80,7 +69,7 @@ async def test_get_ctx_returns_attached_context() -> None:
     fake_request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(ctx=ctx)))
     out = get_ctx(fake_request)  # type: ignore[arg-type]
     assert out is ctx
-    assert out.runtime.bot_running is True
+    assert out.runtime is runtime
 
 
 @pytest.mark.asyncio

@@ -30,37 +30,6 @@ def _ctx_kwargs() -> dict:
 # ── RuntimeView defaults ────────────────────────────────────
 
 
-def test_runtime_view_constructs_with_no_args():
-    """All fields have defaults — no required kwargs."""
-    rv = RuntimeView()
-    assert rv.bot_running is False
-    assert rv.started_at is None
-    assert rv.last_cycle is None
-    assert rv.risk_state is None
-    assert rv.account_snapshot is None
-
-
-def test_runtime_view_collection_defaults_are_independent():
-    """``stock_positions`` and ``open_positions_by_asset`` use
-    ``field(default_factory=...)`` — two instances must NOT share the
-    same list/dict, otherwise pushing into one leaks into the other."""
-    a = RuntimeView()
-    b = RuntimeView()
-    a.stock_positions.append({"symbol": "AAPL"})
-    a.open_positions_by_asset["AAPL"] = []
-    assert b.stock_positions == []  # b is unaffected
-    assert b.open_positions_by_asset == {}
-
-
-def test_runtime_view_optional_broker_handles_default_none():
-    """``stock_broker`` / ``stocks_news_reactor`` are only populated when
-    the bot is co-hosted with the dashboard. Dashboard-only processes
-    must see them as None to branch correctly."""
-    rv = RuntimeView()
-    assert rv.stock_broker is None
-    assert rv.stocks_news_reactor is None
-
-
 def test_runtime_view_is_mutable():
     """The view is intentionally mutable — the cycle pushes into
     `risk_state`, `last_cycle`, etc. on each tick."""
@@ -69,13 +38,6 @@ def test_runtime_view_is_mutable():
     rv.risk_state = {"drawdown": 0.05, "market": "stocks"}
     assert rv.bot_running is True
     assert rv.risk_state == {"drawdown": 0.05, "market": "stocks"}
-
-
-def test_runtime_view_llm_cost_optional_float():
-    rv = RuntimeView()
-    assert rv.llm_cost_today_usd is None
-    rv.llm_cost_today_usd = 1.23
-    assert rv.llm_cost_today_usd == 1.23
 
 
 # ── DashboardContext shape ─────────────────────────────────
@@ -125,3 +87,10 @@ def test_dashboard_context_uses_slots():
     that make `pytest.raises` brittle)."""
     ctx = DashboardContext(**_ctx_kwargs())
     assert not hasattr(ctx, "__dict__")
+
+
+def test_the_web_knows_only_when_it_started() -> None:
+    """The bot's in-process state never reaches the web: no field pretends it does."""
+    from dataclasses import fields
+
+    assert [f.name for f in fields(RuntimeView)] == ["started_at"]
