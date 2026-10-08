@@ -156,3 +156,31 @@ async def test_promotion_gate_holds_on_thin_data(halabot_engine):
     assert rep.promotion is not None
     assert rep.promotion.promote is False  # not enough samples to promote
     assert rep.shadow_return_std is not None  # variance reported
+
+
+@pytest.mark.asyncio
+async def test_live_returns_are_the_day_traders_closed_round_trips(halabot_engine):
+    """The promotion gate's live leg: closed buys, priced from the fill (else
+    the order's price) to the exit; a row with no entry or exit is skipped."""
+    rows = [
+        ("NVDA", 100.0, None, 110.0, NOW),  # +10%, from the fill
+        ("MSFT", None, 200.0, 190.0, NOW),  # -5%, from the order's price
+        ("SHOP", None, None, 50.0, NOW),  # no entry: unknowable
+        ("AMD", 100.0, None, None, NOW),  # no exit: unknowable
+        ("TXN", 100.0, None, 120.0, NOW - timedelta(days=3)),  # outside the window
+    ]
+    async with halabot_engine.begin() as conn:
+        for symbol, filled, price, exit_price, closed in rows:
+            await conn.execute(
+                sa.text(
+                    "INSERT INTO trades (symbol, side, quantity, status, timestamp, filled_price, "
+                    "price, exit_price, closed_at) VALUES (:s, 'buy', 1, 'filled', :ts, :f, :p, "
+                    ":x, :c)"
+                ),
+                {"s": symbol, "ts": closed, "f": filled, "p": price, "x": exit_price, "c": closed},
+            )
+    rep = await ab_report(
+        halabot_engine, since=NOW - timedelta(hours=1), until=NOW + timedelta(hours=1)
+    )
+    assert rep.live_closed == 2
+    assert rep.live_avg_return_pct == pytest.approx((0.10 - 0.05) / 2)
