@@ -1,78 +1,41 @@
-"""Finnhub stocks news backend — drop-in replacement for the Yahoo
-search endpoint that started 429-ing on 2026-05-21. Tests focus on
-the payload parser since the network layer is identical to the
-Yahoo backend's (httpx + circuit breaker)."""
+"""The one Finnhub company-news request (sentiment/finnhub.py)."""
 
 from __future__ import annotations
 
-from halal_trader.sentiment.events import NewsEvent
-from halal_trader.sentiment.stocks_news import _parse_finnhub_payload
+from datetime import UTC, date, datetime
+
+import httpx
+import pytest
+
+from halal_trader.sentiment import finnhub
 
 
-def test_finnhub_parser_extracts_required_fields():
-    payload = [
-        {
-            "headline": "Apple announces record Q4 earnings",
-            "url": "https://example.com/aapl-q4",
-            "source": "Reuters",
-            "datetime": 1716387200,  # epoch s
-        }
-    ]
-    events = _parse_finnhub_payload("AAPL", payload, limit=5)
-    assert len(events) == 1
-    e = events[0]
-    assert isinstance(e, NewsEvent)
-    assert e.title == "Apple announces record Q4 earnings"
-    assert e.url == "https://example.com/aapl-q4"
-    assert e.source == "Reuters"
-    assert e.published_at  # ISO string, non-empty
+async def test_the_key_travels_in_a_header_and_the_window_in_days() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json=[{"headline": "x"}, "junk"])
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    items = await finnhub.company_news(client, "secret", "AAPL", days=3, today=date(2026, 10, 8))
+
+    assert items == [{"headline": "x"}]
+    (req,) = seen
+    assert req.headers["X-Finnhub-Token"] == "secret"
+    assert "secret" not in str(req.url)
+    assert req.url.params["from"] == "2026-10-05" and req.url.params["to"] == "2026-10-08"
 
 
-def test_finnhub_parser_respects_limit():
-    payload = [
-        {"headline": f"news {i}", "url": f"u{i}", "source": "x", "datetime": 1716387200}
-        for i in range(20)
-    ]
-    events = _parse_finnhub_payload("AAPL", payload, limit=3)
-    assert len(events) == 3
+async def test_an_http_error_is_the_callers_to_handle() -> None:
+    client = httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(429)))
+    with pytest.raises(httpx.HTTPStatusError):
+        await finnhub.company_news(client, "k", "AAPL")
 
 
-def test_finnhub_parser_skips_items_missing_title():
-    payload = [
-        {"headline": "", "url": "u1", "datetime": 1716387200},
-        {"url": "u2", "datetime": 1716387200},  # no headline at all
-        {"headline": "good", "url": "u3", "datetime": 1716387200},
-    ]
-    events = _parse_finnhub_payload("AAPL", payload, limit=10)
-    assert len(events) == 1
-    assert events[0].title == "good"
-
-
-def test_finnhub_parser_skips_items_missing_url():
-    payload = [
-        {"headline": "good news", "datetime": 1716387200},  # no url
-    ]
-    events = _parse_finnhub_payload("AAPL", payload, limit=10)
-    assert events == []
-
-
-def test_finnhub_parser_handles_non_list_payload():
-    """Finnhub returns a bare list. If we ever get something else
-    (error response, rate-limit JSON), the parser must not crash."""
-    assert _parse_finnhub_payload("AAPL", {}, limit=5) == []
-    assert _parse_finnhub_payload("AAPL", None, limit=5) == []
-    assert _parse_finnhub_payload("AAPL", "string", limit=5) == []
-
-
-def test_finnhub_parser_classifies_sentiment():
-    """Sentiment uses the same lexicon as the Yahoo path."""
-    payload = [
-        {
-            "headline": "Apple beats earnings expectations, surges",
-            "url": "u1",
-            "datetime": 1716387200,
-        }
-    ]
-    events = _parse_finnhub_payload("AAPL", payload, limit=5)
-    # "beats" + "surges" should classify positive
-    assert events[0].sentiment in ("positive", "neutral")
+def test_published_at() -> None:
+    assert finnhub.published_at(1_760_000_000) == datetime.fromtimestamp(1_760_000_000, UTC)
+    aware = datetime(2026, 10, 8, 12, tzinfo=UTC)
+    assert finnhub.published_at(aware) == aware
+    for bad in (None, True, 0, -5, "soon", 1e30):
+        assert finnhub.published_at(bad) is None
