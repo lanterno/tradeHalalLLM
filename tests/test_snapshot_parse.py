@@ -56,3 +56,11 @@ def test_to_float() -> None:
     assert to_float("1.5") == 1.5 and to_float(0) == 0.0 and to_float(2) == 2.0
     assert to_float(None) is None and to_float("") is None
     assert to_float("n/a") is None and to_float({}) is None
+
+
+def test_money_and_ratio_round_as_the_api_reports() -> None:
+    from halal_trader.core.num import money, ratio, rounded
+
+    assert money("12.345") == 12.35 and money(None) is None and money("x") is None
+    assert ratio(0.1234567) == 0.12346
+    assert rounded(1.23456, 3) == 1.235
