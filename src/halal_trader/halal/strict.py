@@ -48,6 +48,7 @@ class ScreenRow:
     price: float | None
     shares: float | None
     market_cap: float | None
+    reasons: tuple[str, ...] = ()
 
 
 async def newest_screen(engine: AsyncEngine, *, on_or_before: date | None = None) -> date | None:
@@ -84,14 +85,21 @@ async def screen_rows(
                 "SELECT symbol, verdict, cik, sic_description, "
                 "(metrics->>'price')::float AS price, "
                 "(metrics->>'shares_outstanding')::float AS shares, "
-                "(metrics->>'market_cap')::float AS market_cap "
+                "(metrics->>'market_cap')::float AS market_cap, reasons "
                 f"FROM halal_screen_current WHERE {' AND '.join(where)} ORDER BY symbol"
             ),
             params,
         )
         return [
             ScreenRow(
-                r.symbol, r.verdict, r.cik, r.sic_description, r.price, r.shares, r.market_cap
+                r.symbol,
+                r.verdict,
+                r.cik,
+                r.sic_description,
+                r.price,
+                r.shares,
+                r.market_cap,
+                tuple(str(x) for x in (r.reasons or [])),
             )
             for r in rows
         ]
