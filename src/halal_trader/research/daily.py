@@ -19,6 +19,7 @@ from halal_trader.compliance.sec import filed_at
 from halal_trader.config import Settings
 from halal_trader.data.alpaca_market import AlpacaMarketData
 from halal_trader.data.store import BENCHMARKS
+from halal_trader.halal import strict
 from halal_trader.portfolio.core_account import CORE_PAPER, core_account
 
 logger = logging.getLogger(__name__)
@@ -49,8 +50,7 @@ async def _stored_symbols(engine: AsyncEngine) -> list[str]:
 
 
 async def _screen_age(engine: AsyncEngine, today: date) -> timedelta | None:
-    async with engine.connect() as conn:
-        newest = (await conn.execute(text("SELECT max(as_of) FROM halal_screen_results"))).scalar()
+    newest = await strict.newest_screen(engine)
     return None if newest is None else today - newest
 
 

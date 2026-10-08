@@ -709,20 +709,14 @@ class TradingBot:
     async def _observe_symbols(self) -> list[str]:
         """The largest halal names of the newest in-house screen: the reactor
         scores and records their news for research, and never trades them."""
-        from sqlalchemy import text
+        from halal_trader.halal.strict import halal_universe
 
         if self._engine is None:
             return []
-        async with self._engine.connect() as conn:
-            rows = await conn.execute(
-                text(
-                    "SELECT symbol FROM halal_screen_current WHERE verdict = 'halal' "
-                    "AND as_of = (SELECT max(as_of) FROM halal_screen_results) "
-                    "ORDER BY (metrics->>'market_cap')::float DESC NULLS LAST LIMIT :n"
-                ),
-                {"n": self.settings.stocks.reactor_observe_size},
-            )
-            return [r.symbol for r in rows]
+        _, symbols = await halal_universe(
+            self._engine, today=today_eastern(), limit=self.settings.stocks.reactor_observe_size
+        )
+        return symbols
 
     async def _on_news_event(self, event: Any) -> None:
         """Reactor callback — the "fast in" half of the strategy.

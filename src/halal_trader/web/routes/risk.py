@@ -11,6 +11,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from halal_trader.core.context import DashboardContext
+from halal_trader.halal import strict
 from halal_trader.web.dependencies import get_ctx
 
 TOP = 10
@@ -93,18 +94,15 @@ async def core_risk(engine: AsyncEngine) -> dict[str, Any]:
         return {"available": False}
     positions.sort(key=lambda p: -(p["market_value"] or 0.0))
     symbols = [p["symbol"] for p in positions]
-    async with engine.connect() as conn:
-        screen = {
-            r.symbol: (r.verdict, r.sic_description)
-            for r in await conn.execute(
-                text(
-                    "SELECT DISTINCT ON (symbol) symbol, verdict, sic_description "
-                    "FROM halal_screen_current WHERE symbol = ANY(:s) "
-                    "ORDER BY symbol, as_of DESC, screened_at DESC"
-                ),
-                {"s": symbols},
-            )
-        }
+    # The newest screen, as the home page and the order boundary read it: a
+    # holding it does not pass (or does not hold) counts as failing.
+    screen_as_of = await strict.newest_screen(engine)
+    screen = {
+        r.symbol: (r.verdict, r.sic_description)
+        for r in (
+            await strict.screen_rows(engine, screen_as_of, symbols=symbols) if screen_as_of else []
+        )
+    }
     sectors: dict[str, float] = {}
     for p in positions:
         s = sector_of(screen.get(p["symbol"], (None, None))[1])

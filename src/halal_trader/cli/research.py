@@ -49,7 +49,6 @@ def factor_backtest_cmd(top: int, cost_bps: float, since: Any, pit: bool, univer
 
     async def _load(engine: Any, settings: Any) -> tuple[Any, set[str]]:
         nonlocal schedule
-        from sqlalchemy import text
 
         from halal_trader.data.store import BENCHMARKS
 
@@ -71,16 +70,14 @@ def factor_backtest_cmd(top: int, cost_bps: float, since: Any, pit: bool, univer
                 since=date(since.year - 2, 1, 1),
             )
             return prices, set()
-        async with engine.connect() as conn:
-            halal = {
-                r.symbol
-                for r in await conn.execute(
-                    text(
-                        "SELECT symbol FROM halal_screen_current WHERE verdict = 'halal' "
-                        "AND as_of = (SELECT max(as_of) FROM halal_screen_results)"
-                    )
-                )
-            }
+        from halal_trader.halal import strict
+
+        as_of = await strict.newest_screen(engine)
+        halal = (
+            {r.symbol for r in await strict.screen_rows(engine, as_of, halal_only=True)}
+            if as_of
+            else set()
+        )
         if not halal:
             fail("no halal verdicts: run `compliance screen` first")
         prices = await load_prices(

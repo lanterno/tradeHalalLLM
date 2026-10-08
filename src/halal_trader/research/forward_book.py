@@ -38,6 +38,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from halal_trader.data.store import BENCHMARKS
 from halal_trader.data.universe import universe_at
+from halal_trader.halal import strict
 from halal_trader.research.factor_backtest import (
     Prices,
     Stats,
@@ -119,23 +120,11 @@ async def _screen_caps(
 ) -> tuple[date, dict[str, tuple[float, int | None]]] | None:
     """(screen date, symbol -> (market cap on that date, CIK)) for the halal names of
     the newest screen on or before ``day``: price x shares as the screen read them."""
-    async with engine.connect() as conn:
-        as_of = (
-            await conn.execute(
-                text("SELECT max(as_of) FROM halal_screen_results WHERE as_of <= :d"), {"d": day}
-            )
-        ).scalar()
-        if as_of is None:
-            return None
-        rows = await conn.execute(
-            text(
-                "SELECT symbol, cik, (metrics->>'price')::float AS p, "
-                "(metrics->>'shares_outstanding')::float AS sh FROM halal_screen_current "
-                "WHERE as_of = :a AND verdict = 'halal'"
-            ),
-            {"a": as_of},
-        )
-        return as_of, {r.symbol: (r.p * r.sh, r.cik) for r in rows if r.p and r.sh}
+    as_of = await strict.newest_screen(engine, on_or_before=day)
+    if as_of is None:
+        return None
+    rows = await strict.screen_rows(engine, as_of, halal_only=True)
+    return as_of, {r.symbol: (r.price * r.shares, r.cik) for r in rows if r.price and r.shares}
 
 
 def _core_target(
@@ -185,19 +174,10 @@ async def _last_day(engine: AsyncEngine, name: str) -> BookDay | None:
 
 async def _halal_as_of(engine: AsyncEngine, day: date) -> set[str] | None:
     """What the newest screen run on or before ``day`` held halal (None: no run yet)."""
-    async with engine.connect() as conn:
-        as_of = (
-            await conn.execute(
-                text("SELECT max(as_of) FROM halal_screen_results WHERE as_of <= :d"), {"d": day}
-            )
-        ).scalar()
-        if as_of is None:
-            return None
-        rows = await conn.execute(
-            text("SELECT symbol FROM halal_screen_current WHERE as_of = :a AND verdict = 'halal'"),
-            {"a": as_of},
-        )
-        return {r.symbol for r in rows}
+    as_of = await strict.newest_screen(engine, on_or_before=day)
+    if as_of is None:
+        return None
+    return {r.symbol for r in await strict.screen_rows(engine, as_of, halal_only=True)}
 
 
 async def _universe(engine: AsyncEngine) -> list[str]:

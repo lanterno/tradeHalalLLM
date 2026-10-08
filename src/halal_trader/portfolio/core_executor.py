@@ -43,12 +43,13 @@ import logging
 import math
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime
 from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from halal_trader.halal import strict
 from halal_trader.portfolio.core_account import CORE_PAPER, core_account
 from halal_trader.portfolio.strict_core import (
     TOP_N,
@@ -59,7 +60,7 @@ from halal_trader.portfolio.strict_core import (
 
 logger = logging.getLogger(__name__)
 
-MAX_SCREEN_AGE = timedelta(days=10)
+MAX_SCREEN_AGE = strict.MAX_SCREEN_AGE
 # The smallest trade worth placing: Alpaca's fractional minimum ($1), or a
 # quarter of the band floor (strict_core.BAND_FLOOR = 0.2% of equity),
 # whichever is larger. $52 on the paper account's $105k, $1 on a $1k live stage:
@@ -117,46 +118,22 @@ async def _screen(
 ) -> tuple[date | None, dict[str, tuple[float, float, int | None]], set[str]]:
     """(screen date, symbol -> (screen price, shares, CIK) for the halal names
     that can be cap-weighted, every symbol the newest screen holds halal)."""
-    async with engine.connect() as conn:
-        as_of = (
-            await conn.execute(
-                text("SELECT max(as_of) FROM halal_screen_results WHERE as_of <= :d"), {"d": day}
-            )
-        ).scalar()
-        if as_of is None:
-            return None, {}, set()
-        rows = (
-            await conn.execute(
-                text(
-                    "SELECT symbol, cik, (metrics->>'price')::float AS p, "
-                    "(metrics->>'shares_outstanding')::float AS sh FROM halal_screen_current "
-                    "WHERE as_of = :a AND verdict = 'halal'"
-                ),
-                {"a": as_of},
-            )
-        ).all()
-        return (
-            as_of,
-            {r.symbol: (r.p, r.sh, r.cik) for r in rows if r.p and r.sh},
-            {r.symbol for r in rows},
-        )
+    as_of = await strict.newest_screen(engine, on_or_before=day)
+    if as_of is None:
+        return None, {}, set()
+    rows = await strict.screen_rows(engine, as_of, halal_only=True)
+    return (
+        as_of,
+        {r.symbol: (r.price, r.shares, r.cik) for r in rows if r.price and r.shares},
+        {r.symbol for r in rows},
+    )
 
 
 async def is_halal_now(engine: AsyncEngine, symbol: str, day: date) -> tuple[bool, date | None]:
-    """The order-boundary check: does the newest fresh screen hold ``symbol`` halal?"""
-    async with engine.connect() as conn:
-        row = (
-            await conn.execute(
-                text(
-                    "SELECT as_of, verdict FROM halal_screen_current WHERE symbol = :s "
-                    "AND as_of = (SELECT max(as_of) FROM halal_screen_results WHERE as_of <= :d)"
-                ),
-                {"s": symbol, "d": day},
-            )
-        ).first()
-    if row is None or day - row.as_of > MAX_SCREEN_AGE:
-        return False, row.as_of if row else None
-    return row.verdict == "halal", row.as_of
+    """The order-boundary check: does the newest fresh screen hold ``symbol`` halal?
+    The day-trader's own gate (halal/strict.py), so both strategies apply one rule."""
+    v = await strict.verdict(engine, symbol, today=day)
+    return v.halal, v.screen_as_of
 
 
 def _prices(snapshot: Any) -> dict[str, float]:

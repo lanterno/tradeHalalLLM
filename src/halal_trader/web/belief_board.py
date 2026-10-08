@@ -69,31 +69,15 @@ async def strict_verdicts(
 ) -> tuple[date | None, bool, dict[str, str]]:
     """(screen date, stale?, {asset: verdict}) from the newest strict screen.
 
-    A name absent from the newest screen is ``unscreened``; several methods on
-    one day resolve towards the stricter verdict.
+    A name absent from the newest screen is ``unscreened``.
     """
-    from halal_trader.halal.strict import MAX_SCREEN_AGE
+    from halal_trader.halal import strict
 
-    async with engine.connect() as conn:
-        as_of = (
-            await conn.execute(
-                text("SELECT max(as_of) FROM halal_screen_results WHERE as_of <= :d"),
-                {"d": today},
-            )
-        ).scalar()
-        if not isinstance(as_of, date):
-            return None, True, dict.fromkeys(assets, "unscreened")
-        rows = await conn.execute(
-            text(
-                "SELECT symbol, CASE WHEN bool_or(verdict = 'not_halal') THEN 'not_halal' "
-                "WHEN bool_and(verdict = 'halal') THEN 'halal' ELSE 'doubtful' END AS verdict "
-                "FROM halal_screen_current WHERE as_of = :a AND symbol = ANY(:s) "
-                "GROUP BY symbol"
-            ),
-            {"a": as_of, "s": list(assets)},
-        )
-        found = {r.symbol: str(r.verdict) for r in rows}
-    stale = today - as_of > MAX_SCREEN_AGE
+    as_of = await strict.newest_screen(engine, on_or_before=today)
+    if as_of is None:
+        return None, True, dict.fromkeys(assets, "unscreened")
+    found = {r.symbol: r.verdict for r in await strict.screen_rows(engine, as_of, symbols=assets)}
+    stale = today - as_of > strict.MAX_SCREEN_AGE
     return as_of, stale, {a: found.get(a, "unscreened") for a in assets}
 
 

@@ -10,12 +10,14 @@ from __future__ import annotations
 
 import re
 from calendar import monthrange
+from collections import Counter
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from halal_trader.halal import strict
 from halal_trader.market_hours import (
     EARLY_CLOSE_DATES,
     MARKET_TZ,
@@ -226,19 +228,11 @@ async def build(
             {"s": list(BENCHMARKS)},
         ):
             closes.setdefault(r.symbol, []).append((r.day, float(r.close)))
-        screen_as_of = (
-            await conn.execute(text("SELECT max(as_of) FROM halal_screen_results"))
-        ).scalar()
-        screen_counts = {
-            r.verdict: int(r.n)
-            for r in await conn.execute(
-                text(
-                    "SELECT verdict, count(*) AS n FROM halal_screen_current "
-                    "WHERE as_of = :a GROUP BY verdict"
-                ),
-                {"a": screen_as_of},
-            )
-        }
+        screen_as_of = await strict.newest_screen(engine)
+        screen_counts = Counter(
+            r.verdict
+            for r in (await strict.screen_rows(engine, screen_as_of) if screen_as_of else [])
+        )
         # Broker accounts only: a forward book's accruals ("book:*") are per a
         # notional $10,000 that nobody holds, so nothing is set aside for them.
         unpaid = (
@@ -390,12 +384,10 @@ async def build(
         }
         verdicts = {
             r.symbol: (r.verdict, r.sic_description)
-            for r in await conn.execute(
-                text(
-                    "SELECT symbol, verdict, sic_description FROM halal_screen_current "
-                    "WHERE as_of = :a AND symbol = ANY(:s)"
-                ),
-                {"a": screen_as_of, "s": symbols},
+            for r in (
+                await strict.screen_rows(engine, screen_as_of, symbols=symbols)
+                if screen_as_of
+                else []
             )
         }
     invested = sum(h["value"] for h in held) or 0.0
