@@ -73,67 +73,6 @@ def register(app: FastAPI) -> None:
             }
         )
 
-    @app.get("/api/insights/exceptions")
-    async def api_exceptions(
-        status: str = "pending", ctx: DashboardContext = Depends(get_ctx)
-    ) -> JSONResponse:
-        from halal_trader.halal.exception_queue import ExceptionQueue
-
-        if status not in ("pending", "approved", "rejected", "deferred", "all"):
-            return JSONResponse({"error": f"unknown status {status!r}"}, status_code=400)
-        q = ExceptionQueue(engine=ctx.engine)
-        rows = await q.all() if status == "all" else await q.by_status(status)  # type: ignore[arg-type]
-        return JSONResponse(
-            {
-                "available": True,
-                "n": len(rows),
-                "entries": [
-                    {
-                        "entry_id": e.entry_id,
-                        "instrument": e.instrument,
-                        "kind": e.kind,
-                        "reasoning": e.reasoning,
-                        "status": e.status,
-                        "created_at": e.created_at,
-                        "decided_at": e.decided_at,
-                        "decided_by": e.decided_by,
-                        "operator_note": e.operator_note,
-                    }
-                    for e in rows
-                ],
-            }
-        )
-
-    @app.post("/api/insights/exceptions/{entry_id}/decide")
-    async def api_exceptions_decide(
-        entry_id: str,
-        status: str,
-        decided_by: str = "",
-        note: str = "",
-        ctx: DashboardContext = Depends(get_ctx),
-    ) -> JSONResponse:
-        from halal_trader.halal.exception_queue import ExceptionQueue
-
-        if status not in ("pending", "approved", "rejected", "deferred"):
-            return JSONResponse(
-                {"error": f"invalid status: {status}"},
-                status_code=400,
-            )
-
-        q = ExceptionQueue(engine=ctx.engine)
-        try:
-            ok = await q.decide(
-                entry_id,
-                status=status,  # type: ignore[arg-type]
-                decided_by=decided_by,
-                operator_note=note,
-            )
-        except ValueError as exc:
-            return JSONResponse({"error": str(exc)}, status_code=400)
-        if not ok:
-            return JSONResponse({"error": "entry not found"}, status_code=404)
-        return JSONResponse({"ok": True, "entry_id": entry_id, "status": status})
-
     @app.get("/api/insights/rag")
     async def api_rag(
         query: str = "",

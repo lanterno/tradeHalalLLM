@@ -1,8 +1,7 @@
 """Insights CLI — surface the new analysis modules at the terminal.
 
 Each subcommand is a thin Click wrapper over one analysis store
-(purification ledger, catalysts, RAG,
-the halal exception queue, compliance receipts).
+(purification ledger, catalysts, RAG, compliance receipts).
 
 Heavy modules (sqlmodel, ml) are imported inside command bodies
 to keep ``--help`` fast — same pattern the rest of the CLI uses.
@@ -167,24 +166,5 @@ def rag_cmd(query: str, k: int) -> None:
             f"\n[bold]Weighted outcome:[/] pnl={agg['weighted_pnl_pct']:+.2%} "
             f"win-rate={agg['weighted_win_rate']:.0%} (n={agg['n']})"
         )
-
-    run_db(_run)
-
-
-@insights.command("exceptions")
-@click.option("--status", default="pending", show_default=True)
-def exceptions_cmd(status: str) -> None:
-    """List Sharia exception queue entries (pending by default)."""
-
-    async def _run(engine: Any, settings: Any) -> None:
-        from halal_trader.halal.exception_queue import (
-            ExceptionQueue,
-            render_summary,
-        )
-        from halal_trader.logging import console
-
-        q = ExceptionQueue(engine=engine)
-        rows = await q.all() if status == "all" else await q.by_status(status)  # type: ignore[arg-type]
-        console.print(render_summary(rows))
 
     run_db(_run)
