@@ -46,7 +46,8 @@ just docker-logs trader-stocks                     # or trader-shadow
    late (end-of-day and the core only while the market is open). Otherwise
    run it by hand: `halal-trader research run`, the ledger sync, or wait for
    the next scheduled run.
-4. **Database (cause 5)** — see [db-connection-lost.md](db-connection-lost.md).
+4. **Database (cause 5)** — `just docker-status`, then
+   `docker logs halal-trader-pg`; the bots reconnect once Postgres is back.
 
 ## Escalate
 

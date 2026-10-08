@@ -37,7 +37,7 @@ list — operator picks the matching one.
 When mitigation fails or the cause is unclear:
 
 * @-handle on-call rotation
-* Slack `#halal-trader-oncall`
+* The bot's Telegram chat
 * Phone of last resort: …
 
 ## Postmortem

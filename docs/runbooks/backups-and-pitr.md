@@ -39,12 +39,8 @@ The rest of this document is the WAL-archiving architecture to adopt before
 real capital is at risk. It was written as if it were in place; it is not.
 Targets for that design: **RPO ≤ 5 minutes**, **RTO ≤ 30 minutes**.
 
-> **Related runbooks.** A live database failure is the
-> [`db-connection-lost`](db-connection-lost.md) PAGE alert; a
-> trade-row gap is the [`snapshot-store-failure`](snapshot-store-failure.md)
-> WARN alert. This document is what the operator runs after
-> they've stabilised the immediate failure and need to recover
-> data.
+> This document is what the operator runs after a database failure,
+> once the immediate problem is stabilised and data needs recovering.
 
 ## What's backed up
 
@@ -54,15 +50,13 @@ is the source of truth for every audit-trail table:
 
 | Concern | Tables |
 |---|---|
-| Trade history | `trades`, `crypto_trades`, `crypto_daily_pnl` |
-| LLM decisions | `llm_decisions` (with prompt / response / cost) |
-| Halal compliance audit | `halal_screenings`, `crypto_halal_cache`, `stock_halal_cache`, `halal_exception_queue`, `purification_entries` |
-| Indicator snapshots (replay) | `indicator_snapshots` |
-| ML artefacts | `ml_artefacts` |
+| Trade history | `trades`, `daily_pnl`, `broker_activities`, `broker_equity` |
+| The core portfolio | `core_orders`, `core_runs`, `account_snapshots` |
+| LLM decisions and spend | `llm_decisions`, `llm_spend` |
+| Halal compliance audit | `halal_screenings`, `halal_screen_results`, `halal_cache`, `sharia_exceptions`, `purification_entries`, `purification_accruals`, `zakat_assessments` |
+| Research | `quant_trials`, `forward_book_days`, the event store, `indicator_snapshots` |
 | Strategy adjustments | `strategy_adjustments` |
-| Web actions audit | `web_actions` |
-| Pair pauses, runtime config | `pair_pause`, `runtime_config` |
-| Per-asset metadata | `prompt_genomes`, `thesis_tags`, `regret_records`, `shadow_ledger`, `replay_snapshots`, `research_jobs` |
+| The shadow engine | the `hb_*` tables |
 
 The bot's own filesystem state (`models/`, `logs/`, `dashboard/dist/`)
 is rebuildable from source + the database; no separate backup needed.
@@ -78,7 +72,7 @@ re-downloadable on demand.
   (1Password / Bitwarden / encrypted USB), not by the bot.
   Including them in the bot's backup pipeline would make every
   backup a credential disclosure.
-* **Trading-account positions** — the broker (Alpaca / Binance)
+* **Trading-account positions** — the broker (Alpaca)
   is authoritative for actual position state. The bot's view is
   reconstructable via `core/reconcile.py:reconcile_positions`
   on resume.
@@ -262,7 +256,7 @@ docker compose restart postgres
 # 6. Verify the latest data is present.
 docker exec $(docker compose ps -q postgres) \
   psql -U trader -d halal_trader \
-  -c "SELECT max(timestamp) FROM crypto_trades"
+  -c "SELECT max(timestamp) FROM trades"
 
 # 7. Run reconcile to sync the bot's position view.
 uv run halal-trader db migrate    # confirm at head
@@ -333,7 +327,7 @@ docker restart pg-restore-drill
 sleep 30
 docker exec pg-restore-drill \
   psql -U trader -d halal_trader \
-  -c "SELECT count(*), max(timestamp) FROM crypto_trades"
+  -c "SELECT count(*), max(timestamp) FROM trades"
 
 # 5. Tear down the drill container + volume.
 docker stop pg-restore-drill
@@ -348,7 +342,7 @@ that the backup chain works on a known cadence.
 
 If the drill produces:
 
-* **Empty `crypto_trades`** — base backup tar didn't extract
+* **Empty `trades`** — base backup tar didn't extract
   cleanly, or the WAL chain was broken. Check
   `archive_status/` directory in the data dir for
   `<segment>.partial` files (incomplete archive).
@@ -380,7 +374,7 @@ Two edge cases the operator should know about:
   approved as `halal` 3 weeks ago and re-screened to
   `not_halal` last week — restoring to "3 weeks ago" makes
   the bot believe the symbol is halal again. The operator
-  must re-run the screener (`halal-trader crypto screen`)
+  must re-run the screener (`halal-trader compliance screen`)
   after every restore that crosses a screening update.
 * **Restoring past a purification disbursement.** A
   purification entry marked `paid_at` last week — restoring
@@ -393,8 +387,8 @@ After **any** restore (full DR or PITR):
 
 * [ ] `halal-trader db current` reports the migration head
       revision.
-* [ ] `halal-trader crypto screen` re-refreshes the halal
-      cache (in case the restore reverted a `not_halal`
+* [ ] `halal-trader compliance screen` re-screens
+      (`halal_screen_results`) (in case the restore reverted a `not_halal`
       update).
 * [ ] `halal-trader status` shows the position view matches
       the broker (`reconcile_positions` runs on bot startup).
