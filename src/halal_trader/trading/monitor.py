@@ -539,7 +539,7 @@ class StockPositionMonitor:
                 entry_price = trade.filled_price or trade.price or 0.0
                 pnl = (price - entry_price) * (trade.quantity or 0.0)
                 await self._notifier.notify_sl_tp(
-                    pair=trade.symbol,
+                    symbol=trade.symbol,
                     exit_reason=reason,
                     entry_price=float(entry_price),
                     exit_price=float(price),

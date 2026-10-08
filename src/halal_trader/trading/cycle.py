@@ -404,7 +404,7 @@ class TradingCycleService(BaseCycleService):
             if self._notifier and status in ("submitted", "filled"):
                 try:
                     await self._notifier.notify_trade(
-                        pair=r.get("symbol", ""),
+                        symbol=r.get("symbol", ""),
                         side=r.get("action", ""),
                         quantity=r.get("filled_quantity") or r.get("quantity", 0),
                         price=r.get("price") or 0,

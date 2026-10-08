@@ -113,7 +113,7 @@ class WebAuditRepo(Protocol):
 
 class IndicatorSnapshotRepo(Protocol):
     async def record_indicator_snapshot(
-        self, *, trade_id: int, pair: str, indicators: dict[str, Any]
+        self, *, trade_id: int, symbol: str, indicators: dict[str, Any]
     ) -> int: ...
 
 

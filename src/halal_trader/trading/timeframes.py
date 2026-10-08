@@ -48,12 +48,12 @@ class StockTimeframeAnalyzer(TimeframeAnalyzer):
     def __init__(self, broker: Broker) -> None:
         super().__init__(broker)
 
-    async def _fetch_klines(self, pair: str, interval: str, *, limit: int) -> list[Kline]:
+    async def _fetch_klines(self, symbol: str, interval: str, *, limit: int) -> list[Kline]:
         """Pull Alpaca bars at the requested timeframe and coerce to Kline."""
         days = _DAYS_BY_INTERVAL.get(interval, 30)
         try:
-            bars = await self._broker.get_stock_bars(pair, days=days, timeframe=interval)
+            bars = await self._broker.get_stock_bars(symbol, days=days, timeframe=interval)
         except Exception as exc:  # noqa: BLE001
-            logger.debug("Alpaca bars fetch failed for %s @ %s: %r", pair, interval, exc)
+            logger.debug("Alpaca bars fetch failed for %s @ %s: %r", symbol, interval, exc)
             return []
         return bars_to_klines(bars)

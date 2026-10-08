@@ -31,10 +31,10 @@ class PerformanceStats:
     profit_factor: float = 0.0
     max_drawdown_pct: float = 0.0
     avg_hold_minutes: float = 0.0
-    best_pair: str = ""
-    best_pair_pnl: float = 0.0
-    worst_pair: str = ""
-    worst_pair_pnl: float = 0.0
+    best_symbol: str = ""
+    best_symbol_pnl: float = 0.0
+    worst_symbol: str = ""
+    worst_symbol_pnl: float = 0.0
     streak: int = 0
     streak_type: str = ""
     by_exit_reason: dict[str, int] = field(default_factory=dict)
@@ -65,19 +65,19 @@ class PerformanceAnalytics:
         loss_pcts: list[float] = []
         gross_wins = 0.0
         gross_losses = 0.0
-        pair_pnl: dict[str, float] = {}
+        symbol_pnl: dict[str, float] = {}
         durations: list[float] = []
         exit_reasons: dict[str, int] = {}
 
         for rt in round_trips:
             pnl: float = rt["pnl"]
             pnl_pct: float = rt["pnl_pct"]
-            pair: str = rt["pair"]
+            symbol: str = rt["symbol"]
             duration: float = rt["duration_minutes"]
             reason: str = rt.get("exit_reason") or "unknown"
 
             stats.total_pnl += pnl
-            pair_pnl[pair] = pair_pnl.get(pair, 0) + pnl
+            symbol_pnl[symbol] = symbol_pnl.get(symbol, 0) + pnl
             durations.append(duration)
             exit_reasons[reason] = exit_reasons.get(reason, 0) + 1
 
@@ -97,12 +97,12 @@ class PerformanceAnalytics:
         stats.avg_hold_minutes = sum(durations) / len(durations) if durations else 0
         stats.by_exit_reason = exit_reasons
 
-        # Best/worst pair
-        if pair_pnl:
-            stats.best_pair = max(pair_pnl, key=lambda k: pair_pnl[k])
-            stats.best_pair_pnl = pair_pnl[stats.best_pair]
-            stats.worst_pair = min(pair_pnl, key=lambda k: pair_pnl[k])
-            stats.worst_pair_pnl = pair_pnl[stats.worst_pair]
+        # Best/worst symbol
+        if symbol_pnl:
+            stats.best_symbol = max(symbol_pnl, key=lambda k: symbol_pnl[k])
+            stats.best_symbol_pnl = symbol_pnl[stats.best_symbol]
+            stats.worst_symbol = min(symbol_pnl, key=lambda k: symbol_pnl[k])
+            stats.worst_symbol_pnl = symbol_pnl[stats.worst_symbol]
 
         # Max drawdown (peak-to-trough on cumulative P&L)
         stats.max_drawdown_pct = self._compute_max_drawdown(round_trips)
@@ -132,10 +132,10 @@ class PerformanceAnalytics:
             f"Avg hold time: {hold_str} | Current streak: {stats.streak} {stats.streak_type}",
         ]
 
-        if stats.best_pair:
+        if stats.best_symbol:
             lines.append(
-                f"Best pair: {stats.best_pair} (${stats.best_pair_pnl:+,.2f}) | "
-                f"Worst pair: {stats.worst_pair} (${stats.worst_pair_pnl:+,.2f})"
+                f"Best symbol: {stats.best_symbol} (${stats.best_symbol_pnl:+,.2f}) | "
+                f"Worst symbol: {stats.worst_symbol} (${stats.worst_symbol_pnl:+,.2f})"
             )
 
         if stats.by_exit_reason:

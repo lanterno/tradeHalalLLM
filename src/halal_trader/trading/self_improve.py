@@ -76,14 +76,11 @@ You MUST respond with valid JSON:
     "max_position_pct": <float or null>,
     "daily_loss_limit": <float or null>
   }},
-  "pairs_to_avoid": ["<symbol1>", ...],
+  "symbols_to_avoid": ["<symbol1>", ...],
   "strategy_notes": "<overall strategy recommendation>"
 }}
 
 Only suggest adjustments you are confident about. Use null for parameters that don't need changing.
-
-Note: ``pairs_to_avoid`` is the field name for backward compatibility with the crypto-side schema; \
-list stock tickers here.
 """
 
 
@@ -104,7 +101,7 @@ class ReviewResult:
 
     observations: list[str] = field(default_factory=list)
     adjustments: list[StrategyAdjustment] = field(default_factory=list)
-    pairs_to_avoid: list[str] = field(default_factory=list)
+    symbols_to_avoid: list[str] = field(default_factory=list)
     strategy_notes: str = ""
 
 
@@ -158,7 +155,7 @@ class StockTradeSelfReview:
         self._consecutive_loss_trigger = consecutive_loss_trigger
         self._exec_failure_trigger = exec_failure_trigger
         self._active_adjustments: dict[str, float] = {}
-        self._pairs_to_avoid: list[str] = []
+        self._symbols_to_avoid: list[str] = []
         self._exec_failures: dict[str, list[str]] = {}
         self._last_review_time: float = 0
 
@@ -183,8 +180,8 @@ class StockTradeSelfReview:
         return self._active_adjustments.copy()
 
     @property
-    def pairs_to_avoid(self) -> list[str]:
-        return self._pairs_to_avoid.copy()
+    def symbols_to_avoid(self) -> list[str]:
+        return self._symbols_to_avoid.copy()
 
     def format_adjustments_for_prompt(self) -> str:
         """Format active adjustments as text for the trading prompt."""
@@ -192,28 +189,28 @@ class StockTradeSelfReview:
         if self._active_adjustments:
             for param, value in self._active_adjustments.items():
                 lines.append(f"- {param}: {value}")
-        if self._pairs_to_avoid:
-            lines.append(f"- Avoid these pairs: {', '.join(self._pairs_to_avoid)}")
+        if self._symbols_to_avoid:
+            lines.append(f"- Avoid these symbols: {', '.join(self._symbols_to_avoid)}")
         return "\n".join(lines) if lines else ""
 
     # ── Exec-failure tracking ────────────────────────────────────
 
-    def record_execution_failure(self, pair: str, error_type: str) -> None:
-        """Track an execution failure for a pair / symbol."""
-        failures = self._exec_failures.setdefault(pair, [])
+    def record_execution_failure(self, symbol: str, error_type: str) -> None:
+        """Track an execution failure for a symbol."""
+        failures = self._exec_failures.setdefault(symbol, [])
         failures.append(error_type)
         if len(failures) > 50:
-            self._exec_failures[pair] = failures[-50:]
+            self._exec_failures[symbol] = failures[-50:]
 
     def _get_failure_summary(self) -> str:
         """Summarize execution failures for the review prompt."""
         if not self._exec_failures:
             return ""
         lines = ["=== EXECUTION FAILURES ==="]
-        for pair, errors in sorted(self._exec_failures.items()):
+        for symbol, errors in sorted(self._exec_failures.items()):
             counts = Counter(errors)
             summary = ", ".join(f"{err}: {cnt}" for err, cnt in counts.most_common(5))
-            lines.append(f"  {pair}: {len(errors)} failures ({summary})")
+            lines.append(f"  {symbol}: {len(errors)} failures ({summary})")
         return "\n".join(lines)
 
     # ── Trigger logic ────────────────────────────────────────────
@@ -306,10 +303,11 @@ Analyze these trades and execution failures, and suggest improvements.
             self._exec_failures.clear()
 
             logger.info(
-                "Self-review complete (stock): %d observations, %d adjustments, %d pairs to avoid",
+                "Self-review complete (stock): %d observations, %d adjustments, "
+                "%d symbols to avoid",
                 len(result.observations),
                 len(result.adjustments),
-                len(result.pairs_to_avoid),
+                len(result.symbols_to_avoid),
             )
 
             return result
@@ -336,8 +334,7 @@ Analyze these trades and execution failures, and suggest improvements.
     def _format_trades_for_review(self, round_trips: list[dict[str, Any]]) -> str:
         """Format trades with context for the review prompt.
 
-        Reads ``rt["pair"]``: ``get_completed_stock_round_trips`` returns
-        the symbol under that key.
+        Reads ``rt["symbol"]``, as ``get_completed_stock_round_trips`` returns it.
         """
         lines = []
         for i, rt in enumerate(round_trips, 1):
@@ -346,7 +343,7 @@ Analyze these trades and execution failures, and suggest improvements.
             dur_str = f"{dur:.0f}m" if dur < 60 else f"{dur / 60:.1f}h"
 
             lines.append(
-                f"Trade #{i} [{pnl_label}]: {rt['pair']} | "
+                f"Trade #{i} [{pnl_label}]: {rt['symbol']} | "
                 f"Entry: ${rt['buy_price']:,.2f} → Exit: ${rt['sell_price']:,.2f} | "
                 f"P&L: ${rt['pnl']:+,.2f} ({rt['pnl_pct']:+.2%}) | "
                 f"Duration: {dur_str} | Reason: {rt.get('exit_reason', 'unknown')}"
@@ -363,7 +360,7 @@ Analyze these trades and execution failures, and suggest improvements.
         """
         result = ReviewResult()
         result.observations = raw.get("observations", [])
-        result.pairs_to_avoid = raw.get("pairs_to_avoid", [])
+        result.symbols_to_avoid = raw.get("symbols_to_avoid", [])
         result.strategy_notes = raw.get("strategy_notes", "")
 
         param_adjustments = raw.get("parameter_adjustments", {})
@@ -400,11 +397,11 @@ Analyze these trades and execution failures, and suggest improvements.
                 adj.old_value,
             )
 
-        if result.pairs_to_avoid:
-            existing = set(self._pairs_to_avoid)
-            existing.update(result.pairs_to_avoid)
-            self._pairs_to_avoid = list(existing)
-            logger.info("Pairs to avoid updated: %s", self._pairs_to_avoid)
+        if result.symbols_to_avoid:
+            existing = set(self._symbols_to_avoid)
+            existing.update(result.symbols_to_avoid)
+            self._symbols_to_avoid = list(existing)
+            logger.info("Symbols to avoid updated: %s", self._symbols_to_avoid)
 
         self._apply_to_strategy()
 
@@ -427,7 +424,7 @@ Analyze these trades and execution failures, and suggest improvements.
         self, *, limit: int, lookback_days: int | None
     ) -> list[dict[str, Any]]:
         """Closed round-trips, newest first, in the canonical dict shape
-        (``pair``, ``buy_price``, ``sell_price``, ``pnl``, ``pnl_pct``,
+        (``symbol``, ``buy_price``, ``sell_price``, ``pnl``, ``pnl_pct``,
         ``duration_minutes``, ``exit_reason``)."""
         return await self._trades.get_completed_stock_round_trips(
             limit=limit, lookback_days=lookback_days

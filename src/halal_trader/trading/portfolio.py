@@ -108,27 +108,27 @@ class PortfolioTracker:
             "return_pct": return_pct,
             "trades_count": trades_count,
         }
-        # Win-rate / best+worst pair derived from today's trades. Only
-        # populated when trades include the necessary fields (pnl, pair).
+        # Win-rate / best+worst symbol derived from today's trades. Only
+        # populated when trades include the necessary fields (pnl, symbol).
         wins = [t for t in trades if (t.get("pnl") or 0) > 0]
         losses = [t for t in trades if (t.get("pnl") or 0) < 0]
         if wins or losses:
             total_closed = len(wins) + len(losses)
             summary["win_rate"] = len(wins) / total_closed if total_closed else 0.0
-        pnl_by_pair: dict[str, float] = {}
+        pnl_by_symbol: dict[str, float] = {}
         for t in trades:
-            pair = t.get("pair") or t.get("symbol")
+            symbol = t.get("symbol")
             pnl = t.get("pnl")
-            if pair and isinstance(pnl, (int, float)):
-                pnl_by_pair[pair] = pnl_by_pair.get(pair, 0.0) + float(pnl)
-        if pnl_by_pair:
-            best = max(pnl_by_pair.items(), key=lambda kv: kv[1])
-            worst = min(pnl_by_pair.items(), key=lambda kv: kv[1])
-            summary["best_pair"] = best[0]
-            summary["best_pair_pnl"] = best[1]
+            if symbol and isinstance(pnl, (int, float)):
+                pnl_by_symbol[symbol] = pnl_by_symbol.get(symbol, 0.0) + float(pnl)
+        if pnl_by_symbol:
+            best = max(pnl_by_symbol.items(), key=lambda kv: kv[1])
+            worst = min(pnl_by_symbol.items(), key=lambda kv: kv[1])
+            summary["best_symbol"] = best[0]
+            summary["best_symbol_pnl"] = best[1]
             if worst[0] != best[0]:
-                summary["worst_pair"] = worst[0]
-                summary["worst_pair_pnl"] = worst[1]
+                summary["worst_symbol"] = worst[0]
+                summary["worst_symbol_pnl"] = worst[1]
 
         logger.info(
             "Day ended: $%.2f -> $%.2f (P&L: $%+.2f, %+.2f%%, %d trades)",

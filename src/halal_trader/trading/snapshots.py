@@ -3,9 +3,6 @@
 When a stock BUY fills we record the 9-feature indicator vector keyed
 by ``trade_id``. The ML retrainer that labelled and trained on these
 rows was deleted on 2026-10-01; the rows are kept as research data.
-
-The ``IndicatorSnapshot.pair`` column holds the stock symbol; the name
-is left over from the crypto bot and renaming it would need a migration.
 """
 
 from __future__ import annotations
@@ -78,7 +75,7 @@ async def record_stock_snapshot(
 
     try:
         return await repo.record_indicator_snapshot(
-            trade_id=trade_id, pair=symbol, indicators=payload
+            trade_id=trade_id, symbol=symbol, indicators=payload
         )
     except Exception as exc:
         logger.debug("Failed to record stock snapshot for #%d: %r", trade_id, exc)

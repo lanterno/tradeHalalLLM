@@ -24,12 +24,12 @@ class IndicatorSnapshotRepoImpl:
         self,
         *,
         trade_id: int,
-        pair: str,
+        symbol: str,
         indicators: dict[str, float],
     ) -> int:
         snap = IndicatorSnapshot(
             trade_id=trade_id,
-            pair=pair,
+            symbol=symbol,
             rsi_14=indicators.get("rsi_14"),
             macd_histogram=indicators.get("macd_histogram"),
             volume_ratio=indicators.get("volume_ratio"),

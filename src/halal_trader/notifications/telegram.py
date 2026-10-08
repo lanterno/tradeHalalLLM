@@ -82,7 +82,7 @@ class TelegramNotifier:
 
     async def notify_trade(
         self,
-        pair: str,
+        symbol: str,
         side: str,
         quantity: float,
         price: float,
@@ -101,7 +101,7 @@ class TelegramNotifier:
         notional = quantity * price
         prefix = f"[{market}] " if market else ""
         msg = (
-            f"{emoji} <b>{prefix}{side.upper()}</b> {pair}\n"
+            f"{emoji} <b>{prefix}{side.upper()}</b> {symbol}\n"
             f"Qty: {quantity:.6f} @ ${price:,.2f}  (\u2248${notional:,.0f})\n"
         )
         if order_id:
@@ -112,7 +112,7 @@ class TelegramNotifier:
 
     async def notify_sl_tp(
         self,
-        pair: str,
+        symbol: str,
         exit_reason: str,
         entry_price: float,
         exit_price: float,
@@ -128,7 +128,7 @@ class TelegramNotifier:
         pnl_pct = ((exit_price - entry_price) / entry_price) if entry_price else 0
         prefix = f"[{market}] " if market else ""
         msg = (
-            f"{emoji} <b>{prefix}{label}</b> {pair}\n"
+            f"{emoji} <b>{prefix}{label}</b> {symbol}\n"
             f"${entry_price:,.2f} \u2192 ${exit_price:,.2f}  ({pnl_pct:+.2%})\n"
             f"P&L: ${pnl:+,.2f}"
         )
@@ -150,7 +150,7 @@ class TelegramNotifier:
 
         Recognised keys:
           realized_pnl / total_pnl, trades_count, win_rate,
-          best_pair / best_pair_pnl, worst_pair / worst_pair_pnl,
+          best_symbol / best_symbol_pnl, worst_symbol / worst_symbol_pnl,
           llm_cost_usd, llm_calls, cycles_count, cycles_failed,
           market (e.g. "stocks"), date (YYYY-MM-DD).
         """
@@ -168,10 +168,14 @@ class TelegramNotifier:
             f"P&L: <b>${pnl:+,.2f}</b>  \u2022  Trades: {n_trades}  \u2022  Win: {wr:.0%}\n"
         )
 
-        if stats.get("best_pair"):
-            msg += f"\ud83c\udfc6 {stats['best_pair']}: ${stats.get('best_pair_pnl', 0):+,.2f}\n"
-        if stats.get("worst_pair"):
-            msg += f"\ud83e\ude79 {stats['worst_pair']}: ${stats.get('worst_pair_pnl', 0):+,.2f}\n"
+        if stats.get("best_symbol"):
+            msg += (
+                f"\ud83c\udfc6 {stats['best_symbol']}: ${stats.get('best_symbol_pnl', 0):+,.2f}\n"
+            )
+        if stats.get("worst_symbol"):
+            msg += (
+                f"\ud83e\ude79 {stats['worst_symbol']}: ${stats.get('worst_symbol_pnl', 0):+,.2f}\n"
+            )
 
         # LLM cost line \u2014 only printed when caller supplies the numbers.
         # Surfaces ops/spend visibility next to PnL for at-a-glance health.

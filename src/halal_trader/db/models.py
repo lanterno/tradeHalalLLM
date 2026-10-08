@@ -149,7 +149,7 @@ class IndicatorSnapshot(SQLModel, table=True):
 
     id: int | None = Field(default=None, primary_key=True)
     trade_id: int = Field(index=True)
-    pair: str  # the stock symbol (column named for the crypto bot)
+    symbol: str
     timestamp: datetime = Field(
         default_factory=lambda: datetime.now(UTC), sa_type=sa.DateTime(timezone=True)
     )

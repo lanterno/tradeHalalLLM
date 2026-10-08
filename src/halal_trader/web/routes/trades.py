@@ -17,7 +17,6 @@ def register(app: FastAPI) -> None:
     async def api_trades(
         limit: int = 100,
         offset: int = 0,
-        pair: str | None = None,
         symbol: str | None = None,
         side: str | None = None,
         status: str | None = None,
@@ -27,18 +26,12 @@ def register(app: FastAPI) -> None:
     ) -> JSONResponse:
         """Recent stock trades from the ``trades`` table.
 
-        Rows are keyed by ``symbol``. The ``pair`` filter is accepted as
-        an alias of ``symbol`` and checked against either key.
+        Rows are keyed by ``symbol``.
         """
         trades: list[dict[str, Any]] = await ctx.repo.get_recent_trades(limit=limit + offset)
         result = trades[offset:]
-        entity_filter = pair or symbol
-        if entity_filter:
-            result = [
-                t
-                for t in result
-                if t.get("pair") == entity_filter or t.get("symbol") == entity_filter
-            ]
+        if symbol:
+            result = [t for t in result if t.get("symbol") == symbol]
         if side:
             result = [t for t in result if t.get("side") == side]
         if status:

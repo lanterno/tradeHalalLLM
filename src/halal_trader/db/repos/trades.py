@@ -231,8 +231,8 @@ class TradeRepoImpl:
     ) -> list[dict[str, Any]]:
         """Closed stock round-trips reshaped for the analytics layer.
 
-        Returns the canonical round-trip dict shape (with ``pair`` set to
-        the symbol) that ``portfolio.analytics`` and the self-review read.
+        Returns the canonical round-trip dict shape that
+        ``portfolio.analytics`` and the self-review read.
         """
         async with AsyncSession(self._engine) as session:
             statement = (
@@ -270,7 +270,7 @@ class TradeRepoImpl:
                 round_trips.append(
                     {
                         "id": trade.id,
-                        "pair": trade.symbol,
+                        "symbol": trade.symbol,
                         "buy_price": entry,
                         "sell_price": exit_p,
                         "quantity": trade.quantity,

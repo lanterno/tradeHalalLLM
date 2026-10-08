@@ -141,8 +141,8 @@ async def stage(
 
     Usage::
 
-        async with stage(bus, "fetch_klines", pair_count=len(pairs)) as o:
-            klines = await broker.fetch(pairs)
+        async with stage(bus, "fetch_klines", symbol_count=len(symbols)) as o:
+            klines = await broker.fetch(symbols)
             o.extra["n_klines"] = sum(len(k) for k in klines.values())
 
     On entry, publishes ``cycle.stage.start``; on exit ``cycle.stage.end``

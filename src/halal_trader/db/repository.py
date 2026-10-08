@@ -283,11 +283,11 @@ class Repository:
         self,
         *,
         trade_id: int,
-        pair: str,
+        symbol: str,
         indicators: dict[str, float],
     ) -> int:
         return await self._indicator_snapshots.record_indicator_snapshot(
-            trade_id=trade_id, pair=pair, indicators=indicators
+            trade_id=trade_id, symbol=symbol, indicators=indicators
         )
 
     # ── Strategy Adjustments (delegated to StrategyAdjustmentRepoImpl) ─
