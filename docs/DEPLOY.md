@@ -152,8 +152,8 @@ run data backfill                # the liquid universe's daily bars
 run compliance etf-history       # SPUS/HLAL holdings (the index veto)
 run compliance screen            # today's verdicts: both strategies need these
 run data fundamentals
-run compliance screen-history    # every past quarter end
 run data pit-universe            # monthly + daily bars for the point-in-time universe (long)
+run compliance screen-history    # every past quarter end (needs pit-universe)
 run events backfill all          # news, filings, insiders, EPS (long; shares the Alpaca key's rate)
 run events extract
 run books create                 # the forward book (see --help for strategies)
