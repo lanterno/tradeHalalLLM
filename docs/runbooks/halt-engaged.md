@@ -15,7 +15,7 @@ button. Nothing in the code engages it automatically.
 docker exec trader-stocks halal-trader halt-status   # reason, who, when
 ```
 
-The dashboard's Risk & System page shows the same.
+The dashboard's Risk & Halt page shows the same, and Operations shows it in its strip.
 
 ## Resume
 

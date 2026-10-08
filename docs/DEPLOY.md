@@ -156,7 +156,8 @@ run data pit-universe            # monthly + daily bars for the point-in-time un
 run compliance screen-history    # every past quarter end (needs pit-universe)
 run events backfill all          # news, filings, insiders, EPS (long; shares the Alpaca key's rate)
 run events extract
-run books create                 # the forward book (see --help for strategies)
+run books create core --strategy core-strict-cap --top 100 --cost-bps 5   # the core's book: its gate measures the account against it
+run books create s1               # the day-trader's research book (momentum, low vol)
 ```
 
 `halal-trader core readiness` then says what the core still needs before
