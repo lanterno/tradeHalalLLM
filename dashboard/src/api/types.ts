@@ -143,24 +143,6 @@ export function staleComponents(h: HealthStatus): string[] {
     .map(([name]) => name);
 }
 
-export interface SystemStatus {
-  bot_running: boolean;
-  last_cycle: string | null;
-  stocks_cycle_interval_seconds: number;
-  uptime_seconds: number | null;
-  core_enabled?: boolean;
-}
-
-export interface AppConfig {
-  llm_provider: string;
-  llm_model: string;
-  stocks_trading_interval_minutes: number;
-  stocks_max_position_pct: number;
-  stocks_daily_loss_limit: number;
-  stocks_daily_return_target: number;
-  database: string;
-}
-
 export interface CycleMetrics {
   window_seconds: number;
   count: number;
@@ -814,4 +796,146 @@ export interface HomeStatus {
     max_gap: number;
     clean: boolean;
   };
+}
+
+// ── Operations (/api/operations, web/operations.py) ──
+
+export type OpsStatus = "ok" | "stale" | "missing" | "disabled" | "unknown";
+
+export interface OpsJob {
+  component: string;
+  label: string;
+  at: string; // "15:40" ET
+  weekday: string | null; // "Fri" for a weekly job
+  today_at: string | null;
+  due_today: boolean;
+  last: string | null;
+  ran_today: boolean;
+  summary: string | null;
+  next: string | null;
+  status: OpsStatus;
+  reason: string | null;
+}
+
+export interface OpsProcess {
+  component: string;
+  label: string;
+  cadence: string;
+  due: boolean;
+  last: string | null;
+  age_seconds: number | null;
+  status: OpsStatus;
+  reason: string | null;
+  detail: Record<string, unknown> | null;
+}
+
+export interface OpsPool {
+  pool: string;
+  members: string[];
+  today: number;
+  daily_cap: number | null;
+  month: number;
+  monthly_cap: number | null;
+  pace: number;
+}
+
+export interface OpsConsumer {
+  consumer: string;
+  pool: string;
+  today: number;
+  calls_today: number;
+  yesterday: number;
+  month: number;
+  calls_month: number;
+}
+
+export interface OpsBackup {
+  at: string | null;
+  detail: Record<string, unknown> | null;
+  status: "ok" | "stale" | "missing";
+}
+
+export interface OpsFreshness {
+  name: string;
+  as_of: string | null;
+  detail: string;
+  status: "ok" | "stale" | "unknown" | "info";
+}
+
+export interface OpsTable {
+  name: string;
+  bytes: number;
+  rows: number;
+  dead: number;
+  vacuumed: string | null;
+  shadow: boolean;
+  dumped: boolean;
+}
+
+export interface OperationsStatus {
+  now: string;
+  paper: boolean;
+  market: {
+    today: string;
+    trading_day: boolean;
+    open: boolean;
+    opens: string | null;
+    closes: string | null;
+    next_open: string;
+  };
+  fleet: {
+    verdict: "healthy" | "degraded" | "down";
+    alive: boolean;
+    reason: string | null;
+    beating: number;
+    jobs_due: number;
+    jobs_ran: number;
+    problems: string[];
+    watchdog: { suspect?: string[]; alerting?: string[] } | null;
+  };
+  halt: { enabled: boolean; reason: string | null; set_by: string | null; set_at: string | null };
+  jobs: OpsJob[];
+  processes: OpsProcess[];
+  llm: {
+    day: string;
+    today: number;
+    calls_today: number;
+    enforced: boolean;
+    pools: OpsPool[];
+    consumers: OpsConsumer[];
+    days: ({ day: string } & Record<string, number | string>)[];
+  };
+  backups: {
+    nightly: OpsBackup;
+    offsite: OpsBackup;
+    drill: OpsBackup;
+    max_age_hours: number;
+    drill_max_age_days: number;
+    next_nightly: string;
+    next_drill: string;
+  };
+  freshness: OpsFreshness[];
+  database: {
+    bytes: number;
+    version: string;
+    tables: number;
+    connections: number;
+    active: number;
+    dead_ratio: number | null;
+    xid_age: number;
+    revision: string | null;
+    shadow_share: number;
+    biggest: OpsTable[];
+    rest: { count: number; bytes: number };
+    dead_most: OpsTable[];
+    shadow_events: { day: string; events: number }[];
+  };
+  deploy: {
+    version: string;
+    revision: string | null;
+    expected_revision: string;
+    schema_ok: boolean;
+    web_started: string | null;
+  };
+  config: { core: [string, string][]; llm: [string, string][]; day_trader: [string, string][] };
 }

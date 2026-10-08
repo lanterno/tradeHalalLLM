@@ -1,5 +1,5 @@
 import { lazy, Suspense } from "react";
-import { Routes, Route } from "react-router-dom";
+import { Navigate, Routes, Route } from "react-router-dom";
 import { Layout } from "./components/Layout";
 import { PageSkeleton } from "./components/PageSkeleton";
 
@@ -12,8 +12,7 @@ const Analytics = lazy(() => import("./pages/Analytics"));
 const Decisions = lazy(() => import("./pages/Decisions"));
 const Halal = lazy(() => import("./pages/Halal"));
 const Core = lazy(() => import("./pages/Core"));
-const System = lazy(() => import("./pages/System"));
-const Observability = lazy(() => import("./pages/Observability"));
+const Operations = lazy(() => import("./pages/Operations"));
 const RiskAndSystem = lazy(() => import("./pages/RiskAndSystem"));
 const Insights = lazy(() => import("./pages/Insights"));
 
@@ -102,21 +101,16 @@ export default function App() {
           }
         />
         <Route
-          path="observability"
+          path="operations"
           element={
             <Suspense fallback={<PageSkeleton />}>
-              <Observability />
+              <Operations />
             </Suspense>
           }
         />
-        <Route
-          path="system"
-          element={
-            <Suspense fallback={<PageSkeleton />}>
-              <System />
-            </Suspense>
-          }
-        />
+        {/* The two pages Operations replaced. */}
+        <Route path="observability" element={<Navigate to="/operations" replace />} />
+        <Route path="system" element={<Navigate to="/operations" replace />} />
         <Route
           path="insights"
           element={

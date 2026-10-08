@@ -174,3 +174,16 @@ export function formatDay(iso: string): string {
 export function formatDayTime(iso: string): string {
   return DAY_TIME.format(new Date(iso));
 }
+
+/** A size in bytes, in its largest unit: "9.6 GB", "434 MB", "12 kB". */
+export function formatBytes(n: number | null | undefined): string {
+  if (n == null) return "—";
+  const units = ["B", "kB", "MB", "GB", "TB"];
+  let v = n;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i += 1;
+  }
+  return `${v >= 100 || i === 0 ? v.toFixed(0) : v.toFixed(1)} ${units[i]}`;
+}

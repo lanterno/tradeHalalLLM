@@ -6,7 +6,6 @@ import {
   ArrowLeftRight,
   BarChart3,
   Brain,
-  Settings,
   Activity,
   Gauge,
   ShieldAlert,
@@ -62,8 +61,7 @@ const NAV_GROUPS: { heading: string | null; note?: string; items: NavItem[] }[] 
   {
     heading: "Operations",
     items: [
-      { to: "/observability", icon: Gauge, label: "Observability" },
-      { to: "/system", icon: Settings, label: "System" },
+      { to: "/operations", icon: Gauge, label: "Operations" },
     ],
   },
 ];
