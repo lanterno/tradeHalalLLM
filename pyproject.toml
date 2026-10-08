@@ -31,8 +31,6 @@ dependencies = [
     "asyncpg>=0.31.0",
     "psycopg[binary]>=3.3.3",
     "pgvector>=0.4.2",
-    # Prometheus client for native histograms (Wave J)
-    "prometheus-client>=0.20",
     "hijridate>=2.6.0",
 ]
 
