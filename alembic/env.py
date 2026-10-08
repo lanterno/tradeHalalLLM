@@ -14,7 +14,6 @@ from halal_trader.db.models import (  # noqa: F401
     DailyPnl,
     DailyRecommendation,
     HalalCache,
-    IndicatorSnapshot,
     LlmDecision,
     StrategyAdjustment,
     Trade,

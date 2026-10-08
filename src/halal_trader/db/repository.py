@@ -30,7 +30,6 @@ class Repository:
         self._web_audit = self._bundle.web_audit
         self._halal_screening = self._bundle.halal_screening
         self._daily_recommendations = self._bundle.daily_recommendations
-        self._indicator_snapshots = self._bundle.indicator_snapshots
         self._llm_decisions = self._bundle.llm_decisions
         self._trades = self._bundle.trades
         self._strategy_adjustments = self._bundle.strategy_adjustments
@@ -246,19 +245,6 @@ class Repository:
     ) -> list[dict[str, Any]]:
         return await self._trades.get_completed_stock_round_trips(
             limit=limit, lookback_days=lookback_days
-        )
-
-    # ── Indicator Snapshots (delegated to IndicatorSnapshotRepoImpl) ─
-
-    async def record_indicator_snapshot(
-        self,
-        *,
-        trade_id: int,
-        symbol: str,
-        indicators: dict[str, float],
-    ) -> int:
-        return await self._indicator_snapshots.record_indicator_snapshot(
-            trade_id=trade_id, symbol=symbol, indicators=indicators
         )
 
     # ── Strategy Adjustments (delegated to StrategyAdjustmentRepoImpl) ─

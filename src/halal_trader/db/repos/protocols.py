@@ -111,12 +111,6 @@ class WebAuditRepo(Protocol):
     async def delete_old_web_actions(self, *, older_than: timedelta) -> int: ...
 
 
-class IndicatorSnapshotRepo(Protocol):
-    async def record_indicator_snapshot(
-        self, *, trade_id: int, symbol: str, indicators: dict[str, Any]
-    ) -> int: ...
-
-
 class LlmDecisionRepo(Protocol):
     async def record_decision(
         self,

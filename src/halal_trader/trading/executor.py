@@ -363,7 +363,6 @@ class TradeExecutor:
         self,
         plan: TradingPlan,
         *,
-        bars: dict[str, Any] | None = None,
         positions: list[Any] | None = None,
     ) -> list[dict[str, Any]]:
         """Execute all decisions in a TradingPlan, returning execution results.
@@ -372,17 +371,14 @@ class TradeExecutor:
         until ``max_simultaneous_positions`` is reached; a buy past the cap
         is reported as rejected rather than silently dropped.
 
-        ``bars`` is the per-symbol bar payload from the cycle. When passed,
-        every successful BUY records a stock-side IndicatorSnapshot.
-        ``positions`` (current open positions) feeds the
-        sector-rotation halal cap.
+        ``positions`` (current open positions) feeds the sector-rotation
+        halal cap.
         """
-        bars = bars or {}
         positions = positions or []
         results: list[dict[str, Any]] = []
 
         for decision in plan.sells:
-            results.append(await self._execute_sell(decision, bars=bars, positions=positions))
+            results.append(await self._execute_sell(decision, positions=positions))
 
         open_count = len(await self._broker.get_all_positions())
 
@@ -402,7 +398,7 @@ class TradeExecutor:
                     }
                 )
                 continue
-            result = await self._execute_buy(decision, bars=bars, positions=positions)
+            result = await self._execute_buy(decision, positions=positions)
             if result.get("status") in ("submitted", "filled"):
                 open_count += 1
             results.append(result)
@@ -635,18 +631,6 @@ class TradeExecutor:
                 stop_loss=safe_stop,
                 target_price=safe_target,
             )
-
-            # Stock-side ML snapshot — best-effort, never aborts the buy.
-            bars_for_symbol = (kwargs.get("bars") or {}).get(decision.symbol)
-            if fill.status in ("filled", "partially_filled") and bars_for_symbol:
-                from halal_trader.trading.snapshots import record_stock_snapshot
-
-                await record_stock_snapshot(
-                    repo=self._repo,
-                    trade_id=trade_id,
-                    symbol=decision.symbol,
-                    bars=bars_for_symbol,
-                )
 
             return {
                 "symbol": decision.symbol,

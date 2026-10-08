@@ -355,7 +355,7 @@ class TradingCycleService(BaseCycleService):
         if plan.decisions:
             # Pass current positions so the executor can apply the
             # per-sector halal allocation cap on each candidate buy.
-            results = await self._executor.execute_plan(plan, bars=bars, positions=positions)
+            results = await self._executor.execute_plan(plan, positions=positions)
             await self._handle_execution_results(results)
         else:
             logger.info("No trades to execute this cycle")

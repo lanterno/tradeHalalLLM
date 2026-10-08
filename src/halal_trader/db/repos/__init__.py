@@ -15,7 +15,6 @@ from typing import TYPE_CHECKING
 from halal_trader.db.repos.protocols import (
     DailyRecommendationRepo,
     HalalScreeningRepo,
-    IndicatorSnapshotRepo,
     LlmDecisionRepo,
     StockHalalCacheRepo,
     StockPnlRepo,
@@ -44,7 +43,6 @@ class RepoBundle:
     halal_screening: HalalScreeningRepo
     daily_recommendations: DailyRecommendationRepo
     web_audit: WebAuditRepo
-    indicator_snapshots: IndicatorSnapshotRepo
     llm_decisions: LlmDecisionRepo
     strategy_adjustments: StrategyAdjustmentRepo
 
@@ -55,7 +53,6 @@ class RepoBundle:
             DailyRecommendationRepoImpl,
         )
         from halal_trader.db.repos.halal_screening import HalalScreeningRepoImpl
-        from halal_trader.db.repos.indicator_snapshots import IndicatorSnapshotRepoImpl
         from halal_trader.db.repos.llm_decisions import LlmDecisionRepoImpl
         from halal_trader.db.repos.stock_halal_cache import StockHalalCacheRepoImpl
         from halal_trader.db.repos.stock_pnl import StockPnlRepoImpl
@@ -70,7 +67,6 @@ class RepoBundle:
             halal_screening=HalalScreeningRepoImpl(engine),
             daily_recommendations=DailyRecommendationRepoImpl(engine),
             web_audit=WebAuditRepoImpl(engine),
-            indicator_snapshots=IndicatorSnapshotRepoImpl(engine),
             llm_decisions=LlmDecisionRepoImpl(engine),
             strategy_adjustments=StrategyAdjustmentRepoImpl(engine),
         )
@@ -79,7 +75,6 @@ class RepoBundle:
 __all__ = [
     "DailyRecommendationRepo",
     "HalalScreeningRepo",
-    "IndicatorSnapshotRepo",
     "LlmDecisionRepo",
     "RepoBundle",
     "StockHalalCacheRepo",
