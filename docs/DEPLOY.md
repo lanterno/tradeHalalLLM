@@ -134,23 +134,26 @@ State-changing endpoints need `WEB_API_TOKEN` (generated in `.env`).
 
 ## 7. Seed the research store (fresh database)
 
-The day-trader needs nothing seeded: it trades the curated list. The
-research side (the in-house halal screen, forward books, the event store,
-the core portfolio) reads stores that start empty. The evening run keeps
-them current but does not fill ten years of history. Seed them once.
-Every step is resumable: if one is interrupted, run it again.
+Both strategies trade only what today's in-house screen holds halal, and
+that screen starts empty: until `compliance screen` has run, the
+day-trader's universe is empty and the core refuses to trade. Run the
+first four steps below (assets, backfill, etf-history, screen) before the
+first market open. The rest (the event store, forward books, history)
+can follow. The evening run keeps every store current but does not fill
+ten years of history. Every step is resumable: if one is interrupted,
+run it again.
 
 Run them in `tmux` (the long ones take hours), as the `halabot` user:
 
 ```bash
 run() { docker exec trader-stocks halal-trader "$@"; }
 run data assets
-run data pit-universe            # monthly + daily bars for the point-in-time universe (long)
 run data backfill                # the liquid universe's daily bars
 run compliance etf-history       # SPUS/HLAL holdings (the index veto)
-run compliance screen-history    # every past quarter end
-run compliance screen            # today's verdicts
+run compliance screen            # today's verdicts: both strategies need these
 run data fundamentals
+run compliance screen-history    # every past quarter end
+run data pit-universe            # monthly + daily bars for the point-in-time universe (long)
 run events backfill all          # news, filings, insiders, EPS (long; shares the Alpaca key's rate)
 run events extract
 run books create                 # the forward book (see --help for strategies)
