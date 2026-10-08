@@ -294,4 +294,9 @@ async def after_call(cost_usd: Decimal) -> None:
 
 
 def _today() -> date:
+    """The spend day, in UTC on purpose (decided 2026-10-08): it is a budget
+    day, not a trading day. The live pool spends during the session, which
+    falls inside one UTC day in summer and winter alike, so the caps bind
+    the same calls either way; a New York day would only re-mean the stored
+    rows."""
     return datetime.now(UTC).date()
