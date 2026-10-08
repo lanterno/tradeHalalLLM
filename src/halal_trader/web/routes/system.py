@@ -5,11 +5,12 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import Body, Depends, FastAPI, Header
+from fastapi import Body, Depends, FastAPI
 from fastapi.responses import JSONResponse
 
 from halal_trader.core.context import DashboardContext
 from halal_trader.web.dependencies import get_ctx
+from halal_trader.web.middleware.confirm import require_confirmation
 
 
 async def _bot_liveness(ctx: DashboardContext) -> tuple[bool, dict[str, Any] | None]:
@@ -136,61 +137,26 @@ def register(app: FastAPI) -> None:
     async def api_get_halt(ctx: DashboardContext = Depends(get_ctx)) -> JSONResponse:
         from halal_trader.core.halt import get_status
 
-        s = await get_status(ctx.engine)
-        return JSONResponse(
-            {
-                "enabled": s.enabled,
-                "reason": s.reason,
-                "set_by": s.set_by,
-                "set_at": s.set_at.isoformat() if s.set_at else None,
-            }
-        )
+        return JSONResponse((await get_status(ctx.engine)).to_json())
 
-    @app.post("/api/system/halt")
+    # Engaging and clearing the kill-switch: the token (auth middleware) and
+    # the confirm header every destructive route needs (middleware/confirm.py).
+    @app.post("/api/system/halt", dependencies=[Depends(require_confirmation)])
     async def api_set_halt(
         body: dict[str, Any] | None = Body(default=None),
-        x_halt_confirm: str = Header(default=""),
         ctx: DashboardContext = Depends(get_ctx),
     ) -> JSONResponse:
-        if x_halt_confirm.lower() != "yes":
-            return JSONResponse(
-                {"error": "X-Halt-Confirm: yes header required"},
-                status_code=400,
-            )
         from halal_trader.core.halt import set_halt
 
         reason = (body or {}).get("reason") or "dashboard"
         s = await set_halt(ctx.engine, reason=reason, set_by="dashboard")
-        return JSONResponse(
-            {
-                "enabled": s.enabled,
-                "reason": s.reason,
-                "set_by": s.set_by,
-                "set_at": s.set_at.isoformat() if s.set_at else None,
-            }
-        )
+        return JSONResponse(s.to_json())
 
-    @app.delete("/api/system/halt")
-    async def api_clear_halt(
-        x_halt_confirm: str = Header(default=""),
-        ctx: DashboardContext = Depends(get_ctx),
-    ) -> JSONResponse:
-        if x_halt_confirm.lower() != "yes":
-            return JSONResponse(
-                {"error": "X-Halt-Confirm: yes header required"},
-                status_code=400,
-            )
+    @app.delete("/api/system/halt", dependencies=[Depends(require_confirmation)])
+    async def api_clear_halt(ctx: DashboardContext = Depends(get_ctx)) -> JSONResponse:
         from halal_trader.core.halt import clear_halt
 
-        s = await clear_halt(ctx.engine)
-        return JSONResponse(
-            {
-                "enabled": s.enabled,
-                "reason": s.reason,
-                "set_by": s.set_by,
-                "set_at": s.set_at.isoformat() if s.set_at else None,
-            }
-        )
+        return JSONResponse((await clear_halt(ctx.engine)).to_json())
 
     @app.get("/api/system/reconcile/recent")
     async def api_reconcile_recent(

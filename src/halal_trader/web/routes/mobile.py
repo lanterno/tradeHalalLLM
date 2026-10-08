@@ -24,13 +24,7 @@ async def _build_summary(ctx: DashboardContext) -> dict[str, Any]:
     """Roll up the dashboard's frequently-needed state into one payload."""
     halt_payload: dict[str, Any] = {"enabled": False, "reason": None}
     try:
-        halt = await get_status(ctx.engine)
-        halt_payload = {
-            "enabled": halt.enabled,
-            "reason": halt.reason,
-            "set_by": halt.set_by,
-            "set_at": halt.set_at.isoformat() if halt.set_at else None,
-        }
+        halt_payload = (await get_status(ctx.engine)).to_json()
     except Exception as e:
         logger.debug("halt status read failed: %s", e)
 

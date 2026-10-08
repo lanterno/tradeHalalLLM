@@ -11,6 +11,7 @@ from __future__ import annotations
 import getpass
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from sqlmodel import select
@@ -24,6 +25,14 @@ class HaltStatus:
     reason: str | None
     set_by: str | None
     set_at: datetime | None
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "enabled": self.enabled,
+            "reason": self.reason,
+            "set_by": self.set_by,
+            "set_at": self.set_at.isoformat() if self.set_at else None,
+        }
 
 
 async def get_status(engine: AsyncEngine) -> HaltStatus:
