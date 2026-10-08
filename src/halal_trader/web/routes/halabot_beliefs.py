@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime
-from typing import Any
 from uuid import UUID
 
 from fastapi import Depends, FastAPI, HTTPException
@@ -26,17 +25,9 @@ from fastapi.responses import JSONResponse
 
 from halal_trader.core.context import DashboardContext
 from halal_trader.web.dependencies import get_ctx
+from halal_trader.web.soft import soft
 
 logger = logging.getLogger(__name__)
-
-
-async def _soft(coro: Any, fallback: Any) -> Any:
-    """Run a halabot query, degrading to *fallback* when hb_ tables are absent."""
-    try:
-        return await coro
-    except Exception as exc:  # noqa: BLE001 — missing hb_ schema must not 500 the dashboard
-        logger.debug("halabot belief query degraded: %r", exc)
-        return fallback
 
 
 def register(app: FastAPI) -> None:
@@ -69,7 +60,7 @@ def register(app: FastAPI) -> None:
     ) -> JSONResponse:
         from halabot.api import queries
 
-        row = await _soft(queries.get_belief(ctx.engine, asset.upper()), None)
+        row = await soft("halabot query", queries.get_belief(ctx.engine, asset.upper()), None)
         if row is None:
             raise HTTPException(status_code=404, detail=f"no belief for {asset}")
         return JSONResponse(row)
@@ -84,7 +75,8 @@ def register(app: FastAPI) -> None:
         from halal_trader.web import belief_board
 
         limit = max(1, min(limit, 200))
-        rows = await _soft(
+        rows = await soft(
+            "halabot query",
             queries.recent_decisions(
                 ctx.engine, limit=limit, asset=asset.upper() if asset else None
             ),
@@ -102,7 +94,7 @@ def register(app: FastAPI) -> None:
             cid = UUID(correlation_id)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail="invalid correlation id") from exc
-        rows = await _soft(queries.decision_chain(ctx.engine, cid), [])
+        rows = await soft("halabot query", queries.decision_chain(ctx.engine, cid), [])
         return JSONResponse(rows)
 
     @app.get("/api/halabot/health")
@@ -111,7 +103,7 @@ def register(app: FastAPI) -> None:
     ) -> JSONResponse:
         from halabot.api import queries
 
-        health = await _soft(queries.system_health(ctx.engine), None)
+        health = await soft("halabot query", queries.system_health(ctx.engine), None)
         if health is None:
             return JSONResponse({"available": False})
         return JSONResponse({"available": True, **health})

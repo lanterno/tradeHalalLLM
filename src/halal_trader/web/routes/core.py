@@ -21,20 +21,17 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from halal_trader.core.context import DashboardContext
+from halal_trader.core.num import money, ratio, rounded
 from halal_trader.web.dependencies import get_ctx
-
-
-def _f(x: Any, digits: int = 2) -> float | None:
-    return None if x is None else round(float(x), digits)
 
 
 def _fill(o: Any) -> dict[str, Any]:
     if o is None:
         return {"fill_price": None, "fill_status": None, "vs_arrival_bps": None}
     return {
-        "fill_price": _f(o.fill_price, 4),
+        "fill_price": rounded(o.fill_price, 4),
         "fill_status": o.status,
-        "vs_arrival_bps": _f(o.vs_arrival_bps, 1),
+        "vs_arrival_bps": rounded(o.vs_arrival_bps, 1),
     }
 
 
@@ -42,7 +39,6 @@ def register(app: FastAPI) -> None:
     @app.get("/api/core")
     async def api_core(ctx: DashboardContext = Depends(get_ctx)) -> JSONResponse:
         from halal_trader.compliance.purification import paper_positions
-        from halal_trader.config import get_settings
         from halal_trader.core.heartbeat import core_running
         from halal_trader.data.store import last_closes
         from halal_trader.execution.ledger import equity_history
@@ -52,7 +48,7 @@ def register(app: FastAPI) -> None:
         from halal_trader.portfolio.snapshots import read_snapshot
         from halal_trader.research.forward_book import latest_weights, nav_series
 
-        settings = get_settings()
+        settings = ctx.settings
         account = core_account(settings.core.paper)
         today = today_eastern()
         engine = ctx.engine
@@ -105,11 +101,11 @@ def register(app: FastAPI) -> None:
             holdings.append(
                 {
                     "symbol": symbol,
-                    "shares": _f(shares.get(symbol), 6),
-                    "value": _f(value),
-                    "weight": _f(weight, 5),
-                    "target": _f(target, 5),
-                    "drift": _f(weight - target, 5) if weight is not None else None,
+                    "shares": rounded(shares.get(symbol), 6),
+                    "value": money(value),
+                    "weight": ratio(weight),
+                    "target": ratio(target),
+                    "drift": ratio(weight - target) if weight is not None else None,
                 }
             )
         holdings.sort(key=lambda h: -float(h["target"] or 0) - float(h["weight"] or 0))
@@ -124,8 +120,8 @@ def register(app: FastAPI) -> None:
                 series.append(
                     {
                         "date": day.isoformat(),
-                        "account": _f(100 * equity_then / first_equity, 3),
-                        "book": _f(100 * nav / base_nav, 3) if nav and base_nav else None,
+                        "account": rounded(100 * equity_then / first_equity, 3),
+                        "book": rounded(100 * nav / base_nav, 3) if nav and base_nav else None,
                     }
                 )
 
@@ -139,7 +135,7 @@ def register(app: FastAPI) -> None:
                 "enabled": await core_running(engine),
                 "paper": settings.core.paper,
                 "account": account,
-                "equity": _f(equity),
+                "equity": money(equity),
                 "equity_day": equity_day,
                 "equity_source": source,
                 "holdings": holdings,
@@ -149,9 +145,9 @@ def register(app: FastAPI) -> None:
                     "days": ready.days,
                     "min_days": gate.MIN_DAYS,
                     "monthly_runs": ready.monthly_runs,
-                    "tracking_error": _f(ready.tracking_error, 5),
+                    "tracking_error": ratio(ready.tracking_error),
                     "max_tracking_error": gate.MAX_TRACKING_ERROR,
-                    "gap": _f(ready.gap, 5),
+                    "gap": ratio(ready.gap),
                     "max_gap": gate.MAX_GAP,
                     "refused": ready.refused,
                     "unfilled": ready.unfilled,
@@ -166,9 +162,9 @@ def register(app: FastAPI) -> None:
                         "at": o.submitted_at.isoformat(),
                         "symbol": o.symbol,
                         "side": o.side,
-                        "qty": _f(o.qty, 6),
-                        "price": _f(o.est_price),
-                        "notional": _f(o.notional),
+                        "qty": rounded(o.qty, 6),
+                        "price": money(o.est_price),
+                        "notional": money(o.notional),
                         "reason": o.reason,
                         "screen_as_of": o.screen_as_of.isoformat() if o.screen_as_of else None,
                         "screen_method": o.screen_method,
@@ -182,8 +178,8 @@ def register(app: FastAPI) -> None:
                         "run_on": r.run_on.isoformat(),
                         "monthly": r.monthly,
                         "executed": r.executed,
-                        "equity": _f(r.equity),
-                        "cash": _f(r.cash),
+                        "equity": money(r.equity),
+                        "cash": money(r.cash),
                         "orders": r.orders,
                         "halted": r.halted,
                         "screen_as_of": r.screen_as_of.isoformat() if r.screen_as_of else None,

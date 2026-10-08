@@ -21,12 +21,14 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Awaitable, Sequence
+from collections.abc import Sequence
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
+
+from halal_trader.web.soft import soft
 
 logger = logging.getLogger(__name__)
 
@@ -49,14 +51,6 @@ _baseline_cache: dict[tuple[Any, ...], tuple[float, tuple[float | None, int]]] =
 
 SHADOW_CONSUMER = "shadow"  # halabot/cli.py's SpendMeter consumer
 LLM_DAYS = 7
-
-
-async def _soft[T](what: str, coro: Awaitable[T], fallback: T) -> T:
-    try:
-        return await coro
-    except Exception as exc:  # noqa: BLE001 -- one missing table must not 500 the page
-        logger.debug("belief board %s degraded: %r", what, exc)
-        return fallback
 
 
 def _iso(ts: datetime | None) -> str | None:
@@ -143,20 +137,20 @@ async def board(engine: AsyncEngine, *, core_account: str, now: datetime) -> dic
     from halabot.api import plain, queries
     from halabot.platform.db import OUTCOME_COHORT
 
-    rows = await _soft("beliefs", queries.list_beliefs(engine), [])
+    rows = await soft("beliefs", queries.list_beliefs(engine), [])
     entry, exit_, benchmark = _bands()
     today = now.astimezone(_et()).date()
     assets = [b["asset"] for b in rows]
-    prices = await _soft("prices", queries.latest_prices(engine, assets, now=now), {})
-    screen_as_of, stale, verdicts = await _soft(
+    prices = await soft("prices", queries.latest_prices(engine, assets, now=now), {})
+    screen_as_of, stale, verdicts = await soft(
         "strict",
         strict_verdicts(engine, assets, today=today),
         (None, True, dict.fromkeys(assets, "unscreened")),
     )
-    core_at, core = await _soft("core", core_weights(engine, core_account), (None, {}))
+    core_at, core = await soft("core", core_weights(engine, core_account), (None, {}))
     book = {
         p["asset"]: p
-        for p in await _soft(
+        for p in await soft(
             "shadow book", queries.open_positions(engine, cohort=OUTCOME_COHORT), []
         )
     }
@@ -317,12 +311,12 @@ async def overview(engine: AsyncEngine, *, now: datetime) -> dict[str, Any]:
     hb = get_settings()
     entry, exit_, benchmark = _bands()
     today = now.astimezone(_et()).date()
-    beliefs = await _soft("beliefs", queries.list_beliefs(engine), [])
+    beliefs = await soft("beliefs", queries.list_beliefs(engine), [])
     assets = [b["asset"] for b in beliefs]
     traded = [a for a in assets if a != benchmark]
 
     empty = {"closed": 0, "wins": 0, "win_rate": None, "mean_return_pct": None}
-    stats = await _soft(
+    stats = await soft(
         "outcomes",
         queries.outcome_stats(engine, cohort=OUTCOME_COHORT),
         {
@@ -334,7 +328,7 @@ async def overview(engine: AsyncEngine, *, now: datetime) -> dict[str, Any]:
         },
     )
     started = datetime.fromisoformat(stats["started"]) if stats["started"] else None
-    measured, trades = await _soft(
+    measured, trades = await soft(
         "baseline",
         _baseline(
             engine,
@@ -355,7 +349,7 @@ async def overview(engine: AsyncEngine, *, now: datetime) -> dict[str, Any]:
     else:
         baseline, note, is_measured = REVIEW_BASELINE, REVIEW_BASELINE_NOTE, False
 
-    scored, moved = await _soft(
+    scored, moved = await soft(
         "calibration",
         queries.calibration_probe(engine, assets, since=now - timedelta(hours=24)),
         (0, 0),
@@ -368,22 +362,22 @@ async def overview(engine: AsyncEngine, *, now: datetime) -> dict[str, Any]:
         "min_samples": hb.conviction.min_samples_to_calibrate,
     }
 
-    positions = await _soft("book", queries.open_positions(engine, cohort=OUTCOME_COHORT), [])
-    _, _, verdicts = await _soft(
+    positions = await soft("book", queries.open_positions(engine, cohort=OUTCOME_COHORT), [])
+    _, _, verdicts = await soft(
         "strict",
         strict_verdicts(engine, [p["asset"] for p in positions], today=today),
         (None, True, {}),
     )
 
-    beat_at = await _soft("heartbeat", shadow_heartbeat(engine), None)
+    beat_at = await soft("heartbeat", shadow_heartbeat(engine), None)
     age = (now - beat_at).total_seconds() if beat_at else None
     limit = STALE_AFTER[SHADOW_PROCESS].total_seconds()
     engine_state = {
         "status": "missing" if age is None else ("stale" if age > limit else "live"),
         "heartbeat_at": _iso(beat_at),
         "heartbeat_age_s": round(age) if age is not None else None,
-        "last_bar_at": _iso(await _soft("last bar", queries.last_bar_at(engine), None)),
-        "last_event_at": _iso(await _soft("last event", queries.last_event_at(engine), None)),
+        "last_bar_at": _iso(await soft("last bar", queries.last_bar_at(engine), None)),
+        "last_event_at": _iso(await soft("last event", queries.last_event_at(engine), None)),
         "names": len(beliefs),
         "refreshed_at": max(
             (b["last_updated"] for b in beliefs if b["last_updated"]), default=None
@@ -401,7 +395,7 @@ async def overview(engine: AsyncEngine, *, now: datetime) -> dict[str, Any]:
         "calibration": calibration,
         "book": _book(positions, verdicts),
         "engine": engine_state,
-        "llm": await _soft(
+        "llm": await soft(
             "llm spend",
             shadow_llm_spend(engine, today=now.astimezone(UTC).date()),
             {"per_day_usd": None, "days": 0, "today_usd": 0.0},

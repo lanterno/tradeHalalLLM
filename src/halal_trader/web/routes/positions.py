@@ -21,16 +21,10 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from halal_trader.core.context import DashboardContext
+from halal_trader.core.num import money, ratio, rounded
 from halal_trader.data.store import last_closes
 from halal_trader.portfolio.core_account import DAY_TRADER, core_account
 from halal_trader.web.dependencies import get_ctx
-
-
-def _f(value: Any, digits: int = 2) -> float | None:
-    try:
-        return None if value is None else round(float(value), digits)
-    except TypeError, ValueError:
-        return None
 
 
 def broker_position(p: dict[str, Any]) -> dict[str, Any]:
@@ -45,14 +39,14 @@ def broker_position(p: dict[str, Any]) -> dict[str, Any]:
     cost = float(value) - float(upl) if value is not None and upl is not None else None
     return {
         "symbol": str(p["symbol"]),
-        "qty": _f(qty, 6),
-        "avg_entry": _f(cost / qty, 4) if cost is not None and qty else None,
-        "price": _f(p.get("price"), 4),
-        "market_value": _f(value),
-        "cost_basis": _f(cost),
-        "unrealized_pl": _f(upl),
-        "unrealized_pl_pct": _f(float(upl) / cost, 5) if cost and upl is not None else None,
-        "change_today": _f(p.get("change_today"), 5),
+        "qty": rounded(qty, 6),
+        "avg_entry": rounded(cost / qty, 4) if cost is not None and qty else None,
+        "price": rounded(p.get("price"), 4),
+        "market_value": money(value),
+        "cost_basis": money(cost),
+        "unrealized_pl": money(upl),
+        "unrealized_pl_pct": ratio(float(upl) / cost) if cost and upl is not None else None,
+        "change_today": ratio(p.get("change_today")),
     }
 
 
@@ -84,13 +78,13 @@ async def ledger_positions(
         rows.append(
             {
                 "symbol": symbol,
-                "qty": _f(q, 6),
-                "avg_entry": _f(basis / q, 4) if basis and q else None,
-                "price": _f(price, 4),
-                "market_value": _f(value),
-                "cost_basis": _f(basis),
-                "unrealized_pl": _f(upl),
-                "unrealized_pl_pct": _f(upl / basis, 5) if upl is not None and basis else None,
+                "qty": rounded(q, 6),
+                "avg_entry": rounded(basis / q, 4) if basis and q else None,
+                "price": rounded(price, 4),
+                "market_value": money(value),
+                "cost_basis": money(basis),
+                "unrealized_pl": money(upl),
+                "unrealized_pl_pct": ratio(upl / basis) if upl is not None and basis else None,
                 "change_today": None,
             }
         )
@@ -152,7 +146,7 @@ def register(app: FastAPI) -> None:
             for p in positions:
                 denominator = equity or invested
                 p["weight"] = (
-                    _f((p["market_value"] or 0.0) / denominator, 5) if denominator else None
+                    ratio((p["market_value"] or 0.0) / denominator) if denominator else None
                 )
             positions.sort(key=lambda p: -(p["market_value"] or 0.0))
             upl = [p["unrealized_pl"] for p in positions if p["unrealized_pl"] is not None]
@@ -164,10 +158,10 @@ def register(app: FastAPI) -> None:
                     "source": source,
                     "as_of": as_of,
                     "age_seconds": age,
-                    "equity": _f(equity),
-                    "cash": _f(cash),
-                    "invested": _f(invested),
-                    "unrealized_pl": _f(sum(upl)) if upl else None,
+                    "equity": money(equity),
+                    "cash": money(cash),
+                    "invested": money(invested),
+                    "unrealized_pl": money(sum(upl)) if upl else None,
                     "positions": positions,
                 }
             )

@@ -7,7 +7,6 @@ Purification: the dividend ledger per holding for a payment year.
 
 from __future__ import annotations
 
-from datetime import date
 from typing import Any
 
 from fastapi import Depends, FastAPI
@@ -36,20 +35,16 @@ def register(app: FastAPI) -> None:
     @app.get("/api/halal/zakat")
     async def api_halal_zakat(ctx: DashboardContext = Depends(get_ctx)) -> JSONResponse:
         from halal_trader.compliance import zakat as z
-        from halal_trader.config import get_settings
         from halal_trader.market_hours import today_eastern
 
-        hawl_hijri = get_settings().zakat.hawl_hijri
+        hawl_hijri = ctx.settings.zakat.hawl_hijri
         if not hawl_hijri:
             return JSONResponse({"configured": False, "source": z.SOURCE})
-        hawl = z.parse_hawl(hawl_hijri)
         today = today_eastern()
-        _, last_hawl = z.hawl_period(hawl, today)
-        # The next hawl: the one on or before a day a lunar year ahead.
-        _, next_hawl = z.hawl_period(hawl, date.fromordinal(last_hawl.toordinal() + 360))
+        last_hawl, next_hawl = z.hawl_dates(z.parse_hawl(hawl_hijri), today)
         from halal_trader.portfolio.core_account import DAY_TRADER, core_account
 
-        core_name = core_account(get_settings().core.paper)
+        core_name = core_account(ctx.settings.core.paper)
         accounts = []
         for account, label in ((core_name, "Core portfolio"), (DAY_TRADER, "Day-trader")):
             now = await z.assess(ctx.engine, account, period_start=last_hawl, hawl_date=today)

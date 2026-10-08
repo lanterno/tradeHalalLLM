@@ -397,9 +397,7 @@ async def build(
     hawl_hijri = settings.zakat.hawl_hijri
     next_hawl = None
     if hawl_hijri:
-        hawl = z.parse_hawl(hawl_hijri)
-        _, last_hawl = z.hawl_period(hawl, today)
-        _, next_hawl = z.hawl_period(hawl, date.fromordinal(last_hawl.toordinal() + 360))
+        last_hawl, next_hawl = z.hawl_dates(z.parse_hawl(hawl_hijri), today)
         now_due = await z.assess(engine, core_name, period_start=last_hawl, hawl_date=today)
         zakat = {
             "amount": round(now_due.amount, 2),

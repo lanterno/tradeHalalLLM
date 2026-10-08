@@ -10,14 +10,11 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from halal_trader.core.context import DashboardContext
+from halal_trader.core.num import money, ratio
 from halal_trader.halal import strict
 from halal_trader.web.dependencies import get_ctx
 
 TOP = 10
-
-
-def _r(x: float | None, digits: int = 5) -> float | None:
-    return None if x is None else round(x, digits)
 
 
 def drawdown(points: list[tuple[date, float]], current: float) -> dict[str, Any]:
@@ -33,7 +30,7 @@ def drawdown(points: list[tuple[date, float]], current: float) -> dict[str, Any]
     if current >= peak:
         peak_day, peak = None, current  # the peak is now
     return {
-        "drawdown_pct": _r(current / peak - 1) if peak else None,
+        "drawdown_pct": ratio(current / peak - 1) if peak else None,
         "peak_equity": round(peak, 2),
         "peak_day": peak_day.isoformat() if peak_day else None,
         "history_from": min(d for d, _ in series).isoformat() if series else None,
@@ -100,18 +97,18 @@ async def core_risk(engine: AsyncEngine, account: str) -> dict[str, Any]:
         "source": source,
         "as_of": as_of,
         "age_seconds": age,
-        "equity": _r(equity, 2),
-        "cash": _r(cash, 2),
-        "cash_pct": _r(cash / base) if cash is not None else None,
+        "equity": money(equity),
+        "cash": money(cash),
+        "cash_pct": ratio(cash / base) if cash is not None else None,
         "positions": len(positions),
-        "top10_weight": _r(sum(p["market_value"] or 0.0 for p in positions[:TOP]) / base),
+        "top10_weight": ratio(sum(p["market_value"] or 0.0 for p in positions[:TOP]) / base),
         "largest": {
             "symbol": largest["symbol"],
-            "weight": _r((largest["market_value"] or 0.0) / base),
+            "weight": ratio((largest["market_value"] or 0.0) / base),
         }
         if largest
         else None,
-        "sectors": [{"sector": s, "weight": _r(v / base)} for s, v in ranked],
+        "sectors": [{"sector": s, "weight": ratio(v / base)} for s, v in ranked],
         "failing_screen": [s for s in symbols if screen.get(s, ("",))[0] != "halal"],
         **drawdown(history, equity if equity is not None else invested),
     }

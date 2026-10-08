@@ -59,6 +59,14 @@ def hawl_period(hawl: tuple[int, int], on_or_before: date) -> tuple[date, date]:
     return _gregorian(year - 1, month, day), end
 
 
+def hawl_dates(hawl: tuple[int, int], today: date) -> tuple[date, date]:
+    """(the latest hawl on or before ``today``, the next one after it)."""
+    _, last = hawl_period(hawl, today)
+    # A lunar year is about 354 days: 360 days on is past the next hawl.
+    _, following = hawl_period(hawl, date.fromordinal(last.toordinal() + 360))
+    return last, following
+
+
 def hijri_label(day: date) -> str:
     h = Gregorian(day.year, day.month, day.day).to_hijri()
     return f"{h.year}-{h.month:02d}-{h.day:02d} AH"
