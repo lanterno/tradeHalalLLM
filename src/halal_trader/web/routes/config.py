@@ -1,36 +1,19 @@
-"""GET /api/config (current values) + /api/config/schema (envvar metadata)."""
+"""GET /api/config/schema: every environment variable the settings read, with its metadata."""
 
 from __future__ import annotations
 
 from collections.abc import Callable
 from typing import Any, cast
 
-from fastapi import Depends, FastAPI
+from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from pydantic.fields import FieldInfo
 from pydantic_settings import BaseSettings
 
 from halal_trader.config import Settings
-from halal_trader.core.context import DashboardContext
-from halal_trader.web.dependencies import get_ctx
 
 
 def register(app: FastAPI) -> None:
-    @app.get("/api/config")
-    async def api_config(ctx: DashboardContext = Depends(get_ctx)) -> JSONResponse:
-        settings = ctx.settings
-        return JSONResponse(
-            {
-                "llm_provider": "glm",
-                "llm_model": settings.llm.model,
-                "stocks_trading_interval_minutes": settings.stocks.trading_interval_minutes,
-                "stocks_max_position_pct": settings.stocks.max_position_pct,
-                "stocks_daily_loss_limit": settings.stocks.daily_loss_limit,
-                "stocks_daily_return_target": settings.stocks.daily_return_target,
-                "database": settings.database_url.split("@")[-1],
-            }
-        )
-
     @app.get("/api/config/schema")
     async def api_config_schema() -> JSONResponse:
         """Expose every Settings leaf field with its env name + default + type.

@@ -1,4 +1,7 @@
-"""System endpoints: /api/health, /api/system/{status,halt,reconcile,backups}."""
+"""System endpoints: /api/health, /api/system/{halt,reconcile}.
+
+The Operations page reads /api/operations (web/operations.py).
+"""
 
 from __future__ import annotations
 
@@ -69,55 +72,6 @@ def register(app: FastAPI) -> None:
             {"bot_alive": alive, "bot": components}, status_code=200 if alive else 503
         )
 
-    @app.get("/api/system/status")
-    async def api_system_status(
-        ctx: DashboardContext = Depends(get_ctx),
-    ) -> JSONResponse:
-        started = ctx.runtime.started_at
-        uptime = (datetime.now(UTC) - started).total_seconds() if started else None
-
-        from halal_trader.core.heartbeat import STOCK_CYCLE, core_running
-
-        alive, components = await _bot_liveness(ctx)
-        cycle_beat = (components or {}).get(STOCK_CYCLE)
-        return JSONResponse(
-            {
-                # From the bot's heartbeat rows, not in-process state this
-                # container never had (which always read "Bot Running: No").
-                "bot_running": alive,
-                "last_cycle": cycle_beat["beat_at"] if cycle_beat else None,
-                "stocks_cycle_interval_seconds": ctx.settings.stocks.trading_interval_minutes * 60,
-                # The core runs only with its own account's keys set; the bot
-                # says so in its process beat (the web never sees those keys).
-                "core_enabled": await core_running(ctx.engine),
-                "uptime_seconds": uptime,
-            }
-        )
-
-    @app.get("/api/system/core-config")
-    async def api_core_config(ctx: DashboardContext = Depends(get_ctx)) -> JSONResponse:
-        """The core portfolio's parameters for the System page: its settings
-        (never its keys) and the rule constants it trades by."""
-        from halal_trader.core.heartbeat import core_running
-        from halal_trader.portfolio import core_executor, strict_core
-        from halal_trader.portfolio.home import CORE_TRADE
-
-        core = ctx.settings.core
-        return JSONResponse(
-            {
-                "core_enabled": await core_running(ctx.engine),
-                "core_paper": core.paper,
-                "core_top_n": core.top_n,
-                "core_rebalance_band": strict_core.BAND,
-                "core_band_floor": strict_core.BAND_FLOOR,
-                "core_min_trade_usd": core_executor.MIN_TRADE_FLOOR,
-                "core_min_trade_fraction": core_executor.MIN_TRADE_FRACTION,
-                "core_cash_buffer": core_executor.CASH_BUFFER,
-                "core_max_screen_age_days": core_executor.MAX_SCREEN_AGE.days,
-                "core_trades_at_et": CORE_TRADE.strftime("%H:%M"),
-            }
-        )
-
     @app.get("/api/system/halt")
     async def api_get_halt(ctx: DashboardContext = Depends(get_ctx)) -> JSONResponse:
         from halal_trader.core.halt import get_status
@@ -151,9 +105,3 @@ def register(app: FastAPI) -> None:
 
         rows = await get_recent_logs(ctx.engine, limit=max(1, min(limit, 200)))
         return JSONResponse(rows)
-
-    @app.get("/api/system/backups")
-    async def api_backups() -> JSONResponse:
-        # Postgres baseline — backups happen via pg_dump or managed-DB
-        # snapshot tooling, not via this endpoint.
-        return JSONResponse([])
