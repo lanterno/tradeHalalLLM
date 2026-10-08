@@ -1,19 +1,16 @@
 """Prometheus exposition format — zero-dependency exporter.
 
-The full ``prometheus_client`` library is overkill for a single-user
-bot: we have a small fixed set of metrics, all read out of the DB or
-in-memory state at scrape time. Generating the line-format response by
-hand keeps deployment dependency-free.
-
-Exposed metrics (all snapshot-style — Prometheus scrapes; we don't
-push):
+The web is its own process: everything it exports is read from the
+database at scrape time, the one channel it shares with the bot (the
+bot's in-process state never reaches it). Exposed gauges:
 
 * ``halal_trader_bot_running`` — 1 / 0, from the bot's heartbeat
-* ``halal_trader_drawdown_pct`` — current drawdown from peak
-* ``halal_trader_portfolio_heat_pct`` — unrealized P&L / equity
-* ``halal_trader_cycle_latency_ms`` — last cycle's elapsed time
-* ``halal_trader_llm_cost_today_usd`` — running spend total
-* ``halal_trader_open_positions`` — count per asset class
+* ``halal_trader_heartbeat_age_seconds{component}`` — every component's last beat
+* ``halal_trader_drawdown_pct`` / ``halal_trader_portfolio_heat_pct`` — the
+  day-trader's last cycle's risk read
+* ``halal_trader_llm_spend_today_usd{pool}`` — today's (UTC) LLM spend
+* ``halal_trader_account_equity_usd{account}`` /
+  ``halal_trader_open_positions{account}`` — from the minute snapshots
 
 Each metric has a ``HELP`` + ``TYPE`` header per Prometheus convention.
 """
@@ -24,10 +21,10 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
+from sqlalchemy import text
+
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncEngine
-
-    from halal_trader.core.context import RuntimeView
 
 
 @dataclass
@@ -89,77 +86,80 @@ async def bot_alive(engine: AsyncEngine) -> bool:
     return alive
 
 
-def collect_default_snapshots(
-    runtime: RuntimeView, *, bot_running: bool | None = None
-) -> list[MetricSnapshot]:
-    """Pull standard halal-trader metrics out of the dashboard runtime view.
+async def collect(engine: AsyncEngine) -> list[MetricSnapshot]:
+    """Every gauge, read from the database now (see the module docstring)."""
+    from halal_trader.core.heartbeat import cycle_risk, read_beats
+    from halal_trader.core.llm.spend import POOLS
+    from halal_trader.portfolio.snapshots import read_snapshots
 
-    Populated by the cycle, monitor, and analytics surfaces. Absent
-    metrics are skipped (not fabricated as zero) so Prometheus alerting
-    can detect the gap explicitly. ``bot_running`` (from :func:`bot_alive`)
-    overrides the runtime view's flag, which only an in-process bot sets.
-    """
-    out: list[MetricSnapshot] = []
-
-    running = runtime.bot_running if bot_running is None else bot_running
-    out.append(
+    now = datetime.now(UTC)
+    out = [
         MetricSnapshot(
             name="halal_trader_bot_running",
             help_text="1 if the stock bot's process heartbeat is fresh, 0 otherwise",
-            value=1.0 if running else 0.0,
+            value=1.0 if await bot_alive(engine) else 0.0,
         )
-    )
-
-    risk = runtime.risk_state or {}
-    if isinstance(risk, dict):
-        # Labelled with the market that pushed the snapshot, "unknown" if absent.
-        market_label = {"market": str(risk.get("market", "unknown"))}
-        if "drawdown_pct" in risk and risk["drawdown_pct"] is not None:
-            out.append(
-                MetricSnapshot(
-                    name="halal_trader_drawdown_pct",
-                    help_text="Current portfolio drawdown from peak (fraction)",
-                    value=float(risk["drawdown_pct"]),
-                    labels=market_label,
-                )
-            )
-        if "portfolio_heat_pct" in risk and risk["portfolio_heat_pct"] is not None:
-            out.append(
-                MetricSnapshot(
-                    name="halal_trader_portfolio_heat_pct",
-                    help_text="Portfolio unrealized P&L as fraction of equity",
-                    value=float(risk["portfolio_heat_pct"]),
-                    labels=market_label,
-                )
-            )
-
-    last_cycle = runtime.last_cycle or {}
-    if isinstance(last_cycle, dict) and "latency_ms" in last_cycle:
+    ]
+    for component, b in sorted((await read_beats(engine)).items()):
         out.append(
             MetricSnapshot(
-                name="halal_trader_cycle_latency_ms",
-                help_text="Most recent cycle wall-clock duration in milliseconds",
-                value=float(last_cycle["latency_ms"]),
+                name="halal_trader_heartbeat_age_seconds",
+                help_text="Seconds since the component last beat",
+                value=round(b.age(now).total_seconds(), 1),
+                labels={"component": component},
             )
         )
-
-    if runtime.llm_cost_today_usd is not None:
+    risk, _ = await cycle_risk(engine)
+    for key, name, help_text in (
+        ("drawdown_pct", "halal_trader_drawdown_pct", "Day-trader drawdown from peak (fraction)"),
+        (
+            "portfolio_heat_pct",
+            "halal_trader_portfolio_heat_pct",
+            "Day-trader unrealized P&L as a fraction of equity",
+        ),
+    ):
+        if risk and risk.get(key) is not None:
+            out.append(MetricSnapshot(name=name, help_text=help_text, value=float(risk[key])))
+    async with engine.connect() as conn:
+        spend = {
+            r.consumer: float(r.usd)
+            for r in await conn.execute(
+                text(
+                    "SELECT consumer, sum(spent_usd) AS usd FROM llm_spend "
+                    "WHERE day = :d GROUP BY consumer"
+                ),
+                {"d": now.date()},
+            )
+        }
+    pools: dict[str, float] = {}
+    for consumer, usd in spend.items():
+        pool = POOLS.get(consumer, consumer)
+        pools[pool] = pools.get(pool, 0.0) + usd
+    for pool, usd in sorted(pools.items()):
         out.append(
             MetricSnapshot(
-                name="halal_trader_llm_cost_today_usd",
-                help_text="Running cumulative LLM spend for the current UTC day",
-                value=float(runtime.llm_cost_today_usd),
+                name="halal_trader_llm_spend_today_usd",
+                help_text="LLM spend today (UTC) by budget pool",
+                value=round(usd, 6),
+                labels={"pool": pool},
             )
         )
-
-    for asset_class, positions in (runtime.open_positions_by_asset or {}).items():
+    for account, snap in sorted((await read_snapshots(engine)).items()):
+        labels = {"account": account}
+        out.append(
+            MetricSnapshot(
+                name="halal_trader_account_equity_usd",
+                help_text="Account equity at the bot's latest minute snapshot",
+                value=snap.equity,
+                labels=labels,
+            )
+        )
         out.append(
             MetricSnapshot(
                 name="halal_trader_open_positions",
-                help_text="Open position count per asset class",
-                value=float(len(positions)),
-                labels={"asset_class": str(asset_class)},
+                help_text="Open positions at the bot's latest minute snapshot",
+                value=float(len(snap.positions)),
+                labels=labels,
             )
         )
-
     return out
