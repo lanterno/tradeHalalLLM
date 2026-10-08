@@ -54,7 +54,7 @@ is the source of truth for every audit-trail table:
 | The core portfolio | `core_orders`, `core_runs`, `account_snapshots` |
 | LLM decisions and spend | `llm_decisions`, `llm_spend` |
 | Halal compliance audit | `halal_screenings`, `halal_screen_results`, `halal_cache`, `sharia_exceptions`, `purification_entries`, `purification_accruals`, `zakat_assessments` |
-| Research | `quant_trials`, `forward_book_days`, the event store, `indicator_snapshots` |
+| Research | `quant_trials`, `forward_book_days`, the event store |
 | Strategy adjustments | `strategy_adjustments` |
 | The shadow engine | the `hb_*` tables |
 
