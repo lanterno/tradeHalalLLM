@@ -32,6 +32,9 @@ def _f(**kw: object) -> Fundamentals:
         (16918, 2080, "beer, wine and spirits"),  # STZ
         (1705696, 6798, "casino"),  # VICI
         (1428336, 7389, "HSA"),  # HQY
+        (884887, 4400, "casino operations"),  # RCL
+        (1513761, 4400, "casino operations"),  # NCLH
+        (815097, 4400, "bars and lounges"),  # CCL
     ],
 )
 def test_named_companies_fail_on_activity_whatever_their_ratios(
