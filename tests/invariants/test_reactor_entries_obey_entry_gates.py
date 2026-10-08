@@ -39,7 +39,6 @@ def _bot(
     positions: list[Position] | Exception | None = None,
 ) -> tuple[TradingBot, MagicMock]:
     bot = TradingBot.__new__(TradingBot)
-    bot.settings = SimpleNamespace(stocks=SimpleNamespace(reactor_entries_enabled=True))
     bot._engine = object()
     bot.broker = MagicMock()
     bot.broker.get_clock = AsyncMock(return_value=SimpleNamespace(is_open=True))

@@ -148,7 +148,6 @@ async def test_the_home_view_reads_the_live_snapshot(engine: AsyncEngine) -> Non
     await _seed_screen(engine)
     settings = SimpleNamespace(
         core=SimpleNamespace(enabled=True, paper=True),
-        stocks=SimpleNamespace(day_trader_enabled=False),
         zakat=SimpleNamespace(hawl_hijri=""),
     )
     now = datetime.now(UTC)
@@ -183,7 +182,6 @@ async def test_set_aside_counts_broker_accounts_and_zakat_is_an_estimate(
         )
     settings = SimpleNamespace(
         core=SimpleNamespace(enabled=True, paper=True),
-        stocks=SimpleNamespace(day_trader_enabled=False),
         zakat=SimpleNamespace(hawl_hijri="09-01"),
     )
     view = await home.build(engine, settings, now=datetime(2026, 10, 6, 15, tzinfo=UTC))
@@ -196,7 +194,6 @@ async def test_a_live_core_is_shown_from_its_own_account(engine: AsyncEngine) ->
     await snapshots.snapshot_account(engine, "core", FakeBroker())  # the paper history
     settings = SimpleNamespace(
         core=SimpleNamespace(enabled=True, paper=False),
-        stocks=SimpleNamespace(day_trader_enabled=False),
         zakat=SimpleNamespace(hawl_hijri=""),
     )
     view = await home.build(engine, settings, now=datetime.now(UTC))

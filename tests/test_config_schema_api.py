@@ -39,7 +39,10 @@ def test_schema_includes_well_known_envvars(client):
     assert "ALPACA_API_KEY" in env_names
     assert "FINNHUB_API_KEY" in env_names
     assert "ZOYA_API_KEY" not in env_names
-    assert "DAY_TRADER_ENABLED" in env_names
+    assert "CORE_ALPACA_API_KEY" in env_names
+    # Both strategies always run; no switch turns either off.
+    assert "DAY_TRADER_ENABLED" not in env_names
+    assert "CORE_ENABLED" not in env_names
     # Fixed values are not configuration.
     assert "TRADING_INTERVAL_MINUTES" not in env_names
     assert "LLM_DAILY_USD_CAP" not in env_names

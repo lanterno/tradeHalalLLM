@@ -176,7 +176,6 @@ def test_a_hung_cycle_during_market_hours_is_a_dead_bot(
 ) -> None:
     import halal_trader.config as config
 
-    monkeypatch.setenv("DAY_TRADER_ENABLED", "true")  # retired by default since 2026-10
     monkeypatch.setattr(config, "_settings", None)
     market_open["open"] = True
     _beat_now(database_url, STOCK_PROCESS)  # the process is turning...
@@ -191,22 +190,6 @@ def test_a_hung_cycle_during_market_hours_is_a_dead_bot(
     assert client.get("/api/health/bot").status_code == 200
 
 
-def test_a_retired_day_traders_cycle_reports_disabled_not_stale(
-    client: TestClient, database_url: str, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    import halal_trader.config as config
-
-    monkeypatch.setenv("DAY_TRADER_ENABLED", "false")
-    monkeypatch.setattr(config, "_settings", None)
-    _beat_now(database_url, STOCK_PROCESS)
-    _beat_now(database_url, STOCK_CYCLE, minutes_ago=60 * 24 * 4)  # retired days ago
-
-    cycle = client.get("/api/health").json()["bot"][STOCK_CYCLE]
-
-    assert cycle["status"] == "disabled"
-    assert cycle["stale"] is False
-
-
 # ── the core's 15:40 run and Friday's digest are watched like the other jobs ──
 
 
@@ -217,20 +200,17 @@ def test_the_core_trade_is_stale_after_a_missed_1540_run() -> None:
     # Wed 7 Oct 2026 17:00 ET; the last beat was Tue's run.
     now = datetime(2026, 10, 7, 17, 0, tzinfo=MARKET_TZ)
     beats = {CORE_TRADE: Beat(CORE_TRADE, datetime(2026, 10, 6, 15, 41, tzinfo=MARKET_TZ), None)}
-    st = assess(beats, now=now, cycles_due=False, day_trader_enabled=False)
+    st = assess(beats, now=now, cycles_due=False)
     assert st[CORE_TRADE].status == "stale"
     beats[CORE_TRADE] = Beat(CORE_TRADE, datetime(2026, 10, 7, 15, 42, tzinfo=MARKET_TZ), None)
-    assert (
-        assess(beats, now=now, cycles_due=False, day_trader_enabled=False)[CORE_TRADE].status
-        == "ok"
-    )
+    assert assess(beats, now=now, cycles_due=False)[CORE_TRADE].status == "ok"
 
 
 def test_the_core_trade_reports_disabled_when_the_core_is_off() -> None:
     from halal_trader.core.heartbeat import CORE_TRADE, assess
 
     now = datetime(2026, 10, 7, 21, 0, tzinfo=UTC)
-    st = assess({}, now=now, cycles_due=False, day_trader_enabled=False, core_enabled=False)
+    st = assess({}, now=now, cycles_due=False, core_enabled=False)
     assert st[CORE_TRADE].status == "disabled" and not st[CORE_TRADE].failing
 
 
@@ -248,7 +228,7 @@ def test_describe_lists_a_watched_job_that_has_never_run() -> None:
     from halal_trader.core.heartbeat import CORE_TRADE, assess, describe
 
     now = datetime(2026, 10, 7, 21, 0, tzinfo=UTC)
-    st = assess({}, now=now, cycles_due=False, day_trader_enabled=False)
+    st = assess({}, now=now, cycles_due=False)
     out = describe({}, st, now=now)
     assert out[CORE_TRADE]["beat_at"] is None
     assert out[CORE_TRADE]["status"] == "unknown"

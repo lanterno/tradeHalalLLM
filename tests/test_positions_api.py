@@ -38,8 +38,8 @@ OPEN_MSFT = (
 @pytest.fixture
 def make_client(database_url, tmp_path, monkeypatch):
     monkeypatch.setenv("LOG_DIR", str(tmp_path / "logs"))
-    monkeypatch.setenv("CORE_ENABLED", "true")
-    monkeypatch.setenv("DAY_TRADER_ENABLED", "false")
+    monkeypatch.setenv("CORE_ALPACA_API_KEY", "core-key")
+    monkeypatch.setenv("CORE_ALPACA_SECRET_KEY", "core-secret")
     from halal_trader import config
 
     monkeypatch.setattr(config, "_settings", None)
@@ -121,7 +121,7 @@ def test_positions_are_marked_by_the_snapshot_core_first(make_client) -> None:
     assert core_acct["invested"] == 770.0 and core_acct["unrealized_pl"] == -9.0
     assert 150 <= core_acct["age_seconds"] <= 400
 
-    assert paper["status"] == "disabled"  # the fixture switches it off
+    assert paper["status"] == "active"  # the day-trader always runs
     (pos,) = paper["positions"]
     # Marked at the broker's price, not at entry: the gain is the broker's.
     assert pos["price"] == 529.7 and pos["unrealized_pl"] == 3068.64
