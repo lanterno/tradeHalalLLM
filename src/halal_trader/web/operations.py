@@ -400,13 +400,24 @@ async def _freshness(engine: AsyncEngine, now: datetime) -> list[dict[str, Any]]
                 "status": status(age <= timedelta(minutes=5) if snapshot_due else True),
             }
         )
+    # Alpaca publishes a session's closing equity the next day, so the 16:30
+    # sync brings in the session before: once today's sync is due the ledger
+    # should reach yesterday's session, before it the one before that.
+    ledger_job = hb.DAILY_JOBS[hb.STOCK_LEDGER]
+    synced_today = (
+        is_trading_day(today) and now >= hb.scheduled_at(ledger_job, today) + ledger_job.grace
+    )
+    expected_ledger = previous_trading_day(today)
+    if not synced_today:
+        expected_ledger = previous_trading_day(expected_ledger)
     for r in ledger:
         out.append(
             {
                 "name": f"Broker equity · {r.account}",
                 "as_of": r.day.isoformat(),
-                "detail": f"${float(r.equity):,.2f} · Alpaca's daily ledger, synced at 16:30",
-                "status": status(r.day >= previous_trading_day(today)),
+                "detail": f"${float(r.equity):,.2f} · Alpaca's daily ledger; a session's "
+                f"close arrives the next day at 16:30, expected {expected_ledger:%a %d %b}",
+                "status": status(r.day >= expected_ledger),
             }
         )
     out.append(
