@@ -82,6 +82,20 @@ async def build(engine: AsyncEngine, settings: Any, *, today: date) -> str:
             f"(book assumes {execution.get('book_cost_bps')})"
         )
 
+    from halal_trader.db.repos.trades import TradeRepoImpl
+    from halal_trader.portfolio.analytics import exit_breakdown
+
+    trips = await TradeRepoImpl(engine).get_completed_stock_round_trips(limit=1000, lookback_days=7)
+    exits = exit_breakdown(trips)
+    if exits:
+        parts = []
+        for e in exits[:5]:
+            part = f"{e.reason} {e.trades}, avg {e.avg_pct:+.2%}"
+            if e.first_hour_trades and e.first_hour_avg_pct is not None:
+                part += f" ({e.first_hour_trades} in the first hour, {e.first_hour_avg_pct:+.2%})"
+            parts.append(part)
+        lines.append("Day-trader exits (7 days): " + " · ".join(parts))
+
     validation = beats.get("screen.validation", {})
     if validation:
         lines.append(
