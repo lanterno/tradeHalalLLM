@@ -70,3 +70,44 @@ async def test_labels_are_abnormal_returns_from_the_first_close_and_written_once
     rows = await report(engine)
     # Two headlines, one catalyst: counted once, at its highest score.
     assert {(r.horizon, r.events, r.above) for r in rows} == {(1, 1, 1), (5, 1, 1), (20, 1, 1)}
+
+
+async def test_labels_are_written_a_batch_of_symbols_at_a_time(
+    engine: AsyncEngine, monkeypatch
+) -> None:
+    """One symbol per pass labels every symbol, and a half-labelled event gets only
+    the horizons it lacks."""
+    from halal_trader.events import labels
+
+    monkeypatch.setattr(labels, "LABEL_BATCH_SYMBOLS", 1)
+    n = len(SESSIONS)
+    await _bars(engine, "SPUS", [100.0] * n)
+    await _bars(engine, "AAPL", [100.0 + i for i in range(n)])
+    await _bars(engine, "MSFT", [200.0 - i for i in range(n)])
+    t = _utc(2026, 9, 28, 15)
+    await EventRecorder(engine).record(
+        [
+            EventRecord("alpaca", "1", "news", "AAPL", t, t, {}, Score("s", 0.9)),
+            EventRecord("alpaca", "2", "news", "MSFT", t, t, {}, Score("s", 0.1)),
+        ]
+    )
+    async with engine.begin() as conn:  # MSFT's 1-day label already there
+        await conn.execute(
+            text(
+                "INSERT INTO event_labels (event_id, horizon, ret, abn_ret, labeled_at) "
+                "SELECT id, 1, 0, 0, now() FROM events WHERE symbol = 'MSFT'"
+            )
+        )
+    assert await label_events(engine) == 5  # AAPL's three, MSFT's missing two
+    async with engine.connect() as conn:
+        by_symbol = dict(
+            (
+                await conn.execute(
+                    text(
+                        "SELECT e.symbol, count(*) FROM event_labels l "
+                        "JOIN events e ON e.id = l.event_id GROUP BY 1"
+                    )
+                )
+            ).all()
+        )
+    assert by_symbol == {"AAPL": 3, "MSFT": 3}
