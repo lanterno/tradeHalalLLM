@@ -144,7 +144,12 @@ async def check(
         and r.run_on in sell_days
     )
     halted = sum(1 for r in runs if r.halted is not None and r.run_on >= since)
-    missing = [d for d in window if d not in ran_on]
+    # A session before the account's first ledger day could not have had a
+    # run. Leaving those out never loosens the gate: MIN_DAYS counted days
+    # need MIN_DAYS sessions of ledger, so by the time the duration check
+    # passes the whole window lies after the account's start.
+    opened = equity[0][0] if equity else None
+    missing = [d for d in window if d not in ran_on and (opened is None or d >= opened)]
     async with engine.connect() as conn:
         refused = (
             await conn.execute(
