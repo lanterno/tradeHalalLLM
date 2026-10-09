@@ -28,6 +28,7 @@ if out=$(just health 2>&1); then
     exit 0
 fi
 
+echo "${out:-just health failed}" >&2   # the reason, in the unit's journal
 strikes=$(( $(cat "$STRIKES" 2>/dev/null || echo 0) + 1 ))
 echo "$strikes" > "$STRIKES"
 now=$(date +%s)
