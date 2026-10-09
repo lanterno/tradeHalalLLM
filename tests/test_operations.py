@@ -202,3 +202,23 @@ def test_the_route_serves_the_page(database_url, tmp_path, monkeypatch) -> None:
     config._settings = None
     assert body["deploy"]["web_started"] is not None
     assert {"fleet", "jobs", "processes", "llm", "backups", "database"} <= set(body)
+
+
+async def test_the_broker_ledger_is_expected_a_session_behind(engine) -> None:
+    """Alpaca publishes a session's close the next day: on Thursday the 16:30
+    sync brings in Wednesday, so until then Tuesday is as current as it gets."""
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO broker_equity (account, day, equity, profit_loss, profit_loss_pct, "
+                "synced_at) VALUES ('core', '2026-10-06', 100000, 0, 0, now())"
+            )
+        )
+
+    async def ledger(at: datetime) -> dict:
+        body = await build(engine, get_settings(), now=at)
+        return next(f for f in body["freshness"] if f["name"] == "Broker equity · core")
+
+    assert (await ledger(NOW))["status"] == "ok"  # Thursday noon
+    evening = await ledger(datetime(2026, 10, 8, 18, 0, tzinfo=MARKET_TZ))
+    assert evening["status"] == "stale" and "expected Wed 07 Oct" in evening["detail"]
