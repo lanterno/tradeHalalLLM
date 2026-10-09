@@ -808,13 +808,17 @@ class TradingBot:
                 score=cls.score,
                 reasoning=f"{cls.tag}: {event.title[:120]} — {cls.rationale[:120]}",
                 positions=positions,
+                place=self.settings.stocks.reactor_places_orders,
             )
         except Exception as exc:  # noqa: BLE001
             logger.error("reactor entry execution failed for %s: %r", event.symbol, exc)
             return None, "Entry attempt errored — see logs"
 
         status = str(result.get("status", ""))
-        if status in ("filled", "partially_filled"):
+        if status == "shadow":
+            qty = result.get("quantity", "?")
+            note = f"👻 Shadow: would BUY {qty} {event.symbol} (reactor entries are not placed)"
+        elif status in ("filled", "partially_filled"):
             qty = result.get("quantity", "?")
             note = f"✅ Reactor entry: BUY {qty} {event.symbol} (half-size, slow-out lockout)"
         elif status == "skipped":

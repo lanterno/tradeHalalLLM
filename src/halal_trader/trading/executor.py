@@ -234,8 +234,13 @@ class TradeExecutor:
         score: float,
         reasoning: str,
         positions: list[Any] | None = None,
+        place: bool = True,
     ) -> dict[str, Any]:
         """Place a half-size news-momentum BUY, gated on price confluence.
+
+        ``place=False`` (shadow) runs every gate and sizes the entry, then
+        returns ``status='shadow'`` with what it would have bought instead of
+        placing it.
 
         The "fast in" half of the operator's fast-in/slow-out strategy
         (memory: strategy-fast-in-slow-out). Called by the scheduler's
@@ -328,13 +333,24 @@ class TradeExecutor:
             stop_loss=initial_stop,
         )
         logger.info(
-            "Reactor entry: %s x%d (~$%.2f, score=%.2f, intraday +%.2f%%)",
+            "Reactor entry%s: %s x%d (~$%.2f, score=%.2f, intraday +%.2f%%)",
+            "" if place else " (shadow)",
             symbol,
             shares,
             shares * price,
             score,
             change_pct * 100,
         )
+        if not place:
+            return {
+                "symbol": symbol,
+                "action": "buy",
+                "status": "shadow",
+                "quantity": shares,
+                "price": price,
+                "intraday_change": change_pct,
+                "stop_loss": initial_stop,
+            }
         return await self._execute_buy(
             decision,
             entry_type=EntryType.REACTOR_MOMENTUM,

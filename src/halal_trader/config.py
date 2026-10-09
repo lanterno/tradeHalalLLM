@@ -241,6 +241,12 @@ class StockSettings(_Group):
     reactor_entry_size_fraction: float = Field(default=0.5, gt=0, le=1.0)
     reactor_entry_min_intraday_change_pct: float = Field(default=0.002, ge=0.0, le=0.5)
     reactor_trailing_stop_distance_pct: float = Field(default=0.08, gt=0, le=0.5)
+    # Decided 2026-10-09: the reactor's entries run in shadow. Its
+    # pre-registered minute-bar test failed (buying 60 s after positively
+    # scored headlines lost 0.30% the same day, net of cost), and so did three
+    # rebuilt variants. It keeps every gate and logs what it would buy
+    # (reactor_decisions) without placing it, until a variant passes.
+    reactor_places_orders: bool = False
     trend_break_ma_period: int = Field(default=20, ge=2, le=200)
     trend_break_timeframe: str = "1Hour"
     # Re-entry blocks after any close, and longer after a stop-out.
