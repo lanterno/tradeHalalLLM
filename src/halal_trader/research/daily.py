@@ -189,6 +189,13 @@ async def run_research(engine: AsyncEngine, settings: Settings, *, today: date) 
         logger.error("research: backup check failed: %r", exc)
 
     try:
+        from halal_trader.core.llm import credits
+
+        run.errors += await credits.check(engine, settings, today)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("research: LLM credit check failed: %r", exc)
+
+    try:
         run.errors += await _calendar_check(settings, today)
     except Exception as exc:  # noqa: BLE001
         logger.error("research: calendar check failed: %r", exc)
