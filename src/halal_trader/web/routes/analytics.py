@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import asdict
+
 from fastapi import Depends, FastAPI
 from fastapi.responses import JSONResponse
 
@@ -41,5 +43,6 @@ def register(app: FastAPI) -> None:
                 "streak": stats.streak,
                 "streak_type": stats.streak_type,
                 "by_exit_reason": stats.by_exit_reason,
+                "exits": [asdict(e) for e in stats.exits],
             }
         )

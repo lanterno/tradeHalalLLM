@@ -16,6 +16,47 @@ from halal_trader.db.repos import TradeRepo
 
 logger = logging.getLogger(__name__)
 
+# The early-exit question (should an exit come this soon after the entry?).
+FIRST_HOUR_MINUTES = 60.0
+
+
+@dataclass
+class ExitStats:
+    """How the round trips that closed one way did: the evidence for an exit rule."""
+
+    reason: str
+    trades: int
+    avg_pct: float
+    total_pnl: float
+    win_rate: float
+    avg_hold_minutes: float
+    first_hour_trades: int  # closed within FIRST_HOUR_MINUTES of the entry
+    first_hour_avg_pct: float | None
+
+
+def exit_breakdown(round_trips: list[dict[str, Any]]) -> list[ExitStats]:
+    """Per exit reason, most frequent first."""
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for rt in round_trips:
+        groups.setdefault(rt.get("exit_reason") or "unknown", []).append(rt)
+    out = []
+    for reason, rts in groups.items():
+        pcts = [float(rt["pnl_pct"]) for rt in rts]
+        early = [float(rt["pnl_pct"]) for rt in rts if rt["duration_minutes"] < FIRST_HOUR_MINUTES]
+        out.append(
+            ExitStats(
+                reason=reason,
+                trades=len(rts),
+                avg_pct=sum(pcts) / len(pcts),
+                total_pnl=sum(float(rt["pnl"]) for rt in rts),
+                win_rate=sum(1 for p in pcts if p > 0) / len(pcts),
+                avg_hold_minutes=sum(float(rt["duration_minutes"]) for rt in rts) / len(rts),
+                first_hour_trades=len(early),
+                first_hour_avg_pct=sum(early) / len(early) if early else None,
+            )
+        )
+    return sorted(out, key=lambda e: (-e.trades, e.reason))
+
 
 @dataclass
 class PerformanceStats:
@@ -38,6 +79,7 @@ class PerformanceStats:
     streak: int = 0
     streak_type: str = ""
     by_exit_reason: dict[str, int] = field(default_factory=dict)
+    exits: list[ExitStats] = field(default_factory=list)
 
 
 class PerformanceAnalytics:
@@ -96,6 +138,7 @@ class PerformanceAnalytics:
         stats.profit_factor = gross_wins / gross_losses if gross_losses > 0 else float("inf")
         stats.avg_hold_minutes = sum(durations) / len(durations) if durations else 0
         stats.by_exit_reason = exit_reasons
+        stats.exits = exit_breakdown(round_trips)
 
         # Best/worst symbol
         if symbol_pnl:
