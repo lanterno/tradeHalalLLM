@@ -169,3 +169,38 @@ def test_an_open_buy_of_unknown_size_blocks_every_buy() -> None:
     assert ce._open_buy_notional([{"side": "buy", "qty": "2", "limit_price": "10"}]) == 20.0
     assert ce._open_buy_notional([{"side": "sell", "qty": "2"}]) == 0.0
     assert ce._open_buy_notional([{"side": "buy", "qty": "2"}]) == float("inf")
+
+
+async def test_the_core_holds_technology_only_and_sells_the_rest_at_the_month(
+    engine: AsyncEngine,
+) -> None:
+    """XOM passes the screen but is not technology: the monthly plan sells it and
+    buys only tech; a daily run leaves it alone (the screen still passes it)."""
+    await screen(
+        engine,
+        TODAY - timedelta(days=2),
+        {"MSFT": ("halal", 10, 9e9), "XOM": ("halal", 10, 9e9)},
+        sic={"XOM": "PETROLEUM REFINING"},
+    )
+    broker = FakeCoreBroker(
+        cash=0,
+        positions=[Position(symbol="XOM", qty=100, current_price=10)],
+        prices={"MSFT": 10, "XOM": 10},
+    )
+    monthly = await ce.plan(engine, broker, today=TODAY, monthly=True)
+    assert [(o.symbol, o.side) for o in monthly.orders] == [("XOM", "sell"), ("MSFT", "buy")]
+    daily = await ce.plan(engine, broker, today=TODAY, monthly=False)
+    assert daily.orders == []
+
+
+async def test_a_rule_change_makes_the_month_due_again_from_its_date(engine: AsyncEngine) -> None:
+    changed = ce.RULE_SINCE
+    before = changed - timedelta(days=4)
+    await screen(engine, before - timedelta(days=2), {"MSFT": ("halal", 10, 9e9)})
+    broker = FakeCoreBroker(cash=1_000, prices={"MSFT": 10})
+    p = await ce.plan(engine, broker, today=before, monthly=True)
+    await ce.record_run(engine, p, today=before, executed=True)
+    assert not await ce.monthly_due(engine, before)  # that month's rebalance ran
+    assert await ce.monthly_due(engine, changed)  # but the targets changed since
+    await ce.record_run(engine, p, today=changed, executed=True)
+    assert not await ce.monthly_due(engine, changed + timedelta(days=1))

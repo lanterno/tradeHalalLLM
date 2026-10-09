@@ -150,15 +150,23 @@ def day_trader_is(account_id: str | None):
     return lookup
 
 
+# The core holds technology only (strict_core.SECTOR): a fake screen's names are
+# software companies unless a test says otherwise.
+TECH_SIC = "SERVICES-PREPACKAGED SOFTWARE"
+
+
 async def screen(
-    engine: AsyncEngine, as_of: date, rows: dict[str, tuple[str, float, float]]
+    engine: AsyncEngine,
+    as_of: date,
+    rows: dict[str, tuple[str, float, float]],
+    sic: dict[str, str] | None = None,
 ) -> None:
-    """symbol -> (verdict, price, shares outstanding)."""
+    """symbol -> (verdict, price, shares outstanding); ``sic`` overrides a name's industry."""
     async with engine.begin() as conn:
         await conn.execute(
             text(
                 "INSERT INTO halal_screen_results (as_of, symbol, cik, sic_description, verdict, "
-                "reasons, metrics, method, screened_at) VALUES (:a, :s, :c, '', :v, '[]', "
+                "reasons, metrics, method, screened_at) VALUES (:a, :s, :c, :sic, :v, '[]', "
                 "CAST(:m AS JSONB), 't', now())"
             ),
             [
@@ -166,6 +174,7 @@ async def screen(
                     "a": as_of,
                     "s": s,
                     "c": i + 1,
+                    "sic": (sic or {}).get(s, TECH_SIC),
                     "v": v,
                     "m": f'{{"price": {p:f}, "shares_outstanding": {sh:f}}}',
                 }
