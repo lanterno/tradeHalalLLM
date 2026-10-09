@@ -57,26 +57,62 @@ async def _closes(engine: AsyncEngine, symbols: list[str]) -> dict[str, dict[dat
     return out
 
 
+# Symbols labelled per pass: each pass holds only its own events, labels and
+# closes, so memory stays flat as the store grows (the whole store at once,
+# ~1.5M events after the 2016 backfill, ran the process out of memory).
+LABEL_BATCH_SYMBOLS = 100
+
+
 async def label_events(engine: AsyncEngine) -> int:
     """Label every event whose horizons have elapsed; returns labels written."""
+    async with engine.connect() as conn:
+        symbols = [
+            r.symbol
+            for r in await conn.execute(
+                text(
+                    "SELECT DISTINCT e.symbol FROM events e WHERE e.symbol IS NOT NULL "
+                    "AND (SELECT count(*) FROM event_labels l WHERE l.event_id = e.id) < :n"
+                ),
+                {"n": len(HORIZONS)},
+            )
+        ]
+    if not symbols:
+        return 0
+    bench = (await _closes(engine, [BENCHMARK])).get(BENCHMARK, {})
+    sessions = sorted(bench)
+    written = 0
+    for i in range(0, len(symbols), LABEL_BATCH_SYMBOLS):
+        written += await _label_batch(
+            engine, symbols[i : i + LABEL_BATCH_SYMBOLS], bench=bench, sessions=sessions
+        )
+    logger.info("event labels: %d written", written)
+    return written
+
+
+async def _label_batch(
+    engine: AsyncEngine, symbols: list[str], *, bench: dict[date, float], sessions: list[date]
+) -> int:
     async with engine.connect() as conn:
         rows = (
             await conn.execute(
                 text(
                     "SELECT e.id, e.symbol, e.published_at FROM events e "
-                    "WHERE (SELECT count(*) FROM event_labels l WHERE l.event_id = e.id) < :n"
+                    "WHERE e.symbol = ANY(:s) "
+                    "AND (SELECT count(*) FROM event_labels l WHERE l.event_id = e.id) < :n"
                 ),
-                {"n": len(HORIZONS)},
+                {"s": symbols, "n": len(HORIZONS)},
             )
         ).all()
         done = defaultdict(set)
-        for r in await conn.execute(text("SELECT event_id, horizon FROM event_labels")):
+        for r in await conn.execute(
+            text(
+                "SELECT l.event_id, l.horizon FROM event_labels l "
+                "JOIN events e ON e.id = l.event_id WHERE e.symbol = ANY(:s)"
+            ),
+            {"s": symbols},
+        ):
             done[r.event_id].add(r.horizon)
-    if not rows:
-        return 0
-    closes = await _closes(engine, sorted({r.symbol for r in rows} | {BENCHMARK}))
-    bench = closes.get(BENCHMARK, {})
-    sessions = sorted(bench)
+    closes = await _closes(engine, symbols)
     labels = []
     for r in rows:
         d0 = first_close_session(r.published_at, sessions)
@@ -101,7 +137,6 @@ async def label_events(engine: AsyncEngine) -> int:
                 ),
                 [{**lab, "at": datetime.now(UTC)} for lab in labels],
             )
-    logger.info("event labels: %d written", len(labels))
     return len(labels)
 
 
