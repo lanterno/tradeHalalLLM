@@ -47,12 +47,15 @@ def test_costs_are_weighted_by_filled_value() -> None:
     assert _weighted([_fill(None, 100)], "vs_arrival_bps") is None
 
 
-def test_the_earliest_pass_counts_one_session_a_day() -> None:
-    thu = date(2026, 10, 8)
-    # Today's run still to come counts today; the weekend does not count.
-    assert _earliest_pass(thu, days=17, min_days=20, run_today_pending=True) == date(2026, 10, 12)
-    assert _earliest_pass(thu, days=17, min_days=20, run_today_pending=False) == date(2026, 10, 13)
-    assert _earliest_pass(thu, days=20, min_days=20, run_today_pending=False) == thu
+def test_the_earliest_pass_counts_one_session_a_day_a_day_late() -> None:
+    """Each session counts once its equity arrives, the next trading day."""
+    thu, fri = date(2026, 10, 8), date(2026, 10, 9)
+    # Thu, Fri and Mon still needed: Monday's equity arrives Tuesday.
+    assert _earliest_pass(thu, days=17, min_days=20, today=thu) == date(2026, 10, 13)
+    assert _earliest_pass(fri, days=17, min_days=20, today=thu) == date(2026, 10, 14)
+    # A Saturday start skips the weekend.
+    assert _earliest_pass(date(2026, 10, 10), days=19, min_days=20, today=fri) == date(2026, 10, 13)
+    assert _earliest_pass(thu, days=20, min_days=20, today=thu) == thu
 
 
 async def _seed(engine: AsyncEngine) -> None:
