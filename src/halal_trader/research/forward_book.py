@@ -84,10 +84,13 @@ async def create_book(
     strategy: str = "s1-momentum-lowvol",
     top_n: int = 30,
     cost_bps: float = 10.0,
+    sector: str | None = None,
 ) -> None:
     if strategy not in STRATEGIES:
         raise ValueError(f"unknown strategy {strategy!r}; known: {', '.join(STRATEGIES)}")
-    params = {"top_n": top_n, "cost_bps": cost_bps, "strategy": strategy}
+    params: dict[str, object] = {"top_n": top_n, "cost_bps": cost_bps, "strategy": strategy}
+    if sector is not None:
+        params["sector"] = sector  # the core's targets: only this sector's names
     async with engine.begin() as conn:
         await conn.execute(
             text(
@@ -96,6 +99,25 @@ async def create_book(
             ),
             {"n": name, "s": strategy, "p": json.dumps(params)},
         )
+
+
+async def rename_book(engine: AsyncEngine, old: str, new: str) -> None:
+    """Rename a book and its history in one transaction (a book is keyed by name)."""
+    async with engine.begin() as conn:
+        moved = await conn.execute(
+            text(
+                "INSERT INTO forward_books (name, strategy, params, created_at) "
+                "SELECT :new, strategy, params, created_at FROM forward_books WHERE name = :old"
+            ),
+            {"old": old, "new": new},
+        )
+        if moved.rowcount != 1:
+            raise ValueError(f"no book named {old!r}")
+        await conn.execute(
+            text("UPDATE forward_book_days SET book = :new WHERE book = :old"),
+            {"old": old, "new": new},
+        )
+        await conn.execute(text("DELETE FROM forward_books WHERE name = :old"), {"old": old})
 
 
 async def book_names(engine: AsyncEngine) -> list[str]:
@@ -198,12 +220,21 @@ async def _last_day(engine: AsyncEngine, name: str) -> BookDay | None:
     )
 
 
-async def _halal_as_of(engine: AsyncEngine, day: date) -> set[str] | None:
-    """What the newest screen run on or before ``day`` held halal (None: no run yet)."""
+async def _halal_as_of(
+    engine: AsyncEngine, day: date, sector: str | None = None
+) -> set[str] | None:
+    """What the newest screen run on or before ``day`` held halal (None: no run yet),
+    only in ``sector`` when one is given, as that screen classed each name."""
+    from halal_trader.halal.sector_limits import cap_sector
+
     as_of = await strict.newest_screen(engine, on_or_before=day)
     if as_of is None:
         return None
-    return {r.symbol for r in await strict.screen_rows(engine, as_of, halal_only=True)}
+    return {
+        r.symbol
+        for r in await strict.screen_rows(engine, as_of, halal_only=True)
+        if sector is None or cap_sector(r.symbol, r.sic_description) == sector
+    }
 
 
 def target_weights(prices: Prices, t: int, eligible: set[str], top_n: int) -> dict[str, float]:
@@ -243,31 +274,37 @@ async def _core_step(
     rebalance: bool,
     top_n: int,
     universe_size: int,
+    sector: str | None = None,
 ) -> tuple[dict[str, float], float]:
     """One session of the core: forced sales any day, banded rebalance monthly."""
     from halal_trader.portfolio.strict_core import rebalance as banded
     from halal_trader.portfolio.strict_core import turnover as traded
 
     day, prev_day = prices.days[t], prices.days[t - 1]
-    eligible = await _halal_as_of(engine, prev_day)
-    if eligible is None:
+    halal = await _halal_as_of(engine, prev_day)
+    if halal is None:
         return weights, 0.0
     members = await universe_at(engine, prev_day, top_n=universe_size)
     if members:
-        eligible &= set(members)
-    eligible -= set(BENCHMARKS)
-    failed = set(weights) - eligible
+        halal &= set(members)
+    halal -= set(BENCHMARKS)
+    # Forced sales follow the screen alone, as the account's daily run does; the
+    # sector shapes only the monthly targets (a name leaving it goes at the month).
+    failed = set(weights) - halal
     if not (rebalance or failed or day.month != prev_day.month):
         return weights, 0.0
     if rebalance or day.month != prev_day.month:
         screen = await _screen_caps(engine, prev_day)
         if screen is None:
             return weights, 0.0
+        in_sector = await _halal_as_of(engine, prev_day, sector) if sector else halal
+        eligible = halal & (in_sector or set())
         target = _core_target(prices, t - 1, screen[0], screen[1], eligible, top_n)
+        new = banded(weights, target, eligible)
     else:
         # A mid-month forced sale: the failed names go, the rest are held as they are.
-        target = {s: w for s, w in weights.items() if s in eligible}
-    new = banded(weights, target, eligible)
+        target = {s: w for s, w in weights.items() if s in halal}
+        new = banded(weights, target, halal)
     return new, traded(weights, new)
 
 
@@ -276,6 +313,7 @@ async def advance_book(engine: AsyncEngine, name: str, *, through: date) -> list
     params = await _params(engine, name)
     top_n, cost = int(params["top_n"]), float(params["cost_bps"]) / 10_000.0
     universe_size = int(params.get("universe", UNIVERSE))
+    sector = params.get("sector")  # the core's sector, None for every sector
     last = await _last_day(engine, name)
     since = (last.day if last else through) - _HISTORY
     prices, _ = split_reused_tickers(
@@ -299,7 +337,7 @@ async def advance_book(engine: AsyncEngine, name: str, *, through: date) -> list
             turnover = 0.0
             if params.get("strategy") == "core-strict-cap":
                 weights, turnover = await _core_step(
-                    engine, prices, t, weights, rebalance, top_n, universe_size
+                    engine, prices, t, weights, rebalance, top_n, universe_size, sector
                 )
                 rebalance = False
             elif rebalance or day.month != prev_day.month:

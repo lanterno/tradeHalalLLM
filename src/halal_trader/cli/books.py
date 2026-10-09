@@ -20,18 +20,48 @@ def books() -> None:
 @click.option("--strategy", default="s1-momentum-lowvol", show_default=True)
 @click.option("--top", default=30, show_default=True, help="Names held.")
 @click.option("--cost-bps", default=10.0, show_default=True, help="Per side, on turnover.")
-def create_cmd(name: str, strategy: str, top: int, cost_bps: float) -> None:
+@click.option(
+    "--sector",
+    type=click.Choice(["all", "technology"]),
+    default="all",
+    show_default=True,
+    help="core-strict-cap only: hold only this sector's names.",
+)
+def create_cmd(name: str, strategy: str, top: int, cost_bps: float, sector: str) -> None:
     """Start a book: it is set up on the latest stored session and trades from the next."""
 
     async def work(engine: Any, settings: Any) -> Any:
+        from halal_trader.halal.sector_limits import TECHNOLOGY
         from halal_trader.market_hours import today_eastern
         from halal_trader.research.forward_book import advance_book, create_book
 
-        await create_book(engine, name, strategy=strategy, top_n=top, cost_bps=cost_bps)
+        await create_book(
+            engine,
+            name,
+            strategy=strategy,
+            top_n=top,
+            cost_bps=cost_bps,
+            sector=TECHNOLOGY if sector == "technology" else None,
+        )
         return await advance_book(engine, name, through=today_eastern())
 
     rows = run_db(work)
     console.print(f"book {name} starts on {rows[0].day}; it rebalances at the next close")
+
+
+@books.command("rename")
+@click.argument("old")
+@click.argument("new")
+def rename_cmd(old: str, new: str) -> None:
+    """Rename a book, its history with it (e.g. keep the broad core as core-broad)."""
+
+    async def work(engine: Any, settings: Any) -> None:
+        from halal_trader.research.forward_book import rename_book
+
+        await rename_book(engine, old, new)
+
+    run_db(work)
+    console.print(f"book {old} is now {new}")
 
 
 @books.command("run")
