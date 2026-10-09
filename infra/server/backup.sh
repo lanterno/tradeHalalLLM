@@ -56,8 +56,13 @@ if [ "$(date -u +%u)" = 7 ]; then
     $RESTIC check --read-data-subset=5%
 fi
 
-docker exec halal-trader-pg psql -U trader -d halal_trader -tAq -c \
-    "INSERT INTO heartbeats (component, beat_at, detail) VALUES ('backup.offsite', now(), '{\"snapshot\": \"${snapshot:0:8}\"}') ON CONFLICT (component) DO UPDATE SET beat_at = EXCLUDED.beat_at, detail = EXCLUDED.detail"
-
+# The upload is done: old local copies can go whatever the heartbeat does.
 find "$BACKUP_DIR" -mindepth 1 -maxdepth 1 -type d -mtime "+${KEEP_LOCAL_DAYS:-7}" -exec rm -rf {} +
+
+# Fails only if the database went away since `just backup` read it. The
+# snapshot is safe; the unit still fails (OnFailure alerts) because the
+# evening run would otherwise report backup.offsite stale with no reason.
+docker exec halal-trader-pg psql -U trader -d halal_trader -tAq -c \
+    "INSERT INTO heartbeats (component, beat_at, detail) VALUES ('backup.offsite', now(), '{\"snapshot\": \"${snapshot:0:8}\"}') ON CONFLICT (component) DO UPDATE SET beat_at = EXCLUDED.beat_at, detail = EXCLUDED.detail" \
+    || { echo "off-site snapshot ${snapshot:0:8} stored, but the backup.offsite heartbeat could not be written" >&2; exit 1; }
 echo "off-site snapshot ${snapshot:0:8} of $dest"
