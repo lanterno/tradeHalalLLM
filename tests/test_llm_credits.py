@@ -33,6 +33,8 @@ def test_a_week_of_spending_left_is_fine_and_less_is_not() -> None:
     assert low is not None and "about 5.0 days" in low
     assert _credits(1.0, 50.0, 0.0).problem() is not None  # under the floor, whatever the pace
     assert _credits(None, None, 1.0).problem() is None  # nothing published: nothing to judge
+    gone = _credits(-0.06, 39.5, 1.0).problem()
+    assert gone is not None and gone.startswith("LLM credit exhausted")
 
 
 def _openrouter(balance: tuple[float, float], remaining: float | None) -> httpx.AsyncClient:
