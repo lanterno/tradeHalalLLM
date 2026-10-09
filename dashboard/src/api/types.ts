@@ -1,3 +1,15 @@
+/** How the round trips that closed one way did (portfolio/analytics.py:ExitStats). */
+export interface ExitStats {
+  reason: string;
+  trades: number;
+  avg_pct: number;
+  total_pnl: number;
+  win_rate: number;
+  avg_hold_minutes: number;
+  first_hour_trades: number;
+  first_hour_avg_pct: number | null;
+}
+
 export interface AnalyticsStats {
   total_trades: number;
   wins: number;
@@ -14,6 +26,7 @@ export interface AnalyticsStats {
   streak: number;
   streak_type: string;
   by_exit_reason: Record<string, number>;
+  exits: ExitStats[];
 }
 
 export interface Trade {

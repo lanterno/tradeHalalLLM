@@ -4,7 +4,7 @@ import { useTrades } from "../hooks/useTrades";
 import { StatCard } from "../components/StatCard";
 import { PnlBarChart } from "../components/PnlBarChart";
 import { EquityCurve } from "../components/EquityCurve";
-import { ExitReasonsChart } from "../components/ExitReasonsChart";
+import { ExitsTable } from "../components/ExitsTable";
 import { SymbolBreakdown } from "../components/SymbolBreakdown";
 import { ErrorState } from "../components/ErrorState";
 import { formatUsd, formatPct, pnlColor } from "../lib/utils";
@@ -194,9 +194,9 @@ export default function Analytics() {
           <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
             <div className="rounded-xl border border-border bg-surface p-4">
               <h3 className="mb-4 text-sm font-medium uppercase tracking-wider text-muted">
-                Exit Reasons
+                Exits
               </h3>
-              <ExitReasonsChart data={stats.by_exit_reason} />
+              <ExitsTable exits={stats.exits ?? []} />
             </div>
             <div className="rounded-xl border border-border bg-surface p-4">
               <h3 className="mb-4 text-sm font-medium uppercase tracking-wider text-muted">
