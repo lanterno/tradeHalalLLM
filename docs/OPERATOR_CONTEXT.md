@@ -85,6 +85,25 @@ churn kills this bot.
 - **News:** live news moves to Alpaca (Benzinga), the feed the research
   is backtested on; Finnhub stays as a fallback.
 
+## Operator decisions of 2026-10-09
+
+- **Technology focus, everywhere.** The application concentrates on
+  technology companies: software & internet, computer hardware, and
+  semiconductors with chip equipment (the screen's industries grouped as
+  Technology in `halal/sector_limits.py`). The **core** became tech-only
+  (`strict_core.SECTOR`): the 100 largest halal tech names, cap-weighted, from
+  its rebalance of 2026-10-12 (`RULE_SINCE`). Its forward book "core" restarted
+  on the tech rule; the broad book continues as `core-broad`, and the
+  live-money gate's 20-day record restarts with the new book.
+- **The engine becomes context- and industry-aware, the LLM a tech-industry
+  expert**, measured before it trades (`events tech-score` / `tech-eval`).
+- **The news reactor is to be improved, not removed.** Its pre-registered
+  minute-bar test failed as built (buying 60 s after positively scored
+  headlines lost 0.30% the same day, t -12, net of cost): the work is to find
+  news it can act on, measured the same way.
+- **LLM credit:** the OpenRouter account's prepaid balance, not the key's
+  limit, is what runs out; the evening run alerts on it.
+
 ## Operator decisions of 2026-10-08
 
 - **Both strategies run side by side**, reversing the day-trader's retirement
