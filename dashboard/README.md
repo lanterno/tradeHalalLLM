@@ -42,10 +42,10 @@ What the SPA reads (one `src/api/*.ts` client per group):
 | `GET /api/analytics`, `GET /api/pnl/daily` | Analytics |
 | `GET /api/decisions`, `GET /api/adjustments`, `GET /api/metrics/rejections` | Decisions |
 | `GET /api/halal/{compliance,zakat,purification}` | Halal |
-| `GET /api/risk/state`, `GET /api/system/{halt,reconcile/recent,backups}` | Risk & Halt |
+| `GET /api/risk/state`, `GET /api/risk/core`, `GET /api/system/{halt,reconcile/recent}` | Risk & Halt |
 | `GET /api/insights/purification` | Insights |
-| `GET /api/metrics/{cycles,llm}` | Observability |
-| `GET /api/health`, `GET /api/system/status`, `GET /api/config` | System, sidebar status |
+| `GET /api/operations`, `GET /api/metrics/{cycles,llm}` | Operations |
+| `GET /api/health` | Sidebar status |
 | `POST` / `DELETE /api/system/halt` | Engage / clear the kill-switch |
 
 ## Auth
