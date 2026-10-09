@@ -1,7 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   clearHalt,
-  fetchBackups,
   fetchCoreRisk,
   fetchHaltStatus,
   fetchReconcileRecent,
@@ -61,10 +60,3 @@ export function useReconcileRecent(limit = 25) {
   });
 }
 
-export function useBackups() {
-  return useQuery({
-    queryKey: ["backups"],
-    queryFn: fetchBackups,
-    refetchInterval: 60_000,
-  });
-}

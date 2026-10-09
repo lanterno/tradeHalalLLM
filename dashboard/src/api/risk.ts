@@ -1,5 +1,5 @@
 import { apiFetch } from "./client";
-import type { BackupRow, CoreRisk, HaltStatus, ReconcileLogRow, RiskState } from "./types";
+import type { CoreRisk, HaltStatus, ReconcileLogRow, RiskState } from "./types";
 
 export async function fetchRiskState(): Promise<RiskState> {
   return apiFetch<RiskState>("/api/risk/state");
@@ -37,8 +37,4 @@ export async function fetchReconcileRecent(
   limit: number,
 ): Promise<ReconcileLogRow[]> {
   return apiFetch<ReconcileLogRow[]>(`/api/system/reconcile/recent?limit=${limit}`);
-}
-
-export async function fetchBackups(): Promise<BackupRow[]> {
-  return apiFetch<BackupRow[]>("/api/system/backups");
 }

@@ -1,6 +1,6 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import {
-  useBackups,
   useClearHalt,
   useCoreRisk,
   useHaltStatus,
@@ -12,12 +12,6 @@ import { StatCard } from "../components/StatCard";
 import { ErrorState } from "../components/ErrorState";
 import type { CoreRisk, RiskState } from "../api/types";
 import { cn, formatDate, formatDuration, formatPct, formatTime, formatUsd } from "../lib/utils";
-
-function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  return `${(n / 1024 / 1024).toFixed(1)} MB`;
-}
 
 const SECTORS_SHOWN = 5;
 const SECTOR_COLORS = ["#4ade80", "#60a5fa", "#c084fc", "#facc15", "#fb923c"];
@@ -157,7 +151,6 @@ export default function RiskAndSystem() {
   const setHaltMut = useSetHalt();
   const clearHaltMut = useClearHalt();
   const reconcile = useReconcileRecent(25);
-  const backups = useBackups();
 
   const [haltReason, setHaltReason] = useState("");
   const engaged = halt.data?.enabled === true;
@@ -349,50 +342,12 @@ export default function RiskAndSystem() {
         )}
       </section>
 
-      {/* Backups */}
-      <section className="rounded-xl border border-border bg-surface p-4">
-        <h2 className="mb-3 text-sm font-medium uppercase tracking-wider text-muted">
-          Daily Backups
-        </h2>
-        {backups.isError ? (
-          <ErrorState compact error={backups.error} onRetry={backups.refetch} />
-        ) : backups.isLoading ? (
-          <p className="text-sm text-muted">Loading…</p>
-        ) : !backups.data || backups.data.length === 0 ? (
-          <p className="text-sm text-warning">
-            No backups found. The bot writes one every EOD; run{" "}
-            <code className="font-mono">halal-trader backup</code> to create one now.
-          </p>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[480px] text-sm">
-              <thead>
-                <tr className="border-b border-border text-left text-xs uppercase tracking-wider text-muted">
-                  <th className="px-3 py-2">Date</th>
-                  <th className="px-3 py-2">Path</th>
-                  <th className="px-3 py-2 text-right">Size</th>
-                </tr>
-              </thead>
-              <tbody>
-                {backups.data.slice(0, 14).map((b) => (
-                  <tr
-                    key={b.path}
-                    className="border-b border-border/50 hover:bg-surface-hover/50 transition-colors"
-                  >
-                    <td className="whitespace-nowrap px-3 py-2">{formatTime(b.backed_up_at)}</td>
-                    <td className="px-3 py-2 font-mono text-xs text-muted">
-                      {b.path}
-                    </td>
-                    <td className="px-3 py-2 text-right font-mono">
-                      {formatBytes(b.size_bytes)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
+      <p className="text-xs text-muted">
+        Backups, daily jobs and every process's heartbeat are on{" "}
+        <Link to="/operations" className="text-accent hover:underline">
+          Operations →
+        </Link>
+      </p>
     </div>
   );
 }

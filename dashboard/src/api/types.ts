@@ -269,12 +269,6 @@ export interface ReconcileLogRow {
   notes: string | null;
 }
 
-export interface BackupRow {
-  path: string;
-  size_bytes: number;
-  backed_up_at: string;
-}
-
 // Daily halal "stock of the day" recommendation (advisory — never traded).
 // The latest endpoint returns { available: false } when none has been
 // generated yet; otherwise available is true and the fields are populated.
