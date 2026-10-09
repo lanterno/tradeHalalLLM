@@ -99,8 +99,11 @@ churn kills this bot.
   expert**, measured before it trades (`events tech-score` / `tech-eval`).
 - **The news reactor is to be improved, not removed.** Its pre-registered
   minute-bar test failed as built (buying 60 s after positively scored
-  headlines lost 0.30% the same day, t -12, net of cost): the work is to find
-  news it can act on, measured the same way.
+  headlines lost 0.30% the same day, t -12, net of cost), and so did three
+  rebuilt variants (earnings catalysts at the first tradable price, peer
+  read-through, negative news as an exit). Its entries run **in shadow**
+  until one passes: every gate still runs, nothing is placed, and each
+  decision is kept in `reactor_decisions` to measure the next version on.
 - **LLM credit:** the OpenRouter account's prepaid balance, not the key's
   limit, is what runs out; the evening run alerts on it.
 
