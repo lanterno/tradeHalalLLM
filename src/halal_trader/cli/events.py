@@ -134,24 +134,39 @@ def quality_cmd() -> None:
 
 
 @events.command("study")
-@click.argument("signal", type=click.Choice(["sue"]))
+@click.argument("signal", type=click.Choice(["sue", "sales", "beat-raise"]))
 @click.option("--start", type=int, default=2016, show_default=True, help="First year.")
 @click.option("--end", type=int, default=2019, show_default=True, help="Last year.")
 @click.option("--by", type=click.Choice(["all", "bucket", "year"]), default="bucket")
 def study_cmd(signal: str, start: int, end: int, by: str) -> None:
-    """Event study of a free signal: net abnormal return by signal decile and horizon."""
+    """Event study of a free signal: net abnormal return by signal decile and horizon.
+
+    sue: SEC EPS surprise; sales, beat-raise: earnings releases as catalysts,
+    entered at their first tradable price (events/earnings_signal.py).
+    """
 
     async def _run(engine: Any, settings: Any) -> Any:
-        from halal_trader.events.history import covered_companies
         from halal_trader.events.study import Observation, evaluate, summarise
-        from halal_trader.events.sue import sue_observations
 
-        raw = await sue_observations(engine, await covered_companies(engine))
-        obs = [
-            Observation(o.symbol, o.announced_at, o.sue)
-            for o in raw
-            if start <= o.announced_at.year <= end
-        ]
+        if signal == "sue":
+            from halal_trader.events.history import covered_companies
+            from halal_trader.events.sue import sue_observations
+
+            raw = await sue_observations(engine, await covered_companies(engine))
+            obs = [
+                Observation(o.symbol, o.announced_at, o.sue)
+                for o in raw
+                if start <= o.announced_at.year <= end
+            ]
+        else:
+            from halal_trader.events.earnings_signal import releases, signal_of
+
+            obs = [
+                Observation(r.symbol, r.published_at, value)
+                for r in await releases(engine)
+                if start <= r.published_at.year <= end
+                and (value := signal_of(r, signal)) is not None
+            ]
         return summarise(await evaluate(engine, obs), by=None if by == "all" else by)
 
     result = run_db(_run)
