@@ -49,17 +49,24 @@ def _weighted(fills: list[Any], attr: str) -> float | None:
     return sum(v * w for v, w in pairs if w > 0) / total if total else None
 
 
-def _earliest_pass(today: date, *, days: int, min_days: int, run_today_pending: bool) -> date:
-    """The first day the paper record can be long enough: one run a trading day."""
+def _earliest_pass(first_uncounted: date, *, days: int, min_days: int, today: date) -> date:
+    """The first evening the paper record can be long enough.
+
+    The gate counts a session once both the book and the broker's equity have
+    it, and Alpaca publishes a session's closing equity the next day (the
+    16:30 ledger sync brings in the session before). So the sessions still
+    needed run from ``first_uncounted``, and the last of them counts on the
+    trading day after it.
+    """
     needed = max(min_days - days, 0)
-    d = today if run_today_pending else next_trading_day(today)
     if needed == 0:
         return today
+    d = first_uncounted
     while True:
         if is_trading_day(d):
             needed -= 1
             if needed == 0:
-                return d
+                return max(next_trading_day(d), today)
         d += timedelta(days=1)
 
 
@@ -286,8 +293,13 @@ async def build(
             else "pending"
         )
         window.append({"day": d.isoformat(), "status": status})
+    counted = sorted({d for d, _ in equity_rows} & set(navs))
+    if counted:
+        first_uncounted = next_trading_day(counted[-1])
+    else:
+        first_uncounted = today if is_trading_day(today) else next_trading_day(today)
     earliest_days = _earliest_pass(
-        today, days=ready.days, min_days=gate.MIN_DAYS, run_today_pending=next_day == today
+        first_uncounted, days=ready.days, min_days=gate.MIN_DAYS, today=today
     )
     earliest = max(earliest_days, rebalance_day) if not ready.ready else today
 
