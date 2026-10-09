@@ -55,6 +55,11 @@ class Credits:
         a = self.available_usd
         if a is None or (a >= FLOOR_USD and a >= LOW_DAYS * self.pace_usd_per_day):
             return None
+        if a <= 0:
+            return (
+                "LLM credit exhausted: the OpenRouter account has no credit left, so every "
+                "GLM call fails; add credits at openrouter.ai/settings/credits"
+            )
         days = self.days_left
         pace_note = f" (about {days:.1f} days at the last week's pace)" if days is not None else ""
         return (
