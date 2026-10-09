@@ -125,6 +125,14 @@ export function OpsStrip({ data }: { data: OperationsStatus }) {
             </p>
           </>
         ) : null}
+        {data.llm.credits && data.llm.credits.available_usd != null && (
+          <p className={cn("mt-1", data.llm.credits.low ? "font-semibold text-loss" : undefined)}>
+            {usd(data.llm.credits.available_usd)} left on OpenRouter
+            {data.llm.credits.days_left != null
+              ? ` · ~${data.llm.credits.days_left.toFixed(0)} days at this pace`
+              : ""}
+          </p>
+        )}
       </Tile>
       <Tile label="Last backup">
         {nightly.at ? (

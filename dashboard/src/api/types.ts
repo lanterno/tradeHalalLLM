@@ -911,6 +911,16 @@ export interface OperationsStatus {
     pools: OpsPool[];
     consumers: OpsConsumer[];
     days: ({ day: string } & Record<string, number | string>)[];
+    /** The evening run's reading of the OpenRouter account (core/llm/credits.py). */
+    credits: {
+      balance_usd: number | null;
+      key_remaining_usd: number | null;
+      available_usd: number | null;
+      days_left: number | null;
+      pace_usd_per_day: number;
+      at: string;
+      low: boolean;
+    } | null;
   };
   backups: {
     nightly: OpsBackup;
