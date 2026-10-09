@@ -76,10 +76,20 @@ ufw --force enable
 
 say "ssh"
 # Key-only logins, but only once a key is in place: never lock the operator out.
+# sshd keeps the first value it reads and reads sshd_config.d in name order,
+# so this file sorts before cloud-init's 50-cloud-init.conf, which can turn
+# password logins back on.
 if [ -s /root/.ssh/authorized_keys ]; then
+    rm -f /etc/ssh/sshd_config.d/60-halabot.conf   # this file's earlier name
     printf 'PasswordAuthentication no\nKbdInteractiveAuthentication no\nPermitRootLogin prohibit-password\n' \
-        > /etc/ssh/sshd_config.d/60-halabot.conf
-    systemctl reload ssh
+        > /etc/ssh/sshd_config.d/10-halabot.conf
+    install -d -m 0755 /run/sshd   # sshd -t needs it; only ssh.service makes it
+    sshd -t || { rm -f /etc/ssh/sshd_config.d/10-halabot.conf; echo "sshd rejects the config; left unchanged" >&2; exit 1; }
+    # 24.04 starts sshd from ssh.socket: ssh.service may not be running, and
+    # `reload` fails on a stopped unit. A stopped sshd reads the file on start.
+    systemctl try-reload-or-restart ssh
+    sshd -T | grep -x 'passwordauthentication no' >/dev/null \
+        || echo "warning: sshd still allows password logins; check /etc/ssh/sshd_config.d" >&2
 else
     echo "no /root/.ssh/authorized_keys: password logins left on; add a key and re-run"
 fi
