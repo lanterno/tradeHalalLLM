@@ -31,6 +31,7 @@ class Firm:
     cik: int | None
     cap: float | None  # screen-date price x shares outstanding (spot, not the 36-month average)
     screened: date
+    sic: str | None = None  # its SEC industry as that screen recorded it
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,7 +63,7 @@ async def _screens(engine: AsyncEngine) -> dict[date, _Screen]:
             if r.verdict == "halal":
                 price, shares = to_float(r.price), to_float(r.shares)
                 cap = price * shares if price is not None and shares is not None else None
-                screen.halal[r.symbol] = Firm(r.cik, cap, r.as_of)
+                screen.halal[r.symbol] = Firm(r.cik, cap, r.as_of, r.sic_description)
             if r.sic_description == UNMAPPED:
                 screen.unmapped.add(r.symbol)
     return out

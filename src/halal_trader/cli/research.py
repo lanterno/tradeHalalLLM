@@ -444,11 +444,19 @@ def event_backtest_cmd(signal: str, since: Any) -> None:
 @click.option("--top", default=100, show_default=True, help="Largest names held.")
 @click.option("--cost-bps", default=5.0, show_default=True)
 @click.option("--since", type=click.DateTime(["%Y-%m-%d"]), default="2017-01-01", show_default=True)
-def core_backtest_cmd(top: int, cost_bps: float, since: Any) -> None:
+@click.option(
+    "--sector",
+    type=click.Choice(["all", "technology"]),
+    default="all",
+    show_default=True,
+    help="Only the names each month's screen put in this sector.",
+)
+def core_backtest_cmd(top: int, cost_bps: float, since: Any, sector: str) -> None:
     """The core portfolio's rule, point in time: tracking and cost against SPUS.
 
     A description, not a trial: the core claims no edge, so it is not recorded.
     """
+    from halal_trader.halal.sector_limits import TECHNOLOGY
     from halal_trader.research.factor_backtest import (
         backtest_targets,
         benchmark_returns,
@@ -479,7 +487,11 @@ def core_backtest_cmd(top: int, cost_bps: float, since: Any) -> None:
         ("banded (the core rule)", core_banding(prices.symbols)),
     ):
         r = backtest_targets(
-            prices, core_strict(inputs, top), cost_bps=cost_bps, start=since.date(), adjust=adjust
+            prices,
+            core_strict(inputs, top, None if sector == "all" else TECHNOLOGY),
+            cost_bps=cost_bps,
+            start=since.date(),
+            adjust=adjust,
         )
         spus_col = prices.symbols.index("SPUS")
         have = [
@@ -493,7 +505,7 @@ def core_backtest_cmd(top: int, cost_bps: float, since: Any) -> None:
         s, sb = stats(mine), stats(b) if b is not None else None
         te = float(np.std(mine - b, ddof=1) * np.sqrt(252)) if b is not None else float("nan")
         console.print(
-            f"[bold]{label}[/bold], top {top}, {cost_bps:g} bps: "
+            f"[bold]{label}[/bold], {sector}, top {top}, {cost_bps:g} bps: "
             f"since {days[0]} CAGR {s.cagr:+.2%} "
             f"vs SPUS {sb.cagr if sb else float('nan'):+.2%}, tracking error {te:.2%}, "
             f"avg turnover {r.avg_turnover:.1%}/month, maxDD {s.max_drawdown:.1%}"

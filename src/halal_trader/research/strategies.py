@@ -152,15 +152,22 @@ def three_factor(inputs: Inputs, top_n: int = TOP_N) -> TargetFn:
 STRATEGIES = {"t3-cap": cap_weighted, "t4-tilt": cap_tilt, "t5-3factor": three_factor}
 
 
-def core_strict(inputs: Inputs, top_n: int = 100) -> TargetFn:
+def core_strict(inputs: Inputs, top_n: int = 100, sector: str | None = None) -> TargetFn:
     """The core portfolio's targets (portfolio/strict_core.py): cap weights of the
-    largest ``top_n`` eligible names, share classes splitting a company's cap."""
+    largest ``top_n`` eligible names, share classes splitting a company's cap.
+
+    ``sector`` (the sector cap's names, e.g. "Technology") keeps only the names
+    that month's screen put in it, as the screen classed them then.
+    """
+    from halal_trader.halal.sector_limits import cap_sector
     from halal_trader.portfolio.strict_core import targets
 
     symbols = inputs.prices.symbols
 
     def target(t: int) -> FloatArray:
         firms = inputs.firms(t)
+        if sector is not None:
+            firms = {j: f for j, f in firms.items() if cap_sector(symbols[j], f.sic) == sector}
         caps = inputs.caps(t, firms)  # already split across share classes
         chosen = targets({symbols[j]: float(caps[j]) for j in firms if np.isfinite(caps[j])}, top_n)
         out = np.zeros(len(symbols))
