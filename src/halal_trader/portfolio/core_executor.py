@@ -52,8 +52,11 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from halal_trader.compliance import purification
 from halal_trader.data.store import last_closes
 from halal_trader.halal import strict
+from halal_trader.halal.sector_limits import cap_sector
 from halal_trader.portfolio.core_account import CORE_PAPER, core_account
 from halal_trader.portfolio.strict_core import (
+    RULE_SINCE,
+    SECTOR,
     TOP_N,
     rebalance,
     split_share_classes,
@@ -116,17 +119,23 @@ class Plan:
 
 
 async def _screen(
-    engine: AsyncEngine, day: date
+    engine: AsyncEngine, day: date, sector: str | None = SECTOR
 ) -> tuple[date | None, dict[str, tuple[float, float, int | None]], set[str]]:
-    """(screen date, symbol -> (screen price, shares, CIK) for the halal names
-    that can be cap-weighted, every symbol the newest screen holds halal)."""
+    """(screen date, symbol -> (screen price, shares, CIK) for the halal names in
+    ``sector`` that can be cap-weighted, every symbol the newest screen holds halal)."""
     as_of = await strict.newest_screen(engine, on_or_before=day)
     if as_of is None:
         return None, {}, set()
     rows = await strict.screen_rows(engine, as_of, halal_only=True)
     return (
         as_of,
-        {r.symbol: (r.price, r.shares, r.cik) for r in rows if r.price and r.shares},
+        {
+            r.symbol: (r.price, r.shares, r.cik)
+            for r in rows
+            if r.price
+            and r.shares
+            and (sector is None or cap_sector(r.symbol, r.sic_description) == sector)
+        },
         {r.symbol for r in rows},
     )
 
@@ -512,11 +521,15 @@ async def _record(
 
 
 async def monthly_due(engine: AsyncEngine, today: date, account: str = CORE_PAPER) -> bool:
-    """True until a monthly rebalance has actually run on ``account`` this month.
+    """True until a monthly rebalance has actually run on ``account`` this month,
+    or since the targets last changed (``RULE_SINCE``), whichever is later.
 
     A halted run (stale screen, open orders) and a plan-only run do not count:
     the month is used up only by a rebalance that traded or found nothing to do.
     """
+    since = today.replace(day=1)
+    if since < RULE_SINCE <= today:  # the targets changed this month: rebalance again
+        since = RULE_SINCE
     async with engine.connect() as conn:
         n = (
             await conn.execute(
@@ -524,7 +537,7 @@ async def monthly_due(engine: AsyncEngine, today: date, account: str = CORE_PAPE
                     "SELECT count(*) FROM core_runs WHERE account = :a AND monthly AND executed "
                     "AND halted IS NULL AND run_on >= :m"
                 ),
-                {"a": account, "m": today.replace(day=1)},
+                {"a": account, "m": since},
             )
         ).scalar()
     return not n

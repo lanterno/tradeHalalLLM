@@ -4,7 +4,11 @@ Pure functions, shared by the forward book (research/forward_book.py) and,
 later, by execution, so the record and the orders follow one rule:
 
 * **targets:** the largest ``TOP_N`` eligible names by market cap, weighted
-  by cap; a company's share classes split its cap;
+  by cap; a company's share classes split its cap. Eligible means halal on
+  the newest screen and in ``SECTOR``: technology only (software & internet,
+  computer hardware, semiconductors and chip equipment, as
+  halal/sector_limits.py groups the screen's industries), the operator's
+  decision of 2026-10-09;
 * **trades:** a holding the screen no longer passes goes to zero; a new name
   enters at its target; a holding whose weight has drifted outside its band
   (``BAND`` of its target, at least ``BAND_FLOOR``) goes back to target;
@@ -16,8 +20,16 @@ later, by execution, so the record and the orders follow one rule:
 from __future__ import annotations
 
 from collections.abc import Mapping
+from datetime import date
+
+from halal_trader.halal.sector_limits import TECHNOLOGY
 
 TOP_N = 100
+SECTOR: str | None = TECHNOLOGY  # None: every sector
+# The day the targets last changed (2026-10-12: technology only). A monthly
+# rebalance is due again at the first run on or after it, so the account moves
+# to the new targets then rather than at the next month's start.
+RULE_SINCE = date(2026, 10, 12)
 BAND = 0.25
 BAND_FLOOR = 0.002
 COST_BPS = 5.0
