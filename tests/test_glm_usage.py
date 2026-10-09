@@ -295,3 +295,15 @@ async def test_nonzero_temperature_passes_through_on_zai():
     create_mock = _wire(llm, _stub_response())
     await llm.generate("hello")
     assert create_mock.await_args.kwargs["temperature"] == 0.2
+
+
+@pytest.mark.asyncio
+async def test_request_names_its_output_ceiling():
+    """Without max_tokens OpenRouter prices the request at the model's maximum
+    output and refuses it (402) once the key's remaining credit cannot cover it."""
+    from halal_trader.core.llm.glm import MAX_OUTPUT_TOKENS
+
+    llm = GLMLLM(model="z-ai/glm-5.2", api_key="sk-test")
+    create_mock = _wire(llm, _stub_response())
+    await llm.generate("hello")
+    assert create_mock.await_args.kwargs["max_tokens"] == MAX_OUTPUT_TOKENS == 16_384

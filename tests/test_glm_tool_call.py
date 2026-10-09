@@ -285,3 +285,13 @@ async def test_no_usage_field_does_not_crash():
     await llm.generate_tool_call("hi", tools=[_tool()])
     assert llm.last_usage.input_tokens == 0
     assert llm.last_usage.cost_usd == 0
+
+
+@pytest.mark.asyncio
+async def test_tool_call_names_its_output_ceiling():
+    from halal_trader.core.llm.glm import MAX_OUTPUT_TOKENS
+
+    llm = _llm()
+    create_mock = _wire(llm, _stub_response([]))
+    await llm.generate_tool_call("hello", tools=[_tool("submit_plan")], force_tool="submit_plan")
+    assert create_mock.await_args.kwargs["max_tokens"] == MAX_OUTPUT_TOKENS
