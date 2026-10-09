@@ -43,12 +43,25 @@ bash bootstrap.sh       # TAILSCALE_AUTHKEY=tskey-... bash bootstrap.sh joins th
 
 What it does, idempotently: updates the system and enables security
 updates; installs Docker (with log rotation), `just`, `restic`, `jq`;
-adds 4 GB of swap; sets ufw to SSH only; makes SSH key-only; creates the
-`halabot` user (in the `docker` group, with root's SSH key); clones the
-repo to `/opt/halabot`; writes `.env` from `.env.example` with a
+adds 4 GB of swap; sets ufw to SSH only; makes SSH key-only
+(`/etc/ssh/sshd_config.d/10-halabot.conf`, only once root has a key);
+creates the `halabot` user (in the `docker` group, with root's SSH key);
+clones the repo to `/opt/halabot`; writes `.env` from `.env.example` with a
 fresh `POSTGRES_PASSWORD` (also in `DATABASE_URL`) and `WEB_API_TOKEN`;
 writes `/etc/halabot/server.env` from `infra/server/server.env.example`;
-installs and starts the systemd timers; installs Tailscale.
+installs and starts the systemd timers; installs Tailscale. Without
+`TAILSCALE_AUTHKEY`, join the tailnet now with
+`tailscale up --hostname halabot` (it prints a login URL).
+
+Before you log out, check from a second terminal that
+`ssh halabot@<server-ip>` and `ssh root@<server-ip>` still let you in.
+
+The timers run from now on, before anything is configured, so expect
+failures until the steps below are done: the health check fails every 5
+minutes until the fleet is up (step 5), and once Telegram is filled in
+(step 3) it alerts after two failures, then hourly; the 07:00 UTC backup
+fails, and alerts, until step 4 is done. Both say why in
+`journalctl -u halabot-health` / `-u halabot-backup`.
 
 ## 3. Fill in `.env`
 
@@ -73,8 +86,22 @@ Then save `.env` in your password manager.
 
 Pick a repository and fill in `/etc/halabot/server.env` (`sudo nano`). The
 file has the forms for Cloudflare R2, Hetzner Object Storage and a Hetzner
-Storage Box. Generate the password with `openssl rand -base64 32` and **save
-it in your password manager now**: without it no snapshot can be read.
+Storage Box. Write the values bare (no quotes). Generate the password with
+`openssl rand -base64 32` and **save it in your password manager now**:
+without it no snapshot can be read.
+
+A Storage Box is reached over SSH by the `halabot` user, which has no key
+of its own yet. Give it one and put it on the box; `ssh-copy-id` asks for
+the box's password once and records its host key (an unknown host key
+makes the unattended run fail):
+
+```bash
+sudo -u halabot ssh-keygen -t ed25519 -N '' -f /home/halabot/.ssh/id_ed25519
+sudo -u halabot ssh-copy-id -p 23 -s -i /home/halabot/.ssh/id_ed25519 u123456@u123456.your-storagebox.de
+sudo -u halabot sftp -P 23 u123456@u123456.your-storagebox.de <<< 'ls'   # must list, with no password asked
+```
+
+Then, for any repository:
 
 ```bash
 sudo -u halabot /opt/halabot/infra/server/backup.sh --init   # once
@@ -126,7 +153,8 @@ The dashboard listens on `127.0.0.1:8082` only. Reach it over:
 
 - **Tailscale (recommended):** `sudo tailscale serve --bg 8082`, then
   `https://halabot.<tailnet>.ts.net` from any device on the tailnet,
-  phone included.
+  phone included. The first time, it prints a link to turn on Serve and
+  HTTPS certificates for the tailnet in the admin console.
 - **An SSH tunnel:** `ssh -L 8082:127.0.0.1:8082 halabot@<server>`, then
   http://localhost:8082.
 
