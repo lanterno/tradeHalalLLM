@@ -38,6 +38,13 @@ from halal_trader.core.llm.tools import ToolCall
 logger = logging.getLogger(__name__)
 
 DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
+# Every request names its ceiling. Without one, OpenRouter prices each request
+# at the model's maximum output (131,072 tokens) and refuses it with a 402 once
+# the key's remaining monthly credit, less what concurrent requests already
+# reserve, cannot cover that worst case; seen 2026-10-09 when parallel scoring
+# batches drew down the credit. The largest output observed is ~7.5k tokens,
+# reasoning included.
+MAX_OUTPUT_TOKENS = 16_384
 
 
 class GLMLLM(BaseLLM):
@@ -132,6 +139,7 @@ class GLMLLM(BaseLLM):
                 model=self.model,
                 messages=messages,
                 response_format={"type": "json_object"},
+                max_tokens=MAX_OUTPUT_TOKENS,
                 temperature=self._effective_temperature(),
                 extra_body=self._extra_body(),
             ),
@@ -187,6 +195,7 @@ class GLMLLM(BaseLLM):
             "model": self.model,
             "messages": messages,
             "tools": [t.for_openai() for t in tools],
+            "max_tokens": MAX_OUTPUT_TOKENS,
             "temperature": self._effective_temperature(),
             "extra_body": self._extra_body(),
         }
