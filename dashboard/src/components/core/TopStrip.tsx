@@ -37,8 +37,8 @@ export function CoreHeader({ data }: { data: CoreStatus }) {
           </span>
         </div>
         <p className="mt-1 max-w-3xl text-xs text-muted">
-          The largest 100 names the strict screen passes, cap-weighted, rebalanced monthly within
-          bands, on its own Alpaca account. A holding that stops passing is sold at the next daily
+          The 100 largest technology names (software, hardware, semiconductors) the strict screen
+          passes, cap-weighted, rebalanced monthly within bands, on its own Alpaca account. A holding that stops passing is sold at the next daily
           check. Real money only after the gate below passes.
         </p>
       </div>
