@@ -132,3 +132,20 @@ def test_share_classes_split_the_company_cap_and_t5_holds_one_of_them() -> None:
     assert w[0] + w[1] == pytest.approx(w[2])  # Alphabet counted once, not twice
     held = three_factor(inputs, top_n=3)(299)
     assert (held[:2] > 0).sum() == 1
+
+
+def test_the_core_can_hold_one_sector_as_each_screen_classed_it() -> None:
+    from halal_trader.halal.sector_limits import TECHNOLOGY
+    from halal_trader.research.strategies import core_strict
+
+    p = _prices(5, {"NVDA": 0.0, "MSFT": 0.0, "XOM": 0.0})
+    firms = {
+        "NVDA": Firm(1, 300.0, p.days[0], "SEMICONDUCTORS & RELATED DEVICES"),
+        "MSFT": Firm(2, 100.0, p.days[0], "SERVICES-PREPACKAGED SOFTWARE"),
+        "XOM": Firm(3, 600.0, p.days[0], "PETROLEUM REFINING"),
+    }
+    inputs = Inputs(p, {p.days[0]: firms}, {})
+    tech = core_strict(inputs, 100, TECHNOLOGY)(2)
+    weights = dict(zip(p.symbols, tech, strict=True))
+    assert weights["XOM"] == 0.0 and weights["NVDA"] > weights["MSFT"] > 0.0
+    assert core_strict(inputs, 100)(2)[p.symbols.index("XOM")] > 0.0  # the broad core keeps it
