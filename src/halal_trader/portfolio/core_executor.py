@@ -81,6 +81,7 @@ TERMINAL = frozenset({"filled", "canceled", "expired", "rejected", "done_for_day
 REBALANCE = "rebalance"
 SCREEN_SALE = "forced sale (screen)"  # the screen no longer holds it halal
 UNIVERSE_EXIT = "exit (left the universe)"  # halal, but no longer a universe member
+SECTOR_EXIT = "exit (outside the core's sector)"  # halal, but not in strict_core.SECTOR
 TARGET_EXIT = "exit (left the target)"  # halal and in the universe, not in the top N
 
 
@@ -98,7 +99,7 @@ class PlannedOrder:
     side: str  # buy | sell
     qty: float
     price: float
-    reason: str  # REBALANCE | SCREEN_SALE | UNIVERSE_EXIT | TARGET_EXIT
+    reason: str  # REBALANCE | SCREEN_SALE | UNIVERSE_EXIT | SECTOR_EXIT | TARGET_EXIT
 
     @property
     def notional(self) -> float:
@@ -120,23 +121,28 @@ class Plan:
 
 async def _screen(
     engine: AsyncEngine, day: date, sector: str | None = SECTOR
-) -> tuple[date | None, dict[str, tuple[float, float, int | None]], set[str]]:
+) -> tuple[date | None, dict[str, tuple[float, float, int | None]], set[str], set[str]]:
     """(screen date, symbol -> (screen price, shares, CIK) for the halal names in
-    ``sector`` that can be cap-weighted, every symbol the newest screen holds halal)."""
+    ``sector`` that can be cap-weighted, every symbol the newest screen holds halal,
+    the halal symbols outside ``sector``)."""
     as_of = await strict.newest_screen(engine, on_or_before=day)
     if as_of is None:
-        return None, {}, set()
+        return None, {}, set(), set()
     rows = await strict.screen_rows(engine, as_of, halal_only=True)
+    outside = {
+        r.symbol
+        for r in rows
+        if sector is not None and cap_sector(r.symbol, r.sic_description) != sector
+    }
     return (
         as_of,
         {
             r.symbol: (r.price, r.shares, r.cik)
             for r in rows
-            if r.price
-            and r.shares
-            and (sector is None or cap_sector(r.symbol, r.sic_description) == sector)
+            if r.price and r.shares and r.symbol not in outside
         },
         {r.symbol for r in rows},
+        outside,
     )
 
 
@@ -265,7 +271,7 @@ async def plan(
         )
         return result
 
-    screened, screen, halal = await _screen(engine, today)
+    screened, screen, halal, outside = await _screen(engine, today)
     result.screen_as_of = screened
     if screened is None or today - screened > MAX_SCREEN_AGE:
         result.halted = f"halal screen missing or stale ({screened}): no orders on old data"
@@ -328,6 +334,8 @@ async def plan(
         if after == 0 and symbol in positions:  # a full exit sells exactly what is held
             if symbol not in halal:
                 reason = SCREEN_SALE
+            elif symbol in outside:
+                reason = SECTOR_EXIT
             elif symbol not in eligible:
                 reason = UNIVERSE_EXIT
             else:
