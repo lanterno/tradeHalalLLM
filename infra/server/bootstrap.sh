@@ -28,7 +28,9 @@ export DEBIAN_FRONTEND=noninteractive
 
 say "packages"
 apt-get update -q
-apt-get upgrade -yq
+# noninteractive silences debconf, not dpkg: a config file the image already
+# changed (cloud-init edits sshd's) would stop the upgrade at a prompt.
+apt-get upgrade -yq -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold
 apt-get install -yq ca-certificates curl git gnupg jq openssl restic ufw unattended-upgrades
 if ! command -v just >/dev/null; then
     apt-get install -yq just \
