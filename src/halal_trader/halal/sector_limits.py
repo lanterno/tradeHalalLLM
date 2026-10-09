@@ -36,17 +36,31 @@ _TECH_INDUSTRIES = frozenset({"Software & internet", "Semiconductors", "Computer
 # Large halal names whose SIC code says the wrong thing: life-science tool
 # makers filed as measuring or lab instruments (they are healthcare, and
 # must not ride the Technology exemption), chip-equipment makers filed as
-# machinery or optics, an industrial filed as surgical instruments.
+# machinery or optics, an industrial filed as surgical instruments. Since the
+# core holds Technology only (2026-10-09), the group was reviewed name by
+# name against GICS: instrument, water, radiation, auction and solar-tracker
+# businesses are not technology; internet platforms and solar-chip makers
+# (GICS semiconductors) stay in it.
 SECTOR_OVERRIDES: dict[str, str] = {
     "TMO": "Healthcare",
     "DHR": "Healthcare",
     "A": "Healthcare",
     "WAT": "Healthcare",
+    "RVTY": "Healthcare",
+    "BIO": "Healthcare",
+    "TXG": "Healthcare",
+    "BRKR": "Healthcare",
     "LRCX": TECHNOLOGY,
     "KLAC": TECHNOLOGY,
     "ROP": TECHNOLOGY,
     "MMM": "Industrials",
     "ROK": "Industrials",
+    "VLTO": "Industrials",
+    "FTV": "Industrials",
+    "MIR": "Industrials",
+    "RBA": "Industrials",
+    "NXT": "Industrials",
+    "IMAX": "Communications & media",
 }
 
 
