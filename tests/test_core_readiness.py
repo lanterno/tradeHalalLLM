@@ -214,3 +214,10 @@ async def test_the_live_gate_reads_the_paper_record_as_of_its_last_day(
     # Long after the paper record ended, a first live run must rehearse again.
     late = await live_gate(engine, today=days[-1] + timedelta(days=30))
     assert any("rehearse again" in p for p in late)
+
+
+async def test_sessions_before_the_account_existed_are_not_missed_runs(engine: AsyncEngine) -> None:
+    days = await _seed(engine, 3, skip_runs=(1,))
+    r = await check(engine, today=days[-1])
+    assert r.missing_runs == [days[1]]  # the skipped run, not the 17 sessions before the account
+    assert not r.ready and r.days < 20  # still far from ready
