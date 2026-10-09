@@ -713,6 +713,10 @@ class TradingBot:
         )
 
         result, status_note = await self._maybe_execute_reactor_entry(event)
+        # The record its rebuilt versions are measured on (trading/reactor_log.py).
+        from halal_trader.trading import reactor_log
+
+        await reactor_log.record(self._engine, event, result, status_note)
 
         if self._notifier and self._notifier.enabled:
             try:

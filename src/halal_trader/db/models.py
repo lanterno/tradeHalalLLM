@@ -859,6 +859,29 @@ class CoreOrder(SQLModel, table=True):
     )
 
 
+class ReactorDecision(SQLModel, table=True):
+    """What the news reactor did with one scored catalyst (trading/reactor_log.py):
+    a shadow entry (what it would have bought), a placed order, or why it did not.
+    The record its rebuilt versions are measured on."""
+
+    __tablename__ = "reactor_decisions"
+    __table_args__ = (sa.Index("ix_reactor_decisions_decided_at", "decided_at"),)
+
+    id: int | None = Field(default=None, primary_key=True)
+    decided_at: datetime = Field(sa_type=sa.DateTime(timezone=True))
+    symbol: str
+    score: float
+    tag: str | None = None
+    headline: str
+    status: str  # shadow | filled | partially_filled | submitted | skipped | rejected | observed
+    reason: str | None = None  # why not, or the observation-only note
+    placed: bool  # an order went to the broker
+    price: float | None = None
+    intraday_change: float | None = None
+    quantity: float | None = None
+    stop_loss: float | None = None
+
+
 class CoreRun(SQLModel, table=True):
     """One run of the core executor: monthly or forced-sales-only, executed or a plan."""
 
