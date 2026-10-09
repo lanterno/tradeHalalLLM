@@ -288,3 +288,40 @@ async def test_the_core_book_holds_cap_weights_trades_monthly_and_sells_a_failed
     await _cap_screen(engine, DAYS[k + 1], {"UP": 3e9})  # MID now fails the screen
     sold = await advance_book(engine, "core", through=DAYS[k + 2])
     assert set(sold[-1].weights) == {"UP"} and sold[-1].turnover > 0
+
+
+async def test_a_tech_core_book_targets_technology_only(engine: AsyncEngine) -> None:
+    from halal_trader.halal.sector_limits import TECHNOLOGY
+
+    k = _mid_month_index()
+    await _seed(engine, k)
+    await _cap_screen(engine, DAYS[k - 5], {"UP": 3e9, "MID": 1e9, "FLAT": 2e9})
+    async with engine.begin() as conn:  # UP and FLAT are software, MID refines oil
+        await conn.execute(
+            text(
+                "UPDATE halal_screen_results SET sic_description = CASE symbol "
+                "WHEN 'MID' THEN 'PETROLEUM REFINING' ELSE 'SERVICES-PREPACKAGED SOFTWARE' END"
+            )
+        )
+    await create_book(
+        engine, "core", strategy="core-strict-cap", top_n=100, cost_bps=5.0, sector=TECHNOLOGY
+    )
+    await advance_book(engine, "core", through=DAYS[k - 1])
+    w = (await advance_book(engine, "core", through=DAYS[k]))[-1].weights
+    assert set(w) == {"UP", "FLAT"} and w["UP"] / w["FLAT"] == pytest.approx(1.5, rel=0.05)
+
+
+async def test_a_renamed_book_keeps_its_history(engine: AsyncEngine) -> None:
+    from halal_trader.research.forward_book import rename_book
+
+    await _seed(engine, 30)
+    await _cap_screen(engine, DAYS[20], {"UP": 3e9})
+    await create_book(engine, "core", strategy="core-strict-cap", top_n=100, cost_bps=5.0)
+    await advance_book(engine, "core", through=DAYS[28])
+    await rename_book(engine, "core", "core-broad")
+    async with engine.connect() as conn:
+        names = [r.name for r in await conn.execute(text("SELECT name FROM forward_books"))]
+        books = {r.book for r in await conn.execute(text("SELECT book FROM forward_book_days"))}
+    assert names == ["core-broad"] and books == {"core-broad"}
+    with pytest.raises(ValueError, match="no book named"):
+        await rename_book(engine, "core", "anything")
