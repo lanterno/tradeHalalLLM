@@ -137,3 +137,16 @@ def test_unknown_symbols_share_unknown_bucket():
         {"ZZZZ": 5_000, "YYYY": 5_000}, total_equity=20_000, sector_map=SECTORS
     )
     assert alloc.by_sector[UNKNOWN_SECTOR] == 10_000
+
+
+def test_non_technology_businesses_filed_under_tech_codes_are_moved_out():
+    """Reviewed for the tech-only core: life-science tools, industrial instruments,
+    auctions and solar trackers are not technology; solar chips and platforms are."""
+    assert cap_sector("RVTY", "Laboratory Analytical Instruments") == "Healthcare"
+    assert cap_sector("VLTO", "Instruments For Meas & Testing of  Electricity & Elec Signals") == (
+        "Industrials"
+    )
+    assert cap_sector("NXT", "Semiconductors & Related Devices") == "Industrials"
+    assert cap_sector("RBA", "Services-Business Services, NEC") == "Industrials"
+    assert cap_sector("FSLR", "Semiconductors & Related Devices") == "Technology"
+    assert cap_sector("UBER", "Services-Business Services, NEC") == "Technology"

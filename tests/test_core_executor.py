@@ -188,7 +188,10 @@ async def test_the_core_holds_technology_only_and_sells_the_rest_at_the_month(
         prices={"MSFT": 10, "XOM": 10},
     )
     monthly = await ce.plan(engine, broker, today=TODAY, monthly=True)
-    assert [(o.symbol, o.side) for o in monthly.orders] == [("XOM", "sell"), ("MSFT", "buy")]
+    assert [(o.symbol, o.side, o.reason) for o in monthly.orders] == [
+        ("XOM", "sell", ce.SECTOR_EXIT),
+        ("MSFT", "buy", ce.REBALANCE),
+    ]
     daily = await ce.plan(engine, broker, today=TODAY, monthly=False)
     assert daily.orders == []
 
