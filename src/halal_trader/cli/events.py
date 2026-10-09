@@ -220,6 +220,56 @@ def llm_score_cmd(max_pairs: int) -> None:
     console.print(f"{run_db(_run)} headline/symbol pairs scored")
 
 
+@events.command("tech-score")
+@click.argument("variant", type=click.Choice(["expert", "context"]))
+@click.option("--max-pairs", default=40_000, show_default=True, help="Stop after this many.")
+def tech_score_cmd(variant: str, max_pairs: int) -> None:
+    """Score post-cutoff tech headlines as a tech-industry expert (research budget).
+
+    Only events the generic scorer already scored, so the two compare on the
+    same headlines (events/tech_expert.py; read with `events tech-eval`).
+    """
+
+    async def _run(engine: Any, settings: Any) -> int:
+        from halal_trader.core.llm import create_classifier_llm
+        from halal_trader.events.llm_score import score_all
+        from halal_trader.events.tech_expert import tech_symbols, variants
+
+        _research_meter(engine, settings)
+        return await score_all(
+            create_classifier_llm(settings),
+            engine,
+            model=settings.llm.model,
+            max_pairs=max_pairs,
+            variant=variants(await tech_symbols(engine))[variant],
+        )
+
+    console.print(f"{run_db(_run)} tech headline/symbol pairs scored ({variant})")
+
+
+@events.command("tech-eval")
+def tech_eval_cmd() -> None:
+    """Generic vs tech-expert vs expert-with-context scores on the same tech headlines."""
+
+    async def _run(engine: Any, settings: Any) -> Any:
+        from halal_trader.events.tech_expert import compare
+
+        return await compare(engine, settings.llm.model)
+
+    c = run_db(_run)
+    console.print(f"{c.days} (symbol, day) readings every scorer read")
+    for label, result in c.results.items():
+        n = result.n.get("all", 0)
+        console.print(f"[bold]{label}[/bold] (n={n})")
+        for h in sorted({h for (_, h) in result.ic}):
+            ic = result.ic[("all", h)]
+            cells = {r.decile: r for r in result.rows if r.horizon == h}
+            line = f"  {h:>2}d IC {ic:+.3f} (t {ic * n**0.5:+.1f})"
+            if 10 in cells and 1 in cells:
+                line += f"  top decile {cells[10].mean:+.2%}  bottom decile {cells[1].mean:+.2%}"
+            console.print(line)
+
+
 @events.command("llm-eval")
 def llm_eval_cmd() -> None:
     """LLM vs lexicon scores of post-cutoff news: IC and deciles of net abnormal return."""
