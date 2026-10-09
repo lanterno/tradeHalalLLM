@@ -222,3 +222,19 @@ async def test_the_broker_ledger_is_expected_a_session_behind(engine) -> None:
     assert (await ledger(NOW))["status"] == "ok"  # Thursday noon
     evening = await ledger(datetime(2026, 10, 8, 18, 0, tzinfo=MARKET_TZ))
     assert evening["status"] == "stale" and "expected Wed 07 Oct" in evening["detail"]
+
+
+async def test_a_low_llm_credit_is_a_problem_on_the_page(engine) -> None:
+    from halal_trader.core.llm.credits import LLM_CREDITS
+
+    await _seed(engine)
+    await _beat(
+        engine,
+        LLM_CREDITS,
+        NOW,
+        {"balance_usd": 0.1, "key_remaining_usd": 39.8, "pace_usd_per_day": 0.5},
+    )
+    body = await build(engine, get_settings(), now=NOW)
+    credits = body["llm"]["credits"]
+    assert credits["available_usd"] == pytest.approx(0.1) and credits["low"] is True
+    assert any(p.startswith("LLM credit low: $0.10") for p in body["fleet"]["problems"])
