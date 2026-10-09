@@ -68,7 +68,15 @@ async def coverage(engine: AsyncEngine) -> list[Coverage]:
         ]
 
 
-async def timing(engine: AsyncEngine, extractor: str = "benzinga-earnings-v1") -> Timing:
+async def timing(engine: AsyncEngine, extractor: str | None = None) -> Timing:
+    """Earnings releases seen both as a headline and as an 8-K item 2.02.
+
+    ``extractor`` defaults to the current one (earnings_parse.EXTRACTOR): a
+    literal here went stale at v3 and matched no fact at all.
+    """
+    from halal_trader.events.earnings_parse import EXTRACTOR
+
+    extractor = extractor or EXTRACTOR
     async with engine.connect() as conn:
         row = (
             await conn.execute(
