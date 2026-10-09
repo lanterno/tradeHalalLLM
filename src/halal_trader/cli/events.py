@@ -133,6 +133,39 @@ def quality_cmd() -> None:
         console.print(f"duplicate headlines (same symbol, day, text): {dup:.1%}")
 
 
+@events.command("peers")
+@click.option("--sector", type=click.Choice(["technology", "all"]), default="technology")
+@click.option("--start", type=int, default=2016, show_default=True, help="First year.")
+@click.option("--end", type=int, default=2021, show_default=True, help="Last year.")
+@click.option("--by", type=click.Choice(["all", "year"]), default="all")
+def peers_cmd(sector: str, start: int, end: int, by: str) -> None:
+    """Peer read-through: industry peers' net abnormal return by the leader's surprise."""
+
+    async def _run(engine: Any, settings: Any) -> Any:
+        from halal_trader.events.earnings_signal import releases
+        from halal_trader.events.peers import peer_outcomes
+        from halal_trader.events.study import summarise
+        from halal_trader.halal.sector_limits import TECHNOLOGY
+
+        leaders = [r for r in await releases(engine) if start <= r.published_at.year <= end]
+        outcomes = await peer_outcomes(
+            engine, leaders, sector=TECHNOLOGY if sector == "technology" else None
+        )
+        return summarise(outcomes, by=None if by == "all" else by)
+
+    result = run_db(_run)
+    console.print(
+        f"peers of {sector} earnings releases {start}-{end}: peers' mean net abnormal "
+        "return by the leader's sales-surprise decile (t-stat)"
+    )
+    for group in sorted({r.group for r in result.rows}):
+        console.print(f"[bold]{group}[/bold] (releases={result.n.get(group, 0)})")
+        for h in sorted({r.horizon for r in result.rows if r.group == group}):
+            cells = [r for r in result.rows if r.group == group and r.horizon == h]
+            line = "  ".join(f"D{r.decile} {r.mean:+.2%}({r.t:+.1f})" for r in cells)
+            console.print(f"  {h:>2}d IC {result.ic.get((group, h), 0):+.3f}  | {line}")
+
+
 @events.command("study")
 @click.argument("signal", type=click.Choice(["sue", "sales", "beat-raise"]))
 @click.option("--start", type=int, default=2016, show_default=True, help="First year.")
@@ -333,3 +366,26 @@ def intraday_cmd(rate: int) -> None:
 
     for b in run_db(_run):
         console.print(f"  {b.label:20} {b.horizon:9} n={b.n:<5} mean {b.mean:+.2%}  t {b.t:+.1f}")
+
+
+@events.command("exit-test")
+def exit_test_cmd() -> None:
+    """Negative news as an exit: the gross move after a 60 s exit, train and holdout halves."""
+
+    async def _run(engine: Any, settings: Any) -> dict[str, list[Any]]:
+        from halal_trader.data.alpaca_market import AlpacaMarketData
+        from halal_trader.events.intraday import exit_test, first_in_session, run, selection
+
+        market = AlpacaMarketData.from_settings(settings, min_interval_s=60.0 / 80)
+        try:
+            chosen = selection(await first_in_session(engine))
+            return exit_test(await run(engine, market, chosen, cost_sides=0))
+        finally:
+            await market.aclose()
+
+    for half, buckets in run_db(_run).items():
+        console.print(f"[bold]{half}[/bold] (gross abnormal move from 60 s after the headline)")
+        for b in buckets:
+            console.print(
+                f"  {b.label:20} {b.horizon:9} n={b.n:<5} mean {b.mean:+.2%}  t {b.t:+.1f}"
+            )

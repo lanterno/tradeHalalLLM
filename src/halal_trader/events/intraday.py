@@ -152,7 +152,11 @@ async def _raw_closes(engine: AsyncEngine, symbols: set[str]) -> dict[str, dict[
     return out
 
 
-async def run(engine: AsyncEngine, market: Any, headlines: list[Headline]) -> list[Outcome]:
+async def run(
+    engine: AsyncEngine, market: Any, headlines: list[Headline], *, cost_sides: int = 2
+) -> list[Outcome]:
+    """Each headline's abnormal return from 60 s after it, less ``cost_sides`` one-way
+    costs: 2 for an entry and its exit, 0 for an exit's gross move (exit_test)."""
     from halal_trader.data.universe import universe_at
 
     closes = await _raw_closes(engine, {h.symbol for h in headlines} | {"SPY"})
@@ -168,7 +172,7 @@ async def run(engine: AsyncEngine, market: Any, headlines: list[Headline]) -> li
             ranks[month] = {
                 s: i for i, s in enumerate(await universe_at(engine, month, top_n=3000))
             }
-        cost = 2 * cost_bps(ranks[month].get(h.symbol)) / 10_000
+        cost = cost_sides * cost_bps(ranks[month].get(h.symbol)) / 10_000
         at = h.published_at + LATENCY
         stock = entry_and_close(await minute_series(engine, market, h.symbol, day), at)
         spy = entry_and_close(await minute_series(engine, market, "SPY", day), at)
@@ -225,3 +229,25 @@ def summarise(outcomes: list[Outcome]) -> list[Bucket]:
             t = float(values.mean()) / (sd / math.sqrt(len(values))) if sd > 0 else 0.0
             rows.append(Bucket(label, horizon, len(values), float(values.mean()), t))
     return rows
+
+
+# ── Negative news as an exit (the reactor's third rebuilt test, pre-registered) ──
+#
+# A holder who sells 60 s after a strongly negative headline, rather than at
+# the close, pays the same one sale's cost either way, so what decides it is
+# the gross abnormal move after the exit point. Registered before any result:
+# the post-cutoff window is split in two (TRAIN_UNTIL); the exit is kept only
+# if, in the first half, the gross same-day move after score <= -STRONG
+# headlines is negative with t <= -2 and the next day has not recovered above
+# the exit point (next_day <= 0), and the second half agrees on both.
+
+TRAIN_UNTIL = date(2026, 6, 1)
+
+
+def exit_test(outcomes: list[Outcome]) -> dict[str, list[Bucket]]:
+    """The exit test's buckets for the first ("train") and second ("holdout") half."""
+    halves = {
+        "train": [o for o in outcomes if o.headline.published_at.date() < TRAIN_UNTIL],
+        "holdout": [o for o in outcomes if o.headline.published_at.date() >= TRAIN_UNTIL],
+    }
+    return {k: summarise(v) for k, v in halves.items()}
