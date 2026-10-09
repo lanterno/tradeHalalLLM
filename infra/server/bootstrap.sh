@@ -160,8 +160,8 @@ tailscale status >/dev/null 2>&1 || echo "not on the tailnet yet: run 'tailscale
 cat <<EOF
 
 Done. Next (docs/DEPLOY.md has the detail):
-  1. Fill in the API keys:      sudo -u ${HALABOT_USER} \$EDITOR ${env_file}
-  2. Configure off-site backup:  \$EDITOR ${ETC_DIR}/server.env, then
+  1. Fill in the API keys:      sudo -u ${HALABOT_USER} nano ${env_file}
+  2. Configure off-site backup:  nano ${ETC_DIR}/server.env, then
                                  sudo -u ${HALABOT_USER} ${HALABOT_DIR}/infra/server/backup.sh --init
   3. Start the fleet:            sudo -iu ${HALABOT_USER}; cd ${HALABOT_DIR}; just build && just up && just health
   4. Dashboard on the tailnet:   tailscale serve --bg 8082
