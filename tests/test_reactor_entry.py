@@ -182,3 +182,26 @@ def test_intraday_change_none_without_reference():
     executor = _executor(MagicMock(), MagicMock())
     snap = {"NVDA": {"latest_trade": {"price": 100.0}}}  # no bars
     assert executor._extract_intraday_change_pct(snap, "NVDA") is None
+
+
+@pytest.mark.asyncio
+async def test_a_shadow_entry_is_sized_and_never_placed():
+    broker = MagicMock()
+    broker.get_account_info = AsyncMock(return_value=_account(portfolio_value=100_000.0))
+    broker.get_stock_snapshot = AsyncMock(
+        return_value=_snapshot("NVDA", latest=200.0, prev_close=199.0)
+    )
+    broker.place_order = AsyncMock()
+    repo = MagicMock()
+    repo.record_trade = AsyncMock()
+    executor = _executor(broker, repo)
+
+    out = await executor.execute_reactor_entry(
+        "NVDA", score=0.92, reasoning="surprise beat", place=False
+    )
+
+    assert out["status"] == "shadow" and out["quantity"] == 50 and out["price"] == 200.0
+    assert out["stop_loss"] == pytest.approx(184.0)
+    assert out["intraday_change"] == pytest.approx(1 / 199)
+    broker.place_order.assert_not_called()
+    repo.record_trade.assert_not_called()

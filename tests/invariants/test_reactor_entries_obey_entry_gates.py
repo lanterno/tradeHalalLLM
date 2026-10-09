@@ -37,9 +37,11 @@ def _bot(
     loss_halt: bool | Exception = False,
     risk_halt: str | None = None,
     positions: list[Position] | Exception | None = None,
+    places_orders: bool = True,
 ) -> tuple[TradingBot, MagicMock]:
     bot = TradingBot.__new__(TradingBot)
     bot._engine = object()
+    bot.settings = SimpleNamespace(stocks=SimpleNamespace(reactor_places_orders=places_orders))
     bot.broker = MagicMock()
     bot.broker.get_clock = AsyncMock(return_value=SimpleNamespace(is_open=True))
     if isinstance(positions, Exception):
@@ -131,3 +133,21 @@ async def test_adding_to_a_held_name_is_not_a_new_position() -> None:
 
     assert "max simultaneous positions" not in result.get("reason", "")
     broker.get_stock_snapshot.assert_awaited_once()  # went on to price it
+
+
+async def test_in_shadow_the_gates_still_run_and_nothing_is_placed() -> None:
+    """Decided 2026-10-09: reactor entries are shadow until a rebuilt version passes."""
+    bot, executor = _bot(places_orders=False)
+    executor.execute_reactor_entry = AsyncMock(return_value={"status": "shadow", "quantity": 5})
+    result, note = await bot._maybe_execute_reactor_entry(_event())
+    assert executor.execute_reactor_entry.await_args.kwargs["place"] is False
+    assert result == {"status": "shadow", "quantity": 5} and note.startswith("👻 Shadow")
+
+    blocked, _ = _bot(places_orders=False, loss_halt=True)
+    assert (await blocked._maybe_execute_reactor_entry(_event()))[0] is None  # gates first
+
+
+def test_the_reactor_runs_in_shadow_by_decision() -> None:
+    from halal_trader.config import StockSettings
+
+    assert StockSettings().reactor_places_orders is False
