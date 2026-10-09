@@ -21,7 +21,7 @@ just lint / just format # ruff (one version: the lock's, also used by the pre-co
 just typecheck          # mypy strict over the gated packages (pyproject [tool.mypy] files)
 just precommit          # every pre-commit hook over every tracked file
 
-# The deployed fleet (a Hetzner server; docs/DEPLOY.md)
+# The deployed fleet (a Hetzner server; docs/DEPLOY.md; the Mac until then)
 just up                 # postgres + migrate + stocks + shadow + web, in docker
 just down / build / rebuild / health / backup <dir> / docker-status
 just docker-logs [svc]  # follow one service (default trader-stocks)
@@ -34,7 +34,7 @@ halal-trader recommend [--show|--scorecard]   # advisory daily pick, never trade
 halabot backtest ... / halabot ab-report      # shadow engine research tools
 ```
 
-Every compose recipe goes through `compose` in the justfile (`--env-file .env`, project `halabot`). The compose file binds every port to 127.0.0.1 (dashboard 8082, Postgres 5433): on the public server Docker's port rules bypass ufw, so never publish a port on 0.0.0.0. The host side (bootstrap, the nightly off-site backup, health alerts, systemd units) is `infra/server/`. The previous machine was lost with its database and `.env` in 2026-10; a backup counts only once restic has it off the server (`backup.offsite` heartbeat).
+Every compose recipe goes through `compose` in the justfile (`--env-file .env`, project `halabot`). The compose file binds every port to 127.0.0.1 (dashboard 8082, Postgres 5433): on the public server Docker's port rules bypass ufw, so never publish a port on 0.0.0.0. The host side (bootstrap, the nightly off-site backup, health alerts, systemd units) is `infra/server/`. The previous machine was lost with its database and `.env` in 2026-10; a backup counts only once restic has it off the server (`backup.offsite` heartbeat). **Until the Hetzner deploy**, the fleet runs on the operator's Mac under Docker Desktop (kept awake by `caffeinate`), where `infra/server` is not installed: no backups, so the evening run reports the two backup problems every night. That is expected there; the backups come with the server.
 
 **Database**: Postgres 16 + pgvector, Alembic is the schema authority for every `halal_trader` table (`init_db()` refuses to start on a wrong revision; it never runs DDL). The one exception, by design until the Phase-4 cutover: the shadow engine's `hb_*` tables, which `halabot/platform/db.py:bootstrap_schema` creates additively. The models must match what the migrations build (`tests/test_alembic_migrations.py` compares them): an index or constraint goes in both the model and its migration, or the next `--autogenerate` proposes dropping it. Tests use per-worker `halal_trader_test*` databases on the same server. `tests/conftest.py` refuses any database name that isn't disposable, runs tests without the operator's `.env` (`HALAL_TRADER_ENV_FILE`), and blocks outbound network (`TEST_ALLOW_NETWORK=1` to opt out once).
 
