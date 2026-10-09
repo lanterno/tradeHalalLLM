@@ -628,6 +628,33 @@ async def build(
         )
         if b["status"] != "ok"
     ]
+    # The evening run's reading of what the LLM account can still pay for,
+    # judged by the same rule its alert uses.
+    from halal_trader.core.llm.credits import LLM_CREDITS, Credits
+
+    llm = await _llm(engine, settings, now)
+    credit = beats.get(LLM_CREDITS)
+    llm["credits"] = None
+    if credit is not None and credit.detail:
+        d = credit.detail
+        reading = Credits(
+            d.get("balance_usd"),
+            d.get("key_remaining_usd"),
+            float(d.get("pace_usd_per_day") or 0.0),
+            str(d.get("checked_at") or credit.beat_at.isoformat()),
+        )
+        problem = reading.problem()
+        llm["credits"] = {
+            "balance_usd": reading.balance_usd,
+            "key_remaining_usd": reading.key_remaining_usd,
+            "available_usd": reading.available_usd,
+            "days_left": reading.days_left,
+            "pace_usd_per_day": reading.pace_usd_per_day,
+            "at": credit.beat_at.isoformat(),
+            "low": problem is not None,
+        }
+        if problem:
+            problems.append(problem)
     watchdog = beats.get(hb.WATCHDOG)
     return {
         "now": now.isoformat(),
@@ -646,7 +673,7 @@ async def build(
         "halt": (await get_status(engine)).to_json(),
         "jobs": jobs,
         "processes": processes,
-        "llm": await _llm(engine, settings, now),
+        "llm": llm,
         "backups": backups,
         "freshness": await _freshness(engine, now),
         "database": database,
