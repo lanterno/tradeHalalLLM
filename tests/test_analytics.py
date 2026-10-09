@@ -209,3 +209,21 @@ class TestFormatForPrompt:
         assert "Profit factor" in text
         assert "AAPL" in text
         assert "take_profit" in text
+
+
+def test_exits_break_down_each_reason_with_its_first_hour() -> None:
+    from halal_trader.portfolio.analytics import exit_breakdown
+
+    trips = [
+        _make_rt("AAPL", -3, -0.003, duration_minutes=20),
+        _make_rt("MSFT", -1, -0.001, duration_minutes=45),
+        _make_rt("NVDA", -9, -0.009, duration_minutes=150),
+        _make_rt("AMD", 5, 0.005, duration_minutes=300, exit_reason="eod_close_all"),
+    ]
+    llm, eod = exit_breakdown(trips)
+    assert (llm.reason, llm.trades, eod.reason) == ("llm_sell", 3, "eod_close_all")
+    assert llm.avg_pct == pytest.approx(-0.013 / 3)
+    assert llm.total_pnl == -13 and llm.win_rate == 0.0
+    assert llm.avg_hold_minutes == pytest.approx(215 / 3)
+    assert llm.first_hour_trades == 2 and llm.first_hour_avg_pct == pytest.approx(-0.002)
+    assert eod.first_hour_trades == 0 and eod.first_hour_avg_pct is None

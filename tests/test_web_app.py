@@ -154,6 +154,7 @@ def test_analytics_returns_zeros_with_no_trades(client):
     assert r.status_code == 200
     body = r.json()
     assert body["total_trades"] == 0
+    assert body["exits"] == []
 
 
 # ── Risk + system status ───────────────────────────────────────
