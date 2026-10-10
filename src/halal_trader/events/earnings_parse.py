@@ -41,9 +41,10 @@ glued nor introduced by From/Prior/Previous/Was ("From $80M To $75M" gives
 the $75M; Prior and Previous may name it in a few words first, "Versus Prior
 Guidance Of $13.20-$13.60") nor inside a parenthetical opening with Prior,
 From or Previous ("(From $8.80 To $8.90)"). Guidance kept as it was (Sees,
-Affirms, Reaffirms, Maintains, Reiterates) may state its range with a "from"
-no "to" follows ("PPL Reaffirms FY2017 EPS Guidance from $1.92-2.12 vs $2.16
-Est"). When none qualifies the fact keeps its action with no figure and no
+Affirms, Reaffirms, Maintains, Reiterates) may state its range with a
+"Guidance from" no "to" follows ("PPL Reaffirms FY2017 EPS Guidance from
+$1.92-2.12 vs $2.16 Est"); any other "from" states a base ("Sees FY Sales Down
+5% From $1.2B"). When none qualifies the fact keeps its action with no figure and no
 surprise, so "Lowers" and "Cuts" still count as guidance down. A range
 states its unit once: "$643-$684M" is $643M to $684M.
 
@@ -188,11 +189,14 @@ _OLD = re.compile(
 _FROM = re.compile(r"\bFrom\s*:?\s*\(?\s*~?\s*$", re.I)
 # How far before a figure _OLD looks for the words that introduce it.
 OLD_WINDOW: Final = 40
-# Guidance kept as it was: a "from" before its first figure introduces the
-# range itself when no "to" follows ("PPL Reaffirms FY2017 EPS Guidance from
-# $1.92-2.12 vs $2.16 Est"); after one, the range replaced ("Atkore Sees FY
-# Adj. EPS $1.37-$1.45 from $1.55-$1.65 vs $1.57 Est.").
+# Guidance kept as it was: a "Guidance from" before its first figure
+# introduces the range itself when no "to" follows ("PPL Reaffirms FY2017 EPS
+# Guidance from $1.92-2.12 vs $2.16 Est"); after one, a "from" introduces the
+# range replaced ("Atkore Sees FY Adj. EPS $1.37-$1.45 from $1.55-$1.65 vs
+# $1.57 Est."). Any other "from" states a base ("Sees FY Sales Down 5% From
+# $1.2B"), never the guidance.
 KEEP_ACTIONS: Final = frozenset({"sees", "affirms", "reaffirms", "maintains", "reiterates"})
+_GUIDANCE_FROM = re.compile(r"\bGuidance\s+From\s*:?\s*\(?\s*~?\s*$", re.I)
 _TO = re.compile(r"\bto\b", re.I)
 # A parenthetical stating the guidance replaced: no figure in it is the guidance
 # ("Sees Adj. EPS To $9.00 (From $8.80 To $8.90) Vs $8.87 Est.").
@@ -384,8 +388,8 @@ def _guided_figure(segment: str, g: re.Match[str]) -> tuple[str | None, str | No
     that is not glued to the token before it and not introduced as the
     guidance being replaced, by the words before it (after the metric) or a
     parenthetical; of "From $80M To $75M" the "To" figure counts. Guidance
-    kept as it was (:data:`KEEP_ACTIONS`) may state its range with a "from"
-    that no "to" follows, as its first figure.
+    kept as it was (:data:`KEEP_ACTIONS`) may state its range with a
+    "Guidance from" that no "to" follows, as its first figure.
     """
     end = g.end("high") if g["high"] else g.end("low")
     kept = g["action"].lower() in KEEP_ACTIONS
@@ -398,7 +402,7 @@ def _guided_figure(segment: str, g: re.Match[str]) -> tuple[str | None, str | No
         elif _OLD.search(segment, before, f.start()) is None or (
             kept
             and found == (None, None)
-            and _FROM.search(segment, before, f.start())
+            and _GUIDANCE_FROM.search(segment, before, f.start())
             and not _TO.search(segment, f.start(), end)
         ):
             found, pos = (f["low"], f["high"]), f.end()
@@ -561,6 +565,7 @@ def sources() -> dict[str, str]:
         "_FIGURE": _FIGURE,
         "_OLD": _OLD,
         "_FROM": _FROM,
+        "_GUIDANCE_FROM": _GUIDANCE_FROM,
         "_FORWARD": _FORWARD,
         "_SUFFIXED": _SUFFIXED,
         "_METRIC_WORD": _METRIC_WORD,
