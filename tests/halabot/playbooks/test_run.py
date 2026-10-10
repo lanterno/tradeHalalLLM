@@ -9,6 +9,7 @@ import sys
 import threading
 from concurrent.futures.process import BrokenProcessPool
 from datetime import date, timedelta
+from multiprocessing.reduction import ForkingPickler
 
 import pytest
 from sqlalchemy import text
@@ -412,9 +413,13 @@ class _Unloadable(Context):
 
 
 async def test_a_spawn_run_refuses_a_state_it_cannot_ship_before_writing(
-    halabot_engine: AsyncEngine,
+    halabot_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A factory or context a worker cannot get fails the run with no run row."""
+    """A factory or context a worker cannot get fails the run with no run row.
+
+    Its parts are pickled one by one only after the pool failed to start: a run
+    whose state ships pays for no extra pickle.
+    """
     engine = halabot_engine
     market = random_market(26, 4, sessions=1)
     await seed_calendar(engine, date(2016, 1, 4), END)
@@ -447,7 +452,22 @@ async def test_a_spawn_run_refuses_a_state_it_cannot_ship_before_writing(
         await go(toy, _Unloadable())
     async with engine.connect() as conn:
         assert await conn.scalar(text("SELECT count(*) FROM hb_playbook_run")) == 0
+
+    def no_diagnosis(shared: object) -> list[str]:
+        raise AssertionError("a state that ships is never pickled part by part")
+
+    real_dumps = ForkingPickler.dumps
+    whole: list[object] = []
+
+    def dumps(cls: type, obj: object, protocol: int | None = None) -> object:
+        if isinstance(obj, sim._Shared):
+            whole.append(obj)  # a check pickling the run state before the pool does
+        return real_dumps(obj, protocol)
+
+    monkeypatch.setattr(sim, "_unpicklable", no_diagnosis)
+    monkeypatch.setattr(ForkingPickler, "dumps", classmethod(dumps))
     summary = await go(toy, market.ctx)  # the same run with a state that ships
+    assert whole == []
     assert summary.outcomes > 0
     async with engine.connect() as conn:
         assert await conn.scalar(text("SELECT count(*) FROM hb_playbook_run")) == 1
