@@ -15,8 +15,10 @@ from halal_trader.events.renames import (
     HELD_SINCE,
     TASK,
     TICKER_RENAMES,
+    RenamedNewsError,
     backfill_renamed_news,
     held_since,
+    missing_units,
     months,
     news_window,
     old_tickers,
@@ -123,7 +125,13 @@ def test_months_cut_a_window_at_calendar_months() -> None:
     ]
     assert months(date(2024, 2, 1), date(2024, 2, 29)) == [(date(2024, 2, 1), date(2024, 2, 29))]
     assert months(date(2024, 3, 2), date(2024, 3, 1)) == []
-    assert unit("FB", date(2016, 1, 1)) == "FB:2016-01"
+
+
+def test_a_unit_carries_its_bounds() -> None:
+    assert unit("FB", date(2016, 1, 1), date(2016, 1, 31)) == "FB:2016-01-01:2016-01-31"
+    assert unit("FB", date(2022, 6, 1), date(2022, 6, 15)) != unit(
+        "FB", date(2022, 6, 1), date(2022, 6, 8)
+    )
 
 
 def test_old_ticker_articles_become_events_of_the_current_symbol() -> None:
@@ -243,6 +251,13 @@ async def test_seeding_flags_news_that_starts_over_a_year_after_the_first_halal_
 # ── the backfill ──────────────────────────────────────────────
 
 _SECOND = timedelta(seconds=1)
+_PROBE_CALL = (["FB"], ny(date(2019, 1, 1), 0), ny(date(2019, 2, 1), 0) - _SECOND, 1)
+_UNITS = {
+    "OLDA:2016-01-01:2016-01-31": 1,
+    "OLDA:2016-02-01:2016-02-18": 1,  # five sessions past 02-10 (Presidents' Day between)
+    "OLDB:2016-02-11:2016-02-29": 1,
+    "OLDB:2016-03-01:2016-03-11": 1,
+}
 
 
 async def _stored(engine: AsyncEngine) -> list[tuple[str, str, list[str]]]:
@@ -269,37 +284,70 @@ async def test_backfill_fetches_each_old_month_and_files_it_under_the_current_sy
     stored = await backfill_renamed_news(engine, market, rate_per_min=600_000)
     assert stored == 4
     assert market.calls == [
+        _PROBE_CALL,  # first: does Alpaca serve a retired ticker at all?
         (["OLDA"], ny(date(2016, 1, 1), 0), ny(date(2016, 2, 1), 0) - _SECOND, 500),
-        # five sessions past OLDA's last (2016-02-10), Presidents' Day between
         (["OLDA"], ny(date(2016, 2, 1), 0), ny(date(2016, 2, 19), 0) - _SECOND, 500),
         # OLDB names the company from the session after OLDA's last
         (["OLDB"], ny(date(2016, 2, 11), 0), ny(date(2016, 3, 1), 0) - _SECOND, 500),
         (["OLDB"], ny(date(2016, 3, 1), 0), ny(date(2016, 3, 12), 0) - _SECOND, 500),
     ]
     assert await _stored(engine) == [
-        ("NEWA", "alpaca:1", ["OLDA", "AAPL"]),  # payload.symbols as Benzinga sent it
-        ("NEWA", "alpaca:2", ["OLDA", "AAPL"]),
-        ("NEWA", "alpaca:3", ["OLDB", "AAPL"]),
+        ("NEWA", "alpaca:2", ["OLDA", "AAPL"]),  # payload.symbols as Benzinga sent it
+        ("NEWA", "alpaca:3", ["OLDA", "AAPL"]),
         ("NEWA", "alpaca:4", ["OLDB", "AAPL"]),
+        ("NEWA", "alpaca:5", ["OLDB", "AAPL"]),
     ]
-    assert await _units(engine) == {
-        "OLDA:2016-01": 1,
-        "OLDA:2016-02": 1,
-        "OLDB:2016-02": 1,
-        "OLDB:2016-03": 1,
-    }
+    assert await _units(engine) == _UNITS
+    assert await missing_units(engine) == []
     again = NewsMarket()
     assert await backfill_renamed_news(engine, again, rate_per_min=600_000) == 0
-    assert again.calls == []  # every unit is done
+    assert again.calls == []  # every unit is done, so no probe either
+
+
+@pytest.mark.usefixtures("small_map")
+async def test_nothing_is_fetched_or_marked_when_the_probe_month_comes_back_empty(
+    engine: AsyncEngine,
+) -> None:
+    market = NewsMarket(empty=True)
+    with pytest.raises(RenamedNewsError, match="no FB article for 2019-01"):
+        await backfill_renamed_news(engine, market, rate_per_min=600_000)
+    assert market.calls == [_PROBE_CALL]
+    assert await _units(engine) == {}
+    assert len(await missing_units(engine)) == 4
 
 
 @pytest.mark.usefixtures("small_map")
 async def test_a_month_not_over_yet_is_fetched_but_not_marked_done(engine: AsyncEngine) -> None:
     market = NewsMarket()
     await backfill_renamed_news(engine, market, rate_per_min=600_000, now=ny(date(2016, 3, 11), 20))
-    assert len(market.calls) == 4
-    assert "OLDB:2016-03" not in await _units(engine)
+    assert len(market.calls) == 5
+    assert "OLDB:2016-03-01:2016-03-11" not in await _units(engine)
+    assert await missing_units(engine, now=ny(date(2016, 3, 11), 20)) == []  # not over: not due
+    assert await missing_units(engine) == ["OLDB:2016-03-01:2016-03-11"]
     again = NewsMarket()
     await backfill_renamed_news(engine, again, rate_per_min=600_000, now=ny(date(2016, 3, 12), 1))
-    assert [(c[0], c[1]) for c in again.calls] == [(["OLDB"], ny(date(2016, 3, 1), 0))]
-    assert (await _units(engine))["OLDB:2016-03"] == 0  # the same article again: nothing new
+    assert [(c[0], c[1]) for c in again.calls] == [
+        _PROBE_CALL[:2],
+        (["OLDB"], ny(date(2016, 3, 1), 0)),
+    ]
+    assert (await _units(engine))["OLDB:2016-03-01:2016-03-11"] == 0  # the same article again
+
+
+@pytest.mark.usefixtures("small_map")
+async def test_a_window_that_changes_is_fetched_again_where_it_changed(
+    engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await backfill_renamed_news(engine, NewsMarket(), rate_per_min=600_000)
+    monkeypatch.setattr(
+        renames,
+        "TICKER_RENAMES",
+        {"OLDA": ("NEWA", date(2016, 2, 10)), "OLDB": ("NEWA", date(2016, 3, 18))},
+    )
+    assert await missing_units(engine) == ["OLDB:2016-03-01:2016-03-28"]  # Good Friday between
+    market = NewsMarket()
+    await backfill_renamed_news(engine, market, rate_per_min=600_000)
+    assert market.calls == [
+        _PROBE_CALL,
+        (["OLDB"], ny(date(2016, 3, 1), 0), ny(date(2016, 3, 29), 0) - _SECOND, 500),
+    ]
+    assert await missing_units(engine) == []

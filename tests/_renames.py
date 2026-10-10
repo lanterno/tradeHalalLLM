@@ -23,16 +23,19 @@ def ny(day: date, hour: int = 12) -> datetime:
 
 
 class NewsMarket:
-    """Answers every news request with one article tagging the asked ticker and
-    AAPL; records each request."""
+    """Answers every news request with one article tagging the asked ticker and AAPL
+    (none at all when ``empty``); records each request."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, empty: bool = False) -> None:
+        self.empty = empty
         self.calls: list[tuple[list[str], datetime, datetime, int]] = []
 
     async def news(
         self, symbols: list[str], *, start: datetime, end: datetime, max_pages: int
     ) -> list[NewsArticle]:
         self.calls.append((list(symbols), start, end, max_pages))
+        if self.empty:
+            return []
         return [article(len(self.calls), (symbols[0], "AAPL"), start + timedelta(hours=12))]
 
     async def inactive_assets(self) -> list[Asset]:

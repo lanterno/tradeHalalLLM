@@ -27,6 +27,18 @@ def _run(database_url: str, work: Callable[[AsyncEngine], Awaitable[Any]]) -> An
     return asyncio.run(go())
 
 
+def _client(monkeypatch: pytest.MonkeyPatch, market: NewsMarket) -> list[dict[str, Any]]:
+    """Every AlpacaMarketData the command makes is ``market``; returns their kwargs."""
+    made: list[dict[str, Any]] = []
+
+    def from_settings(cls: type, settings: Any, **kwargs: Any) -> NewsMarket:
+        made.append(kwargs)
+        return market
+
+    monkeypatch.setattr(AlpacaMarketData, "from_settings", classmethod(from_settings))
+    return made
+
+
 def test_the_seed_command_lists_candidates_and_their_mapping(database_url: str) -> None:
     _run(database_url, seed_candidates_data)
     result = CliRunner().invoke(cli, ["events", "renames", "seed"])
@@ -44,17 +56,24 @@ def test_the_seed_command_lists_candidates_and_their_mapping(database_url: str) 
 def test_the_backfill_command_paces_the_client_at_the_rate(
     database_url: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    made: list[dict[str, Any]] = []
-
-    def from_settings(cls: type, settings: Any, **kwargs: Any) -> NewsMarket:
-        made.append(kwargs)
-        return NewsMarket()
-
-    monkeypatch.setattr(AlpacaMarketData, "from_settings", classmethod(from_settings))
+    market = NewsMarket()
+    made = _client(monkeypatch, market)
     result = CliRunner().invoke(cli, ["events", "renames", "backfill", "--rate", "6000000"])
     assert result.exit_code == 0, result.output
     assert "renamed-ticker news: 4 new event(s)" in result.output
     assert made == [{"min_interval_s": 60.0 / 6_000_000}]
+    assert len(market.calls) == 5  # the probe, then four months
+
+
+@pytest.mark.usefixtures("small_map")
+def test_the_backfill_command_stops_when_alpaca_serves_no_retired_ticker(
+    database_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _client(monkeypatch, NewsMarket(empty=True))
+    result = CliRunner().invoke(cli, ["events", "renames", "backfill", "--rate", "6000000"])
+    assert result.exit_code == 1
+    assert "no FB article for 2019-01" in result.output
+    assert "Traceback" not in result.output
 
 
 def test_the_alias_build_command_stores_and_pins_the_set(
