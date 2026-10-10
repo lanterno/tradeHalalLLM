@@ -9,7 +9,8 @@ Two levels, both pure:
   when the headline also cuts or withdraws guidance) or could not
   (``guidance_unparsed``, unless it cuts guidance); the structural
   negatives, checked **before** analyst actions so "Downgrades On Fraud
-  Concerns" is fraud; analyst actions; price-mover pieces (``mover``,
+  Concerns" is fraud; a denied rating change ("Did Not Downgrade",
+  ``analyst_other``); analyst actions; price-mover pieces (``mover``,
   written because the price moved, so they never name a cause); then the
   unclear negatives, the positives and the neutrals.
 * **Stories.** :func:`resolve` types a story (one symbol's items of one
@@ -290,6 +291,14 @@ PT_RAISE: Final = re.compile(
     r"\b(?:Raises?|Raised|Boosts?|Lifts?|Increases?|Hikes?|Bumps?)\b.{0,40}"
     r"\b(?:Price Target|PT|Target Price)\b|"
     r"\b(?:Raises?|Raised|Boosts?|Lifts?|Increases?|Hikes?|Bumps?)\s+(?:Its\s+)?Target\b",
+    re.I,
+)
+# A denial is no rating change: "CORRECTION: RBC Did Not Downgrade KB Home
+# Today", "Bank of America Did Not Issue A Downgrade Of AMC", "Himax Was Not
+# Downgraded", "Morgan Stanley Did Not Issue A Rating Change On Bilibili".
+ANALYST_DENIAL: Final = re.compile(
+    r"\b(?:Did|Does|Was|Has)\s+Not\s+(?:Issue\s+An?\s+)?"
+    r"(?:Downgrad|Upgrad|Initiat|Rating\s+Change)",
     re.I,
 )
 # Case-sensitive, like Benzinga's rating wires.
@@ -636,6 +645,8 @@ def classify_item(
     still count in :func:`earnings_verdict`, whatever the item's type. An
     explicit cut also comes before guidance no template reads ("Aptiv Lowers
     FY24 Revenue Outlook: ... Vs. $21.03B Estimate (Prior View: ...)").
+    A denial ("CORRECTION: RBC Did Not Downgrade KB Home Today") is
+    ``analyst_other``, never the rating change it names.
     """
     if kind in FILING_KINDS:
         return _filing_type(items_8k)
@@ -651,6 +662,8 @@ def classify_item(
     for name, rx in NEGATIVE_ORDER:
         if rx.search(headline):
             return name
+    if ANALYST_DENIAL.search(headline):
+        return "analyst_other"
     if ANALYST_ACTION.search(headline):
         return _analyst_type(clause if clause is not None else headline)
     if MOVER.search(headline):
@@ -889,6 +902,7 @@ def _patterns() -> dict[str, re.Pattern[str]]:
         "PT_CUT": PT_CUT,
         "PT_RAISE": PT_RAISE,
         "INIT_NEG": INIT_NEG,
+        "ANALYST_DENIAL": ANALYST_DENIAL,
         "GUIDE_UNPARSED": GUIDE_UNPARSED,
         **{name.upper(): rx for name, rx in (*NEGATIVE_ORDER, *LATE_NEGATIVE_ORDER, *OTHER_ORDER)},
     }
