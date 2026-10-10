@@ -1393,13 +1393,12 @@ async def run_atlas(
 ) -> Atlas:
     """Every unit's row and every table's cells, with what the run read (``meta``).
 
-    Refuses (:class:`AtlasLocked`) before H1's verdict or when the story pins
-    are not the registration's, (``StoriesNotReady``) a range without a
-    persisted story, and (``ValueError``,
-    before anything is read) a range outside [:data:`ATLAS_START`,
-    :data:`ATLAS_END`] or an ``end`` that is not a session. Symbols go in
-    batches of ``batch_symbols``: stories rebuilt, paths measured, then the
-    machine run for ID and MD3.
+    Refuses (``ValueError``, before anything is read) a range outside
+    [:data:`ATLAS_START`, :data:`ATLAS_END`] or an ``end`` that is not a
+    session; (:class:`AtlasLocked`) before H1's verdict or when the story pins
+    are not the registration's; (``StoriesNotReady``) a range without a
+    persisted story. Symbols go in batches of ``batch_symbols``: stories
+    rebuilt, paths measured, then the machine's lanes run for ID and MD3.
     """
     check_range(start, end)
     reg = await h1_closed(engine)
