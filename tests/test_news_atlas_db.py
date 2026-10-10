@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import math
 from collections import Counter
 from collections.abc import Awaitable, Callable
@@ -16,9 +17,11 @@ from typing import Any
 
 import pytest
 from click.testing import CliRunner
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from halal_trader.cli import cli
+from halal_trader.core import events
 from halal_trader.db.repos.quant_trials import QuantTrialRepoImpl
 from halal_trader.events import atlas
 from halal_trader.events.atlas import (
@@ -176,6 +179,28 @@ async def test_candidates_read_the_unit_items_from_postgres(world: AsyncEngine) 
         "BRVO:2017-03-08",
         "CHRL:2017-03-07",
     ]
+
+
+async def test_stories_that_differ_from_their_rows_are_counted_with_one_warning(
+    world: AsyncEngine, caplog: pytest.LogCaptureFixture
+) -> None:
+    async with world.begin() as conn:
+        await conn.execute(
+            text("UPDATE news_stories SET type_close = 'other' WHERE symbol IN ('ALFA', 'BRVO')")
+        )
+    with caplog.at_level(logging.WARNING, logger=atlas.__name__):
+        result = await run_atlas(world, start=START, end=END)
+    assert result.meta["counts"]["persisted_mismatch"] == 3
+    assert result.meta["persisted_mismatch_ids"] == [
+        "ALFA:2017-03-07",
+        "ALFA:2017-03-09",
+        "BRVO:2017-03-08",
+    ]
+    assert len(result.rows) == 4  # counted, not dropped
+    warned = [
+        r for r in caplog.records if getattr(r, "event", None) == events.ATLAS_STORIES_MISMATCH
+    ]
+    assert len(warned) == 1 and getattr(warned[0], "stories", None) == 3
 
 
 async def test_an_nsn_story_is_measured_from_its_previous_close(world: AsyncEngine) -> None:
