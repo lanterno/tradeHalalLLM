@@ -471,6 +471,53 @@ def test_lowering_what_the_company_spends_is_not_a_guidance_cut(headline: str, i
     assert news_type(headline) == itype
 
 
+@pytest.mark.parametrize(
+    ("headline", "itype"),
+    [
+        ("UPDATE: Bank Of America Maintains Underperform On RH, Lowers Target To $75 As Firm "
+         "Sees Risk To Full Year Guidance And Street Estimates Due To 'tough comparisons "
+         "through the year', 'new debt costs', 'growing macro headwinds'", "guidance_unparsed"),
+        ("UPDATE: Credit Suisse Downgrades Tapestry to Neutral, Lowers Target to $22 As Firm "
+         "Notes 'our Kate outlook is now significantly reduced' Cites 3 Reasons:",
+         "analyst_downgrade"),
+        ("UPDATE: Wedbush Maintains Neutral On Urban Outfitters, Lowers Target To $28 Notes "
+         "'Inventory Overhang and Guidance Sink Shares, Despite a Strong Start to Holiday'",
+         "analyst_pt_cut"),
+        ("Bank Of America Cuts Square Target Due To Questions About 2020 Guidance", "other"),
+        ("Analysts Lower Cigna Targets As PBM Segment Guidance Surprises Market", "other"),
+        ("These Analysts Cut Price Targets On Walmart Following Outlook Cut", "other"),
+    ],
+)  # fmt: skip
+def test_an_analyst_s_target_is_never_the_guidance_cut(headline: str, itype: str) -> None:
+    # The older wires say "Target" alone: the cut is the analyst's, not the company's.
+    assert news_type(headline) == itype
+
+
+@pytest.mark.parametrize(
+    ("headline", "kind", "family"),
+    [
+        # Guided below consensus once the figure keeps its sign, or once the
+        # guidance replaced is not read as the guidance.
+        ("Varonis Systems Sees EPS $($0.57)-($0.55) Vs. $(0.30) Est., Sales $59M-$60M Vs. "
+         "$58.69M Est.", "guidance_cut", None),
+        ("Lowe's Companies Sees FY23 Adjusted EPS Of $13.00 Versus Prior Guidance Of "
+         "$13.20-$13.60 Versus Consensus Of $13.33", "guidance_cut", None),
+        ("PPL Reaffirms FY2017 EPS Guidance from $1.92-2.12 vs $2.16 Est", "guidance_cut", None),
+        # The top of a range already issued: in line, not a cut.
+        ("Ulta Beauty Sees Q3 EPS At High End Of Previously-Issued Range $2.11-$2.16 vs $2.16 "
+         "Estimate", "guidance_inline", None),
+        ("Axon Sees FY23 Revenue ~$1.55B, Up From Prior Range Of $1.51B-$1.53B vs $1.53B Est.",
+         "guidance_raise", None),
+        # A loss against a near-zero estimate is a miss.
+        ("Ralph Lauren Q4 Adj. EPS $(0.68) Misses $0.01 Estimate, Sales $1.30B Beat $1.29B "
+         "Estimate", "earnings_miss", "NSN_CORE"),
+    ],
+)  # fmt: skip
+def test_the_figure_re_read_types_the_story(headline: str, kind: str, family: str | None) -> None:
+    card = resolve([news(1, 0, headline)], LATER, follower=False)
+    assert (card.type, card.family) == (kind, family)
+
+
 def test_an_explicit_cut_comes_before_unread_guidance() -> None:
     h = (
         "Core & Main Lowered 2024 Outlook: Now Expects Net Sales Of $7.3B-$7.4B (Prior "
