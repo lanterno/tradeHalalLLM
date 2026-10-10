@@ -16,12 +16,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import date
 
-from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from halal_trader.compliance.runner import UNMAPPED
-from halal_trader.core.num import to_float
 from halal_trader.data.universe import month_starts, universe_at
+from halal_trader.halal.strict import all_screens
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,20 +49,12 @@ class _Screen:
 
 async def _screens(engine: AsyncEngine) -> dict[date, _Screen]:
     out: dict[date, _Screen] = {}
-    async with engine.connect() as conn:
-        rows = await conn.execute(
-            text(
-                "SELECT as_of, symbol, verdict, sic_description, cik, "
-                "metrics->>'price' AS price, metrics->>'shares_outstanding' AS shares "
-                "FROM halal_screen_current"
-            )
-        )
+    for as_of, rows in (await all_screens(engine)).items():
+        screen = out[as_of] = _Screen()
         for r in rows:
-            screen = out.setdefault(r.as_of, _Screen())
             if r.verdict == "halal":
-                price, shares = to_float(r.price), to_float(r.shares)
-                cap = price * shares if price is not None and shares is not None else None
-                screen.halal[r.symbol] = Firm(r.cik, cap, r.as_of, r.sic_description)
+                cap = r.price * r.shares if r.price is not None and r.shares is not None else None
+                screen.halal[r.symbol] = Firm(r.cik, cap, as_of, r.sic_description)
             if r.sic_description == UNMAPPED:
                 screen.unmapped.add(r.symbol)
     return out

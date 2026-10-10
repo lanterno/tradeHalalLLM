@@ -22,6 +22,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, timedelta
+from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -49,6 +50,28 @@ class ScreenRow:
     shares: float | None
     market_cap: float | None
     reasons: tuple[str, ...] = ()
+
+
+# What a ScreenRow is read from: the columns of halal_screen_current.
+_COLUMNS = (
+    "symbol, verdict, cik, sic_description, "
+    "(metrics->>'price')::float AS price, "
+    "(metrics->>'shares_outstanding')::float AS shares, "
+    "(metrics->>'market_cap')::float AS market_cap, reasons"
+)
+
+
+def _row(r: Any) -> ScreenRow:
+    return ScreenRow(
+        r.symbol,
+        r.verdict,
+        r.cik,
+        r.sic_description,
+        r.price,
+        r.shares,
+        r.market_cap,
+        tuple(str(x) for x in (r.reasons or [])),
+    )
 
 
 async def newest_screen(engine: AsyncEngine, *, on_or_before: date | None = None) -> date | None:
@@ -82,27 +105,28 @@ async def screen_rows(
     async with engine.connect() as conn:
         rows = await conn.execute(
             text(
-                "SELECT symbol, verdict, cik, sic_description, "
-                "(metrics->>'price')::float AS price, "
-                "(metrics->>'shares_outstanding')::float AS shares, "
-                "(metrics->>'market_cap')::float AS market_cap, reasons "
-                f"FROM halal_screen_current WHERE {' AND '.join(where)} ORDER BY symbol"
+                f"SELECT {_COLUMNS} FROM halal_screen_current "
+                f"WHERE {' AND '.join(where)} ORDER BY symbol"
             ),
             params,
         )
-        return [
-            ScreenRow(
-                r.symbol,
-                r.verdict,
-                r.cik,
-                r.sic_description,
-                r.price,
-                r.shares,
-                r.market_cap,
-                tuple(str(x) for x in (r.reasons or [])),
-            )
-            for r in rows
-        ]
+        return [_row(r) for r in rows]
+
+
+async def all_screens(engine: AsyncEngine) -> dict[date, list[ScreenRow]]:
+    """Every screen's rows, keyed by ``as_of`` (oldest first), each by symbol.
+
+    One query, for research that asks what each past screen said (no
+    freshness rule: a backtest picks the screen it may know).
+    """
+    out: dict[date, list[ScreenRow]] = {}
+    async with engine.connect() as conn:
+        rows = await conn.execute(
+            text(f"SELECT as_of, {_COLUMNS} FROM halal_screen_current ORDER BY as_of, symbol")
+        )
+        for r in rows:
+            out.setdefault(r.as_of, []).append(_row(r))
+    return out
 
 
 async def verdict(engine: AsyncEngine, symbol: str, *, today: date) -> Verdict:

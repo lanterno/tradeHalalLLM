@@ -52,7 +52,7 @@ from halal_trader.data.minutes import session_bounds
 from halal_trader.events.earnings_parse import EarningsFacts
 from halal_trader.events.study import BENCHMARK, cost_bps
 from halal_trader.halal.sector_limits import TECHNOLOGY, cap_sector
-from halal_trader.halal.strict import ScreenRow
+from halal_trader.halal.strict import ScreenRow, all_screens
 from halal_trader.signals.indicators import atr
 
 logger = logging.getLogger(__name__)
@@ -541,29 +541,8 @@ def _levels(series: _Series, p: int, n: int, a_s: float) -> tuple[float, float]:
 
 async def _screens(engine: AsyncEngine) -> dict[date, dict[str, ScreenRow]]:
     """Every screen's rows (the newest method's), by date then symbol."""
-    out: dict[date, dict[str, ScreenRow]] = {}
-    async with engine.connect() as conn:
-        rows = await conn.execute(
-            text(
-                "SELECT as_of, symbol, verdict, cik, sic_description, "
-                "(metrics->>'price')::float AS price, "
-                "(metrics->>'shares_outstanding')::float AS shares, "
-                "(metrics->>'market_cap')::float AS market_cap, reasons "
-                "FROM halal_screen_current"
-            )
-        )
-        for r in rows:
-            out.setdefault(r.as_of, {})[r.symbol] = ScreenRow(
-                r.symbol,
-                r.verdict,
-                r.cik,
-                r.sic_description,
-                r.price,
-                r.shares,
-                r.market_cap,
-                tuple(str(x) for x in (r.reasons or [])),
-            )
-    return out
+    screens = await all_screens(engine)
+    return {as_of: {r.symbol: r for r in rows} for as_of, rows in screens.items()}
 
 
 @dataclass(slots=True)
