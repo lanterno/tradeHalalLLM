@@ -122,7 +122,7 @@ from halal_trader.events.context import LOOKAHEAD_DAYS, Eligibility, PitContext,
 from halal_trader.events.stats import clustered_mean
 from halal_trader.events.taxonomy import NOISE_TYPES, StoryCard
 from halal_trader.events.units import TRAIN_SKIP_TYPES
-from halal_trader.market_hours import MARKET_TZ
+from halal_trader.market_hours import MARKET_TZ, is_trading_day, previous_trading_day
 
 if TYPE_CHECKING:
     from halal_trader.config import Settings
@@ -452,7 +452,8 @@ async def h1_closed(engine: AsyncEngine) -> Registration:
 
 
 def check_range(start: date, end: date) -> None:
-    """``ValueError`` unless [start, end] lies inside the train range the atlas may read."""
+    """``ValueError`` unless [start, end] lies inside the train range the atlas may read
+    and ``end`` is a session (the paths and continuations are counted from it)."""
     if end < start:
         raise ValueError(f"end {end} is before start {start}")
     if start < ATLAS_START:
@@ -461,6 +462,11 @@ def check_range(start: date, end: date) -> None:
         raise ValueError(
             f"the atlas ends by {ATLAS_END}: its 5-session continuation ends on {DATA_END}; "
             "it is never extended to validation or holdout"
+        )
+    if not is_trading_day(end):
+        raise ValueError(
+            f"end {end} is not a trading session; the session before it is "
+            f"{previous_trading_day(end)}"
         )
 
 
@@ -1221,8 +1227,9 @@ async def run_atlas(
 ) -> Atlas:
     """Every unit's row and every table's cells, with what the run read (``meta``).
 
-    Refuses (:class:`AtlasLocked`) before H1's verdict, and (``ValueError``)
-    a range outside [:data:`ATLAS_START`, :data:`ATLAS_END`]. Symbols go in
+    Refuses (:class:`AtlasLocked`) before H1's verdict, and (``ValueError``,
+    before anything is read) a range outside [:data:`ATLAS_START`,
+    :data:`ATLAS_END`] or an ``end`` that is not a session. Symbols go in
     batches of ``batch_symbols``: stories rebuilt, paths measured, then the
     machine run for ID and MD3.
     """
