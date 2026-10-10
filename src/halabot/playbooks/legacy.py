@@ -413,9 +413,11 @@ def reactor_plausible(trade: TradeRecord) -> bool:
 class R1Dropped:
     """R1's dropped-set check (module docstring, steps 1 to 3).
 
-    ``passed`` needs the set-aside within :data:`R1_SET_ASIDE_CAP` and no
-    headline dropped by one side only; ``kept`` are the headlines both sides
-    kept, on which the gate compares returns.
+    ``passed`` needs the set-aside within :data:`R1_SET_ASIDE_CAP`, no
+    headline dropped by one side only, and at least one headline kept;
+    ``kept`` are the headlines both sides kept, on which the gate compares
+    returns. With none kept nothing was compared (an empty H, or every id
+    dropped by both sides), so the check fails.
     """
 
     headlines: int
@@ -444,7 +446,7 @@ class R1Dropped:
 
     @property
     def passed(self) -> bool:
-        return self.within_cap and self.identical
+        return self.within_cap and self.identical and bool(self.kept)
 
     def as_config(self) -> dict[str, object]:
         """What the gate row records of the check (counts, the cap, every mismatch)."""
