@@ -25,6 +25,8 @@ builder version in ``story_aliases`` so the set the pre-registration pins
 
 Names come from today's asset list, not from the date of each article: a
 renamed company's old name survives only where Benzinga's slot learned it.
+Slots are learned only from rows that are their symbol's own
+(``renames.owner``): Pandora's articles under P teach P nothing.
 """
 
 from __future__ import annotations
@@ -43,8 +45,8 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from halal_trader.events.headline_patterns import ANALYST_SLOT, EARN_CO, GUIDE_CO
-from halal_trader.events.renames import TICKER_RENAMES, old_tickers
-from halal_trader.market_hours import trading_day_end_utc, trading_day_start_utc
+from halal_trader.events.renames import TICKER_RENAMES, old_tickers, ticker_history
+from halal_trader.market_hours import MARKET_TZ, trading_day_end_utc, trading_day_start_utc
 
 logger = logging.getLogger(__name__)
 
@@ -244,19 +246,27 @@ async def learn_slots(
 ) -> dict[str, Counter[str]]:
     """Slot counts per symbol from single-symbol articles published in [start, end] (New York).
 
-    Streams the rows: only the counts are held, never the articles.
+    Only rows that are their symbol's own count (``renames.owner``): not the
+    rows of a ticker's earlier holder, and not an old ticker's rows, whose
+    copies under the current symbol count instead. Streams the rows: only the
+    counts are held, never the articles.
     """
+    history = ticker_history()
     counts: dict[str, Counter[str]] = defaultdict(Counter)
     async with engine.connect() as conn:
         rows = await conn.stream(
             text(
-                "SELECT symbol, payload->>'headline' AS headline FROM events "
+                "SELECT symbol, published_at, payload->'symbols' AS tagged, "
+                "payload->>'headline' AS headline FROM events "
                 "WHERE kind = 'news' AND published_at >= :lo AND published_at < :hi "
                 "AND jsonb_array_length(coalesce(payload->'symbols', '[]'::jsonb)) = 1"
             ),
             {"lo": trading_day_start_utc(start), "hi": trading_day_end_utc(end)},
         )
         async for r in rows:
+            day = r.published_at.astimezone(MARKET_TZ).date()
+            if history.owner(r.symbol, day, r.tagged) != r.symbol:
+                continue
             slot = slot_of(r.headline or "")
             if slot is not None:
                 counts[r.symbol][slot] += 1

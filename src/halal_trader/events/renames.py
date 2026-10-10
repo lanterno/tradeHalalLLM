@@ -14,17 +14,24 @@ with none at all (a ticker taken over from another company hides the gap:
 Gardner Denver took IR from Ingersoll-Rand, Axon took AXON from Axovant),
 and every date was checked against the company's own filing or release.
 
-``backfill_renamed_news`` fetches each old ticker's articles over the
-sessions it named this company and stores them under the current symbol.
-``payload.symbols`` stays as Benzinga sent it. Resumable: one unit per old
-ticker and month (task ``news-renamed``, unit ``OLD:YYYY-MM``).
+``backfill_renamed_news`` fetches each old ticker's articles over the days it
+named this company (``news_window``) and stores them under the current
+symbol. ``payload.symbols`` stays as Benzinga sent it. Resumable: one unit per
+old ticker and month (task ``news-renamed``, unit ``OLD:YYYY-MM``).
+
+Prices follow the company, news follows the ticker: a news row under a ticker
+another company held on its day is that company's. ``owner`` says, for a news
+row, which of today's symbols it belongs to (see there for the rule); the
+alias learner and the story builder keep a row only where it is its own
+symbol's.
 """
 
 from __future__ import annotations
 
 import dataclasses
 import logging
-from collections.abc import Iterable
+from collections.abc import Collection, Iterable
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from typing import Any, Final
 
@@ -46,6 +53,10 @@ logger = logging.getLogger(__name__)
 
 TASK: Final = "news-renamed"
 SEED_GAP_DAYS: Final = 365  # first news this long after the first halal screen: a candidate
+# Benzinga keeps tagging an old ticker for a few days after the switch (DWDP
+# has rows after 2019-05-31), so an old ticker nobody took over at once names
+# its company for this many sessions more.
+GRACE_SESSIONS: Final = 5
 _MAX_PAGES = 500  # 25,000 articles: more than any old ticker's busiest month
 
 # old ticker -> (current symbol, last session under the old ticker).
@@ -94,13 +105,19 @@ TICKER_RENAMES: Final[dict[str, tuple[str, date]]] = {
     "ZI": ("GTM", date(2025, 5, 12)),  # ZoomInfo Technologies
 }
 
-# The first session an old ticker named this company, where another company
-# held the ticker after NEWS_FROM and before it (an old ticker whose
-# predecessor is itself in TICKER_RENAMES starts the session after that one's
-# last, without an entry here).
-FIRST_SESSIONS: Final[dict[str, date]] = {
-    "BTX": date(2021, 3, 26),  # BioTime (now LCTX) traded as BTX until 2019
-    "IAC": date(2020, 7, 1),  # the old IAC, now Match Group, traded as IAC until 2020-06-30
+# (ticker, current symbol of the company) -> the first session the ticker
+# named that company, where the rule below does not already give it.
+#   * An old ticker names its company from the session after the previous
+#     old ticker of the same company, else from NEWS_FROM.
+#   * A current ticker with old tickers names its company from the day after
+#     the last of them; one without names it throughout, unless listed.
+# Rows under a ticker before the company held it are another company's
+# (or nobody's): the old IAC, BioTime, Quintiles' Q before Qnity took it.
+HELD_SINCE: Final[dict[tuple[str, str], date]] = {
+    ("BTX", "ERNA"): date(2021, 3, 26),  # BioTime (now LCTX) traded as BTX until 2019
+    ("DWDP", "DD"): date(2017, 9, 1),  # DowDuPont's first session (the merger closed 08-31)
+    ("IAC", "PPLI"): date(2020, 7, 1),  # the old IAC, now Match Group, was IAC to 2020-06-30
+    ("Q", "Q"): date(2025, 11, 3),  # Qnity Electronics, regular-way after DuPont's spin-off
 }
 
 
@@ -113,13 +130,44 @@ def old_tickers(symbol: str) -> tuple[str, ...]:
 def window(old: str) -> tuple[date, date]:
     """The sessions [first, last] the old ticker named its company, from NEWS_FROM."""
     current, last = TICKER_RENAMES[old]
-    first = FIRST_SESSIONS.get(old)
+    first = HELD_SINCE.get((old, current))
     if first is None:
         earlier = [
             prior for o, (c, prior) in TICKER_RENAMES.items() if c == current and prior < last
         ]
         first = next_trading_day(max(earlier)) if earlier else NEWS_FROM
     return max(first, NEWS_FROM), last
+
+
+def held_since(symbol: str) -> date | None:
+    """The first day ``symbol`` named the company trading under it today, when
+    another company (or none) held it inside the news history; None otherwise.
+
+    A ``HELD_SINCE`` entry for (symbol, symbol), else the day after the last
+    session of its company's last old ticker (the switch happens at that
+    close, so the weekend after it is already the new ticker's).
+    """
+    explicit = HELD_SINCE.get((symbol, symbol))
+    if explicit is not None:
+        return explicit
+    lasts = [last for current, last in TICKER_RENAMES.values() if current == symbol]
+    return max(lasts) + timedelta(days=1) if lasts else None
+
+
+def news_window(old: str) -> tuple[date, date]:
+    """The days [first, last] news under the old ticker is its company's.
+
+    ``window`` plus ``GRACE_SESSIONS`` sessions, but never into the days
+    another company held the ticker (IR passed straight to Gardner Denver).
+    """
+    first, last = window(old)
+    end = last
+    for _ in range(GRACE_SESSIONS):
+        end = next_trading_day(end)
+    taken = held_since(old)
+    if taken is not None and taken > last:
+        end = min(end, taken - timedelta(days=1))
+    return first, end
 
 
 def months(first: date, last: date) -> list[tuple[date, date]]:
@@ -137,9 +185,90 @@ def unit(old: str, month: date) -> str:
     return f"{old}:{month:%Y-%m}"
 
 
+# ── who a news row belongs to ─────────────────────────────────
+
+
+@dataclass(frozen=True, slots=True)
+class TickerHistory:
+    """``TICKER_RENAMES`` and ``HELD_SINCE`` as lookups (``owner`` per row)."""
+
+    windows: dict[str, tuple[str, date, date]]  # old -> (current, news_window)
+    olds: dict[str, tuple[str, ...]]  # current -> its old tickers
+    since: dict[str, date]  # ticker -> held_since
+    involved: frozenset[str]
+
+    @classmethod
+    def build(cls) -> TickerHistory:
+        windows = {old: (now, *news_window(old)) for old, (now, _) in TICKER_RENAMES.items()}
+        olds = {current: old_tickers(current) for current, _ in TICKER_RENAMES.values()}
+        tickers = {t for pair in HELD_SINCE for t in pair} | set(windows) | set(olds)
+        since = {t: s for t in tickers if (s := held_since(t)) is not None}
+        return cls(windows, olds, since, frozenset(windows.keys() | olds.keys() | since.keys()))
+
+    def owner(self, symbol: str, day: date, tagged: Collection[str] | None) -> str | None:
+        if symbol not in self.involved:
+            return symbol
+        if tagged:
+            for old in self.olds.get(symbol, ()):
+                _, first, last = self.windows[old]
+                if old in tagged and first <= day <= last:
+                    return symbol
+        named = self.windows.get(symbol)
+        if named is not None and named[1] <= day <= named[2]:
+            return named[0]
+        since = self.since.get(symbol)
+        if since is not None:
+            return symbol if day >= since else None
+        return None  # an old ticker outside its window: another company's, or nobody's
+
+
+_history: dict[str, tuple[object, object, TickerHistory]] = {}
+
+
+def ticker_history() -> TickerHistory:
+    """The lookups for the current tables (rebuilt when either table is replaced)."""
+    cached = _history.get("now")
+    if cached is None or cached[0] is not TICKER_RENAMES or cached[1] is not HELD_SINCE:
+        cached = (TICKER_RENAMES, HELD_SINCE, TickerHistory.build())
+        _history["now"] = cached
+    return cached[2]
+
+
+def owner(symbol: str, day: date, tagged: Collection[str] | None) -> str | None:
+    """Which of today's symbols a news row stored under ``symbol`` belongs to.
+
+    ``day`` is the New York date the row was published; ``tagged`` is its
+    ``payload.symbols`` as Benzinga sent it (None for a live row, which has
+    none). The first rule that applies decides:
+
+    1. ``tagged`` names an old ticker of ``symbol`` on a day of that ticker's
+       ``news_window``: ``symbol``. These are the rows ``backfill_renamed_news``
+       copied here (FB's articles under META), and articles tagging both
+       tickers (Gardner Denver's GDI next to the old IR).
+    2. ``symbol`` is an old ticker and ``day`` falls in its ``news_window``:
+       its current symbol. The row is a duplicate: the backfill stored the
+       same article under the current symbol, and that copy is the one kept
+       (IAC's rows count for PPLI once, DWDP's for DD).
+    3. ``symbol`` has a ``held_since`` day: ``symbol`` from that day on, None
+       before (Pandora's P, Axovant's AXON, E.I. du Pont's DD, the metaverse
+       ETF's META, Grupo Aeroportuario's GAP, the old IAC).
+    4. ``symbol`` is an old ticker outside its window: None (another company's,
+       or Benzinga still tagging a retired ticker).
+    5. Otherwise ``symbol``.
+
+    A row belongs to its own symbol only when this returns that symbol; the
+    alias learner and the story builder drop every other row. Rule 2 relies
+    on the backfill being complete.
+    """
+    return ticker_history().owner(symbol, day, tagged)
+
+
 def renamed_records(articles: Iterable[Any], old: str, current: str) -> list[EventRecord]:
     """The old ticker's articles as events of the current symbol (``news_records``' rows)."""
     return [dataclasses.replace(r, symbol=current) for r in news_records(articles, {old})]
+
+
+# ── seeding ───────────────────────────────────────────────────
 
 
 async def seed_candidates(
@@ -181,6 +310,9 @@ async def seed_candidates(
     return out
 
 
+# ── the backfill ──────────────────────────────────────────────
+
+
 async def backfill_renamed_news(
     engine: AsyncEngine,
     market: Any,
@@ -201,7 +333,7 @@ async def backfill_renamed_news(
     stored = 0
     for old in sorted(TICKER_RENAMES):
         current = TICKER_RENAMES[old][0]
-        first, last = window(old)
+        first, last = news_window(old)
         written_old = 0
         for lo, hi in months(first, last):
             u = unit(old, lo)
