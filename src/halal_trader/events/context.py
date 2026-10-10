@@ -57,11 +57,32 @@ Deviations from the news engine spec's §C (point-in-time context), for the
 pre-registration to cite:
 
 * **The news time is required.** ``eligibility(symbol, session, *, at_news,
-  universe="primary")``; the spec's signature has no ``at_news``. σ is judged
-  at that time, on the window :meth:`PitContext.pre_event` uses, and a time
-  outside (S−2's close, S's close) is refused by both.
+  universe="primary")``; the spec's signature has neither ``at_news`` nor
+  ``universe`` (which picks BROAD). σ is judged at that time, on the window
+  :meth:`PitContext.pre_event` uses, and a time outside (S−2's close, S's
+  close) is refused by both.
 * **BROAD admits an unmapped name with no ``ticker_ciks`` row** (see Screen
   above); the spec's ``status != 'fund'`` would drop it as NULL.
+* **The share class is settled before any bar is read.** The spec keeps the
+  lowest rank "among eligible symbols"; the code keeps it among the names
+  the screen and rank admit (Share class above). When the most liquid class
+  then fails daily bars, price or σ, the spec would admit the next class;
+  the code keeps it out as ``share_class``. Stage A's counts differ.
+* **``no_daily`` reads S's own bar.** A(S) needs S's raw and all-adjusted
+  closes (Price above), so a name with no bar on S is ``no_daily``: S-dated
+  information, where the spec's price rule says "known before the open".
+* **A name the screen does not hold is 'not_halal'**: ``screen_verdict``
+  answers it, and :meth:`PitContext.eligibility` gives it as the reason.
+  The spec names only 'no_screen', for a day with no screen before it.
+* **Descriptives can be NaN**, which the spec does not provide for (they
+  gate nothing): ATR, dollar volume and momentum where their bars are
+  missing, and the 20- and 252-session levels under the three rules of
+  Descriptives above (the calendar's length, the name's first raw bar on
+  or before the window, a real bar on nine in ten of its sessions). The
+  first raw bar is read over the whole table, one more query per batch than
+  the spec's loading lists. ATR runs Wilder's smoothing over the 60
+  sessions through S−1 (missing bars skipped), not every session before S,
+  so loaded history cannot move it.
 * **History is loaded from 380 days before the first session**, not 100:
   daily bars over [start − 380 d, end + 7 d], because the 252-session levels
   need a year of bars (380 days hold at least 257 sessions in 2017-2027).
