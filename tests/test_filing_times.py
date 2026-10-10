@@ -426,6 +426,40 @@ async def test_the_budget_left_corrects_the_last_month_stored_with_the_json_time
     assert daily.CATCH_UP == timedelta(days=30)
 
 
+async def test_a_run_stamps_an_earnings_week_and_the_next_run_its_overflow(
+    engine: AsyncEngine,
+) -> None:
+    """The default budget is 1,000 requests a run: a week's new filings reach that
+    at the 90th percentile, and the next week's catch-up takes the rest."""
+    edgar = Edgar()
+    late = datetime(2026, 7, 28, 20, 30, tzinfo=UTC)  # 4 h after the header's time
+    overflow = accession(MSFT, 2026, 401)
+    for cik, n in ((AAPL, 600), (MSFT, 401)):
+        filings = []
+        for i in range(1, n + 1):
+            acc, at = accession(cik, 2026, i), late + timedelta(minutes=i)
+            items = "8.01" if acc == overflow else "2.02"  # the one left: last in priority
+            filings.append(("8-K", "2026-07-28", f"{at:%Y-%m-%dT%H:%M:%S}.000Z", acc, items))
+            edgar.header(cik, acc, at - timedelta(hours=4))
+        edgar.submissions[cik] = submissions(filings)
+    companies = {AAPL: "AAPL", MSFT: "MSFT"}
+
+    written = await daily.refresh_filings(engine, edgar.client(), companies, today=date(2026, 8, 1))
+
+    assert written == 1001
+    assert len(edgar.header_requests()) == daily.HEADER_BUDGET == 1000
+    sources = {key: ts for key, (_, _, ts) in (await stored(engine)).items()}
+    assert [key for key, ts in sources.items() if ts != "header"] == [(overflow, "MSFT")]
+
+    edgar.requests.clear()
+    assert (
+        await daily.refresh_filings(engine, edgar.client(), companies, today=date(2026, 8, 8)) == 0
+    )
+    assert edgar.header_requests() == [f"{MSFT}/{overflow}"]
+    at = late + timedelta(minutes=401, hours=-4)
+    assert (await stored(engine))[(overflow, "MSFT")] == (at, at, "header")
+
+
 # ── the command ───────────────────────────────────────────────
 
 
