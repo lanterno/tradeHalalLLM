@@ -12,7 +12,9 @@ trades' daily legs, with a Newey-West (Bartlett, 4 lags) standard error.
 Several cells tested at once are corrected by **Holm**'s step-down. Gates
 that need an interval for a statistic with no closed-form error (decile
 spreads, rank ICs) **resample whole clusters**, seeded so a rerun gives the
-same interval. Equivalence ("the minute and daily harnesses agree") is a
+same interval; resamples on which the statistic is undefined are counted,
+and more than 1% of them is an error rather than a narrower question.
+Equivalence ("the minute and daily harnesses agree") is a
 **TOST**: the 1-2α clustered interval must lie within ±margin.
 
 p-values come from ``halabot.analysis.significance.student_t_sf_two_sided``
@@ -26,6 +28,7 @@ from collections import defaultdict
 from collections.abc import Callable, Hashable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
+from fractions import Fraction
 from typing import Final, Protocol
 
 import numpy as np
@@ -35,6 +38,9 @@ from halabot.analysis.significance import student_t_sf_two_sided
 SEED: Final = 20261010
 NW_LAGS: Final = 4
 BOOTSTRAP_DRAWS: Final = 2000
+# The share of resamples a bootstrap may leave out (statistic undefined on
+# them), exact so the bound is the same for every b.
+MAX_DROPPED_SHARE: Final = Fraction(1, 100)
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,6 +72,16 @@ class NWMean:
     t: float
     df: int  # n - 1
     p_one_sided: float
+
+
+@dataclass(frozen=True, slots=True)
+class BootstrapCI:
+    """A cluster-bootstrap percentile interval and the resamples behind it."""
+
+    lo: float
+    hi: float
+    draws: int  # b, the resamples drawn
+    dropped: int  # resamples where the statistic was not finite, left out
 
 
 class LegLike(Protocol):
@@ -259,15 +275,21 @@ def cluster_bootstrap_ci(
     b: int = BOOTSTRAP_DRAWS,
     seed: int = SEED,
     level: float = 0.95,
-) -> tuple[float, float]:
+) -> BootstrapCI:
     """Percentile interval of ``stat`` over ``b`` resamples of whole clusters.
 
     ``clusters[i]`` is observation i's cluster. Each draw takes G clusters
     with replacement (``numpy.random.default_rng(seed).integers(0, G,
     (b, G))``, clusters numbered in order of first appearance) and calls
-    ``stat`` with the indices of every observation in them, a cluster drawn
-    twice contributing its observations twice. Draws where ``stat`` is not
-    finite (undefined on that resample) are left out.
+    ``stat`` once, in draw order, with the indices of every observation in
+    them, a cluster drawn twice contributing its observations twice.
+
+    Draws where ``stat`` is not finite (undefined on that resample, e.g. a
+    rank IC on a resample with no spread) are left out and counted in
+    ``dropped``: the interval then describes only the resamples where the
+    statistic exists. More than ``MAX_DROPPED_SHARE`` of ``b`` dropped
+    raises ``ValueError``, since that interval no longer answers the
+    question asked of it.
     """
     if b < 1:
         raise ValueError(f"b must be >= 1, got {b}")
@@ -284,10 +306,14 @@ def cluster_bootstrap_ci(
         [stat([i for g in row for i in groups[g]]) for row in draws.tolist()], dtype=float
     )
     finite = values[np.isfinite(values)]
-    if finite.size == 0:
-        raise ValueError("the statistic is undefined on every resample")
+    dropped = b - int(finite.size)
+    if dropped > MAX_DROPPED_SHARE * b:
+        raise ValueError(
+            f"the statistic is undefined on {dropped} of {b} resamples "
+            f"(more than {float(MAX_DROPPED_SHARE):.0%})"
+        )
     lo, hi = np.quantile(finite, [(1.0 - level) / 2.0, (1.0 + level) / 2.0])
-    return float(lo), float(hi)
+    return BootstrapCI(float(lo), float(hi), b, dropped)
 
 
 def tost(
