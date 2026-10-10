@@ -166,6 +166,36 @@ def peers_cmd(sector: str, start: int, end: int, by: str) -> None:
             console.print(f"  {h:>2}d IC {result.ic.get((group, h), 0):+.3f}  | {line}")
 
 
+@events.command("reversal")
+@click.option("--sector", type=click.Choice(["all", "technology"]), default="all")
+@click.option("--start", type=int, default=2016, show_default=True, help="First year.")
+@click.option("--end", type=int, default=2021, show_default=True, help="Last year.")
+def reversal_cmd(sector: str, start: int, end: int) -> None:
+    """Buying after bad-news days: net abnormal return by the day's lexicon decile."""
+
+    async def _run(engine: Any, settings: Any) -> Any:
+        from halal_trader.events.reversal import HORIZONS, news_days
+        from halal_trader.events.study import evaluate, summarise
+
+        symbols = None
+        if sector == "technology":
+            from halal_trader.events.tech_expert import tech_symbols
+
+            symbols = await tech_symbols(engine)
+        obs = await news_days(engine, start, end, symbols)
+        return summarise(await evaluate(engine, obs, HORIZONS)), len(obs)
+
+    result, n = run_db(_run)
+    console.print(
+        f"news days {start}-{end} ({sector}, {n} symbol-days): net abnormal return vs SPY "
+        "by the day's lexicon decile (D1 = worst news)"
+    )
+    for h in sorted({r.horizon for r in result.rows}):
+        cells = [r for r in result.rows if r.horizon == h]
+        line = "  ".join(f"D{r.decile} {r.mean:+.2%}({r.t:+.1f})" for r in cells)
+        console.print(f"  {h:>2}d IC {result.ic.get(('all', h), 0):+.3f}  | {line}")
+
+
 @events.command("study")
 @click.argument("signal", type=click.Choice(["sue", "sales", "beat-raise"]))
 @click.option("--start", type=int, default=2016, show_default=True, help="First year.")
