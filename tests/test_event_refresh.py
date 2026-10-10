@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, date, datetime
 from types import SimpleNamespace
 
@@ -90,14 +91,17 @@ async def _labels(engine: AsyncEngine) -> dict[str, int]:
 
 
 async def test_the_facts_step_reads_every_event_then_drops_the_superseded_facts(
-    engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+    engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     settings = _stub_steps(monkeypatch)
     await _seed_superseded(engine)
-    run = await daily.refresh_events(engine, settings, today=date(2026, 10, 2))
+    with caplog.at_level(logging.INFO, logger=daily.__name__):
+        run = await daily.refresh_events(engine, settings, today=date(2026, 10, 2))
 
     assert run.counts["facts"] == 1
     assert await _labels(engine) == {ep.EXTRACTOR_V3: 1, ep.EXTRACTOR: 1}
+    # The deletion is logged with its count, never silent.
+    assert "deleted 1 superseded fact row(s)" in caplog.text
 
 
 async def test_a_failed_extraction_deletes_no_facts(
