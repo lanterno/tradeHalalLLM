@@ -143,10 +143,11 @@ async def score_batch(
         contexts = await variant.context(engine, [(sym, p.first_at) for (sym, _), p in items])
 
     def line(i: int, sym: str, headline: str, first_at: datetime) -> str:
-        head = headline[:200].replace("|", "/")
+        # One item per line: a headline's own line breaks would split it in two.
+        head = " ".join(headline.split())[:200].replace("|", "/")
         if variant.context is None:
             return f"{i}|{sym}|{head}"
-        ctx = contexts.get((sym, first_at), "no context").replace("|", "/")
+        ctx = " ".join(contexts.get((sym, first_at), "no context").split()).replace("|", "/")
         return f"{i}|{sym}|{ctx}|{head}"
 
     lines = "\n".join(line(i, sym, h, p.first_at) for i, ((sym, h), p) in enumerate(items))
