@@ -79,9 +79,10 @@ nothing, so no card turns NSN at their arrival), and a story of nothing
 else is persisted as ``noise_only`` and is nobody's parent.
 
 **Inputs a build checks** (:func:`build_range`, unless forced): every month
-of the renamed tickers' news fetched, the story aliases stored, and every
-news event it reads parsed by the current earnings extractor
-(``earnings_parse.EXTRACTOR``, read when the build runs). A build replaces
+of the renamed tickers' news fetched, the story aliases stored, every news
+event it reads parsed by the current earnings extractor
+(``earnings_parse.EXTRACTOR``, read when the build runs), and every 8-K it
+reads at its EDGAR header's time (:func:`untimed_filings`). A build replaces
 its range one symbol batch at a time, each batch in one transaction, and
 records the range complete in ``backfill_progress`` (task :data:`TASK`,
 unit :func:`build_unit`) only once every batch is written. The mark names
@@ -133,7 +134,7 @@ from halal_trader.events.headline_patterns import (
     CORRECTION,
     REISSUE_PREFIX,
 )
-from halal_trader.events.history import mark_units
+from halal_trader.events.history import TIMES_MISSING_TASK, TIMES_TASK, mark_units
 from halal_trader.events.taxonomy import (
     FAMILY,
     NOISE_TYPES,
@@ -194,6 +195,7 @@ __all__ = [
     "shingles",
     "story_row",
     "uncovered_sessions",
+    "untimed_filings",
     "window_of",
 ]
 
@@ -276,8 +278,8 @@ UNIVERSES: Final[tuple[Universe, ...]] = ("all", "primary", "tech")
 
 class StoriesNotReady(RuntimeError):
     """A build's inputs are incomplete (renamed-ticker news, story aliases, the
-    current extractor's facts), or counts were asked of a range no complete
-    build covers."""
+    current extractor's facts, the 8-Ks' header times), or counts were asked of
+    a range no complete build covers."""
 
 
 # ── types (spec §A.1) ──────────────────────────────────────────
@@ -1026,6 +1028,44 @@ async def missing_facts(engine: AsyncEngine, *, start: date, end: date) -> tuple
     return int(row.n), (int(row.first) if row.first is not None else None)
 
 
+async def untimed_filings(engine: AsyncEngine, *, start: date, end: date) -> tuple[int, int | None]:
+    """8-K and 8-K/A events published on New York days [start, end] whose time
+    no ``events filings fix-times`` pass has settled: (how many, the lowest
+    event id).
+
+    The submissions JSON's time is hours late for about a third of filings,
+    and the corrected time can move a filing to another session; the inputs
+    hash (:func:`inputs_sha`) does not see it. A row is settled as
+    ``history.correct_filing_times`` judges its filing done: its accession
+    is in ``filing-times-missing`` (EDGAR has no header: the JSON's time is
+    all there is), or in ``filing-times`` with the row stamped from the
+    header (``time_source: header``). A row stored under a second symbol
+    after its filing was read keeps the JSON's time until a pass copies it.
+    """
+    async with engine.connect() as conn:
+        row = (
+            await conn.execute(
+                text(
+                    "SELECT count(*) AS n, min(e.id) AS first FROM events e "
+                    "WHERE e.kind IN ('8-k', '8-k/a') "
+                    "AND e.published_at >= :lo AND e.published_at < :hi "
+                    "AND NOT EXISTS (SELECT 1 FROM backfill_progress p "
+                    "WHERE p.task = :missing AND p.unit = e.source_id) "
+                    "AND NOT (coalesce(e.payload->>'time_source', '') = 'header' "
+                    "AND EXISTS (SELECT 1 FROM backfill_progress p "
+                    "WHERE p.task = :read AND p.unit = e.source_id))"
+                ),
+                {
+                    "read": TIMES_TASK,
+                    "missing": TIMES_MISSING_TASK,
+                    "lo": trading_day_start_utc(start),
+                    "hi": trading_day_end_utc(end),
+                },
+            )
+        ).one()
+    return int(row.n), (int(row.first) if row.first is not None else None)
+
+
 async def _per_symbol(raws: AsyncIterator[RawItem]) -> AsyncIterator[list[RawItem]]:
     """Consecutive items of one symbol (the stream is ordered by symbol)."""
     batch: list[RawItem] = []
@@ -1145,12 +1185,13 @@ async def build_range(
     """Build every story with S in [start, end] and replace this version's rows there.
 
     Refuses (:class:`StoriesNotReady`) while a month of the renamed tickers'
-    news is missing (``owner`` relies on it), no story alias is stored, or a
+    news is missing (``owner`` relies on it), no story alias is stored, a
     news event the build reads has no row of the current extractor
-    (:func:`missing_facts` over every day items are read from), unless
-    ``force``. Items are read from :data:`HISTORY_FROM` (or a few days before
-    ``start``, if earlier) so each story's parent comes from the same history
-    however the build is split.
+    (:func:`missing_facts`), or an 8-K it reads is not at its EDGAR header's
+    time yet (:func:`untimed_filings`), both over every day items are read
+    from, unless ``force``. Items are read from :data:`HISTORY_FROM` (or a
+    few days before ``start``, if earlier) so each story's parent comes from
+    the same history however the build is split.
 
     Symbols go in batches of :data:`BATCH_SYMBOLS`, one symbol at a time,
     sessions in order; a batch's old rows in the range are deleted and its
@@ -1184,6 +1225,13 @@ async def build_range(
                 f"{unparsed} news event(s) published {lo}..{end} have no "
                 f"{earnings_parse.EXTRACTOR} facts row (first: event {first}); "
                 "run `halal-trader events extract` first"
+            )
+        untimed, first = await untimed_filings(engine, start=lo, end=end)
+        if untimed:
+            raise StoriesNotReady(
+                f"{untimed} 8-K event(s) published {lo}..{end} are not at their EDGAR "
+                f"header's time yet (first: event {first}); run `halal-trader events "
+                f"filings fix-times --start {lo} --end {end}` first"
             )
     c = counters if counters is not None else Counter()
     # Hashed before the aliases are read: if they change in between, the mark
@@ -1458,12 +1506,17 @@ async def pins(engine: AsyncEngine) -> dict[str, str]:
 
 
 async def inputs_sha(engine: AsyncEngine) -> str:
-    """A short hash of what a build's stories depend on: every pin (:func:`pins`:
-    the builder's constants, the stored aliases, the renames, the taxonomy, the
-    parser, the headline patterns) and the extractor whose facts it reads
-    (``earnings_parse.EXTRACTOR``, read now).
+    """A short hash of the code and tables a build's stories depend on: every pin
+    (:func:`pins`: the builder's constants, the stored aliases, the renames,
+    the taxonomy, the parser, the headline patterns) and the extractor whose
+    facts it reads (``earnings_parse.EXTRACTOR``, read now).
 
-    A complete build's mark records it (:func:`build_unit`), and
+    The event rows are not hashed: an 8-K's corrected time (``events filings
+    fix-times``), or a row stored in a range after its build, changes the
+    stories and not this hash. :func:`build_range` therefore refuses while an
+    8-K it reads is not at its header's time (:func:`untimed_filings`).
+
+    A complete build's mark records the hash (:func:`build_unit`), and
     :func:`count_stories` accepts only the marks recording today's. A change to
     the builder's rules that no constant shows bumps :data:`RULES_VERSION`
     (in :data:`STORIES_SHA`, so here too).
