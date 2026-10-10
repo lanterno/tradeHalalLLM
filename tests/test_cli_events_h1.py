@@ -57,6 +57,21 @@ def test_a_dry_run_prints_every_check_and_records_nothing(
     assert _count(database_url) == 0
 
 
+def test_the_reported_checks_print_as_information_and_never_block(
+    database_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    report = _report()
+    reported = (
+        Check("D7", True, "not measured: no Alpaca client (reported, not gating)"),
+        Check("D8", False, "a probe that broke"),
+    )
+    _patch(monkeypatch, Preconditions(report.checks + reported), [])
+    result = CliRunner().invoke(cli, ["events", "h1", "register"])
+    assert result.exit_code == 0, result.output
+    assert "info D7  not measured" in result.output and "info D8  a probe" in result.output
+    assert "H1 registered" in result.output and _count(database_url) == 1
+
+
 def test_no_scan_is_for_dry_runs_only() -> None:
     result = CliRunner().invoke(cli, ["events", "h1", "register", "--no-scan"])
     assert result.exit_code == 1 and "for dry runs" in result.output

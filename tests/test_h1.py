@@ -10,8 +10,10 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import subprocess
 import sys
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
@@ -51,7 +53,6 @@ from halal_trader.events.h1 import (
     clean,
     count_outcomes,
     decide,
-    gate_family,
     judge_gates,
     judge_window,
     last_session,
@@ -137,6 +138,25 @@ def test_the_prereg_holds_every_pin_and_the_code_constants() -> None:
     assert build_prereg(dict(reversed(list(PINS.items())))) == pre
 
 
+def _squash(text_: str) -> str:
+    return " ".join(text_.split())
+
+
+def test_the_prereg_cites_the_contexts_deviations_item_for_item() -> None:
+    """CONTEXT_DEVIATIONS is the deviations section of context.py's docstring, in order."""
+    from halal_trader.events import context
+
+    doc = context.__doc__ or ""
+    for item in h1.CONTEXT_DEVIATIONS:
+        assert _squash(item) in _squash(doc), item
+    head = "pre-registration to cite:"
+    assert head in _squash(doc)
+    section = doc[doc.index("pre-registration") :]
+    bullets = [_squash(b) for b in re.split(r"\n\s*\* ", section)[1:]]
+    assert bullets == [_squash(i) for i in h1.CONTEXT_DEVIATIONS]  # none added, none dropped
+    assert build_prereg(PINS)["universe"]["context_deviations"] == list(h1.CONTEXT_DEVIATIONS)
+
+
 def test_a_changed_pin_is_a_new_configuration_and_both_windows_share_a_trial() -> None:
     h = config_hash(build_prereg(PINS))
     assert config_hash(build_prereg({**PINS, "alias_sha": "000000000000"})) != h
@@ -150,33 +170,42 @@ def test_a_changed_pin_is_a_new_configuration_and_both_windows_share_a_trial() -
 # ── gates and the code ───────────────────────────────────────
 
 
-def test_gate_ids_count_for_their_family() -> None:
-    assert [gate_family(g) for g in ("g1", "lookahead", "G2", "reactor.r1", "sue:s2")] == [
-        "G1",
-        "G1",
-        "G2",
-        "G2",
-        "G3",
-    ]
-    assert gate_family("calib") is None and gate_family("reactors") is None
+def _gates(**verdicts: str) -> list[tuple[str, int, str | None]]:
+    """A row for every required gate, passing unless ``verdicts`` says otherwise."""
+    return [(g, i, verdicts.get(g, "pass")) for i, g in enumerate(h1.REQUIRED_GATES, 1)]
 
 
-def test_every_gate_family_needs_a_row_and_every_latest_row_must_pass() -> None:
-    ok = judge_gates([("lookahead", 1, "pass"), ("reactor", 2, "pass"), ("sue", 3, "pass")])
-    assert ok.ok and set(ok.data["gates"]) == {"lookahead", "reactor", "sue"}
-    missing = judge_gates([("lookahead", 1, "pass"), ("reactor", 2, "pass")])
-    assert not missing.ok and "G3" in missing.detail
-    failed = judge_gates(
-        [("g1", 1, "pass"), ("g2", 2, "pass"), ("g3", 3, "pass"), ("calib", 4, "fail")]
+def test_the_gate_ids_are_every_sub_gate_of_g1_to_g3() -> None:
+    assert h1.REQUIRED_GATES == (
+        "g1-lookahead",
+        "g1-synthetic",
+        "g1-determinism",
+        "r0",
+        "r1",
+        "r2",
+        "s0",
+        "s1",
+        "s1-calib",
+        "s2",
+        "s3",
     )
-    assert not failed.ok and "calib" in failed.detail  # an unknown gate id still counts
-    fixed = judge_gates(
-        [("g1", 1, "pass"), ("g2", 5, "pass"), ("g2", 2, "fail"), ("g3", 3, "pass")]
-    )
+
+
+def test_every_required_gate_needs_a_row_and_every_latest_row_must_pass() -> None:
+    ok = judge_gates(_gates())
+    assert ok.ok and set(ok.data["gates"]) == set(h1.REQUIRED_GATES)
+    for gate in h1.REQUIRED_GATES:  # one sub-gate never recorded fails G (no family stands in)
+        missing = judge_gates([r for r in _gates() if r[0] != gate])
+        assert not missing.ok and f"no row for {gate}" in missing.detail
+    family_only = judge_gates([("g1", 1, "pass"), ("reactor", 2, "pass"), ("sue", 3, "pass")])
+    assert not family_only.ok
+    failed = judge_gates(_gates(s1="fail"))
+    assert not failed.ok and "s1" in failed.detail and "no row" not in failed.detail
+    extra = judge_gates([*_gates(), ("calib-extra", 99, "fail")])
+    assert not extra.ok and "calib-extra" in extra.detail  # a recorded failure is never ignored
+    fixed = judge_gates([*_gates(r2="fail"), ("r2", 50, "pass")])
     assert fixed.ok  # a rerun after a fix replaces the failed row
-    broke = judge_gates(
-        [("g1", 1, "pass"), ("g2", 2, "pass"), ("g2", 5, "fail"), ("g3", 3, "pass")]
-    )
+    broke = judge_gates([*_gates(), ("r2", 50, "fail")])
     assert not broke.ok
 
 
@@ -480,8 +509,6 @@ def test_t3_t4_t5_and_t6() -> None:
 
 
 def _unresolved(t: TradeRecord) -> TradeRecord:
-    from dataclasses import replace
-
     return replace(t, flags=("unresolved",))
 
 
@@ -515,8 +542,6 @@ def test_holm_and_t6_decide_each_cells_status() -> None:
     assert judged[MD3].status == "fail"
     expected = event_stats.holm({ID.key: strong.p, MD3.key: weak.p}, alpha=0.05)
     assert {c.key: ws.t2 for c, ws in judged.items()} == expected
-    from dataclasses import replace
-
     unresolved = judge_window({ID: replace(strong, t6=False)})
     assert unresolved[ID].status == "inconclusive"
     assert judge_window({}) == {}
@@ -642,6 +667,15 @@ async def test_d2_measures_each_screens_unmapped_share(engine: AsyncEngine) -> N
     ok = await h1.check_screens_d2(engine)
     assert ok.ok, ok.detail
     assert ok.data["residual"] == {"2016-09-30": pytest.approx(2 / 99)}  # the fund is left out
+    # A nightly screen after the span (never read by H1): its unmatched and its
+    # mapped-but-not-re-screened rows do not count.
+    await _screen(
+        engine, date(2025, 3, 31), [*names, ("U9", None, UNMAPPED), ("U8", None, UNMAPPED)]
+    )
+    await _ticker(engine, "U8", "mapped")
+    late = await h1.check_screens_d2(engine)
+    assert late.ok, late.detail
+    assert (late.data["unmatched"], late.data["pending_rescreen"]) == (0, 0)
     await _screen(
         engine, date(2016, 12, 30), [*names[:40], ("U3", None, UNMAPPED), ("U1", None, UNMAPPED)]
     )
@@ -793,18 +827,39 @@ async def test_d4_needs_99_percent_of_each_part_and_every_spy_session(engine: As
 async def test_d5_scans_every_done_unit_through_the_readers(
     engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    d = date(2017, 3, 7)
-    await seed_bars(engine, "AAA", session_bars(d, price=50.0))
-    outside = session_bars(d, price=50.0, first=(9, 30), last=(9, 30))
-    early = BarArrays(
-        outside.ts - 3600, outside.o, outside.h, outside.l, outside.c, outside.v, outside.vw
-    )
-    await seed_bars(engine, "AAA", early)  # a stored pre-market bar the readers must leave out
-    await mark_done(engine, [("AAA", d)])
+    d, d2 = date(2017, 3, 7), date(2017, 3, 8)
+    for day in (d, d2):
+        await seed_bars(engine, "AAA", session_bars(day, price=50.0))
+        outside = session_bars(day, price=50.0, first=(9, 30), last=(9, 30))
+        early = BarArrays(
+            outside.ts - 3600, outside.o, outside.h, outside.l, outside.c, outside.v, outside.vw
+        )
+        # A stored pre-market bar the readers must leave out; d2's lies inside the range
+        # read_sessions scans for the two sessions at once.
+        await seed_bars(engine, "AAA", early)
+    await mark_done(engine, [("AAA", d), ("AAA", d2)])
     done = await minutes.done_units(engine)
-    ok = await h1.check_readers_d5(engine, {("AAA", d), ("BBB", d)}, done)
+    ok = await h1.check_readers_d5(engine, {("AAA", d), ("AAA", d2), ("BBB", d)}, done)
     assert ok.ok, ok.detail
-    assert (ok.data["units"], ok.data["bars"], ok.data["sampled_read"]) == (1, 390, 1)
+    assert (ok.data["units"], ok.data["bars"], ok.data["sampled_read"]) == (2, 780, 2)
+    assert ok.data["sampled_read_sessions_multi"] == 2 and ok.data["outside_read_sessions"] == 0
+
+    real_sessions = minutes.read_sessions
+
+    async def leaky_sessions(engine_: Any, symbol: str, days: Any) -> dict[date, Any]:
+        got = await real_sessions(engine_, symbol, days)
+        if len(got) > 1:  # the multi-session scan leaks the night between
+            first = min(got)
+            got[first] = [
+                *got[first],
+                replace(got[first][-1], ts=got[first][-1].ts + timedelta(hours=2)),
+            ]
+        return got
+
+    monkeypatch.setattr(minutes, "read_sessions", leaky_sessions)
+    leaked = await h1.check_readers_d5(engine, {("AAA", d), ("AAA", d2)}, done)
+    assert not leaked.ok and leaked.data["outside_read_sessions"] == 2
+    monkeypatch.setattr(minutes, "read_sessions", real_sessions)
 
     real = minutes.read_windows
 
@@ -837,9 +892,114 @@ async def test_d6_needs_every_news_event_read_and_reports_the_202_rate(engine: A
     ok = await h1.check_facts_d6(engine)
     assert ok.ok, ok.detail
     assert (ok.data["stories_202"], ok.data["stories_202_unparsed"]) == (2, 1)
-    await store(engine, [news_row(2, "AAA", ny(day, 9), "no facts stored")], facts=False)
+    # News H1 never reads (before 2016, live after 2024) needs no facts.
+    outside = [
+        news_row(3, "AAA", ny(date(2015, 12, 31), 23, 59), "before the span"),
+        news_row(4, "AAA", ny(date(2025, 1, 2), 0, 0), "after the span"),
+        news_row(5, "AAA", ny(date(2026, 10, 9), 10), "live, after the nightly extraction"),
+    ]
+    await store(engine, outside, facts=False)
+    still = await h1.check_facts_d6(engine)
+    assert still.ok and still.data["news_unread"] == 0, still.detail
+    edges = [
+        news_row(6, "AAA", ny(date(2016, 1, 1), 0, 0), "first NY minute of the span"),
+        news_row(7, "AAA", ny(date(2024, 12, 31), 23, 59), "last NY minute of the span"),
+        news_row(2, "AAA", ny(day, 9), "no facts stored"),
+    ]
+    await store(engine, edges, facts=False)
     bad = await h1.check_facts_d6(engine)
-    assert not bad.ok and bad.data["news_unread"] == 1
+    assert not bad.ok and bad.data["news_unread"] == 3
+
+
+@dataclass
+class _Article:
+    id: int
+    headline: str
+
+
+class _Market:
+    """D7's and D8's view of Alpaca: news by symbol and window, IEX minute bars."""
+
+    def __init__(self, articles: dict[str, list[_Article]], iex: dict[tuple[str, date], int]):
+        self.articles = articles
+        self.iex = iex
+        self.news_calls: list[tuple[str, datetime, datetime | None]] = []
+        self.feeds: list[str] = []
+
+    async def news(
+        self,
+        symbols: Any,
+        *,
+        start: datetime,
+        end: datetime | None = None,
+        max_pages: int = 20,
+    ) -> list[_Article]:
+        (symbol,) = symbols
+        self.news_calls.append((symbol, start, end))
+        return self.articles.get(symbol, [])
+
+    async def minute_bars_many(
+        self, symbols: Any, *, start: datetime, end: datetime, feed: str = "sip"
+    ) -> dict[str, list[dict[str, Any]]]:
+        self.feeds.append(feed)
+        (symbol,) = symbols
+        n = self.iex.get((symbol, start.astimezone(MARKET_TZ).date()), 0)
+        return {symbol: [{} for _ in range(n)]} if n else {}
+
+
+async def test_d7_and_d8_are_measured_and_recorded_but_never_gate(engine: AsyncEngine) -> None:
+    live = date(2026, 10, 8)
+    rows = [
+        news_row(10, "AAA", ny(live, 9), "Acme Rises"),
+        news_row(11, "BBB", ny(live, 10), "Bolt Falls"),
+        news_row(12, "CCC", ny(live, 11), "Cove Holds"),
+        news_row(13, "AAA", ny(date(2026, 10, 7), 9), "before the live rows: not sampled"),
+    ]
+    await store(engine, rows, facts=False)
+    market = _Market(
+        {
+            "AAA": [_Article(10, "Acme Rises "), _Article(13, "other")],
+            "BBB": [_Article(11, "Bolt Falls Sharply")],
+        },
+        {("AAA", date(2024, 3, 5)): 300},
+    )
+    d7 = await h1.check_edits_d7(engine, market)
+    assert d7.ok and d7.data["measured"]
+    assert (d7.data["rows"], d7.data["found"], d7.data["edited"], d7.data["missing"]) == (
+        3,
+        2,
+        1,
+        1,
+    )
+    assert d7.data["edit_rate"] == 0.5 and d7.data["examples"][0]["now"] == "Bolt Falls Sharply"
+    symbol, start, end = next(c for c in market.news_calls if c[0] == "AAA")
+    assert (start, end) == (ny(live, 8), ny(live, 10))  # an hour either side
+
+    d = date(2024, 3, 5)
+    await seed_bars(engine, "AAA", session_bars(d, price=50.0))
+    units = {("AAA", d), ("BBB", d), ("SPY", d), ("AAA", date(2023, 3, 6))}
+    d8 = await h1.probe_iex_d8(engine, market, units)
+    assert d8.ok and d8.data["available"] == 1 and set(market.feeds) == {"iex"}
+    assert {p["unit"]: (p["iex_bars"], p["sip_bars"]) for p in d8.data["units"]} == {
+        "AAA:2024-03-05": (300, 390),
+        "BBB:2024-03-05": (0, 0),
+    }  # SPY and 2023 are never probed
+
+    for check in (
+        await h1.check_edits_d7(engine, None),
+        await h1.probe_iex_d8(engine, None, units),
+        await h1.probe_iex_d8(engine, market, None),
+    ):
+        assert check.ok and not check.data["measured"] and "not measured" in check.detail
+
+    class _Down(_Market):
+        async def news(self, symbols: Any, **_: Any) -> list[_Article]:
+            raise OSError("no route to Alpaca")
+
+    down = await h1.check_edits_d7(engine, _Down({}, {}))
+    assert down.ok and not down.data["measured"] and "no route" in down.detail
+    failing = Preconditions((Check("C0", True, ""), Check("D7", False, "broken")))
+    assert failing.failures == []  # a reported check never fails the registration
 
 
 # ── registration ─────────────────────────────────────────────
@@ -926,12 +1086,9 @@ async def test_without_plan_h_d4_and_d5_fail(
 
 async def test_gate_rows_are_read_from_the_ledger(engine: AsyncEngine) -> None:
     repo = QuantTrialRepoImpl(engine)
-    for gate, verdict in (
-        ("lookahead", "pass"),
-        ("reactor", "fail"),
-        ("reactor", "pass"),
-        ("sue", "pass"),
-    ):
+    recorded = [(g, "pass") for g in h1.REQUIRED_GATES if g != "r1"]
+    recorded += [("r1", "fail"), ("r1", "pass")]
+    for gate, verdict in recorded:
         await repo.record_trial(
             name=h1.GATE_NAME, kind="gate", config={"sim": {}, "gate": gate}, verdict=verdict
         )
@@ -939,5 +1096,5 @@ async def test_gate_rows_are_read_from_the_ledger(engine: AsyncEngine) -> None:
         name="research.news.sim-gate.units", kind="gate-units", config={"gate": "g1"}
     )
     rows = await h1.gate_rows(engine)
-    assert sorted(g for g, _, _ in rows) == ["lookahead", "reactor", "reactor", "sue"]
+    assert sorted(g for g, _, _ in rows) == sorted(g for g, _ in recorded)
     assert judge_gates(rows).ok
