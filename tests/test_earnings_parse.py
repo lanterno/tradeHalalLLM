@@ -728,8 +728,10 @@ def test_a_sales_figure_after_a_forecast_verb_is_not_the_results() -> None:
         ("Acme Q1 EPS $1.00 Beats $0.90 Estimate, Sales $5.0B Beat $4.9B Estimate; Sales May Not "
          "Compare", False, False),
         # Constructed: a segment flagging the headline names the estimates, consensus,
-        # a forecast or guidance, or is a BZ NOTE ...
+        # a forecast, guidance or the outlook, or is a BZ NOTE ...
         ("Acme Q1 EPS $1.00 Beats $0.90 Estimate, Sales $5.0B Beat $4.9B Estimate; Consensus "
+         "May Not Compare", True, True),
+        ("Acme Q1 EPS $1.00 Beats $0.90 Estimate, Sales $5.0B Beat $4.9B Estimate; Outlook "
          "May Not Compare", True, True),
         ("Acme Q1 EPS $1.00 Beats $0.90 Estimate, Sales $5.0B Beat $4.9B Estimate; BZ NOTE: "
          "Figures Not Comparable", True, True),
@@ -790,6 +792,11 @@ def test_a_flag_closing_the_segment_or_alone_in_one_covers_the_statement() -> No
     )
     assert g.kind == "guidance" and g.fields["not_comparable"] is True
     assert g.fields["surprise"] is None and g.fields["mid"] == pytest.approx(-0.155)
+    # Constructed: "Outlook May Not Compare" in its own segment, a false +11.1% raise
+    # while _FLAG_SUBJECT left the outlook out.
+    (g,) = parse_headline("Acme Sees FY EPS $1.00 Vs $0.90 Est; Outlook May Not Compare")
+    assert g.kind == "guidance" and g.fields["not_comparable"] is True
+    assert g.fields["surprise"] is None and g.fields["mid"] == pytest.approx(1.00)
     # Constructed: a segment stating a figure is no headline-wide flag.
     r, *_ = parse_headline(
         "Acme Q1 EPS $1.00 Beats $0.90 Estimate; Sees Q2 EPS $1.20 May Not Compare To $1.30 Est"
