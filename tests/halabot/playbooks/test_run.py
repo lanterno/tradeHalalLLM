@@ -11,6 +11,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from halabot.playbooks import sim
+from halabot.playbooks.legacy import HoldFactory, reactor_config, reactor_story
 from halabot.playbooks.loader import (
     Window,
     WindowLocked,
@@ -21,8 +22,15 @@ from halabot.playbooks.loader import (
 from halabot.playbooks.records import MemorySink, PgOutcomeSink, outcomes_sha256
 from halabot.playbooks.sim import pool_method, run
 from halabot.playbooks.types import SimConfig
-from tests.halabot.playbooks._seed import seed_calendar, seed_market
-from tests.halabot.playbooks._support import ToyFactory
+from tests.halabot.playbooks._seed import mark_done, seed_bars, seed_calendar, seed_market
+from tests.halabot.playbooks._support import (
+    FACTS,
+    MON,
+    Context,
+    ToyFactory,
+    et,
+    session_bars,
+)
 from tests.halabot.playbooks._synth import WEEK, Market, random_market
 
 END = date(2016, 3, 31)
@@ -113,6 +121,50 @@ async def test_an_unpinned_gate_fails_before_anything_is_written(engine: AsyncEn
     await register_gate_units(engine, "g1", units)
     _, summary = await _go(engine, market, sink=sink, unlock=unlock)
     assert sink.info is not None and summary.outcomes > 0
+
+
+async def test_a_gate_only_fill_model_needs_a_gate_unlock(engine: AsyncEngine) -> None:
+    """R1's shape through the driver: a reactor headline, the legacy fills, a pinned set."""
+    await seed_calendar(engine, date(2016, 1, 4), END)
+    rows = {(10, 16): (50.0, 50.5, 49.5, 50.2, 1_000.0, 50.9)}  # a VWAP above the high: kept
+    rows[(15, 59)] = (51.0, 51.5, 50.5, 51.3, 1_000.0, 51.1)
+    await seed_bars(engine, "AAA", session_bars(MON, price=50.0, rows=rows))
+    spy_rows = {(10, 16): (200.0, 201.0, 199.0, 200.5, 1e5, 200.4)}
+    spy_rows[(15, 59)] = (202.0, 202.5, 201.5, 202.2, 1e5, 202.1)
+    await seed_bars(engine, "SPY", session_bars(MON, price=200.0, rows=spy_rows))
+    await mark_done(engine, [("AAA", MON), ("SPY", MON)])
+    st = reactor_story("AAA:r1", "AAA", et(MON, 10, 14, 30))  # decides at 10:15:30
+    factory = HoldFactory(1, {st.story_id: FACTS})
+
+    async def go(unlock: WindowUnlock, sink: MemorySink):  # type: ignore[no-untyped-def]
+        return await run(
+            engine,
+            [st],
+            factory,
+            context=Context(verdicts={("AAA", MON): "not_halal"}),  # not read by the gate model
+            window=Window.GATE,
+            window_end=END,
+            cfg=reactor_config(),
+            unlock=unlock,
+            sink=sink,
+            workers=1,
+        )
+
+    sink = MemorySink()
+    with pytest.raises(ValueError, match="gate runs only"):
+        await go(WindowUnlock(), sink)
+    assert sink.info is None
+    units = frozenset({("AAA", MON)})
+    await register_gate_units(engine, "g1", units)
+    summary = await go(WindowUnlock(gate="g1", units=units, units_sha=unit_set_sha(units)), sink)
+    assert summary.trades == 1 and sink.info is not None
+    assert sink.info.sim["fill"] == "legacy-reactor" and sink.info.playbook == "gate-hold"
+    t = sink.outcomes[0].trade
+    assert t is not None
+    assert t.entry_active_at == et(MON, 10, 15, 30) and t.entry_bar_ts == et(MON, 10, 16)
+    assert (t.entry_px, t.spy_entry_px) == (50.9, 200.4)  # VWAPs, unclamped
+    assert t.exit_bar_ts == et(MON, 15, 59) and (t.exit_px, t.spy_exit_px) == (51.3, 202.2)
+    assert t.flags == ("last_close",) and t.exit_reason == "time_stop"
 
 
 def test_pool_method_defaults_to_serial_on_macos(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -8,7 +8,9 @@ import pytest
 
 from halabot.playbooks.clock import US, to_us
 from halabot.playbooks.exchange import (
+    MARKET_FILL,
     Exchange,
+    fill_model,
     first_eligible,
     in_surcharge_window,
     market_fill,
@@ -16,6 +18,7 @@ from halabot.playbooks.exchange import (
     spy_fill,
     unfilled_exit,
 )
+from halabot.playbooks.legacy import LegacyReactorFill
 from halabot.playbooks.types import BarSeries, OrderKind, SimConfig, WorkingOrder
 from tests.halabot.playbooks._support import MON, TUE, et, session_bars
 
@@ -221,3 +224,41 @@ def test_an_unfilled_exit_falls_back_close_then_market_then_last_trade() -> None
         200.2,
         ("unresolved",),
     )
+
+
+# ── the fill-model hook ──
+
+
+def test_the_market_rule_is_the_default_fill_model() -> None:
+    assert fill_model(SimConfig()) is MARKET_FILL
+    assert MARKET_FILL.name == "market" and not MARKET_FILL.gate_only
+    assert SimConfig().as_config()["fill"] == "market"
+    legacy = SimConfig(fill=LegacyReactorFill())
+    assert fill_model(legacy) is legacy.fill and legacy.as_config()["fill"] == "legacy-reactor"
+    s = series(session_bars(MON, rows={(10, 16): (100.0, 101.0, 99.0, 100.5, 1e3, 101.7)}))
+    o = order(active=to_us(et(MON, 10, 15, 8)))
+    i = MARKET_FILL.due(s, o)
+    assert i == idx(s, MON, 10, 16)
+    assert MARKET_FILL.price(s, i, o, gap_us=GAP_US, session_open_us=0) == (101.0, ())  # clamped
+    assert MARKET_FILL.at_close(s, s, 0) is None
+
+
+def test_the_exchange_fills_by_its_model() -> None:
+    row = (100.0, 101.0, 99.0, 100.5, 1e3, 101.7)
+    s = series(session_bars(MON, rows={(10, 16): row}))
+    i = idx(s, MON, 10, 16)
+    active = to_us(et(MON, 10, 15, 8))
+    market = Exchange(SimConfig())
+    market.submit(order("b", active=active))
+    market.submit(order("s", side="sell", active=active, qty=1.0))
+    assert [(e.order.order_id, e.price) for e in market.on_bar(i, s, session_open_us=0)] == [
+        ("s", 101.0),
+        ("b", 101.0),
+    ]
+    legacy = Exchange(SimConfig(fill=LegacyReactorFill()))
+    legacy.submit(order("b", active=active))
+    legacy.submit(order("s", side="sell", active=active, qty=1.0))
+    assert legacy.due(s, order("s", side="sell", active=active)) is None
+    fills = legacy.on_bar(i, s, session_open_us=0)
+    assert [(e.order.order_id, e.price) for e in fills] == [("b", 101.7)]  # VWAP, unclamped
+    assert [o.order_id for o in legacy.working] == ["s"]  # the exit waits for the close
