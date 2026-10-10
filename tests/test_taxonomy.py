@@ -543,6 +543,14 @@ def test_an_analyst_s_target_is_never_the_guidance_cut(headline: str, itype: str
         "Acme Lowers Long-Term Targets, Outlook",
         "Acme Lowers Targets And Its Guidance",
         "Acme Cuts Targets, The Forecast",
+        # ... the guidance's period named first.
+        "Acme Lowers Profit Targets And FY Guidance",
+        "Acme Lowers Profit Targets And 2025 Outlook",
+        "Acme Lowers Profit Targets And Full-Year Outlook",
+        "Acme Lowers Profit Targets, Full Year Outlook",
+        "Acme Cuts Its 2026 Targets And FY24 Guidance",
+        "Acme Cuts Targets And Its Fiscal 2025 Guidance",
+        "Acme Lowers Targets & The FY2025 Annual Outlook",
     ],
 )
 def test_a_company_s_targets_cut_with_its_guidance_are_a_guidance_cut(headline: str) -> None:
