@@ -56,7 +56,7 @@ are in the holdout, 2025-12..2026-10, read as the gate's pinned set only):
 
 * ``r0``: the legacy ``intraday.run`` on the pinned headlines, with a market
   that raises on any fetch, reproduces n = 7,922, -0.30% (2 dp), t -12.1
-  (1 dp), controls -0.28%, score <= -0.4 -0.40%;
+  (1 dp), controls -0.30% (fixed-order sample), score <= -0.4 -0.40%;
 * ``r1``: the simulator (HARNESS feed, 60 s news lag, ``LegacyReactorFill``)
   on the explicit headline set matches every headline to 1e-10 with an
   identical dropped set (``legacy.r1_dropped``: its set-aside rules and their
@@ -265,13 +265,20 @@ DETERMINISM_RUN_ID: Final = str(uuid.UUID(int=SEED))  # both runs' (records carr
 MISMATCHES_SHOWN: Final = 20
 
 # ── G2 ──
+# The 2026-10-09 study read its headlines in no fixed order, so which of a
+# symbol-day's same-timestamp headlines came first, and the seeded sample of
+# 1,500 controls, were not reproducible: it recorded 7,932 strong headlines and
+# controls at -0.28%. With the order fixed (intraday.first_in_session, 2026-10-10)
+# the pinned set has 7,931 strong headlines and the controls (n = 1,483, the
+# same 4 without bars) are at -0.2971%; the strong and negative groups, which
+# take every headline, reproduce the record exactly.
 R0_EXPECTED: Final[dict[str, float]] = {
     "headlines": 30_614,  # first_in_session(scored_before=2026-10-10T00:00Z)
-    "strong_headlines": 7_932,  # of the pinned set, score >= 0.4
+    "strong_headlines": 7_931,  # of the pinned set, score >= 0.4 (recorded 7,932: see above)
     "strong_n": 7_922,  # score >= 0.4, same day
     "strong_mean_pct": -0.30,  # 2 dp
     "strong_t": -12.1,  # 1 dp, iid
-    "control_mean_pct": -0.28,
+    "control_mean_pct": -0.30,  # the fixed-order sample (recorded -0.28%: see above)
     "negative_mean_pct": -0.40,
 }
 STRONG_LABEL: Final = f"score >= {STRONG}"
@@ -319,8 +326,9 @@ CRITERIA: Final[dict[str, str]] = {
     ),
     "r0": (
         "intraday.run on the pinned set, no fetch: score >= 0.4 same day n = 7,922, mean -0.30% "
-        "(2 dp), t -12.1 (1 dp); controls -0.28%; score <= -0.4 -0.40%; 30,614 headlines, "
-        "7,932 at score >= 0.4"
+        "(2 dp), t -12.1 (1 dp); controls -0.30% (the fixed-order sample; the 2026-10-09 "
+        "record's -0.28% came from an unordered read); score <= -0.4 -0.40%; 30,614 headlines, "
+        "7,931 at score >= 0.4"
     ),
     "r1": (
         "the simulator (HARNESS, 60 s lag, LegacyReactorFill) on the explicit set: identical "
