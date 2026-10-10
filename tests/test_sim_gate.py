@@ -36,7 +36,7 @@ from halabot.playbooks.types import (
     Transition,
 )
 from halal_trader.data.minutes import BarArrays
-from halal_trader.events import sim_gate, study
+from halal_trader.events import h1, sim_gate, study
 from halal_trader.events.context import PreEvent
 from halal_trader.events.intraday import Headline, Outcome
 from halal_trader.events.sim_gate import (
@@ -111,6 +111,7 @@ def ny(day: date, hh: int, mm: int = 0) -> datetime:
 
 
 def test_gate_ids_groups_and_criteria_are_exactly_the_h1_runners() -> None:
+    assert GATE_IDS == h1.REQUIRED_GATES  # the ids the H1 runner requires, in order
     assert GATE_IDS == (
         "g1-lookahead",
         "g1-synthetic",
@@ -1061,6 +1062,8 @@ def test_s3_passes_realistic_fills_inside_the_daily_interval_and_fails_outside()
     ok = s3_result(_sue_pairs(0.0), 400, {}, b=200)
     assert ok.passed, ok.metrics
     five = ok.metrics["horizons"]["5"]
+    assert five["n"] == 400 and five["daily"]["n"] == 400
+    assert describe(ok) == "5d ok (n 400); 20d ok (n 400)"
     assert five["inside"] == {"d10_d1": True, "ic": True}
     assert five["same_sign"] == {"d10_d1": True, "ic": True}
     assert five["realistic"]["d10_d1"] == pytest.approx(five["daily"]["d10_d1"])
