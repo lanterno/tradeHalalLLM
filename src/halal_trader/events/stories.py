@@ -88,11 +88,14 @@ unit :func:`build_unit`) only once every batch is written. The mark names
 the inputs the build read (:func:`inputs_sha`: every pin, the stored
 aliases' among them, and the extractor); counts refuse a range no complete
 build from today's inputs covers, so a range built before the aliases, a
-pin or the extractor changed is rebuilt before it is counted. A change to
-the builder's rules that no pin sees must bump ``BUILDER_VERSION``.
+pin or the extractor changed is rebuilt before it is counted.
 
 The builder's own constants are pinned by :data:`STORIES_SHA`;
-:func:`pins` gathers it with the other pins of the pre-registration.
+:func:`pins` gathers it with the other pins of the pre-registration. A
+change to the builder's rules that no constant shows bumps
+:data:`RULES_VERSION`, which :data:`STORIES_SHA` holds: the pins and every
+build's inputs change, and no table is re-keyed (``BUILDER_VERSION`` keys
+``story_aliases`` and ``news_stories``, so bumping it rebuilds the aliases too).
 """
 
 from __future__ import annotations
@@ -158,6 +161,7 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "BUILDER_VERSION",
     "HEADLINE_PATTERNS_SHA",
+    "RULES_VERSION",
     "STORIES_SHA",
     "RawItem",
     "Story",
@@ -206,6 +210,10 @@ SHINGLE_K: Final = 3
 FILING_OPEN: Final = time(6, 0)
 FILING_CUTOFF: Final = time(17, 30)
 STORY_KINDS: Final = frozenset({"news", "8-k", "8-k/a"})  # insider, 10-Q, 10-K: context only
+# Bumped when the builder's rules change in a way no constant here shows (an
+# admission step, the parent or follower rule): it is in STORIES_SHA, so the
+# pins and inputs_sha move, without re-keying a table as BUILDER_VERSION would.
+RULES_VERSION: Final = "stories-rules-1"
 
 # A parent that closed with one of these makes every story in its shadow a
 # follower (spec §A.5(a); guidance_cut is among the structural types).
@@ -1404,6 +1412,7 @@ def sources() -> dict[str, str]:
     """The builder's own constants, for :data:`STORIES_SHA`."""
     tables: dict[str, object] = {
         "BUILDER_VERSION": BUILDER_VERSION,
+        "RULES_VERSION": RULES_VERSION,
         "ROUNDUP_MAX_SYMBOLS": ROUNDUP_MAX_SYMBOLS,
         "NEWS_LAG_S": NEWS_LAG.total_seconds(),
         "REACT_CUTOFF_S": REACT_CUTOFF.total_seconds(),
@@ -1456,6 +1465,7 @@ async def inputs_sha(engine: AsyncEngine) -> str:
 
     A complete build's mark records it (:func:`build_unit`), and
     :func:`count_stories` accepts only the marks recording today's. A change to
-    the builder's rules that no pin sees bumps ``BUILDER_VERSION``.
+    the builder's rules that no constant shows bumps :data:`RULES_VERSION`
+    (in :data:`STORIES_SHA`, so here too).
     """
     return _sha(await pins(engine) | {"extractor": earnings_parse.EXTRACTOR})
