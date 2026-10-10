@@ -1222,25 +1222,28 @@ DATA_SKIPS: Final = ("adjust_defect", "bad_bars")
 
 @dataclass(frozen=True, slots=True)
 class RunSummary:
-    """What a run did, by count, and the story ids a legacy replication must set apart.
+    """What a run did, by count, and the story ids its data rules touched.
 
-    ``skip_ids`` lists every skipped story by its reason, and
-    ``bar_drop_ids`` the stories whose path loaded although the bar sanity
-    rule removed bars from it (1 to 5 of the symbol's, or any of SPY's on a
-    path session). The legacy studies read every stored row and skip
-    nothing for data reasons, so these are the stories where a gate-only
-    replication can differ from its study by construction (a missing entry
-    or exit bar, another first bar after the decision): :meth:`data_filtered`
-    gathers them for the R1 gate (spec §E.2), which sets them aside and
-    counts them before it compares dropped sets and returns. The coverage
-    skips (``units_missing``, ``halted_all_day``, ``spy_missing``,
-    ``no_daily``) are listed too: a study run on the same stored rows drops
-    or computes those headlines on its own terms, and the gate reports any
-    it kept.
+    * ``skip_ids``: every skipped story, by the loader's reason;
+    * ``bar_drop_ids``: stories whose path loaded although the bar sanity
+      rule cut 1 to 5 of the symbol's own bars on its path sessions;
+    * ``spy_drop_ids``: stories with a path session on which the rule cut
+      any of SPY's bars (``spy_drop_days``: every SPY session the run loaded
+      that lost bars, ISO date -> bars cut). The whole session counts,
+      wherever the cut bar lies, which is conservative; the list is kept
+      apart from ``bar_drop_ids``, and a story can be in both;
+    * ``spare_drop_ids``: stories whose spare session (``PathData.spare``,
+      read only by a ``no_market`` exit) lost bars to the rule.
 
-    ``spare_drop_ids`` lists the stories whose spare session
-    (``PathData.spare``, read only by a ``no_market`` exit) lost bars to
-    the sanity rule.
+    The legacy studies read every stored row and skip nothing for data
+    reasons, so these are the stories where a gate-only replication can
+    differ from its study by construction (a missing entry or exit bar,
+    another first bar after the decision): :meth:`data_filtered` gathers
+    them for the R1 gate (spec §E.2), which sets them aside and counts them
+    before it compares dropped sets. The coverage skips (``units_missing``,
+    ``halted_all_day``, ``spy_missing``, ``no_daily``) are listed too: a
+    study run on the same stored rows drops or computes those headlines on
+    its own terms, and the gate reports any it kept.
     """
 
     run_id: str
@@ -1253,14 +1256,17 @@ class RunSummary:
     skips: dict[str, int]
     loader: dict[str, int]
     skip_ids: dict[str, tuple[str, ...]]  # reason -> sorted story ids
-    bar_drop_ids: tuple[str, ...]  # sorted; a path loaded with bars cut by the sanity rule
+    bar_drop_ids: tuple[str, ...]  # sorted
+    spy_drop_ids: tuple[str, ...] = ()  # sorted
+    spy_drop_days: dict[str, int] = field(default_factory=dict)
     spare_drop_ids: tuple[str, ...] = ()  # sorted
 
     def data_filtered(self) -> frozenset[str]:
         """The stories this run's data rules treated unlike a study reading every row:
-        skipped as ``bad_bars`` or ``adjust_defect``, or loaded with bars cut."""
+        skipped as ``bad_bars`` or ``adjust_defect``, or loaded with its own bars or
+        SPY's cut."""
         ids = {i for reason in DATA_SKIPS for i in self.skip_ids.get(reason, ())}
-        return frozenset(ids | set(self.bar_drop_ids))
+        return frozenset(ids | set(self.bar_drop_ids) | set(self.spy_drop_ids))
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -1275,6 +1281,8 @@ class RunSummary:
             "loader": dict(sorted(self.loader.items())),
             "skip_ids": {k: list(v) for k, v in sorted(self.skip_ids.items())},
             "bar_drop_ids": list(self.bar_drop_ids),
+            "spy_drop_ids": list(self.spy_drop_ids),
+            "spy_drop_days": dict(sorted(self.spy_drop_days.items())),
             "spare_drop_ids": list(self.spare_drop_ids),
         }
 
@@ -1484,9 +1492,9 @@ async def run(
     run keeps no module state, so several runs may share an event loop.
 
     The summary lists the skipped story ids by reason and the stories whose
-    path loaded with bars cut by the sanity rule (:class:`RunSummary`):
-    a legacy replication (R1) sets :meth:`RunSummary.data_filtered` apart
-    before it compares dropped sets.
+    bars, SPY's bars or spare-session bars the sanity rule cut, each list
+    apart (:class:`RunSummary`): a legacy replication (R1) sets
+    :meth:`RunSummary.data_filtered` apart before it compares dropped sets.
     """
     fill = fill_model(cfg)
     if fill.gate_only and unlock.gate is None:
@@ -1519,6 +1527,7 @@ async def run(
     skips: Counter[str] = Counter()
     skip_ids: dict[str, list[str]] = {}
     bar_drop_ids: list[str] = []
+    spy_drop_ids: list[str] = []
     spare_drop_ids: list[str] = []
     n_out = entries = trades = n_batches = 0
     loop = asyncio.get_running_loop()
@@ -1551,15 +1560,15 @@ async def run(
         spy_all = await loader.spy()
         async for batch in loader.batches(requests, context):
             items = {x.story_id: x for x in batch}
-            bar_drop_ids += [
-                x.story_id
-                for x in batch
-                if isinstance(x, PathData)
-                and (x.dropped or any(s.day in loader.spy_dropped for s in x.sessions))
-            ]
-            spare_drop_ids += [
-                x.story_id for x in batch if isinstance(x, PathData) and x.spare_dropped
-            ]
+            for x in batch:
+                if not isinstance(x, PathData):
+                    continue
+                if x.dropped:
+                    bar_drop_ids.append(x.story_id)
+                if any(s.day in loader.spy_dropped for s in x.sessions):
+                    spy_drop_ids.append(x.story_id)
+                if x.spare_dropped:
+                    spare_drop_ids.append(x.story_id)
             ids_by_symbol: dict[str, list[str]] = {}
             for sid in sorted(items, key=lambda i: _story_key(shared.by_id[i])):
                 ids_by_symbol.setdefault(shared.by_id[sid].symbol, []).append(sid)
@@ -1634,6 +1643,8 @@ async def run(
         loader=dict(loader.counts),
         skip_ids={k: tuple(sorted(v)) for k, v in skip_ids.items()},
         bar_drop_ids=tuple(sorted(bar_drop_ids)),
+        spy_drop_ids=tuple(sorted(spy_drop_ids)),
+        spy_drop_days={d.isoformat(): n for d, n in sorted(loader.spy_dropped.items())},
         spare_drop_ids=tuple(sorted(spare_drop_ids)),
     )
     await sink.finish(summary.as_dict())
