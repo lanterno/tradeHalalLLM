@@ -25,9 +25,11 @@ nothing returns no facts, never a guess. Year-over-year comparisons
   Comparable", "Not Comparable", with or without "To") in the statement's
   own clause, which runs from the statement to the next metric it names; a
   flag closing the segment covers every statement in it, and a segment that
-  only flags (no metric, no dollar figure: "...; Estimates May Not Compare",
-  "...; BZ NOTE: Forecast Likely Does Not Compare As ...") every statement
-  in the headline. In "EPS $(1.49) Beats $(1.52) Estimate, Sales $517.00K
+  only flags (no metric, no dollar figure, and the estimates, consensus, a
+  forecast or guidance named or a "BZ NOTE": "...; Estimates May Not
+  Compare", "...; BZ NOTE: Forecast Likely Does Not Compare As ...") every
+  statement in the headline; "...; Results Not Comparable To Prior Year" is
+  about last year, and flags nothing. In "EPS $(1.49) Beats $(1.52) Estimate, Sales $517.00K
   May Not Compare To $3.54M Estimate" the EPS beat keeps its surprise;
 * the figure and its estimate are not in the same units: one carries a
   K/M/B suffix and the other none ("EPS $5.54-$5.61 Vs $5.66B Est."), or
@@ -241,6 +243,13 @@ _METRIC_WORD = re.compile(r"\b(?:EPS|Sales|Revenues?|Revs?)\b", re.I)
 _CLOSING_FLAG = re.compile(
     rf"(?:{NOT_COMPARABLE.pattern})(?:\s+(?:To|With)\s+(?:Estimates?|Est\.?))?[\s.,:]*$", re.I
 )
+# What a segment flagging its whole headline names: the estimates or what is
+# compared with them ("Estimates May Not Compare", "BZ NOTE: Forecast Likely
+# Does Not Compare"), never only the results ("Results Not Comparable To Prior
+# Year" compares with last year).
+_FLAG_SUBJECT = re.compile(
+    r"\b(?:Estimates?|Est\b|Consensus|Forecasts?|Guidance)|\bBZ\s+NOTE\b", re.I
+)
 # A figure's K/M/B suffix.
 SCALE: Final[Mapping[str, float]] = MappingProxyType({"K": 1e3, "M": 1e6, "B": 1e9})
 # A surprise is relative to the estimate's magnitude, but never to less than this.
@@ -322,11 +331,14 @@ def _flagged(segment: str, start: int, end: int) -> bool:
 
 def _flags_headline(segment: str) -> bool:
     """Whether ``segment`` only flags its headline as not comparable: it says
-    so, and names no metric and no dollar figure ("Estimates May Not Compare")."""
+    so, names no metric and no dollar figure, and names the estimates or what
+    is compared with them, or is a BZ NOTE (:data:`_FLAG_SUBJECT`): "Estimates
+    May Not Compare", not "Results Not Comparable To Prior Year"."""
     return (
         NOT_COMPARABLE.search(segment) is not None
         and _METRIC_WORD.search(segment) is None
         and "$" not in segment
+        and _FLAG_SUBJECT.search(segment) is not None
     )
 
 
@@ -632,6 +644,7 @@ def sources() -> dict[str, str]:
         "_SUFFIXED": _SUFFIXED,
         "_METRIC_WORD": _METRIC_WORD,
         "_CLOSING_FLAG": _CLOSING_FLAG,
+        "_FLAG_SUBJECT": _FLAG_SUBJECT,
         "_OLD_PAREN": _OLD_PAREN,
         "_TO": _TO,
         "_TO_END": _TO_END,
