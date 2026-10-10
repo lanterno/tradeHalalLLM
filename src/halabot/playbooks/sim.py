@@ -472,7 +472,8 @@ class _StoryRun:
         self._push_bar()
         self._push_spy()
 
-        self._apply(self.pb.start(self._ctx()), self.pb.state())
+        before = self.pb.state()  # read first: start() moves the playbook out of it
+        self._apply(self.pb.start(self._ctx()), before)
         while self.heap and not self.done:
             at, _, (kind, data) = self.heap.pop()
             self.now_us = at
