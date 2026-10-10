@@ -27,6 +27,10 @@ Names come from today's asset list, not from the date of each article: a
 renamed company's old name survives only where Benzinga's slot learned it.
 Slots are learned only from rows that are their symbol's own
 (``renames.owner``): Pandora's articles under P teach P nothing.
+
+The matchers are built from the stored rows alone, so ``alias_sha`` pins
+exactly what the entity check uses; a change to ``TICKER_RENAMES`` takes
+effect at the next build.
 """
 
 from __future__ import annotations
@@ -44,8 +48,8 @@ from typing import Any, Final, Literal
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from halal_trader.events import renames
 from halal_trader.events.headline_patterns import ANALYST_SLOT, EARN_CO, GUIDE_CO
-from halal_trader.events.renames import TICKER_RENAMES, old_tickers, ticker_history
 from halal_trader.market_hours import MARKET_TZ, trading_day_end_utc, trading_day_start_utc
 
 logger = logging.getLogger(__name__)
@@ -157,14 +161,18 @@ class AliasMatcher:
 
 
 def tickers_of(symbol: str) -> tuple[str, ...]:
-    """The symbol and its old tickers (source d)."""
-    return (symbol, *old_tickers(symbol))
+    """The symbol and its old tickers (source d), as ``TICKER_RENAMES`` has them now."""
+    return (symbol, *renames.old_tickers(symbol))
 
 
 def matcher_for(symbol: str, aliases: Mapping[str, AliasMatcher]) -> AliasMatcher:
-    """``symbol``'s matcher, or one that knows only its tickers."""
+    """``symbol``'s matcher, or one that knows only the symbol itself.
+
+    Not its old tickers: those come from the stored set (every current symbol
+    of ``TICKER_RENAMES`` has rows there), never from the table as it is now.
+    """
     known = aliases.get(symbol)
-    return known if known is not None else AliasMatcher(symbol, (), tickers_of(symbol))
+    return known if known is not None else AliasMatcher(symbol, (), (symbol,))
 
 
 # ── the sources ───────────────────────────────────────────────
@@ -251,7 +259,7 @@ async def learn_slots(
     copies under the current symbol count instead. Streams the rows: only the
     counts are held, never the articles.
     """
-    history = ticker_history()
+    history = renames.ticker_history()
     counts: dict[str, Counter[str]] = defaultdict(Counter)
     async with engine.connect() as conn:
         rows = await conn.stream(
@@ -294,7 +302,7 @@ async def _news_symbols(engine: AsyncEngine) -> set[str]:
     async with engine.connect() as conn:
         rows = await conn.execute(text("SELECT DISTINCT symbol FROM events WHERE kind = 'news'"))
         symbols |= {r.symbol for r in rows}
-    return symbols | {current for current, _ in TICKER_RENAMES.values()}
+    return symbols | {current for current, _ in renames.TICKER_RENAMES.values()}
 
 
 # ── persistence ───────────────────────────────────────────────
@@ -345,15 +353,17 @@ async def _rows(engine: AsyncEngine) -> list[AliasRow]:
 
 
 async def load_aliases(engine: AsyncEngine) -> dict[str, AliasMatcher]:
-    """A matcher for every symbol with a stored alias; its tickers always included."""
+    """A matcher for every symbol with a stored row, built from the stored rows alone.
+
+    The ``ticker`` rows hold the symbol and its old tickers as they were at
+    the build, so what ``alias_sha`` pins is exactly what is matched.
+    """
     aliases: dict[str, list[str]] = defaultdict(list)
     tickers: dict[str, list[str]] = defaultdict(list)
     for r in await _rows(engine):
         (tickers if r.source == "ticker" else aliases)[r.symbol].append(r.alias)
     return {
-        symbol: AliasMatcher(
-            symbol, tuple(aliases.get(symbol, ())), (*tickers.get(symbol, ()), *tickers_of(symbol))
-        )
+        symbol: AliasMatcher(symbol, tuple(aliases.get(symbol, ())), tuple(tickers.get(symbol, ())))
         for symbol in sorted(aliases.keys() | tickers.keys())
     }
 
