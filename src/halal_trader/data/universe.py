@@ -82,7 +82,10 @@ async def universe_at(
     twelve months before ``as_of``'s month (known at ``as_of``).
 
     A name needs six of those months, and a mean close of ``min_price``.
-    Equal dollar volumes rank by symbol, so every read gives the same order.
+    Equal dollar volumes rank by symbol, so every read gives the same order:
+    the mean is taken in exact decimals, because a float sum depends on the
+    order Postgres's workers add rows in, and two tickers with identical bars
+    (a rename stored under both) would otherwise swap places from read to read.
     """
     first_of_month = as_of.replace(day=1)
     async with engine.connect() as conn:
@@ -92,8 +95,8 @@ async def universe_at(
                 SELECT symbol FROM monthly_bars
                 WHERE month < :m AND month >= :since
                 GROUP BY symbol
-                HAVING count(*) >= :min_months AND avg(close) >= :min_price
-                ORDER BY avg(coalesce(vwap, close) * volume) DESC, symbol
+                HAVING count(*) >= :min_months AND avg(close::numeric) >= :min_price
+                ORDER BY avg((coalesce(vwap, close) * volume)::numeric) DESC, symbol
                 LIMIT :n
                 """
             ),
