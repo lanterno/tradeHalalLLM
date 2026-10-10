@@ -43,6 +43,42 @@ async def test_only_the_first_in_session_headline_per_symbol_and_day(engine: Asy
     assert h.published_at == datetime(2026, 3, 2, 15, 0, tzinfo=UTC)
 
 
+async def test_scored_before_pins_the_set_to_the_scores_that_existed(engine: AsyncEngine) -> None:
+    from sqlalchemy import text
+
+    when = datetime(2026, 3, 2, 15, 0, tzinfo=UTC)
+    await EventRecorder(engine).record(
+        [
+            EventRecord(
+                "alpaca",
+                str(i),
+                "news",
+                sym,
+                when,
+                when,
+                {"headline": "h"},
+                Score("llm-batch:m", 0.5),
+            )
+            for i, sym in ((1, "AAA"), (2, "BBB"))
+        ]
+    )
+    async with engine.begin() as conn:  # AAA scored on 10-01, BBB after the pin
+        for symbol, at in (
+            ("AAA", datetime(2026, 10, 1, tzinfo=UTC)),
+            ("BBB", datetime(2026, 10, 11, tzinfo=UTC)),
+        ):
+            await conn.execute(
+                text(
+                    "UPDATE event_scores SET scored_at = :at WHERE event_id = "
+                    "(SELECT id FROM events WHERE symbol = :s)"
+                ),
+                {"at": at, "s": symbol},
+            )
+    assert len(await first_in_session(engine)) == 2
+    pinned = await first_in_session(engine, scored_before=datetime(2026, 10, 10, tzinfo=UTC))
+    assert [h.symbol for h in pinned] == ["AAA"]
+
+
 def test_entry_is_the_first_bar_starting_after_the_latency() -> None:
     t = datetime(2026, 3, 2, 15, 0, tzinfo=UTC)
     rows = [
