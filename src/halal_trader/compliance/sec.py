@@ -18,6 +18,7 @@ the run (a frame, the ticker map) or only the one company (its SIC code).
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections import OrderedDict
 from dataclasses import dataclass
@@ -42,6 +43,19 @@ _MAX_WAIT_S = 120.0  # the longest single wait, whatever Retry-After says
 
 class SecUnavailable(RuntimeError):
     """EDGAR did not answer usefully after every retry."""
+
+
+class _SharedPacer(http.Pacer):
+    """A pacer concurrent requests can share: they wait their turn one at a time,
+    so each starts at least the interval after the one before."""
+
+    def __init__(self, min_interval_s: float) -> None:
+        super().__init__(min_interval_s)
+        self._turn = asyncio.Lock()
+
+    async def wait(self) -> None:
+        async with self._turn:
+            await super().wait()
 
 
 def filed_at(filed: date, accepted: str | None = None) -> datetime:
@@ -84,7 +98,7 @@ class SecClient:
         self._client = client or httpx.AsyncClient(timeout=60.0)
         self._owns_client = client is None
         self._headers = {"User-Agent": user_agent, "Accept-Encoding": "gzip, deflate"}
-        self._pacer = http.Pacer(min_interval_s)
+        self._pacer = _SharedPacer(min_interval_s)
         self._retries = retries
         self._backoff = backoff_s
         # Per-client memos: a screening history re-reads the same quarter's
