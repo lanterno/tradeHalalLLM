@@ -4,10 +4,23 @@
 
 - **Nightly dump, shipped off-site.** `halabot-backup.timer` (07:00 UTC)
   runs `infra/server/backup.sh`: `just backup <dir>` writes a verified
-  `pg_dump -Fc` (minus the rebuildable rows) and `live_events.jsonl.gz`
-  into `/var/backups/halabot/<date>`, then restic uploads it, encrypted, to
-  the repository in `/etc/halabot/server.env` (R2, Hetzner Object Storage
-  or a Storage Box). Setup: [`docs/DEPLOY.md`](../DEPLOY.md) step 4.
+  `pg_dump -Fc` (minus the rebuildable rows), `live_events.jsonl.gz` and
+  `playbook_runs.jsonl.gz` into `/var/backups/halabot/<date>`, then restic
+  uploads it, encrypted, to the repository in `/etc/halabot/server.env`
+  (R2, Hetzner Object Storage or a Storage Box). Setup:
+  [`docs/DEPLOY.md`](../DEPLOY.md) step 4.
+- **What the dump leaves out.** Rows that can be rebuilt: bars and
+  assets, the event store with its scores, fundamentals and ETF holdings,
+  `news_stories` (rebuilt from the event store) and the playbook
+  simulations (`hb_playbook_*` runs with mode `sim`, rerun from code and
+  data). Their tables keep their schema and come back empty. The
+  justfile's `backup` recipe lists the tables, and
+  `web/operations.py:NOT_DUMPED` matches it. What cannot be rebuilt goes
+  into the two exports instead: the live reactor's headlines with every
+  score (`live_events.jsonl.gz`), and the shadow, paper and live playbook
+  runs with their stories and trades (`playbook_runs.jsonl.gz`, one run
+  per line). `story_aliases` stays in the dump: it cannot be rebuilt once
+  asset names change.
 - **Why off-site.** The previous machine kept its dumps on the Windows side
   of the same computer and was lost with them in 2026-10. `backup.offsite`
   is written only after restic succeeds; the evening run alerts when it,

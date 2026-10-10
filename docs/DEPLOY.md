@@ -115,13 +115,14 @@ journalctl -u halabot-backup.service -n 30
 sudo -u halabot /opt/halabot/infra/server/backup.sh --list
 ```
 
-`just backup` runs inside it every night. It writes the dump plus
-`live_events.jsonl.gz` and verifies the dump. On the 1st of the month it
-also runs the restore drill into a scratch database. Then restic uploads it
-(14 daily, 8 weekly and 12 monthly snapshots kept; a 5% read-back check on
-Sundays), and local copies older than `KEEP_LOCAL_DAYS` are deleted. A
-failure sends a Telegram alert (`halabot-alert@`), and the evening run
-reports a stale `backup.nightly` or `backup.offsite` heartbeat.
+`just backup` runs inside it every night. It writes the dump and two
+exports, `live_events.jsonl.gz` and `playbook_runs.jsonl.gz`, and verifies
+the dump. On the 1st of the month it also runs the restore drill into a
+scratch database. Then restic uploads it (14 daily, 8 weekly and 12
+monthly snapshots kept; a 5% read-back check on Sundays), and local copies
+older than `KEEP_LOCAL_DAYS` are deleted. A failure sends a Telegram alert
+(`halabot-alert@`), and the evening run reports a stale `backup.nightly`
+or `backup.offsite` heartbeat.
 
 ## 5. Start the fleet
 
@@ -214,8 +215,14 @@ docker exec trader-stocks halal-trader ledger sync   # Alpaca's record fills the
 ```
 
 The dump leaves out rows that can be rebuilt (bars, the event store,
-fundamentals). Step 7 refills them. `live_events.jsonl.gz` beside the
-dump holds the live reactor's headlines and scores, which cannot be rebuilt.
+fundamentals, the news stories, the playbook simulations); their tables
+come back empty. Step 7 refills the bars, the event store and the
+fundamentals. `events stories build` rebuilds the stories from the event
+store, and a simulation is rerun from code and data. The two exports
+beside the dump hold what cannot be rebuilt: `live_events.jsonl.gz` has
+the live reactor's headlines and scores, and `playbook_runs.jsonl.gz` has
+the playbook runs that are not simulations (shadow, paper, live), one run
+per line with its stories and trades.
 
 On a new server, install the same `server.env` (from your password
 manager) after bootstrap and run the same commands.
