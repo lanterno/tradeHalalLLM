@@ -7,6 +7,7 @@ import uuid
 from dataclasses import replace
 from datetime import date, datetime, timedelta
 
+import numpy as np
 import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -127,12 +128,42 @@ def test_multi_day_legs_and_compounding() -> None:
     }
     book = daily_book([a, b], legs, SESSIONS)
     nav1 = 1.0 + 0.125 * 0.1
+    a_tue = 0.125 * 1.1  # a, marked to market at MON's close
     assert book.days[-2:] == [MON, TUE]
     assert book.returns[-2] == pytest.approx(0.125 * 0.1)
-    # TUE: a's stake stays 1/8 of the first NAV; b's is NAV_MON / 8.
-    assert book.returns[-1] == pytest.approx((0.125 * 0.1 + nav1 / 8 * 0.1) / nav1)
-    assert book.benchmark[-1] == pytest.approx(0.125 * 0.05 / nav1)
-    assert book.exposure[-1] == pytest.approx((0.125 + nav1 / 8) / nav1)
+    # TUE: a earns on its marked value; b's stake is NAV_MON / 8.
+    assert book.returns[-1] == pytest.approx((a_tue * 0.1 + nav1 / 8 * 0.1) / nav1)
+    assert book.benchmark[-1] == pytest.approx(a_tue * 0.05 / nav1)
+    assert book.exposure[-1] == pytest.approx((a_tue + nav1 / 8) / nav1)
+
+
+def test_an_md3_trade_is_marked_to_market_day_by_day() -> None:
+    """v_d = v_{d-1} (1 + leg_d.stock): the book compounds exactly as the trade does."""
+    t = make("md3", MON, (9, 50), (15, 56), exit_day=WED)
+    legs = {
+        "md3": [
+            Leg(MON, 100.0, 110.0, 200.0, 202.0, 0.0015),  # +10% less the entry cost
+            Leg(TUE, 110.0, 99.0, 202.0, 200.0, 0.0),  # -10%
+            Leg(WED, 99.0, 103.95, 200.0, 201.0, 0.0015),  # +5% less the exit cost
+        ]
+    }
+    book = daily_book([t], legs, SESSIONS)
+    s1, s2, s3 = (leg.stock for leg in legs["md3"])
+    v0 = 0.125
+    v1 = v0 * (1 + s1)
+    v2 = v1 * (1 + s2)
+    nav1 = 1 + v0 * s1
+    nav2 = nav1 + v1 * s2
+    assert book.days[-3:] == [MON, TUE, WED]
+    assert list(book.returns[-3:]) == pytest.approx([v0 * s1, v1 * s2 / nav1, v2 * s3 / nav2])
+    assert list(book.exposure[-3:]) == pytest.approx([v0, v1 / nav1, v2 / nav2])
+    spy = [leg.spy for leg in legs["md3"]]
+    assert list(book.benchmark[-3:]) == pytest.approx(
+        [v0 * spy[0], v1 * spy[1] / nav1, v2 * spy[2] / nav2]
+    )
+    # The NAV gains exactly the stake times the trade's compounded return.
+    growth = float(np.prod(1 + book.returns))
+    assert growth - 1 == pytest.approx(v0 * ((1 + s1) * (1 + s2) * (1 + s3) - 1), abs=1e-15)
 
 
 def test_an_empty_book() -> None:
