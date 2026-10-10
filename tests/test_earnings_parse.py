@@ -457,11 +457,71 @@ def test_a_guided_figure_is_never_a_fragment_nor_the_guidance_it_replaces(
 
 
 @pytest.mark.parametrize(
+    ("headline", "action", "low", "high", "estimate"),
+    [
+        # "$($0.57)" is a typo for $(0.57): read whole, never the "$0.57)" inside it (+0.57).
+        ("Varonis Systems Sees EPS $($0.57)-($0.55) Vs. $(0.30) Est., Sales $59M-$60M Vs. "
+         "$58.69M Est.", "sees", -0.57, -0.55, -0.30),
+        # "Group $3.2B" ends in "up ", not the word "Up": the figure stands.
+        ("Visteon Sees FY16 Sales for Electronics Products Group $3.2B vs $3.25B Est., Adj. "
+         "EBITDA $305M-$335M, Adj. Free Cash Flow $110M-$150M", "sees", 3.2e9, 3.2e9, 3.25e9),
+        # Prior or Previous names the guidance replaced in a few words first.
+        ("Lowe's Companies Sees FY23 Adjusted EPS Of $13.00 Versus Prior Guidance Of "
+         "$13.20-$13.60 Versus Consensus Of $13.33", "sees", 13.00, 13.00, 13.33),
+        ("Super Micro Computer Sees Q2 2016 Sales $637M-$639M vs Previous Guidance $580M-$630M "
+         "vs $600.1M Est", "sees", 637e6, 639e6, 600.1e6),
+        ("Axon Sees FY23 Revenue ~$1.55B, Up From Prior Range Of $1.51B-$1.53B vs $1.53B Est.",
+         "sees", 1.55e9, 1.55e9, 1.53e9),
+        # No figure in a parenthetical stating the guidance replaced.
+        ("Sees Adj. EPS Of $4.15-$4.20 (Prior Adj. EPS $4.25-$4.35) Vs. $4.30 Consensus",
+         "sees", 4.15, 4.20, 4.30),
+        ("Trane Technologies Raises FY23 Outlook, Sees Adj. EPS To $9.00 (From $8.80 To $8.90) "
+         "Vs $8.87 Est.", "raises", 9.00, 9.00, 8.87),
+        # Guidance kept as it was: "from" introduces its range when no "to" follows.
+        ("PPL Reaffirms FY2017 EPS Guidance from $1.92-2.12 vs $2.16 Est", "reaffirms",
+         1.92, 2.12, 2.16),
+        ("Knight-Swift Maintains Q4 EPS Guidance from $0.71-0.75 vs $0.73 Est", "maintains",
+         0.71, 0.75, 0.73),
+        # ... but "Raised From $303M To $306M" is still the old figure and the new,
+        ("Sees FY17 Adj. EBITDA $90M, Sales Raised From $303M To $306M vs $304.7M Est.",
+         "sees", 306e6, 306e6, 304.7e6),
+        # ... and a "from" after the guided figure introduces the range replaced.
+        ("Atkore Sees FY Adj. EPS $1.37-$1.45 from $1.55-$1.65 vs $1.57 Est.", "sees",
+         1.37, 1.45, 1.57),
+        # A range's low without its "$" after "To".
+        ("Updates FY24 Financial Guidance EPS From $3.28-$3.35 To 3.22-$3.31 Vs $3.33 Est.",
+         "updates", 3.22, 3.31, 3.33),
+    ],
+)  # fmt: skip
+def test_the_guided_figure_is_the_new_guidance_as_stated(
+    headline: str, action: str, low: float, high: float, estimate: float
+) -> None:
+    g = parse_headline(headline)[0]
+    f = g.fields
+    assert g.kind == "guidance" and f["action"] == action
+    assert f["low"] == pytest.approx(low) and f["high"] == pytest.approx(high)
+    assert f["estimate"] == pytest.approx(estimate) and "not_comparable" not in f
+    assert f["surprise"] == pytest.approx(((low + high) / 2 - estimate) / abs(estimate))
+
+
+def test_a_glued_parenthesis_never_flips_a_figure_s_sign() -> None:
+    # Constructed: "x($0.57)" is glued to the "x", and "$0.57)" inside it is no figure.
+    (g,) = parse_headline("Acme Sees Q1 EPS Of x($0.57) Vs. $(0.30) Est.")
+    assert g.fields["low"] is None and g.fields["surprise"] is None
+
+
+@pytest.mark.parametrize(
     ("headline", "action"),
     [
         # Only the guidance being replaced is stated: the action stands alone.
         ("10x Genomics Lowers FY24 Sales Guidance From $640M-$660M Vs. $663.06M Estimate",
          "lowers"),
+        ("Ulta Beauty Sees Q3 EPS At High End Of Previously-Issued Range $2.11-$2.16 vs $2.16 "
+         "Estimate", "sees"),
+        ("UPDATE: Stryker Sees FY16 Adj. EPS at High End of Previously Stated $5.75-$5.80 vs "
+         "$5.78 Est.", "sees"),
+        # "Raises ... From" with no new figure: the From range is the old one.
+        ("FMC Raises FY19 Adj. EPS Guidance From $5.68-$5.88 vs $5.76 Estimate", "raises"),
         # The "26" of "FY26" is all GUIDE_V4 found.
         ("Autoliv Expects 0% Organic Sales Growth For FY26 Vs $11.18B Estimate. FY25 Sales Was "
          "$10.82B", "expects"),
@@ -714,11 +774,16 @@ def test_parser_sha_pins_every_pattern() -> None:
         "_SUFFIXED",
         "_METRIC_WORD",
         "_CLOSING_FLAG",
+        "_OLD_PAREN",
+        "_TO",
     ):
         assert src[name] == getattr(ep, name).pattern
     assert src["EXTRACTOR"] == ep.EXTRACTOR
     assert src["PARSE_ORDER"] == ",".join(ep.PARSE_ORDER)
-    assert src["UNIT_RATIO"] == repr(ep.UNIT_RATIO)
+    # The constants that shape a read, beside the patterns.
+    assert src["UNIT_RATIO"] == repr(ep.UNIT_RATIO) == "50.0"
+    assert src["OLD_WINDOW"] == repr(ep.OLD_WINDOW) == "40"
+    assert src["KEEP_ACTIONS"] == "affirms,maintains,reaffirms,reiterates,sees"
     want = hashlib.sha256(json.dumps(src, sort_keys=True).encode()).hexdigest()[:12]
     assert ep.PARSER_SHA == want and len(want) == 12
 
