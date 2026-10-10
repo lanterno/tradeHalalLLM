@@ -18,7 +18,9 @@ official close), and SPY over the same bars or closes.
 **Daily book** (:func:`daily_book`): NAV_{d-1}/8 per trade, first come first
 served by ``entry_decided_at``; a trade is rejected when eight positions
 are open, or when trades closed earlier that day lost 2% of NAV_{d-1} or
-more (open positions' marks are not counted).
+more that day (open positions' marks are not counted). Open positions are
+marked to market: a trade's value compounds leg by leg, ``v_d = v_{d-1} *
+(1 + leg_d.stock)``, and day d earns ``v_{d-1} * leg_d.stock``.
 """
 
 from __future__ import annotations
@@ -366,15 +368,24 @@ class PgOutcomeSink:
 @dataclass(frozen=True, slots=True)
 class DailyBook:
     days: list[date]
-    returns: NDArray[np.float64]  # stake-weighted stock legs, net of costs
+    returns: NDArray[np.float64]  # value-weighted stock legs, net of costs, / NAV_{d-1}
     benchmark: NDArray[np.float64]  # exposure-matched SPY legs
-    exposure: NDArray[np.float64]  # sum of stakes / NAV_{d-1}
+    exposure: NDArray[np.float64]  # sum of the open positions' values at d-1 / NAV_{d-1}
     skipped_full: int
     skipped_loss_limit: int
 
 
 def _entry_day(t: TradeRecord, legs: Sequence[Leg]) -> date:
     return legs[0].day if legs else t.session
+
+
+@dataclass(slots=True)
+class _Held:
+    """An accepted trade and its marked value (the stake, compounded by each leg so far)."""
+
+    trade: TradeRecord
+    legs: dict[date, Leg]
+    value: float
 
 
 def daily_book(
@@ -388,7 +399,10 @@ def daily_book(
     """The calendar-time book of ``trades`` over ``sessions`` (the window's sessions).
 
     Days run from the window's first session to the last accepted exit;
-    days without a position are 0.
+    days without a position are 0. Each accepted trade starts at
+    NAV_{d-1}/``slots`` and is marked to market by its legs. The loss limit
+    counts what trades closed earlier on day d lost **on d** (their earlier
+    days are already in NAV_{d-1}).
     """
     days_all = sorted(sessions)
     empty = np.zeros(0, dtype=np.float64)
@@ -401,7 +415,7 @@ def daily_book(
 
     horizon = max(t.exit_session for t in trades)
     nav = 1.0
-    accepted: list[tuple[TradeRecord, float]] = []  # (trade, stake)
+    book: list[_Held] = []  # accepted trades not exited before the current day
     skipped_full = skipped_loss = 0
     rets: list[float] = []
     bench: list[float] = []
@@ -412,28 +426,34 @@ def daily_book(
         if d > horizon:
             break
         nav_prev = nav
+        book = [h for h in book if h.trade.exit_session >= d]
         for t in by_day.get(d, []):
             decided = t.entry_decided_at
-            open_now = sum(1 for a, _ in accepted if a.entry_decided_at <= decided < a.exit_time)
+            open_now = sum(
+                1 for h in book if h.trade.entry_decided_at <= decided < h.trade.exit_time
+            )
             realised = sum(
-                stake * sum(leg.stock for leg in legs.get(a.story_id, ()))
-                for a, stake in accepted
-                if a.exit_session == d and a.exit_time <= decided
+                h.value * h.legs[d].stock  # its value at d-1 times its move on d
+                for h in book
+                if h.trade.exit_session == d and h.trade.exit_time <= decided and d in h.legs
             )
             if open_now >= slots:
                 skipped_full += 1
             elif realised <= -daily_loss_limit * nav_prev:
                 skipped_loss += 1
             else:
-                accepted.append((t, nav_prev / slots))
+                own = {leg.day: leg for leg in legs.get(t.story_id, ())}
+                book.append(_Held(t, own, nav_prev / slots))
                 last_exit = max(last_exit or t.exit_session, t.exit_session)
         r = b = e = 0.0
-        for t, stake in accepted:
-            for leg in legs.get(t.story_id, ()):
-                if leg.day == d:
-                    r += stake * leg.stock
-                    b += stake * leg.spy
-                    e += stake
+        for h in book:
+            leg = h.legs.get(d)
+            if leg is None:
+                continue
+            r += h.value * leg.stock
+            b += h.value * leg.spy
+            e += h.value
+            h.value *= 1.0 + leg.stock  # marked to market for the next day
         out_days.append(d)
         rets.append(r / nav_prev)
         bench.append(b / nav_prev)
