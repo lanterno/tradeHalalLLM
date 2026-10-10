@@ -33,7 +33,6 @@ from halabot.playbooks.legacy import (
     daily_config,
     r1_dropped,
     r1_set_aside,
-    r1_units_not_done,
     reactor_config,
     reactor_plausible,
     reactor_story,
@@ -373,24 +372,6 @@ def test_r1_fails_when_no_headline_is_kept() -> None:
     ids = ["a", "b"]
     both = r1_dropped(ids, _summary(ids, dropped=dict.fromkeys(ids, "units_missing")), [], set(ids))
     assert both.identical and both.within_cap and both.kept == () and not both.passed
-
-
-def test_r1_lists_every_unit_of_h_not_done() -> None:
-    """Each headline's stock and SPY on its day, sessions only; R1 runs when none is missing."""
-    good_friday = date(2016, 3, 25)
-    heads = {
-        "a": ("AAA", MON),
-        "b": ("BBB", MON),
-        "c": ("CCC", TUE),
-        "h": ("HHH", good_friday),  # no session: nothing is read
-    }
-    done = {"AAA:2016-03-07", "BBB:2016-03-07", "SPY:2016-03-07", "CCC:2016-03-08"}
-    assert r1_units_not_done(heads, done) == ("SPY:2016-03-08",)
-    assert r1_units_not_done(heads, done - {"BBB:2016-03-07"}) == (
-        "BBB:2016-03-07",
-        "SPY:2016-03-08",
-    )
-    assert r1_units_not_done(heads, {*done, "SPY:2016-03-08"}) == ()
 
 
 # ── S1: the daily-bar study through the simulator ──

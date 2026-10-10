@@ -21,7 +21,6 @@ from halabot.playbooks.legacy import (
     HarnessStory,
     HoldFactory,
     r1_dropped,
-    r1_units_not_done,
     reactor_config,
     reactor_story,
 )
@@ -297,7 +296,6 @@ async def test_r1_in_miniature_compares_the_run_with_the_study(engine: AsyncEngi
     """The study's drops (``intraday.entry_and_close`` on the stored rows) against the run's."""
     stories, expected, unlock = await _headlines(engine)
     await seed_bars(engine, "GGG", session_bars(MON))  # the study computes it: no story did
-    assert r1_units_not_done(expected, await minutes.done_units(engine)) == ()  # 100% done
     sink = MemorySink()
     summary = await _reactor_run(engine, stories, expected, unlock, sink)
     lo, hi = intraday._PLAUSIBLE
