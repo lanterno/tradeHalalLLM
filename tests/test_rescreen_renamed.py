@@ -14,6 +14,8 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from halal_trader.cli import cli
 from halal_trader.compliance.index_veto import IndexView
 from halal_trader.compliance.renamed import (
+    Affected,
+    Rescreened,
     Stored,
     changes,
     describe,
@@ -22,7 +24,7 @@ from halal_trader.compliance.renamed import (
     rescreen_renamed,
 )
 from halal_trader.compliance.runner import METHOD
-from halal_trader.compliance.sec import Company, Fact
+from halal_trader.compliance.sec import Company, Fact, SecUnavailable
 
 AS_OF = date(2020, 9, 30)
 FILED = date(2020, 7, 28)  # SPUS's N-PORT for 2020-05-31, which lists Facebook as FB
@@ -266,3 +268,47 @@ def test_the_command_lists_then_rescreens(
     assert run.exit_code == 0, run.output
     assert "re-screened halal" in run.output
     assert "1 row(s) across 1 screen date(s) re-screened" in run.output
+    assert "did not predict" not in run.output
+
+
+# ── a re-screen the replay did not predict ────────────────────
+
+
+def test_a_rescreen_is_unexpected_only_when_it_differs_from_the_replay() -> None:
+    a = Affected(AS_OF, "META", "not_halal (SPUS)", "halal", "SPUS holds it as FB")
+    assert not Rescreened(a, "halal").unexpected
+    assert Rescreened(a, "doubtful").unexpected
+    assert Rescreened(a, "not_halal (HLAL)").unexpected
+    assert not Rescreened(a, None).unexpected  # a dry run screens nothing
+
+
+class UnservedSec(RenamedSec):
+    """SEC failing to serve Meta's submissions record for the length of the run."""
+
+    async def sic(self, cik: int) -> tuple[int | None, str]:
+        raise SecUnavailable(f"submissions CIK{cik:010d}: 503")
+
+
+def test_the_command_lists_a_row_rescreened_otherwise_than_predicted(
+    database_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def go() -> None:
+        engine = create_async_engine(database_url)
+        try:
+            await seed(engine)
+        finally:
+            await engine.dispose()
+
+    asyncio.run(go())
+    monkeypatch.setattr("halal_trader.compliance.sec.SecClient", UnservedSec)
+
+    run = CliRunner().invoke(cli, ["compliance", "rescreen-renamed"])
+    assert run.exit_code == 0, run.output
+    assert "1 row(s) re-screened to an outcome the replay did not predict" in run.output
+    assert "2020-09-30 META   predicted halal, re-screened doubtful" in run.output
+
+    # Stored doubtful for want of its record, META no longer turns on the veto:
+    # a rerun finds nothing, which is why the first run has to say so.
+    again = CliRunner().invoke(cli, ["compliance", "rescreen-renamed", "--dry-run"])
+    assert again.exit_code == 0, again.output
+    assert "0 row(s) across 0 screen date(s) would be re-screened" in again.output
