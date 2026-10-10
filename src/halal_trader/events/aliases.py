@@ -10,7 +10,8 @@ builder version in ``story_aliases`` so the set the pre-registration pins
 * **name** -- ``market_assets.name`` and Alpaca's inactive-asset names, with
   legal suffixes stripped (``SUFFIX``): the cleaned name, its first word when
   it is distinctive (four letters, or three in capitals, and not ``GENERIC``)
-  and its first two words when they make six characters;
+  and its first two words when they make six characters. Dotted initials
+  count spaced and as one word ("J B Hunt", "JB Hunt");
 * **learned** -- Benzinga's own name for the company: the company slot of its
   analyst, earnings and guidance templates in articles tagging only that
   symbol, kept when it is at least ``LEARN_MIN_COUNT`` of them and
@@ -86,6 +87,8 @@ SUFFIX: Final = re.compile(
     r"New|The|of|and|&)\b\.?",
     re.I,
 )
+# Dotted initials: two single letters or more, each with its dot ("J.B. ", "C. H. ").
+INITIALS: Final = re.compile(r"(?<![A-Za-z])(?:[A-Za-z]\.\s*){2,}")
 # First words too common to stand for one company on their own.
 GENERIC: Final = frozenset(
     "american first general united national digital advanced applied global international "
@@ -187,8 +190,15 @@ def _distinctive_first_word(word: str) -> bool:
     return (len(word) >= 4 or (word.isupper() and len(word) >= 3)) and word.lower() not in GENERIC
 
 
-def name_aliases(name: str) -> list[str]:
-    """Aliases of one asset name (source a), longest first."""
+def collapse_initials(name: str) -> str:
+    """Dotted initials written as one word: "J.B. Hunt" -> "JB Hunt", "A. O. Smith" -> "AO Smith".
+
+    Two single letters or more, each followed by a dot (``INITIALS``).
+    """
+    return INITIALS.sub(lambda m: re.sub(r"[.\s]", "", m.group(0)) + " ", name)
+
+
+def _spelling_aliases(name: str) -> set[str]:
     clean = re.sub(r"[,.()]", " ", name)
     clean = re.sub(r"\s+", " ", SUFFIX.sub(" ", clean)).strip()
     words = clean.split()
@@ -199,6 +209,18 @@ def name_aliases(name: str) -> list[str]:
             out.add(words[0])
         if len(words) >= 2 and len(" ".join(words[:2])) >= 6 and all(len(w) > 1 for w in words[:2]):
             out.add(" ".join(words[:2]))
+    return out
+
+
+def name_aliases(name: str) -> list[str]:
+    """Aliases of one asset name (source a), longest first.
+
+    Dotted initials count both ways, since headlines write both: as one word
+    (``collapse_initials``: "J.B. Hunt" reads "JB Hunt" once the matcher
+    drops the dots, and the first-two-words rule keeps it) and spaced ("A. O.
+    Smith" reads "A O Smith", as does "A O Smith").
+    """
+    out = _spelling_aliases(name) | _spelling_aliases(collapse_initials(name))
     return sorted(out, key=lambda a: (-len(a), a))
 
 
