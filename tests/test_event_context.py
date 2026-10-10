@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from halal_trader.data.minutes import session_bounds
 from halal_trader.events import context as context_module
-from halal_trader.events.context import DailyPoint, PitContext, index_veto_only
+from halal_trader.events.context import DailyPoint, PitContext, PreEvent, index_veto_only
 from halal_trader.events.earnings_parse import EXTRACTOR
 from halal_trader.market_hours import MARKET_TZ, is_trading_day
 from halal_trader.signals.indicators import atr
@@ -670,6 +670,47 @@ async def test_levels_are_nan_when_the_calendar_is_shorter_than_their_window(
     # A(d) = A(story) = 0.98 here: S units are raw, the adjusted high / 0.98.
     assert pe.hi20_s == pytest.approx(max(world.highs["AAA"][d] for d in window20) / 0.98)
     assert pe.lo20_s == pytest.approx(min(world.lows["AAA"][d] for d in window20) / 0.98)
+
+
+def _comparable(pe: PreEvent | None) -> tuple[object, ...] | None:
+    """``pe``'s fields, NaN as a marker: dataclass equality holds NaN unequal to itself."""
+    if pe is None:
+        return None
+    values = (getattr(pe, f.name) for f in fields(pe))
+    return tuple("NaN" if isinstance(v, float) and math.isnan(v) else v for v in values)
+
+
+async def test_levels_do_not_depend_on_where_the_load_starts(engine: AsyncEngine) -> None:
+    world = await _world(engine)
+    i = _i(PREV)
+    window = SESSIONS[i - 251 : i + 1]
+    # Listed with the world, then halted from before a load starting at S
+    # reaches (S - 380 days) through the 252-session window's first session.
+    await _clone(engine, "UNM", "PAUSED", cik=994)
+    halted = {d for d in SESSIONS if date(2023, 2, 1) <= d <= window[0]}
+    await _drop(engine, "PAUSED", halted)
+    await _clone(engine, "UNM", "LATE", cik=992)  # first bar one session into the window
+    await _drop(engine, "LATE", set(SESSIONS[: i - 250]))
+    names = [*SYMBOLS, "PAUSED", "LATE"]
+
+    short = await PitContext.load(engine, symbols=names, start=S, end=S)
+    long = await PitContext.load(engine, symbols=names, start=START, end=END)
+
+    # The short load holds none of PAUSED's bars on or before the window's start.
+    assert short.sessions[0] > min(halted)
+    assert all(short.daily("PAUSED", d) is None for d in short.sessions if d <= window[0])
+    assert {s: _comparable(short.pre_event(s, S, PRE_OPEN)) for s in names} == {
+        s: _comparable(long.pre_event(s, S, PRE_OPEN)) for s in names
+    }
+    assert {s: short.eligibility(s, S, at_news=PRE_OPEN) for s in names} == {
+        s: long.eligibility(s, S, at_news=PRE_OPEN) for s in names
+    }
+    paused, late = (short.pre_event(s, S, PRE_OPEN) for s in ("PAUSED", "LATE"))
+    assert paused is not None and late is not None
+    kept = [d for d in window if d not in halted]
+    assert paused.hi252_s == pytest.approx(max(world.highs["UNM"][d] for d in kept), rel=1e-12)
+    assert paused.lo252_s == pytest.approx(min(world.lows["UNM"][d] for d in kept), rel=1e-12)
+    assert math.isnan(late.hi252_s) and math.isnan(late.lo252_s)
 
 
 # ── look-ahead ───────────────────────────────────────────────────
