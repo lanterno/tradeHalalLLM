@@ -6,7 +6,7 @@ from typing import Any
 
 import click
 
-from halal_trader.cli._run import run_db
+from halal_trader.cli._run import fail, run_db
 from halal_trader.logging import console
 
 
@@ -132,6 +132,7 @@ def renames_seed_cmd() -> None:
 )
 def renames_backfill_cmd(rate: int) -> None:
     """Store each old ticker's news under its current symbol (resumable)."""
+    from halal_trader.events.renames import RenamedNewsError
 
     async def _run(engine: Any, settings: Any) -> int:
         from halal_trader.data.alpaca_market import AlpacaMarketData
@@ -143,7 +144,11 @@ def renames_backfill_cmd(rate: int) -> None:
         finally:
             await market.aclose()
 
-    console.print(f"renamed-ticker news: {run_db(_run)} new event(s)")
+    try:
+        written = run_db(_run)
+    except RenamedNewsError as e:
+        fail(str(e))
+    console.print(f"renamed-ticker news: {written} new event(s)")
 
 
 @events.group("aliases")

@@ -17,7 +17,8 @@ and every date was checked against the company's own filing or release.
 ``backfill_renamed_news`` fetches each old ticker's articles over the days it
 named this company (``news_window``) and stores them under the current
 symbol. ``payload.symbols`` stays as Benzinga sent it. Resumable: one unit per
-old ticker and month (task ``news-renamed``, unit ``OLD:YYYY-MM``).
+old ticker and month, keyed with the month's bounds (task ``news-renamed``,
+unit ``OLD:first:last``), so a window that changes is fetched again.
 
 Prices follow the company, news follows the ticker: a news row under a ticker
 another company held on its day is that company's. ``owner`` says, for a news
@@ -57,6 +58,10 @@ SEED_GAP_DAYS: Final = 365  # first news this long after the first halal screen:
 # has rows after 2019-05-31), so an old ticker nobody took over at once names
 # its company for this many sessions more.
 GRACE_SESSIONS: Final = 5
+# A month an old ticker was busy in: if Alpaca returns nothing for it, its
+# news filter does not serve retired tickers and every month would be stored
+# empty and marked done.
+PROBE: Final = ("FB", date(2019, 1, 1), date(2019, 1, 31))
 _MAX_PAGES = 500  # 25,000 articles: more than any old ticker's busiest month
 
 # old ticker -> (current symbol, last session under the old ticker).
@@ -121,6 +126,10 @@ HELD_SINCE: Final[dict[tuple[str, str], date]] = {
 }
 
 
+class RenamedNewsError(RuntimeError):
+    """The renamed tickers' news is not (or cannot be) complete."""
+
+
 def old_tickers(symbol: str) -> tuple[str, ...]:
     """The tickers ``symbol``'s company traded under before, oldest first."""
     olds = [(last, old) for old, (current, last) in TICKER_RENAMES.items() if current == symbol]
@@ -181,8 +190,9 @@ def months(first: date, last: date) -> list[tuple[date, date]]:
     return out
 
 
-def unit(old: str, month: date) -> str:
-    return f"{old}:{month:%Y-%m}"
+def unit(old: str, lo: date, hi: date) -> str:
+    """The progress unit of the old ticker's days [lo, hi] (one month, clipped)."""
+    return f"{old}:{lo.isoformat()}:{hi.isoformat()}"
 
 
 # ── who a news row belongs to ─────────────────────────────────
@@ -258,7 +268,7 @@ def owner(symbol: str, day: date, tagged: Collection[str] | None) -> str | None:
 
     A row belongs to its own symbol only when this returns that symbol; the
     alias learner and the story builder drop every other row. Rule 2 relies
-    on the backfill being complete.
+    on the backfill being complete (``missing_units`` is empty).
     """
     return ticker_history().owner(symbol, day, tagged)
 
@@ -313,6 +323,32 @@ async def seed_candidates(
 # ── the backfill ──────────────────────────────────────────────
 
 
+def _plan() -> list[tuple[str, date, date]]:
+    """Every (old ticker, first day, last day) month the backfill fetches."""
+    return [(old, lo, hi) for old in sorted(TICKER_RENAMES) for lo, hi in months(*news_window(old))]
+
+
+async def missing_units(engine: AsyncEngine, *, now: datetime | None = None) -> list[str]:
+    """The backfill's months that are over but not done yet, in fetch order."""
+    now = now or datetime.now(UTC)
+    done = await _done(engine, TASK)
+    return [
+        u
+        for old, lo, hi in _plan()
+        if (u := unit(old, lo, hi)) not in done and trading_day_end_utc(hi) <= now
+    ]
+
+
+async def _news(market: Any, old: str, lo: date, hi: date, pages: int) -> list[Any]:
+    articles: list[Any] = await market.news(
+        [old],
+        start=trading_day_start_utc(lo),
+        end=trading_day_end_utc(hi) - timedelta(seconds=1),
+        max_pages=pages,
+    )
+    return articles
+
+
 async def backfill_renamed_news(
     engine: AsyncEngine,
     market: Any,
@@ -323,35 +359,35 @@ async def backfill_renamed_news(
     """Store every old ticker's articles under its current symbol; returns events written.
 
     ``market.news`` is called at most ``rate_per_min`` times a minute (the
-    client paces its own page requests). A month is marked done once its
-    last day is over.
+    client paces its own page requests). Before any month is fetched,
+    ``PROBE`` must return an article, or nothing is fetched and nothing
+    marked (``RenamedNewsError``). A month is marked done once its last day
+    is over.
     """
     now = now or datetime.now(UTC)
     done = await _done(engine, TASK)
-    recorder = EventRecorder(engine, raise_errors=True)
+    todo = [(old, lo, hi) for old, lo, hi in _plan() if unit(old, lo, hi) not in done]
+    if not todo:
+        return 0
     pacer = Pacer(60.0 / max(rate_per_min, 1))
-    stored = 0
-    for old in sorted(TICKER_RENAMES):
+    probe, lo, hi = PROBE
+    await pacer.wait()
+    if not any(probe in a.symbols for a in await _news(market, probe, lo, hi, 1)):
+        raise RenamedNewsError(
+            f"Alpaca returned no {probe} article for {lo:%Y-%m}: its news filter does not "
+            "serve this retired ticker, so no month was fetched or marked done"
+        )
+    recorder = EventRecorder(engine, raise_errors=True)
+    stored: dict[str, int] = {}
+    for old, lo, hi in todo:
         current = TICKER_RENAMES[old][0]
-        first, last = news_window(old)
-        written_old = 0
-        for lo, hi in months(first, last):
-            u = unit(old, lo)
-            if u in done:
-                continue
-            end = trading_day_end_utc(hi)
-            await pacer.wait()
-            articles = await market.news(
-                [old],
-                start=trading_day_start_utc(lo),
-                end=end - timedelta(seconds=1),
-                max_pages=_MAX_PAGES,
-            )
-            written = await recorder.record(renamed_records(articles, old, current))
-            if end <= now:
-                await mark_units(engine, TASK, {u: written})
-            written_old += written
-        if written_old:
-            logger.info("renamed news %s -> %s: %d events", old, current, written_old)
-        stored += written_old
-    return stored
+        await pacer.wait()
+        articles = await _news(market, old, lo, hi, _MAX_PAGES)
+        written = await recorder.record(renamed_records(articles, old, current))
+        if trading_day_end_utc(hi) <= now:
+            await mark_units(engine, TASK, {unit(old, lo, hi): written})
+        stored[old] = stored.get(old, 0) + written
+    for old, written in stored.items():
+        if written:
+            logger.info("renamed news %s -> %s: %d events", old, TICKER_RENAMES[old][0], written)
+    return sum(stored.values())
