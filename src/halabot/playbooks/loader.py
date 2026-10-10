@@ -7,8 +7,10 @@
 * sessions in [2016-10-01, 2024-12-31] need ``prereg_id``: a
   ``quant_trials`` row of kind ``preregistration`` whose ``config_hash``
   equals ``unlock.config_hash``;
-* sessions from 2025-01-01 need ``holdout=True`` and a ``kind='verdict'``
-  row with ``verdict='pass'`` under that same hash;
+* sessions from 2025-01-01 need ``holdout=True``, and the latest
+  ``kind='verdict'`` row under that same hash and the preregistration's
+  name must say ``pass`` with no ``stage-a``, ``window`` or ``amendment``
+  row of that trial after it;
 * a ``gate=`` unlock admits only its **pinned** unit set, whatever the
   date. ``unlock.units`` must hash (``unit_set_sha``) to ``unlock.units_sha``;
   every unit must lie in the gate's date range (:data:`GATE_RANGES`: g1 and
@@ -170,7 +172,8 @@ class WindowUnlock:
 
     ``prereg_id``: a ``quant_trials`` row of kind ``preregistration`` whose
     ``config_hash`` is ``config_hash`` (``config_hash(PREREG)``). ``holdout``
-    additionally needs a passing ``verdict`` row under that hash. ``gate``
+    additionally needs the latest ``verdict`` row under that hash to pass,
+    with nothing newer that could change it. ``gate``
     with ``units`` and ``units_sha`` admits exactly that unit set, once it is
     pinned in the ledger (:func:`register_gate_units`) and inside the gate's
     dates (:data:`GATE_RANGES`).
@@ -328,15 +331,36 @@ class WindowGuard:
                     )
                 self._prereg_ok = True
             if u.holdout:
-                passed = await conn.scalar(
+                # The latest verdict under the hash, of the trial registered under it,
+                # must pass, and nothing that can change it may have come after it.
+                latest = (
+                    await conn.execute(
+                        text(
+                            "SELECT id, name, verdict FROM quant_trials WHERE kind = 'verdict' "
+                            "AND config_hash = :h AND name IN (SELECT name FROM quant_trials "
+                            "WHERE kind = 'preregistration' AND config_hash = :h) "
+                            "ORDER BY id DESC LIMIT 1"
+                        ),
+                        {"h": u.config_hash},
+                    )
+                ).first()
+                if latest is None or latest.verdict != "pass":
+                    raise WindowLocked(
+                        "the holdout opens only after a passing verdict "
+                        f"(the latest is {latest.verdict if latest else 'none'})"
+                    )
+                newer = await conn.scalar(
                     text(
-                        "SELECT count(*) FROM quant_trials WHERE kind = 'verdict' "
-                        "AND verdict = 'pass' AND config_hash = :h"
+                        "SELECT count(*) FROM quant_trials WHERE name = :n AND config_hash = :h "
+                        "AND kind IN ('stage-a', 'window', 'amendment') AND id > :i"
                     ),
-                    {"h": u.config_hash},
+                    {"n": latest.name, "h": u.config_hash, "i": latest.id},
                 )
-                if not passed:
-                    raise WindowLocked("the holdout opens only after a passing verdict")
+                if newer:
+                    raise WindowLocked(
+                        f"the holdout opens only after a passing verdict: {newer} stage, "
+                        f"window or amendment row(s) came after verdict {latest.id}"
+                    )
                 self._holdout_ok = True
 
     def reason(self, symbol: str, day: date) -> str | None:
