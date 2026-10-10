@@ -72,19 +72,34 @@ async def _mark(engine: AsyncEngine, task: str, unit: str, items: int) -> None:
     await mark_units(engine, task, {unit: items})
 
 
-async def mark_units(engine: AsyncEngine, task: str, items: dict[str, int]) -> None:
-    """Record each unit (with its item count) as done, in one transaction."""
+_MARK_SQL: Final = text(
+    "INSERT INTO backfill_progress (task, unit, items, done_at) "
+    "VALUES (:t, :u, :n, now()) ON CONFLICT (task, unit) "
+    "DO UPDATE SET items = EXCLUDED.items, done_at = EXCLUDED.done_at"
+)
+
+
+async def mark_units(
+    engine: AsyncEngine,
+    task: str,
+    items: dict[str, int],
+    *,
+    conn: AsyncConnection | None = None,
+) -> None:
+    """Record each unit (with its item count) as done, in one transaction.
+
+    With ``conn``, the marks are written on it, in the caller's open
+    transaction, so they commit (or roll back) with the caller's own writes;
+    ``engine`` is then not used. Without it, they get a transaction of their own.
+    """
     if not items:
         return
-    async with engine.begin() as conn:
-        await conn.execute(
-            text(
-                "INSERT INTO backfill_progress (task, unit, items, done_at) "
-                "VALUES (:t, :u, :n, now()) ON CONFLICT (task, unit) "
-                "DO UPDATE SET items = EXCLUDED.items, done_at = EXCLUDED.done_at"
-            ),
-            [{"t": task, "u": u, "n": n} for u, n in items.items()],
-        )
+    params = [{"t": task, "u": u, "n": n} for u, n in items.items()]
+    if conn is not None:
+        await conn.execute(_MARK_SQL, params)
+        return
+    async with engine.begin() as own:
+        await own.execute(_MARK_SQL, params)
 
 
 # ── coverage ──────────────────────────────────────────────────

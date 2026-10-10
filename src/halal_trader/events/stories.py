@@ -108,6 +108,7 @@ from halal_trader.events.headline_patterns import (
     CORRECTION,
     REISSUE_PREFIX,
 )
+from halal_trader.events.history import mark_units
 from halal_trader.events.taxonomy import (
     FAMILY,
     NOISE_TYPES,
@@ -1008,11 +1009,6 @@ async def _per_symbol(raws: AsyncIterator[RawItem]) -> AsyncIterator[list[RawIte
 
 # ── complete builds (backfill_progress) ────────────────────────
 
-_MARK_SQL: Final = (
-    "INSERT INTO backfill_progress (task, unit, items, done_at) "
-    "VALUES (:t, :u, :n, now()) ON CONFLICT (task, unit) "
-    "DO UPDATE SET items = EXCLUDED.items, done_at = EXCLUDED.done_at"
-)
 _DELETE_RANGE: Final = (
     "DELETE FROM news_stories WHERE builder_version = :v AND session >= :a AND session <= :b"
 )
@@ -1089,10 +1085,7 @@ async def _unmark(engine: AsyncEngine, start: date, end: date) -> None:
                     {"v": BUILDER_VERSION, "a": lo, "b": hi},
                 )
                 keep[build_unit(lo, hi)] = int(n or 0)
-        if keep:
-            await conn.execute(
-                text(_MARK_SQL), [{"t": TASK, "u": u, "n": n} for u, n in keep.items()]
-            )
+        await mark_units(engine, TASK, keep, conn=conn)
 
 
 async def build_range(
@@ -1165,9 +1158,7 @@ async def build_range(
     async with engine.begin() as conn:
         await conn.execute(text(_DELETE_RANGE + " AND symbol <> ALL(:s)"), span | {"s": symbols})
         if not force:
-            await conn.execute(
-                text(_MARK_SQL), {"t": TASK, "u": build_unit(start, end), "n": written}
-            )
+            await mark_units(engine, TASK, {build_unit(start, end): written}, conn=conn)
     if force:
         logger.warning(
             "stories %s..%s: a forced build, left unmarked (counts refuse it)", start, end
