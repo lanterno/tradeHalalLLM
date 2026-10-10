@@ -33,6 +33,7 @@ from halabot.playbooks.types import (
     Execution,
     OrderKind,
     PathSkip,
+    Session,
     SpyData,
     TradeFacts,
     WorkingOrder,
@@ -290,7 +291,7 @@ def test_s1_the_simulator_reproduces_study_outcome(seed: int) -> None:
     bars.close["BBB"][date(2016, 5, 2)] = 0.0
     src = DailyBarSource(bars)
     lo = datetime(2016, 2, 1, tzinfo=UTC)
-    checked = skipped = 0
+    checked = skipped = multi = 0
     cases = [(lo + timedelta(seconds=float(rng.uniform(0, 150 * 86400)))) for _ in range(60)]
     cases += [
         datetime.combine(date(2016, 3, 11), time(15, 0), MARKET_TZ),  # close entry, exit 03-14+
@@ -319,8 +320,14 @@ def test_s1_the_simulator_reproduces_study_outcome(seed: int) -> None:
                 t = got.trade
                 assert t is not None
                 assert abs(t.r_net_abn - want) <= EPS, (published, symbol, h)
+                # The study held to its exit: no pre-open compliance sell (the source has
+                # no screen), the exit decided at the deadline's close.
+                assert t.exit_reason == "time_stop", (published, symbol, h)
+                assert t.exit_decided_at == Session.of(t.exit_session).close
+                assert got.reason == "time_stop" and got.terminal_state == "EXITED"
                 checked += 1
-    assert checked > 200 and skipped > 0
+                multi += t.sessions_held > 1
+    assert checked > 200 and skipped > 0 and multi > 100
 
 
 async def test_s1_matches_study_evaluate_on_the_database(engine: AsyncEngine) -> None:
@@ -366,7 +373,7 @@ async def test_s1_matches_study_evaluate_on_the_database(engine: AsyncEngine) ->
                 facts=_facts(study.cost_bps(None)),  # no universe stored: rank None, 30 bps
             )
             if not isinstance(out, PathSkip):
-                assert out.trade is not None
+                assert out.trade is not None and out.trade.exit_reason == "time_stop"
                 got.append((obs.published_at, h, out.trade.r_net_abn))
     expected = [(o.published_at, h, r) for o, h, r in want]
     assert len(got) == len(expected) > 60
