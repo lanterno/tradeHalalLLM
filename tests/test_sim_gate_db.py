@@ -311,6 +311,14 @@ CALIB_PAIRS = [
 ]
 
 
+async def sigma_c(engine: AsyncEngine, obs: Sequence[Observation]) -> list[units.SueEvent]:
+    """Σ_c as the gate builds it: less the events meeting H1's train and validation units."""
+    w = await units.h1_windows(engine)
+    return await units.sue_complement(
+        engine, h1_units=w["train"] | w["validation"], observations=obs
+    )
+
+
 def minute_day(day: date, open_px: float, close_px: float) -> BarArrays:
     """Bars at 09:30 (the daily open) and every hour, 15:56 and 15:59 at the daily close."""
     keep = [(9, 30), (10, 30), (11, 45), (12, 30), (13, 30), (14, 30), (15, 56), (15, 59)]
@@ -356,7 +364,8 @@ async def sue_world(engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch) -> Asy
             )
     await liquidity(engine, S_SYMBOLS, date(2015, 1, 1), date(2016, 12, 1))
     # Minute bars agreeing with the daily bars on every unit the gates read.
-    complement = await units.sue_complement(engine, observations=obs)
+    complement = await sigma_c(engine, obs)
+    assert len(complement) == len(obs)  # no story, so no H1 unit: every event is in Σ_c
     wanted = units.sue_units(units.sue_sample(complement)) | units.calib_units(CALIB_PAIRS)
     index = {d: i for i, d in enumerate(S_DAYS)}
     done: set[tuple[str, date]] = set()
@@ -406,10 +415,38 @@ async def test_the_sue_gates_run_and_minute_mode_matches_daily_mode(sue_world: A
     assert rows[3].config["units_sha"] == next(iter(await gate_pins(engine, "sue")))
 
 
+async def test_sigma_c_leaves_out_the_events_meeting_h1s_units(
+    sue_world: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An event whose exit session is a train unit leaves Σ_c, and Σ_s with it."""
+    events = await sigma_c(sue_world, s_observations())
+    taken = next(
+        u
+        for e in events
+        for u in sorted(e.units())
+        if sum(u in other.units() for other in events) == 1
+    )
+    asked: list[Any] = []
+
+    async def h1_windows(engine: AsyncEngine, **kw: Any) -> dict[str, frozenset[Any]]:
+        asked.append(kw.get("windows"))
+        out = {"train": frozenset({taken}), "validation": frozenset()}
+        wanted = kw.get("windows")
+        return {k: v for k, v in out.items() if wanted is None or k in wanted}
+
+    monkeypatch.setattr(units, "h1_windows", h1_windows)
+    out = await run_sue(sue_world, b=50)
+    s0 = next(r for r in out.results if r.gate == "s0")
+    assert asked and s0.metrics["sigma_c"]["events"] == 27
+    assert s0.metrics["sigma_c"]["counts"]["h1_overlap"] == 1
+    s2 = next(r for r in out.results if r.gate == "s2")
+    assert s2.metrics["events"] == 27 and s2.config["events"] == 27
+
+
 async def test_the_sue_gates_refuse_the_minute_gates_while_units_are_not_done(
     sue_world: AsyncEngine,
 ) -> None:
-    complement = await units.sue_complement(sue_world, observations=s_observations())
+    complement = await sigma_c(sue_world, s_observations())
     sample = units.sue_sample(complement)
     await undone(sue_world, (sample[0].symbol, sample[0].exits[-1]))
     await undone(sue_world, CALIB_PAIRS[0])
