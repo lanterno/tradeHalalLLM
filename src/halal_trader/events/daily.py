@@ -28,11 +28,15 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 logger = logging.getLogger(__name__)
 
 FILINGS_EVERY = timedelta(days=7)
-# EDGAR header requests per filings refresh (about 0.4 s each: 3 minutes at
-# most): a typical week's new filings, 200 to 500. An earnings week's
-# overflow keeps the JSON time until a later run's catch-up.
-HEADER_BUDGET = 500
-CATCH_UP = timedelta(days=30)
+# EDGAR header requests per filings refresh (about 0.4 s each: 7 minutes at
+# most). A week brings 320 new filings at the median, 1,040 at the 90th
+# percentile and up to 1,600 (2023-2026). Replayed week by week over those
+# years, 1,000 a run and the catch-up leave no filing unchecked; 500 left
+# 15% at the JSON time for good, earnings 8-Ks among them, because an
+# earnings week's overflow was older than CATCH_UP before a run had
+# requests to spare.
+HEADER_BUDGET = 1000
+CATCH_UP = timedelta(days=30)  # what a run's spare requests correct
 
 
 @dataclass
