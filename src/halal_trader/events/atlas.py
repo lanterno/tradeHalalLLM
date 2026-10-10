@@ -19,7 +19,8 @@ It is never extended to validation or holdout.
 
 **Unit.** Every PRIMARY story (``PitContext.eligibility``) with its reaction
 session S in [:data:`ATLAS_START`, :data:`ATLAS_END`] and an item of a type
-outside :data:`UNIT_EXCLUDED`. Candidates are read from the persisted
+outside ``units.TRAIN_SKIP_TYPES`` (the filter of plan H's ``train`` part,
+which fetched the paths). Candidates are read from the persisted
 ``news_stories`` rows (eligibility judged one year at a time, as
 ``stories.count_stories`` does), then the stories are rebuilt from the
 event store with ``stories.build`` (``card_at`` needs the items) and checked
@@ -72,9 +73,11 @@ outcome (measured, or the loader's skip). Cells hold the measured stories.
 
 **Deviations from spec §F** (stated for the integrator):
 
-* ``filing_other`` is excluded with the spec's five types: plan H (W3a's
-  ``train`` part) never fetches a story made only of those, so every one
-  would be a ``units_missing`` skip.
+* ``filing_other`` is excluded with the spec's five types: units are
+  filtered with plan H's ``units.TRAIN_SKIP_TYPES``, and plan H's ``train``
+  part never fetches a story made only of those (every one would be a
+  ``units_missing`` skip), so stories made only of ``filing_other`` items
+  are not units.
 * The machine also runs on a story NSN by the cutoff whose detect type is
   not negative (an 8-K's unparsed earnings, then a miss): such a story is
   an H1 event.
@@ -89,7 +92,7 @@ import json
 import logging
 import math
 from collections import Counter, defaultdict
-from collections.abc import AsyncIterator, Iterable, Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field, replace
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -112,17 +115,19 @@ from halabot.playbooks.records import MemorySink, StoryOutcome
 from halabot.playbooks.sim import run as simulate
 from halabot.playbooks.types import PathData, PathSkip, Session, SimConfig, path_days
 from halal_trader.data.minutes import BarArrays
+from halal_trader.events import h1
 from halal_trader.events import stories as builder
 from halal_trader.events.aliases import load_aliases
 from halal_trader.events.context import LOOKAHEAD_DAYS, Eligibility, PitContext, PreEvent
 from halal_trader.events.stats import clustered_mean
 from halal_trader.events.taxonomy import NOISE_TYPES, StoryCard
+from halal_trader.events.units import TRAIN_SKIP_TYPES
 from halal_trader.market_hours import MARKET_TZ
 
 if TYPE_CHECKING:
     from halal_trader.config import Settings
     from halal_trader.events.aliases import AliasMatcher
-    from halal_trader.events.stories import RawItem, Story
+    from halal_trader.events.stories import Story
 
 logger = logging.getLogger(__name__)
 
@@ -131,10 +136,6 @@ logger = logging.getLogger(__name__)
 ATLAS_START: Final = date(2016, 10, 3)  # the first PRIMARY session (screens start 2016-09-30)
 ATLAS_END: Final = date(2021, 12, 23)  # its 5-session continuation ends on 2021-12-31
 DATA_END: Final = date(2021, 12, 31)  # no bar after this is read
-# Stories made only of these are not units (spec §F, plus filing_other: see the docstring).
-UNIT_EXCLUDED: Final = frozenset(
-    {"noise", "law_firm", "mover", "other", "analyst_other", "filing_other"}
-)
 PATH_SESSIONS: Final = 3  # S .. S+2 for the retrace and fade measures
 CONT_HORIZONS: Final = (1, 3, 5)
 # low_sigma buckets: (-inf, -5], (-5, -3], (-3, -2], (-2, -1], (-1, inf)
@@ -152,10 +153,6 @@ SCREEN_BREAK: Final = date(2020, 10, 1)
 ANALYST_BREAK: Final = date(2018, 1, 1)
 EXIT_REASONS: Final = ("target", "stop", "abort", "compliance", "time_stop")
 VARIANTS: Final = (("ID", 1), ("MD3", 3))
-# The H1 runner's ledger rows (spec §G.14): the registration's name, and the
-# Stage-A verdict when no cell is eligible.
-H1_NAME: Final = "research.news.h1"
-STAGE_A_FAIL: Final = "fail: insufficient events"
 OUTPUT_NAME: Final = f"news_atlas-{builder.BUILDER_VERSION}.json"
 BATCH_SYMBOLS: Final = 100
 
@@ -400,8 +397,8 @@ def detection(story: Story) -> tuple[datetime, datetime, bool] | None:
 
 
 def substantive(itypes: Iterable[str]) -> bool:
-    """Whether a story has an item of a type outside :data:`UNIT_EXCLUDED`."""
-    return any(t not in UNIT_EXCLUDED for t in itypes)
+    """Whether a story has an item of a type outside ``units.TRAIN_SKIP_TYPES``."""
+    return any(t not in TRAIN_SKIP_TYPES for t in itypes)
 
 
 def timing_of(at: datetime, session: date) -> Timing:
@@ -429,11 +426,11 @@ async def h1_closed(engine: AsyncEngine) -> Registration:
                     "SELECT id, config_hash FROM quant_trials "
                     "WHERE kind = 'preregistration' AND name = :n ORDER BY id DESC LIMIT 1"
                 ),
-                {"n": H1_NAME},
+                {"n": h1.NAME},
             )
         ).first()
         if reg is None:
-            raise AtlasLocked(f"no {H1_NAME} preregistration: the atlas runs after H1's verdict")
+            raise AtlasLocked(f"no {h1.NAME} preregistration: the atlas runs after H1's verdict")
         closing = (
             await conn.execute(
                 text(
@@ -441,13 +438,13 @@ async def h1_closed(engine: AsyncEngine) -> Registration:
                     "AND ((kind = 'verdict' AND verdict IS NOT NULL) "
                     "OR (kind = 'stage-a' AND verdict LIKE :fail)) ORDER BY id LIMIT 1"
                 ),
-                {"h": reg.config_hash, "fail": f"{STAGE_A_FAIL}%"},
+                {"h": reg.config_hash, "fail": f"{h1.STAGE_A_FAIL}%"},
             )
         ).first()
     if closing is None:
         raise AtlasLocked(
-            f"{H1_NAME} registration {reg.id} has no verdict and no Stage-A "
-            f"'{STAGE_A_FAIL}' row yet: the atlas runs after H1's verdict"
+            f"{h1.NAME} registration {reg.id} has no verdict and no Stage-A "
+            f"'{h1.STAGE_A_FAIL}' row yet: the atlas runs after H1's verdict"
         )
     return Registration(
         int(reg.id), str(reg.config_hash), int(closing.id), f"{closing.kind}: {closing.verdict}"
@@ -943,18 +940,6 @@ async def candidates(
     return chosen
 
 
-async def _per_symbol(raws: AsyncIterator[RawItem]) -> AsyncIterator[list[RawItem]]:
-    """Consecutive items of one symbol (``load_items`` streams them by symbol)."""
-    batch: list[RawItem] = []
-    async for raw in raws:
-        if batch and raw.symbol != batch[0].symbol:
-            yield batch
-            batch = []
-        batch.append(raw)
-    if batch:
-        yield batch
-
-
 async def rebuild(
     engine: AsyncEngine,
     symbols: Sequence[str],
@@ -967,7 +952,7 @@ async def rebuild(
     them: from every item since ``stories.HISTORY_FROM``, one symbol at a time."""
     out: dict[str, list[Story]] = {}
     raws = builder.load_items(engine, start=builder.HISTORY_FROM, end=hi, symbols=symbols)
-    async for rows in _per_symbol(raws):
+    async for rows in builder._per_symbol(raws):
         built = builder.build(rows, aliases)
         out[rows[0].symbol] = [s for s in built if lo <= s.session <= hi]
     return out
@@ -1239,7 +1224,7 @@ async def run_atlas(
         "end": end,
         "data_end": DATA_END,
         "registration": asdict(reg),
-        "unit_excluded": sorted(UNIT_EXCLUDED),
+        "unit_excluded": sorted(TRAIN_SKIP_TYPES),
         "rules": {
             "min_n": MIN_N,
             "min_dates": MIN_DATES,
@@ -1306,13 +1291,10 @@ __all__ = [
     "BUCKETS",
     "CONT_HORIZONS",
     "DATA_END",
-    "H1_NAME",
     "MIN_DATES",
     "MIN_N",
     "OUTPUT_NAME",
-    "STAGE_A_FAIL",
     "TABLES",
-    "UNIT_EXCLUDED",
     "Atlas",
     "AtlasCell",
     "AtlasLocked",
