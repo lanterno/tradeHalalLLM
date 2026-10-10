@@ -29,6 +29,7 @@ from halal_trader.events.atlas import (
     Atlas,
     AtlasRow,
     AtlasStory,
+    Exposure,
     MachineRun,
     PathMeasures,
     bucket,
@@ -37,6 +38,7 @@ from halal_trader.events.atlas import (
     check_range,
     context_end,
     detection,
+    exposure,
     path_measures,
     spy_regimes,
     substantive,
@@ -350,10 +352,52 @@ def test_a_cell_under_thirty_stories_or_twenty_dates_shows_counts_only() -> None
     few_dates = [row(i, DAYS[i % (MIN_DATES - 1)]) for i in range(MIN_N)]
     enough = [row(i, DAYS[i % MIN_DATES]) for i in range(MIN_N)]
     for rows, shown in ((small, False), (few_dates, False), (enough, True)):
-        cell = next(c for c in cells_of(rows, years=1.0) if c.table == "type")
+        cell = next(c for c in cells_of(rows, exposure=Exposure(1.0)) if c.table == "type")
         assert (cell.stats is not None) == shown
         assert cell.n == len(rows) and cell.dates == len({r.session for r in rows})
-    assert next(c for c in cells_of(enough, years=2.0) if c.table == "type").per_year == 15.0
+    assert (
+        next(c for c in cells_of(enough, exposure=Exposure(2.0)) if c.table == "type").per_year
+        == 15.0
+    )
+
+
+def test_a_dated_cell_divides_by_the_time_its_state_covers() -> None:
+    first, last = date(2019, 10, 1), date(2021, 9, 30)
+    sessions = sessions_from(first, 600)
+    sessions = [d for d in sessions if d <= last]
+    # Sessions before 2020-07-01 are "low" volatility, after it "high"; trend unknown.
+    regimes = atlas.SpyRegimes(
+        vol={d: 0.01 if d < date(2020, 7, 1) else 0.03 for d in sessions},
+        above={},
+        edges=(0.015, 0.025),
+    )
+    exp = exposure(sessions, regimes)
+    assert exp.total == pytest.approx(len(sessions) / 252)
+    before = sum(d < atlas.SCREEN_BREAK for d in sessions)
+    assert exp.states[("screen_regime", "before")] == pytest.approx(before / 252)
+    assert exp.states[("screen_regime", "from")] == pytest.approx((len(sessions) - before) / 252)
+    assert exp.states[("analyst_regime", "from")] == exp.total  # all after 2018-01-01
+    low = sum(d < date(2020, 7, 1) for d in sessions)
+    assert exp.states[("spy_vol", "low")] == pytest.approx(low / 252)
+    assert exp.states[("spy_trend", "n/a")] == exp.total
+    rows = [
+        row(i, d, spy_vol="low" if d < date(2020, 7, 1) else "high")
+        for i, d in enumerate(sessions[::10])
+    ]
+    cells = {(c.table, c.key): c for c in cells_of(rows, exposure=exp)}
+    for table, state in (("screen_regime", "from"), ("spy_vol", "high"), ("type", None)):
+        key = ("analyst_downgrade",) if state is None else ("analyst_downgrade", state)
+        cell = cells[(table, key)]
+        assert cell.per_year == pytest.approx(cell.n / exp.years(table, key))
+    from_cell = cells[("screen_regime", ("analyst_downgrade", "from"))]
+    assert from_cell.per_year == pytest.approx(from_cell.n / ((len(sessions) - before) / 252))
+    # A state the range never held has no time: its rate is undefined, and prints "-".
+    lonely = cells_of([row(1, sessions[0], spy_vol="mid")], exposure=exp)
+    mid = next(c for c in lonely if c.table == "spy_vol")
+    assert math.isnan(mid.per_year)
+    assert any(
+        line.startswith("analyst_downgrade / mid") and " - " in line for line in tables(lonely)
+    )
 
 
 def _cr1(values: Sequence[float], clusters: Sequence[date]) -> float:
@@ -468,7 +512,7 @@ def test_a_value_that_is_not_finite_is_left_out_and_counted() -> None:
     lows = sorted(-3.0 - i / 10 for i in range(1, MIN_N))
     assert stats["low_sigma_q50"] == pytest.approx(float(np.quantile(lows, 0.5)))
     # The whole table builds, and the file stays plain JSON.
-    cells = cells_of(rows, years=1.0)
+    cells = cells_of(rows, exposure=Exposure(1.0))
     assert next(c for c in cells if c.table == "type").stats is not None
     json.dumps(to_json(Atlas(rows=rows, cells=cells)), allow_nan=False)
 
@@ -481,7 +525,7 @@ def test_cells_cover_every_table_sorted_by_key() -> None:
         row(4, DAYS[3], measures=None, skip="units_missing"),
         row(5, date(2021, 3, 1), measures=measures(-2.5), spy_trend="below"),
     ]
-    cells = cells_of(rows, years=1.0)
+    cells = cells_of(rows, exposure=Exposure(1.0))
     assert [c.table for c in cells] == sorted((c.table for c in cells), key=atlas.TABLES.index)
     base = [c.key for c in cells if c.table == "base"]
     assert base == [
@@ -515,7 +559,7 @@ def test_cells_cover_every_table_sorted_by_key() -> None:
 def test_tables_print_counts_only_cells_and_never_a_p_value() -> None:
     rows = [row(i, DAYS[i % MIN_DATES]) for i in range(MIN_N)]
     rows.append(row(99, DAYS[0], type="dilution", measures=measures(-1.5)))
-    lines = tables(cells_of(rows, years=1.0))
+    lines = tables(cells_of(rows, exposure=Exposure(1.0)))
     text_ = "\n".join(lines)
     assert "== type x low_sigma bucket ==" in text_
     assert "dilution / (-2,-1]" in text_ and "counts only" in text_
@@ -526,7 +570,7 @@ def test_tables_print_counts_only_cells_and_never_a_p_value() -> None:
 
 def test_the_file_is_plain_json(tmp_path: Path) -> None:
     rows = [row(1, DAYS[0], cont=(None, math.nan, 0.1), id_run=_run(True, "stop", -0.02))]
-    result = Atlas(rows=rows, cells=cells_of(rows, years=1.0), meta={"end": DAYS[0]})
+    result = Atlas(rows=rows, cells=cells_of(rows, exposure=Exposure(1.0)), meta={"end": DAYS[0]})
     path = write_atlas(result, tmp_path / "x" / "atlas.json")
     data = json.loads(path.read_text())
     assert data["meta"]["end"] == DAYS[0].isoformat()

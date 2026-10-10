@@ -211,6 +211,13 @@ async def test_the_cells_and_the_file(world: AsyncEngine, tmp_path: Path) -> Non
     assert all(c.stats is None for c in result.cells)  # every cell is under 30 stories
     type_cells = {c.key: c for c in result.cells if c.table == "type"}
     assert type_cells[("analyst_downgrade",)].n == 1
+    # Five sessions: one story a week is 50.4 a year, in the type cell and in its regimes.
+    assert result.meta["years"] == pytest.approx(5 / 252)
+    assert type_cells[("analyst_downgrade",)].per_year == pytest.approx(252 / 5)
+    screen = next(c for c in result.cells if c.table == "screen_regime" and c.n == 1)
+    assert screen.key[1] == "before" and screen.per_year == pytest.approx(252 / 5)
+    assert result.meta["state_years"]["screen_regime:before"] == pytest.approx(5 / 252)
+    assert "screen_regime:from" not in result.meta["state_years"]
     coverage = {c.key: c.n for c in result.cells if c.table == "coverage"}
     assert coverage == {
         ("analyst_downgrade", "measured"): 1,
