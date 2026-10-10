@@ -17,7 +17,10 @@ Each gate refuses (no row) while one of its units is not done.
 from __future__ import annotations
 
 import math
+import os
+import sys
 from collections.abc import Sequence
+from dataclasses import replace
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
 
@@ -26,7 +29,9 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from halabot.playbooks.bounce import OverreactionBounce
 from halabot.playbooks.loader import GATE_UNITS_NAME, WindowLocked, gate_pins
+from halabot.playbooks.types import Submit
 from halal_trader.data import minutes
 from halal_trader.data.minutes import BarArrays
 from halal_trader.db.repos.quant_trials import config_hash
@@ -35,13 +40,16 @@ from halal_trader.events.intraday import Headline
 from halal_trader.events.sim_gate import (
     CRITERIA,
     GATE_NAME,
+    G1Factory,
     GateRefused,
     GateResult,
     GateRun,
+    LookaheadWorld,
     pin_units,
     read_gate_bars,
     record_gate,
     require_done,
+    run_determinism,
     run_lookahead,
     run_reactor,
     run_sue,
@@ -548,6 +556,7 @@ def bounce_rows(exit_px: float) -> dict[tuple[int, int], tuple[float, ...]]:
 @pytest.fixture
 async def g1_world(engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch) -> AsyncEngine:
     monkeypatch.setattr(sim_gate, "G1_MIN_STORIES", 3)  # the world's three stories, not 500
+    monkeypatch.setattr(sim_gate, "DETERMINISM_BATCH", 1)  # one path a batch: state carries
     days = sessions(date(2015, 1, 2), date(2016, 10, 31))
     eves = {d for d in days if next_trading_day(d) in G1_DAYS}
     for sym, base in (("SPY", 200.0), ("AAA", 100.0), ("BBB", 60.0)):
@@ -616,6 +625,96 @@ async def test_g1_runs_on_the_stored_stories_and_writes_three_rows(g1_world: Asy
         "gate_g1"
     )
     assert rows[2].config["workers"] == 2 and rows[1].window == "2016-01-04..2016-09-30"
+    # g1-determinism ran sim.run itself: serial, then a pool of two in one-path batches.
+    det = by_id["g1-determinism"].metrics["g1"]
+    assert det["pool"] == ("spawn" if sys.platform == "darwin" else "fork")
+    assert det["workers"] == 2 and det["batch_paths"] == 1
+    for cell in ("hold1", "hold3"):
+        shas = det["sha256"][cell]
+        assert shas["workers_1"] == shas["workers_2"]
+        c = det["cells"][cell]
+        assert c["passed"] and c["outcomes"] == c["started"] == 3 and c["left_out"] == 0
+        assert c["trades"] >= 2
+
+
+async def test_g1_s_md3_determinism_runs_the_stories_whose_path_fits(
+    g1_world: AsyncEngine,
+) -> None:
+    """A story on 2016-09-29 has two sessions left: the look-ahead runs it on them, and
+    sim.run (which would ask for three, past the window) only carries its news."""
+    engine = g1_world
+    late = date(2016, 9, 29)
+    await store(engine, [news_row(10, "AAA", ny(late, 8), "Morgan Stanley Downgrades Acme")])
+    await build_range(engine, start=date(2016, 1, 4), end=date(2016, 9, 30), force=True)
+    done = []
+    for d in units.path(late, units.PATH_SESSIONS, units.G1_RANGE[1]):
+        await seed_bars(engine, "AAA", session_bars(d, price=97.6, volume=10_000.0))
+        await seed_bars(engine, "SPY", session_bars(d, price=200.0, volume=1e5))
+        done += [("AAA", d), ("SPY", d)]
+    await mark_done(engine, done)
+    assert len(await units.g1_stories(engine)) == 4
+    out = await run_lookahead(engine, workers=2, synthetic_paths=20)
+    assert not out.refused and all(r.passed for r in out.results), out.results
+    by_id = {r.gate: r for r in out.results}
+    look = by_id["g1-lookahead"].metrics["cells"]
+    assert look["hold1"]["stories"] == look["hold3"]["stories"] == 4
+    det = by_id["g1-determinism"].metrics["g1"]["cells"]
+    assert det["hold1"]["left_out"] == 0 and det["hold1"]["outcomes"] == 4
+    assert det["hold3"]["left_out"] == 1 and det["hold3"]["outcomes"] == 3
+
+
+class _PidTagged(OverreactionBounce):
+    """The bounce, each buy's variant the process it was decided in: records that depend
+    on where they are simulated."""
+
+    def start(self, ctx):  # type: ignore[no-untyped-def]
+        return self._tag(super().start(ctx))
+
+    def on(self, ev, ctx):  # type: ignore[no-untyped-def]
+        return self._tag(super().on(ev, ctx))
+
+    @staticmethod
+    def _tag(out):  # type: ignore[no-untyped-def]
+        return [
+            replace(i, facts=replace(i.facts, variant=f"pid{os.getpid()}"))
+            if isinstance(i, Submit) and i.facts is not None
+            else i
+            for i in out
+        ]
+
+
+class _PidFactory(G1Factory):
+    def __call__(self, story):  # type: ignore[no-untyped-def]
+        pre, elig = self.context[story.story_id]
+        return _PidTagged(story, pre, elig, self.params[story.story_id])
+
+
+class _PidWorld(LookaheadWorld):
+    def factory(self, hold: int) -> G1Factory:
+        f = super().factory(hold)
+        return _PidFactory(f.context, f.params, f.hold)
+
+
+async def test_g1_determinism_fails_records_that_depend_on_the_process(
+    g1_world: AsyncEngine,
+) -> None:
+    engine = g1_world
+    chosen = await units.g1_stories(engine)
+    unit_set = units.g1_units(chosen)
+    plan = await sim_gate.plan_h(engine, "gate_g1")
+    sha = await pin_units(engine, "g1", "gate_g1", unit_set, plan)
+    world = await sim_gate.g1_world(engine, chosen, unit_set, sha)
+    ok, good = await run_determinism(engine, world, unit_set, sha, workers=2, batch_paths=1)
+    assert ok and good["sha256"]["hold1"]["workers_1"] == good["sha256"]["hold1"]["workers_2"]
+    tagged = _PidWorld(world.stories, world.paths, world.spy, world.ctx, world.context, world.holds)
+    bad_ok, bad = await run_determinism(engine, tagged, unit_set, sha, workers=2, batch_paths=1)
+    assert not bad_ok
+    for cell in ("hold1", "hold3"):
+        assert bad["sha256"][cell]["workers_1"] != bad["sha256"][cell]["workers_2"]
+        assert not bad["cells"][cell]["passed"]
+    assert "DIFFER" in sim_gate.describe(
+        GateResult("g1-determinism", bad_ok, {"g1": bad, "synthetic": {}})
+    )
 
 
 async def test_g1_refuses_its_real_gates_below_500_stories(

@@ -56,6 +56,7 @@ from halal_trader.events.sim_gate import (
     Spread,
     calib_result,
     calibration,
+    cell_stories,
     daily_mode,
     decile_spread,
     decomposition,
@@ -437,6 +438,23 @@ def test_determinism_fails_an_order_dependent_factory() -> None:
     assert "DIFFER" in describe(
         GateResult("g1-determinism", ok, {"g1": metrics, "synthetic": metrics})
     )
+
+
+def test_a_story_whose_md3_path_is_cut_only_carries_its_news_in_sim_runs_cell() -> None:
+    """sim.run asks for the hold's sessions of every started story: a shorter path stays out."""
+    w = synthetic_world(n_paths=20)
+    gate = w.gate_stories()
+    short = gate[0].story_id
+    holds = {h: dict(v) for h, v in w.holds.items()}
+    holds[3][short] = 2  # S on 2016-09-29: two sessions left in the window
+    cut = LookaheadWorld(w.stories, w.paths, w.spy, w.ctx, w.context, holds)
+    md3, left = cell_stories(cut, 3)
+    assert left == 1 and [s.story_id for s in md3] == [s.story_id for s in w.stories]
+    by_id = {s.story_id: s for s in md3}
+    assert by_id[short].mode is None and by_id[short].story is gate[0].story
+    assert by_id[short].nsn_at(Session.of(gate[0].session).entry_cutoff) is None  # never starts
+    assert all(by_id[s.story_id] == s for s in gate[1:])
+    assert cell_stories(cut, 1) == (list(w.stories), 0)
 
 
 # ── G2: the reactor ──
