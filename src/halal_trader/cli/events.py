@@ -92,6 +92,84 @@ def backfill_cmd(what: str, rate: int) -> None:
         console.print(f"{name}: {n} new")
 
 
+@events.group("renames")
+def renames_group() -> None:
+    """Renamed tickers: companies whose older news is filed under another ticker."""
+
+
+@renames_group.command("seed")
+def renames_seed_cmd() -> None:
+    """List symbols whose first news comes over a year after their first halal screen."""
+    from halal_trader.events.renames import TICKER_RENAMES, old_tickers
+
+    async def _run(engine: Any, settings: Any) -> list[tuple[str, Any, Any]]:
+        from halal_trader.events.renames import seed_candidates
+
+        return await seed_candidates(engine)
+
+    candidates = run_db(_run)
+    console.print(f"{len(candidates)} candidate(s): first halal screen, first news, old tickers")
+    for symbol, first_halal, first_news in candidates:
+        olds = old_tickers(symbol)
+        mapped = (
+            ", ".join(f"{o} (to {TICKER_RENAMES[o][1]})" for o in olds)
+            if olds
+            else "[yellow]unmapped[/yellow]"
+        )
+        console.print(f"  {symbol:6} {first_halal}  {str(first_news or 'no news'):10}  {mapped}")
+    flagged = {c[0] for c in candidates}
+    others = sorted({current for current, _ in TICKER_RENAMES.values()} - flagged)
+    if others:
+        console.print(f"also mapped (not flagged by the rule): {', '.join(others)}")
+
+
+@renames_group.command("backfill")
+@click.option(
+    "--rate",
+    default=100,
+    show_default=True,
+    help="Alpaca requests per minute (the live bot shares the key's 200/min).",
+)
+def renames_backfill_cmd(rate: int) -> None:
+    """Store each old ticker's news under its current symbol (resumable)."""
+
+    async def _run(engine: Any, settings: Any) -> int:
+        from halal_trader.data.alpaca_market import AlpacaMarketData
+        from halal_trader.events.renames import backfill_renamed_news
+
+        market = AlpacaMarketData.from_settings(settings, min_interval_s=60.0 / max(rate, 1))
+        try:
+            return await backfill_renamed_news(engine, market, rate_per_min=rate)
+        finally:
+            await market.aclose()
+
+    console.print(f"renamed-ticker news: {run_db(_run)} new event(s)")
+
+
+@events.group("aliases")
+def aliases_group() -> None:
+    """The names the story builder's entity check accepts for each symbol."""
+
+
+@aliases_group.command("build")
+def aliases_build_cmd() -> None:
+    """Learn every symbol's aliases and store them (replaces this builder version's)."""
+
+    async def _run(engine: Any, settings: Any) -> tuple[int, str]:
+        from halal_trader.data.alpaca_market import AlpacaMarketData
+        from halal_trader.events.aliases import alias_sha, build_aliases
+
+        market = AlpacaMarketData.from_settings(settings)
+        try:
+            rows = await build_aliases(engine, market)
+        finally:
+            await market.aclose()
+        return rows, await alias_sha(engine)
+
+    rows, sha = run_db(_run)
+    console.print(f"{rows} alias row(s) stored; alias_sha {sha}")
+
+
 @events.command("extract")
 def extract_cmd() -> None:
     """Read earnings results and guidance vs consensus out of stored headlines."""
