@@ -53,3 +53,28 @@ async def test_one_observation_per_release_from_its_earliest_headline(engine: As
     (r,) = await releases(engine)
     assert r.published_at == AT and r.guidance == "raises" and r.beat_raise == 3
     assert r.sales_surprise == 0.5  # clipped: a 90% surprise is a parse or a tiny base
+
+
+async def test_a_metric_that_does_not_compare_is_unknown(engine: AsyncEngine) -> None:
+    # The parser flags the EPS (the year read as the EPS, against a sales
+    # estimate): Benzinga's "Misses" comes from the same figures, so it scores nothing.
+    fields = (
+        '{"eps": 2024.0, "eps_estimate": 149450000.0, "eps_surprise": null, '
+        '"eps_verdict": "misses", "eps_not_comparable": true, "not_comparable": true, '
+        '"sales_surprise": 0.03, "sales_verdict": "beat"}'
+    )
+    await EventRecorder(engine).record(
+        [EventRecord("alpaca", "n1", "news", "APPN", AT, AT, {"headline": "n1"})]
+    )
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO event_facts (event_id, extractor, kind, fields) "
+                "SELECT id, :x, 'result', CAST(:f AS JSONB) FROM events WHERE source_id = 'n1'"
+            ),
+            {"x": EXTRACTOR, "f": fields},
+        )
+    (r,) = await releases(engine)
+    assert r.eps_verdict is None and r.eps_surprise is None
+    assert r.sales_verdict == "beat" and r.sales_surprise == pytest.approx(0.03)
+    assert r.beat_raise == 1
