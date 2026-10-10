@@ -208,14 +208,25 @@ class TechComparison:
     results: dict[str, StudyResult]  # "generic", "expert", "context", "lexicon"
 
 
-async def compare(engine: AsyncEngine, model: str) -> TechComparison:
-    """Each scorer on the (symbol, day) readings all of them scored, as llm_eval reads them."""
+async def compare(
+    engine: AsyncEngine,
+    model: str,
+    *,
+    scorers: dict[str, str] | None = None,
+    since: datetime | None = None,
+) -> TechComparison:
+    """Each scorer on the (symbol, day) readings all of them scored, as llm_eval reads them.
+
+    By default the generic score against the two expert variants; ``scorers``
+    (label -> scorer id) compares the generic score with others instead, e.g. a
+    reading scored outside the app, and ``since`` keeps headlines from then on.
+    """
     from halal_trader.events.llm_score import scorer_id
 
     symbols = await tech_symbols(engine)
-    ids = {"generic": scorer_id(model)} | {
-        k: scorer_id(model, v) for k, v in variants(symbols).items()
-    }
+    ids = {"generic": scorer_id(model)} | (
+        scorers or {k: scorer_id(model, v) for k, v in variants(symbols).items()}
+    )
     name = {v: k for k, v in ids.items()}
     scores: dict[int, dict[str, float]] = defaultdict(dict)
     meta: dict[int, tuple[str, datetime, str]] = {}
@@ -229,6 +240,8 @@ async def compare(engine: AsyncEngine, model: str) -> TechComparison:
             {"ids": list(ids.values()), "syms": sorted(symbols)},
         )
         for r in rows:
+            if since is not None and r.published_at < since:
+                continue
             scores[r.id][name[r.scorer]] = float(r.score)
             meta[r.id] = (r.symbol, r.published_at, r.h or "")
     # Only events every scorer read; then one reading per (symbol, day), timed at

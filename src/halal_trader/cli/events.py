@@ -296,13 +296,28 @@ def tech_score_cmd(variant: str, max_pairs: int) -> None:
 
 
 @events.command("tech-eval")
-def tech_eval_cmd() -> None:
+@click.option(
+    "--scorer",
+    "extra",
+    multiple=True,
+    help="LABEL=SCORER_ID: compare the generic score with this one instead of the variants.",
+)
+@click.option("--since", type=click.DateTime(["%Y-%m-%d"]), default=None)
+def tech_eval_cmd(extra: tuple[str, ...], since: Any) -> None:
     """Generic vs tech-expert vs expert-with-context scores on the same tech headlines."""
 
     async def _run(engine: Any, settings: Any) -> Any:
+        from datetime import UTC
+
         from halal_trader.events.tech_expert import compare
 
-        return await compare(engine, settings.llm.model)
+        scorers = dict(e.split("=", 1) for e in extra) or None
+        return await compare(
+            engine,
+            settings.llm.model,
+            scorers=scorers,
+            since=since.replace(tzinfo=UTC) if since else None,
+        )
 
     c = run_db(_run)
     console.print(f"{c.days} (symbol, day) readings every scorer read")
