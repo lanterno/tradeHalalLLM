@@ -19,6 +19,21 @@ Each headline is a :func:`reactor_story`, deciding at ``published + 60 s``
 (the news-lag override, ``intraday.LATENCY``); the playbook is :class:`Hold`
 (buy at the start, hold), built by :class:`HoldFactory`.
 
+**What R1 must set apart.** ``intraday.run`` reads every stored minute row
+and drops a headline only when no bar starts after its decision (stock or
+SPY) or the move is implausible (``_PLAUSIBLE``, which the gate applies
+itself). ``sim.run`` loads paths through the loader's data rules, which
+the study never had: a path is skipped as ``bad_bars`` (more than 5 bars
+failing the sanity rule) or ``adjust_defect`` (a stale or unreadable
+adjustment), and a kept path has its 1 to 5 failing bars removed, as SPY's
+sessions have theirs. Such a headline can be dropped by one side only, or
+fill on another bar. ``RunSummary.data_filtered()`` lists exactly those
+story ids (``skip_ids`` by reason and ``bar_drop_ids``): R1 sets them
+aside on both sides and reports their count, then requires the identical
+dropped set and ``|Δr| <= 1e-10`` on the rest. The coverage skips in
+``skip_ids`` (``spy_missing``, ``no_daily``, ...) are compared, not set
+aside: the study on the same rows must drop them too, or R1 reports them.
+
 **S1, the daily-bar study** (``events/study.evaluate``): :func:`daily_config`
 with :class:`DailyBarSource`, which turns an observation into a pseudo path
 over the sessions from its entry to its exit. Each session has an 09:30

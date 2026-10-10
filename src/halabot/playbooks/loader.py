@@ -446,6 +446,7 @@ class MinuteBarLoader:
         self._spy = SpyData()
         self._done: set[str] | None = None
         self.counts: Counter[str] = Counter()  # skips by reason, dropped bars
+        self.spy_dropped: dict[date, int] = {}  # SPY sessions the sanity rule dropped bars from
 
     async def prepare(self) -> None:
         """Verify the unlock, check the calendar and read the done units (once)."""
@@ -549,6 +550,8 @@ class MinuteBarLoader:
             if symbol == SPY and day not in self._spy.days:
                 kept, n = sane(arrays)
                 self.counts["spy_dropped_bars"] += n
+                if n:
+                    self.spy_dropped[day] = n
                 self._spy.days[day] = kept
 
         for p in plans:

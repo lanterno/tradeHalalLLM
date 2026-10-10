@@ -70,7 +70,7 @@ from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime
-from typing import Any, Literal
+from typing import Any, Final, Literal
 
 import numpy as np
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -1214,8 +1214,30 @@ def _group(stories: Sequence[StoryView]) -> dict[str, list[StoryView]]:
 # ── the driver ────────────────────────────────────────────────
 
 
+# The loader's data rules (``loader.py``), which no legacy study applied: a skip for a
+# stale or unreadable adjustment, and one for more than 5 bars failing the sanity rule.
+DATA_SKIPS: Final = ("adjust_defect", "bad_bars")
+
+
 @dataclass(frozen=True, slots=True)
 class RunSummary:
+    """What a run did, by count, and the story ids a legacy replication must set apart.
+
+    ``skip_ids`` lists every skipped story by its reason, and
+    ``bar_drop_ids`` the stories simulated although the bar sanity rule
+    removed bars from their path (1 to 5 of the symbol's, or any of SPY's on
+    a path session). The legacy studies read every stored row and skip
+    nothing for data reasons, so these are the stories where a gate-only
+    replication can differ from its study by construction (a missing entry
+    or exit bar, another first bar after the decision): :meth:`data_filtered`
+    gathers them for the R1 gate (spec §E.2), which sets them aside and
+    counts them before it compares dropped sets and returns. The coverage
+    skips (``units_missing``, ``halted_all_day``, ``spy_missing``,
+    ``no_daily``) are listed too: a study run on the same stored rows drops
+    or computes those headlines on its own terms, and the gate reports any
+    it kept.
+    """
+
     run_id: str
     stories: int  # stories given
     started: int  # with a start time (NSN by the entry cutoff)
@@ -1225,6 +1247,14 @@ class RunSummary:
     terminal: dict[str, int]  # "STATE/reason" -> count
     skips: dict[str, int]
     loader: dict[str, int]
+    skip_ids: dict[str, tuple[str, ...]]  # reason -> sorted story ids
+    bar_drop_ids: tuple[str, ...]  # sorted; simulated with bars dropped by the sanity rule
+
+    def data_filtered(self) -> frozenset[str]:
+        """The stories this run's data rules treated unlike a study reading every row:
+        skipped as ``bad_bars`` or ``adjust_defect``, or simulated with bars dropped."""
+        ids = {i for reason in DATA_SKIPS for i in self.skip_ids.get(reason, ())}
+        return frozenset(ids | set(self.bar_drop_ids))
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -1237,6 +1267,8 @@ class RunSummary:
             "terminal": dict(sorted(self.terminal.items())),
             "skips": dict(sorted(self.skips.items())),
             "loader": dict(sorted(self.loader.items())),
+            "skip_ids": {k: list(v) for k, v in sorted(self.skip_ids.items())},
+            "bar_drop_ids": list(self.bar_drop_ids),
         }
 
 
@@ -1443,6 +1475,11 @@ async def run(
     split over ``workers`` (:func:`pool_method` chooses processes or this
     one), and each symbol's blocking state carries from batch to batch. The
     run keeps no module state, so several runs may share an event loop.
+
+    The summary lists the skipped story ids by reason and the stories
+    simulated with bars dropped by the sanity rule (:class:`RunSummary`):
+    a legacy replication (R1) sets :meth:`RunSummary.data_filtered` apart
+    before it compares dropped sets.
     """
     fill = fill_model(cfg)
     if fill.gate_only and unlock.gate is None:
@@ -1473,6 +1510,8 @@ async def run(
     states: dict[str, SymbolState] = {}
     terminal: Counter[str] = Counter()
     skips: Counter[str] = Counter()
+    skip_ids: dict[str, list[str]] = {}
+    bar_drop_ids: list[str] = []
     n_out = entries = trades = n_batches = 0
     loop = asyncio.get_running_loop()
     try:
@@ -1504,6 +1543,12 @@ async def run(
         spy_all = await loader.spy()
         async for batch in loader.batches(requests, context):
             items = {x.story_id: x for x in batch}
+            bar_drop_ids += [
+                x.story_id
+                for x in batch
+                if isinstance(x, PathData)
+                and (x.dropped or any(s.day in loader.spy_dropped for s in x.sessions))
+            ]
             ids_by_symbol: dict[str, list[str]] = {}
             for sid in sorted(items, key=lambda i: _story_key(shared.by_id[i])):
                 ids_by_symbol.setdefault(shared.by_id[sid].symbol, []).append(sid)
@@ -1544,6 +1589,7 @@ async def run(
                 terminal[f"{o.terminal_state}/{o.reason}"] += 1
                 if o.skip is not None:
                     skips[o.skip] += 1
+                    skip_ids.setdefault(o.skip, []).append(o.story_id)
                 entries += o.entered
                 trades += o.trade is not None
             n_out += len(outcomes)
@@ -1575,6 +1621,8 @@ async def run(
         terminal=dict(terminal),
         skips=dict(skips),
         loader=dict(loader.counts),
+        skip_ids={k: tuple(sorted(v)) for k, v in skip_ids.items()},
+        bar_drop_ids=tuple(sorted(bar_drop_ids)),
     )
     await sink.finish(summary.as_dict())
     logger.info(
@@ -1594,6 +1642,7 @@ async def run(
 
 
 __all__ = [
+    "DATA_SKIPS",
     "MakePlaybook",
     "Parallel",
     "PitStory",
