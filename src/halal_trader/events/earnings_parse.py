@@ -213,6 +213,12 @@ _METRIC_WORD = re.compile(r"\b(?:EPS|Sales|Revenues?|Revs?)\b", re.I)
 _CLOSING_FLAG = re.compile(
     r"May Not Compare(?:\s+(?:To|With)\s+(?:Estimates?|Est\.?))?[\s.,:]*$", re.I
 )
+# A figure's K/M/B suffix.
+SCALE: Final[dict[str, float]] = {"K": 1e3, "M": 1e6, "B": 1e9}
+# A surprise is relative to the estimate's magnitude, but never to less than this.
+SURPRISE_FLOOR: Final = 0.01
+# What a headline's statements are split on.
+SEGMENT_SEP: Final = ";"
 
 
 def money(text: str) -> float | None:
@@ -220,8 +226,8 @@ def money(text: str) -> float | None:
     t = text.replace("$", "").replace(",", "").strip()
     negative = "(" in t or t.startswith("-")
     t = t.replace("(", "").replace(")", "").lstrip("-")
-    scale = {"K": 1e3, "M": 1e6, "B": 1e9}.get(t[-1:].upper(), 1.0)
-    if t[-1:].upper() in "KMB":
+    scale = SCALE.get(t[-1:].upper(), 1.0)
+    if t[-1:].upper() in SCALE:
         t = t[:-1]
     try:
         value = float(t) * scale
@@ -233,7 +239,7 @@ def money(text: str) -> float | None:
 def _surprise(actual: float | None, estimate: float | None) -> float | None:
     if actual is None or estimate is None:
         return None
-    return (actual - estimate) / max(abs(estimate), 0.01)
+    return (actual - estimate) / max(abs(estimate), SURPRISE_FLOOR)
 
 
 def _basis(raw: str | None) -> str:
@@ -515,7 +521,7 @@ def _segment_fact(segment: str, prior: Sequence[EarningsFacts]) -> EarningsFacts
 def parse_headline(headline: str) -> list[EarningsFacts]:
     """Every result or guidance statement in one headline (segments split on ';')."""
     out: list[EarningsFacts] = []
-    for segment in headline.split(";"):
+    for segment in headline.split(SEGMENT_SEP):
         if (fact := _segment_fact(segment, out)) is not None:
             out.append(fact)
     return out
@@ -535,7 +541,9 @@ EXTRACTOR: Final = "benzinga-earnings-v4"
 
 
 def sources() -> dict[str, str]:
-    """Every pattern's source text, the parse order and the extractor, for the pins."""
+    """Every pattern's source text, the parse order, the constants that shape a
+    read (the windows, ratios and floors, the verbs, the scale and the separator)
+    and the extractor, for the pins."""
     patterns = {
         "_RESULT": _RESULT,
         "_INLINE": _INLINE,
@@ -565,12 +573,15 @@ def sources() -> dict[str, str]:
         "EPS_RATIO_FLOOR": repr(EPS_RATIO_FLOOR),
         "OLD_WINDOW": repr(OLD_WINDOW),
         "KEEP_ACTIONS": ",".join(sorted(KEEP_ACTIONS)),
+        "SCALE": json.dumps(SCALE, sort_keys=True),
+        "SURPRISE_FLOOR": repr(SURPRISE_FLOOR),
+        "SEGMENT_SEP": SEGMENT_SEP,
         "EXTRACTOR": EXTRACTOR,
     }
 
 
 # The parser's pin in the news engine's pre-registration: a change to any
-# pattern above is a new parser, so a new trial.
+# pattern or constant above is a new parser, so a new trial.
 PARSER_SHA: Final = hashlib.sha256(json.dumps(sources(), sort_keys=True).encode()).hexdigest()[:12]
 
 
