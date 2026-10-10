@@ -473,7 +473,10 @@ def _pin_conflict(gate: Gate, part: str, pinned: str, sha: str) -> GateRefused:
 async def plan_h(engine: AsyncEngine, *parts: str) -> UnitPlan:
     """Plan H's selection of ``parts``, by plan H's own code (``units.h1_plan``): the sets
     the minute backfill fetches, against which a gate's pin is checked."""
-    return await units.h1_plan(engine, parts=list(parts))
+    try:
+        return await units.h1_plan(engine, parts=list(parts))
+    except units.PlanError as e:
+        raise GateRefused(f"plan H: {e}") from e
 
 
 async def pin_units(
@@ -2428,7 +2431,12 @@ async def run_sue(
     is S2's bound).
     """
     observations = await units.load_sue_observations(engine)
-    plan = await plan_h(engine, *SUE_PLAN_PARTS)
+    try:
+        plan = await plan_h(engine, *SUE_PLAN_PARTS)
+    except GateRefused as e:
+        out0 = GateRun()
+        out0.refuse(["s0", "s1", "s1-calib", "s2", "s3"], str(e))
+        return out0
     h1_units = plan.parts["train"] | plan.parts["validation"]
     counts: Counter[str] = Counter()
     complement = await units.sue_complement(
