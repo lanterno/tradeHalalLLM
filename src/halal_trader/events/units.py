@@ -11,7 +11,9 @@ seven parts, fetched in :data:`PARTS` order by :func:`fetch` through
   previous close of at least $5 in S units, NSN_CORE stories (``nsn_at`` by
   S's entry cutoff) first, then the other stories whose ``type_close`` has a
   negative direction (``taxonomy.TYPES``), each group in seeded order
-  (:func:`g1_stories`): ``path(S, 4, 2016-09-30)``.
+  (:func:`g1_stories`): ``path(S, 4, 2016-09-30)``. A path cut there holds
+  fewer sessions; :func:`g1_path_sessions` gives the gate the sessions it
+  may ask the loader for.
 * ``gate_calib`` (G3 calibration): :data:`CALIB_PAIRS` seeded non-event
   (symbol, session) pairs, rank < 1000, sessions 2016-01-04..2016-08-31
   (:func:`calib_pairs`): the session and the session four later.
@@ -22,17 +24,19 @@ seven parts, fetched in :data:`PARTS` order by :func:`fetch` through
 * ``gate_reactor`` (G2): the pinned reactor headline set,
   ``intraday.selection(first_in_session(scored_before=2026-10-10T00:00Z))``:
   each headline's (symbol, New York day) on a session, and SPY's.
-* ``train``: every story with S in 2016-10-03..2021-12-31 whose symbol is
-  BROAD-eligible at S and which has an item of a type outside
-  :data:`TRAIN_SKIP_TYPES`: ``path(S, 4, 2021-12-31)``.
-* ``validation``: every story with S in 2022-01-03..2024-12-31, BROAD-eligible
-  at S, that is NSN_CORE by S's entry cutoff: ``path(S, 4, 2024-12-31)``.
+* ``train``: every story with S in 2016-10-03..2021-12-31 whose symbol is in
+  H1's universe at S (:func:`in_universe`) and which has an item of a type
+  outside :data:`TRAIN_SKIP_TYPES`: ``path(S, 4, 2021-12-31)``.
+* ``validation``: every story with S in 2022-01-03..2024-12-31, in the
+  universe at S, that is NSN_CORE by S's entry cutoff under the fastest news
+  lag any run uses (:data:`FASTEST_NEWS_LAG`): ``path(S, 4, 2024-12-31)``.
 
 A path is S and the sessions after it (:func:`path`): four of them, the three
 a multi-day trade can hold and the spare its close fallback reads, cut at the
-window's last session. A train or validation story holding an 8-K also
-gets S−1: a corrected filing time can move the story one session back, and
-its path then starts there.
+window's last session. A train or validation story holding an 8-K can also
+react in S−1, since a corrected filing time can move it one session back
+(:func:`story_units`): when it is in the universe at S its units add S−1,
+and when it is in the universe at S−1 they add ``path(S−1, 4, cap)``.
 
 **Selection inputs.** The persisted stories (``news_stories`` of
 ``stories.BUILDER_VERSION``: each item's type and kind, ``nsn_at``,
@@ -46,7 +50,9 @@ context.py states. No return on or after S is read, so no outcome selects a
 unit; the sets are fixed before anything is simulated.
 
 **Nothing on or after 2025-01-01** except ``gate_reactor`` (whose bars, from
-2025-12, are the gate's own): :meth:`UnitPlan.check`.
+2025-12, are the gate's own), and **no gate unit outside its gate's dates**
+(``loader.GATE_RANGES``): :meth:`UnitPlan.check` refuses either, so a run
+stops before it fetches anything.
 
 Decisions where the spec or the brief leave a choice, for the
 pre-registration to cite:
@@ -55,25 +61,47 @@ pre-registration to cite:
   ``SYMBOL:YYYY-MM-DD`` lines (``loader.unit_set_sha``), not its first 12
   hex: ``loader.register_gate_units(expected_sha=...)`` compares the full
   digest. The dry run prints the first 12.
-* **BROAD at S** is judged at both news times a story reacting in S can have
-  (:func:`broad_eligible`): σ's window depends on whether the news came
-  before S−1's close or after it, and the plan must hold the paths of every
-  reading (the H1 runner's, at the NSN item, and the atlas's), so a story is
-  in when either time admits it.
+* **The universe at S is PRIMARY or BROAD, at both news times** a story
+  reacting in S can have (:func:`in_universe`). σ's window depends on
+  whether the news came before S−1's close or after it, and the plan must
+  hold the paths of every reading (the H1 runner's, at the NSN item, and the
+  atlas's), so a story is in when either time admits it. PRIMARY is asked
+  as well as BROAD because it is not a subset of BROAD: each universe keeps
+  one share class per CIK among the names *it* admits, so a halal class
+  can win in PRIMARY and lose in BROAD to a more liquid class that only an
+  index veto keeps out of PRIMARY (spec §H assumes PRIMARY ⊂ BROAD).
+* **filing_other makes no train story** (the brief adds it to spec §H's
+  five types): an 8-K of routine items only (5.03, 5.07, 7.01, 8.01, 9.01,
+  or none that ``taxonomy.ITEM_TYPES`` types) has direction "none". The
+  path atlas (spec §F lists the five) filters its units with
+  :data:`TRAIN_SKIP_TYPES` too, so every atlas story has train units.
 * **S−1 for 8-K stories** only when S−1 is inside the part's window: a story
-  moved before the window's first session leaves the window.
+  moved before the window's first session leaves the window. The universe
+  is judged at S−1 as at S; the rank prefilter admits a story liquid at
+  either session.
+* **The fastest news lag.** H1's 60 s news-lag sensitivity makes every item
+  usable 540 s earlier than ``stories.NEWS_LAG`` does (``h1.relag``), and so
+  can make a story NSN by the cutoff that is not at 600 s. Validation
+  therefore selects ``nsn_at − (NEWS_LAG − 60 s) <= entry cutoff``; the 1,200 s
+  sensitivity only makes stories NSN later, a subset.
 * **gate_calib is non-event** (spec §E.3; the brief is silent): a pair whose
   session is the entry session of one of the symbol's SUE observations is
   left out of the population.
 * **Σ_c** holds the observations published (New York date) 2016-01-04..
   2019-12-31 with an entry on ``study.entry_point``'s clock, rank < 1000 at
-  the entry session, and not BROAD-eligible there at the publication time.
-  An observation published on an early-close day between the early close and
-  16:00 is left out and counted (``early_close``): ``entry_point`` enters it
-  at a close that came before the news (spec §E.3, S1), and no context can
-  judge a story at a session that closed before its news. The clock walks
-  ``market_hours``' sessions, which precondition D1 equates with SPY's raw
-  daily bars (the study's calendar).
+  the entry session, and in neither PRIMARY nor BROAD there at the
+  publication time. An observation published on an early-close day between
+  the early close and 16:00 is left out and counted (``early_close``):
+  ``entry_point`` enters it at a close that came before the news (spec §E.3,
+  S1), and no context can judge a story at a session that closed before its
+  news. The clock walks ``market_hours``' sessions, which precondition D1
+  equates with SPY's raw daily bars (the study's calendar).
+* **Σ_c never touches H1's units.** An event whose units (entry or exit
+  session) meet the ``train`` or ``validation`` part is dropped from Σ_c
+  and counted (``h1_overlap``), before Σ_s is drawn: a September 2016 entry
+  can exit in October 2016 on a name that is in the universe by then, and
+  spec §E.3 says the gate never reads H1's own universe. Σ_c therefore needs
+  both window parts (:func:`h1_windows`) before the gate's set is pinned.
 * **Seeds.** Every seeded part draws from its own ``random.Random(seed)``
   over a sorted population: G1 shuffles the NSN group, then the others,
   with one generator; calibration and Σ_s each sample once.
@@ -99,9 +127,9 @@ from halal_trader.core.heartbeat import DAILY_JOBS, RESEARCH
 from halal_trader.data import minutes
 from halal_trader.data.minutes import session_bounds
 from halal_trader.events.context import MAX_RANK, MIN_PREV_CLOSE, TOP_N
-from halal_trader.events.stories import BUILDER_VERSION
+from halal_trader.events.stories import BUILDER_VERSION, NEWS_LAG
 from halal_trader.events.study import BENCHMARK, Observation, entry_point
-from halal_trader.events.taxonomy import TYPES
+from halal_trader.events.taxonomy import FILING_KINDS, TYPES
 from halal_trader.market_hours import (
     MARKET_TZ,
     is_trading_day,
@@ -140,6 +168,7 @@ GATE_OF_PART: Final[dict[str, str]] = {
 
 # Three sessions (MD3) and the spare a close fallback reads.
 PATH_SESSIONS: Final = 4
+HOLD_SESSIONS: Final = PATH_SESSIONS - 1  # the most a trade holds (MD3); the spare is extra
 SPY_RANGE: Final = (date(2016, 1, 4), date(2024, 12, 31))
 TRAIN: Final = (date(2016, 10, 3), date(2021, 12, 31))
 VALIDATION: Final = (date(2022, 1, 3), date(2024, 12, 31))
@@ -160,11 +189,17 @@ SUE_HORIZONS: Final = (5, 20)
 _SUE_CALENDAR: Final = (date(2015, 12, 1), date(2020, 3, 31))
 REACTOR_SCORED_BEFORE: Final = datetime(2026, 10, 10, tzinfo=UTC)
 
-# Item types that do not make a train story (spec §H, plus filing_other).
-TRAIN_SKIP_TYPES: Final = frozenset(
+# Item types that do not make a train story: spec §H's five, plus filing_other.
+# The path atlas (spec §F) filters its units with this same set, so every
+# atlas story has train units.
+TRAIN_SKIP_TYPES: Final[frozenset[str]] = frozenset(
     {"noise", "law_firm", "mover", "other", "analyst_other", "filing_other"}
 )
-FILING_KINDS: Final = ("8-k", "8-k/a")
+# The universes a plan story may be in (in_universe); BROAD first, as it admits more.
+UNIVERSES: Final[tuple[Literal["primary", "broad"], ...]] = ("broad", "primary")
+# The fastest news lag a run reads stories with (h1.NEWS_LAGS' 60 s sensitivity; a
+# test keeps them equal): validation holds the stories NSN by the cutoff under it.
+FASTEST_NEWS_LAG: Final = timedelta(seconds=60)
 
 # The dry run's request estimate (data/alpaca_market.minute_bars_many).
 BARS_PER_UNIT: Final = 390
@@ -204,6 +239,10 @@ def sessions_between(start: date, end: date) -> list[date]:
 # ── the plan ───────────────────────────────────────────────────
 
 
+class PlanError(ValueError):
+    """A plan that may not be fetched (:meth:`UnitPlan.check`)."""
+
+
 @dataclass(frozen=True, slots=True)
 class UnitPlan:
     """The units of each part (keys from :data:`PARTS`)."""
@@ -224,31 +263,30 @@ class UnitPlan:
         return [p for p in PARTS if p in self.parts]
 
     def check(self) -> None:
-        """``ValueError`` on an unknown part, or a unit after 2024 outside the reactor's set."""
+        """:class:`PlanError` on an unknown part, a unit after 2024 outside the
+        reactor's set, or a gate part's unit outside its gate's dates
+        (``loader.GATE_RANGES``, which ``register_gate_units`` enforces only
+        after the fetch): the plan is refused before anything is fetched."""
         unknown = sorted(set(self.parts) - set(PARTS))
         if unknown:
-            raise ValueError(f"unknown part(s): {', '.join(unknown)}")
+            raise PlanError(f"unknown part(s): {', '.join(unknown)}")
         for part, units in self.parts.items():
-            if part == "gate_reactor":
-                continue
-            late = sorted(u for u in units if u[1] > LAST_UNLOCKED)
-            if late:
-                raise ValueError(
-                    f"{part}: {len(late)} unit(s) after {LAST_UNLOCKED}, first "
-                    f"{minutes.unit(*late[0])}"
-                )
-
-    def outside_gate_ranges(self) -> dict[str, int]:
-        """Units of each gate part outside the dates its gate may read (``loader.GATE_RANGES``)."""
-        out: dict[str, int] = {}
-        for part, gate in GATE_OF_PART.items():
-            if part not in self.parts:
-                continue
-            lo, hi = GATE_RANGES[gate]
-            n = sum(1 for _, d in self.parts[part] if not lo <= d <= hi)
-            if n:
-                out[part] = n
-        return out
+            if part != "gate_reactor":
+                late = sorted(u for u in units if u[1] > LAST_UNLOCKED)
+                if late:
+                    raise PlanError(
+                        f"{part}: {len(late)} unit(s) after {LAST_UNLOCKED}, first "
+                        f"{minutes.unit(*late[0])}"
+                    )
+            gate = GATE_OF_PART.get(part)
+            if gate is not None:
+                lo, hi = GATE_RANGES[gate]
+                outside = sorted(u for u in units if not lo <= u[1] <= hi)
+                if outside:
+                    raise PlanError(
+                        f"{part}: {len(outside)} unit(s) outside the {gate} gate's dates "
+                        f"{lo}..{hi}, first {minutes.unit(*outside[0])}"
+                    )
 
 
 # ── liquidity ──────────────────────────────────────────────────
@@ -330,16 +368,31 @@ def news_times(session: date) -> tuple[datetime, datetime]:
     return prev_close - timedelta(seconds=1), session_bounds(session)[0]
 
 
-def broad_eligible(ctx: ContextLike, symbol: str, session: date) -> bool:
-    """BROAD-eligible at ``session`` for news at some time a story there can have."""
+def in_universe(ctx: ContextLike, symbol: str, session: date) -> bool:
+    """In PRIMARY or BROAD at ``session`` for news at some time a story there can have.
+
+    Both universes are asked because PRIMARY is not a subset of BROAD: each
+    keeps one share class per CIK among the names it admits, so a halal
+    class PRIMARY keeps can lose, in BROAD, to a more liquid class that only
+    an index veto keeps out of PRIMARY (``share_class`` there).
+    """
     return any(
-        ctx.eligibility(symbol, session, at_news=at, universe="broad").eligible
+        ctx.eligibility(symbol, session, at_news=at, universe=universe).eligible
+        for universe in UNIVERSES
         for at in news_times(session)
     )
 
 
 def prev_close_s(ctx: ContextLike, symbol: str, session: date) -> float | None:
-    """``close_raw(S−1) · A(S−1)/A(S)``: S−1's close in S units, or None without the bars."""
+    """``close_raw(S−1) · A(S−1)/A(S)``: S−1's close in S units, or None without the bars.
+
+    The G1 price rule. It must agree with the price ``context.PitContext``
+    judges eligibility on (``context._prev_close_s``), which has no public
+    accessor; it is computed here through ``daily`` and ``adj``, and a test
+    holds the two equal on the context's own bars. The one way they can
+    differ: ``daily`` also wants S−1's raw open, high, low and volume, which
+    ``daily_bars`` stores NOT NULL with the close.
+    """
     prev = ctx.daily(symbol, previous_trading_day(session))
     a_s = ctx.adj(symbol, session)
     if prev is None or a_s is None:
@@ -365,9 +418,26 @@ class StoryRef:
     symbol: str
     session: date
     nsn: bool  # NSN_CORE by S's entry cutoff (``nsn_at`` <= Session.entry_cutoff)
+    nsn_fast: bool  # the same under FASTEST_NEWS_LAG (see nsn_by_cutoff); nsn implies it
     type_close: str
     substantive: bool  # an item of a type outside TRAIN_SKIP_TYPES
     has_8k: bool  # an 8-K or 8-K/A item
+
+
+def nsn_by_cutoff(nsn_at: datetime | None, session: date, *, lag: timedelta = NEWS_LAG) -> bool:
+    """Whether a story whose persisted ``nsn_at`` (items usable ``stories.NEWS_LAG``
+    after their time) is NSN_CORE by S's entry cutoff when items are usable
+    ``lag`` after their time instead.
+
+    Moving every item's ``available_at`` by the same amount (``h1.relag``)
+    moves the first NSN time by it too: the cards depend only on which items
+    are known, so the story is NSN by the cutoff iff
+    ``nsn_at − (NEWS_LAG − lag) <= cutoff``. ``nsn_at`` was found by S's
+    close, which is later than the cutoff plus any shift a run uses.
+    """
+    if nsn_at is None:
+        return False
+    return nsn_at - (NEWS_LAG - lag) <= Session.of(session).entry_cutoff
 
 
 _STORIES_SQL: Final = text(
@@ -395,7 +465,7 @@ async def read_stories(engine: AsyncEngine, start: date, end: date) -> list[Stor
                 "a": start,
                 "b": end,
                 "skip": sorted(TRAIN_SKIP_TYPES),
-                "filings": list(FILING_KINDS),
+                "filings": sorted(FILING_KINDS),
             },
         )
         return [
@@ -403,7 +473,8 @@ async def read_stories(engine: AsyncEngine, start: date, end: date) -> list[Stor
                 story_id=str(r.story_id),
                 symbol=str(r.symbol),
                 session=r.session,
-                nsn=r.nsn_at is not None and r.nsn_at <= Session.of(r.session).entry_cutoff,
+                nsn=nsn_by_cutoff(r.nsn_at, r.session),
+                nsn_fast=nsn_by_cutoff(r.nsn_at, r.session, lag=FASTEST_NEWS_LAG),
                 type_close=str(r.type_close),
                 substantive=bool(r.substantive),
                 has_8k=bool(r.has_8k),
@@ -412,13 +483,51 @@ async def read_stories(engine: AsyncEngine, start: date, end: date) -> list[Stor
         ]
 
 
-def story_units(story: StoryRef, start: date, cap: date) -> set[Unit]:
-    """``path(S, 4, cap)``, and S−1 for a story with an 8-K when S−1 >= ``start``."""
-    days = path(story.session, PATH_SESSIONS, cap)
+def reaction_sessions(story: StoryRef, start: date) -> list[date]:
+    """The sessions ``story`` can react in: S, then S−1 for a story with an 8-K
+    when S−1 >= ``start`` (a corrected filing time moves it one session back)."""
+    days = [story.session]
     if story.has_8k:
         prev = previous_trading_day(story.session)
         if prev >= start:
             days.append(prev)
+    return days
+
+
+def _anywhere(day: date) -> bool:
+    return True
+
+
+def _judge(ctx: ContextLike, ranks: LiquidityRanks, symbol: str) -> Callable[[date], bool]:
+    """Whether ``symbol`` is ranked < 1000 and :func:`in_universe` at a session, memoised."""
+    judged: dict[date, bool] = {}
+
+    def eligible(day: date) -> bool:
+        if day not in judged:
+            judged[day] = ranks.liquid(symbol, day) and in_universe(ctx, symbol, day)
+        return judged[day]
+
+    return eligible
+
+
+def story_units(
+    story: StoryRef, start: date, cap: date, *, eligible: Callable[[date], bool] = _anywhere
+) -> set[Unit]:
+    """The units of ``story`` given the sessions it is in the universe at
+    (``eligible``; every session by default).
+
+    In at S: ``path(S, 4, cap)``, and S−1 too for a story with an 8-K. In at
+    S−1 (a story with an 8-K): ``path(S−1, 4, cap)``. S−1 counts only when
+    >= ``start`` (:func:`reaction_sessions`).
+    """
+    session, *before = reaction_sessions(story, start)
+    days: set[date] = set()
+    if eligible(session):
+        days.update(path(session, PATH_SESSIONS, cap))
+        days.update(before)
+    for prev in before:
+        if eligible(prev):
+            days.update(path(prev, PATH_SESSIONS, cap))
     return {(story.symbol, d) for d in days}
 
 
@@ -429,7 +538,12 @@ async def window_units(
     ranks: LiquidityRanks | None = None,
     counts: Counter[str] | None = None,
 ) -> frozenset[Unit]:
-    """The ``train`` or ``validation`` part: one year of stories and context at a time."""
+    """The ``train`` or ``validation`` part: one year of stories and context at a time.
+
+    Train takes the substantive stories, validation those NSN by the cutoff
+    under :data:`FASTEST_NEWS_LAG`; a story is in at each of its reaction
+    sessions where its symbol is ranked < 1000 and :func:`in_universe`.
+    """
     start, end = WINDOWS[window]
     ranks = ranks if ranks is not None else LiquidityRanks(engine)
     c = counts if counts is not None else Counter()
@@ -437,20 +551,48 @@ async def window_units(
     for lo, hi in _years(start, end):
         refs = await read_stories(engine, lo, hi)
         c["stories"] += len(refs)
-        keep = [r for r in refs if (r.substantive if window == "train" else r.nsn)]
-        await ranks.load(r.session for r in keep)
-        keep = [r for r in keep if ranks.liquid(r.symbol, r.session)]
+        keep = [r for r in refs if (r.substantive if window == "train" else r.nsn_fast)]
+        days = {r.story_id: reaction_sessions(r, start) for r in keep}
+        await ranks.load(d for r in keep for d in days[r.story_id])
+        keep = [r for r in keep if any(ranks.liquid(r.symbol, d) for d in days[r.story_id])]
         if not keep:
             continue
-        ctx = await _context(engine, {r.symbol for r in keep}, lo, hi)
+        first = min(min(days[r.story_id]) for r in keep)  # an S−1 can fall in the year before
+        ctx = await _context(engine, {r.symbol for r in keep}, min(lo, first), hi)
         for r in keep:
-            if broad_eligible(ctx, r.symbol, r.session):
-                c["selected"] += 1
-                c["with_8k"] += r.has_8k
-                out |= story_units(r, start, end)
+            eligible = _judge(ctx, ranks, r.symbol)
+            got = story_units(r, start, end, eligible=eligible)
+            if not got:
+                continue
+            c["selected"] += 1
+            c["with_8k"] += r.has_8k
+            c["before_only"] += not eligible(r.session)  # in only through S−1
+            out |= got
         del ctx
         logger.info("plan h1 %s %s..%s: %d units so far", window, lo, hi, len(out))
     return frozenset(out)
+
+
+async def h1_windows(
+    engine: AsyncEngine,
+    *,
+    windows: Collection[Window] | None = None,
+    ranks: LiquidityRanks | None = None,
+    counts: Counter[str] | None = None,
+) -> dict[Window, frozenset[Unit]]:
+    """The ``train`` and ``validation`` parts (or only ``windows``); ``counts``
+    gets ``<window>.<count>``.
+
+    Σ_c drops every SUE event that meets the two (:func:`sue_complement`).
+    """
+    ranks = ranks if ranks is not None else LiquidityRanks(engine)
+    c = counts if counts is not None else Counter()
+    out: dict[Window, frozenset[Unit]] = {}
+    for window in [w for w in WINDOWS if windows is None or w in windows]:
+        window_counts: Counter[str] = Counter()
+        out[window] = await window_units(engine, window, ranks=ranks, counts=window_counts)
+        c.update({f"{window}.{k}": v for k, v in window_counts.items()})
+    return out
 
 
 # ── gate_g1 ────────────────────────────────────────────────────
@@ -507,6 +649,25 @@ def g1_units(stories: Iterable[GateStory]) -> frozenset[Unit]:
     return frozenset(
         (s.symbol, d) for s in stories for d in path(s.session, PATH_SESSIONS, G1_RANGE[1])
     )
+
+
+class _OnSession(Protocol):
+    @property
+    def session(self) -> date: ...
+
+
+def g1_path_sessions(story: _OnSession, hold: int = HOLD_SESSIONS) -> int:
+    """The sessions the G1 gate may ask the loader for (``PathRequest.n_sessions``)
+    for a story held up to ``hold`` sessions: ``hold``, cut where :func:`g1_units`
+    cuts the path, at 2016-09-30.
+
+    A story with S in 2016-09-28..30 has a shorter path, and the loader refuses
+    (``WindowLocked``, the whole run) a path that leaves the gate's unit set.
+    The spare session the loader adds itself, only where it is a unit.
+    """
+    if hold < 1:
+        raise ValueError(f"a story holds at least one session, not {hold}")
+    return min(hold, len(path(story.session, PATH_SESSIONS, G1_RANGE[1])))
 
 
 # ── SUE: Σ_c, Σ_s and the calibration pairs ────────────────────
@@ -567,13 +728,17 @@ def _sue_key(e: SueEvent) -> tuple[datetime, str, float, date]:
 async def sue_complement(
     engine: AsyncEngine,
     *,
+    h1_units: Collection[Unit],
     observations: Sequence[Observation] | None = None,
     ranks: LiquidityRanks | None = None,
     counts: Counter[str] | None = None,
 ) -> list[SueEvent]:
     """Σ_c: SUE observations published 2016-01-04..2019-12-31 whose symbol has rank
-    < 1000 at the entry session and is not BROAD-eligible there at the publication
-    time; sorted. ``counts`` gets each exclusion."""
+    < 1000 at the entry session and is in neither PRIMARY nor BROAD there at the
+    publication time, less every event with a unit in ``h1_units`` (the train and
+    validation parts, :func:`h1_windows`); sorted. ``counts`` gets each exclusion,
+    ``h1_overlap`` the events dropped for meeting ``h1_units``."""
+    h1 = h1_units if isinstance(h1_units, (set, frozenset)) else set(h1_units)
     obs = observations if observations is not None else await load_sue_observations(engine)
     ranks = ranks if ranks is not None else LiquidityRanks(engine)
     c = counts if counts is not None else Counter()
@@ -601,9 +766,13 @@ async def sue_complement(
         lo, hi = min(e.session for e in group), max(e.session for e in group)
         ctx = await _context(engine, {e.symbol for e in group}, lo, hi)
         for e in group:
-            elig = ctx.eligibility(e.symbol, e.session, at_news=e.published_at, universe="broad")
-            if elig.eligible:
-                c["broad"] += 1
+            if any(
+                ctx.eligibility(e.symbol, e.session, at_news=e.published_at, universe=u).eligible
+                for u in UNIVERSES
+            ):
+                c["universe"] += 1
+            elif not e.units().isdisjoint(h1):
+                c["h1_overlap"] += 1
             else:
                 out.append(e)
         del ctx
@@ -703,14 +872,24 @@ async def h1_plan(
     parts: Collection[str] | None = None,
     counts: Counter[str] | None = None,
 ) -> UnitPlan:
-    """Plan H's parts (all, or ``parts``); ``counts`` gets the selection counts."""
+    """Plan H's parts (all, or ``parts``); ``counts`` gets the selection counts.
+
+    ``gate_sue`` needs the train and validation parts (Σ_c drops the events
+    that meet them), so asking for it selects those too, counts included.
+    """
     if parts is not None and (unknown := sorted(set(parts) - set(PARTS))):
-        raise ValueError(f"unknown part(s): {', '.join(unknown)}")
+        raise PlanError(f"unknown part(s): {', '.join(unknown)}")
     wanted = [p for p in PARTS if parts is None or p in parts]
     c = counts if counts is not None else Counter()
     ranks = LiquidityRanks(engine)
     out: dict[str, frozenset[Unit]] = {}
     observations: list[Observation] | None = None
+    windows = await h1_windows(
+        engine,
+        windows=[w for w in WINDOWS if w in wanted or "gate_sue" in wanted],
+        ranks=ranks,
+        counts=c,
+    )
     for part in wanted:
         if part == "spy":
             out[part] = spy_units()
@@ -729,7 +908,11 @@ async def h1_plan(
             else:
                 sue_counts: Counter[str] = Counter()
                 complement = await sue_complement(
-                    engine, observations=observations, ranks=ranks, counts=sue_counts
+                    engine,
+                    h1_units=windows["train"] | windows["validation"],
+                    observations=observations,
+                    ranks=ranks,
+                    counts=sue_counts,
                 )
                 sample = sue_sample(complement, seed=seed)
                 c.update({f"sue.{k}": v for k, v in sue_counts.items()})
@@ -740,10 +923,7 @@ async def h1_plan(
             c["reactor.headlines"] = len(headlines)
             out[part] = reactor_units(headlines)
         else:
-            window: Window = "train" if part == "train" else "validation"
-            window_counts: Counter[str] = Counter()
-            out[part] = await window_units(engine, window, ranks=ranks, counts=window_counts)
-            c.update({f"{part}.{k}": v for k, v in window_counts.items()})
+            out[part] = windows["train" if part == "train" else "validation"]
     plan = UnitPlan(out)
     plan.check()
     return plan
