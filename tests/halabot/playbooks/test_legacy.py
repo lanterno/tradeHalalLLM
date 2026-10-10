@@ -292,6 +292,7 @@ def test_s1_the_simulator_reproduces_study_outcome(seed: int) -> None:
     src = DailyBarSource(bars)
     lo = datetime(2016, 2, 1, tzinfo=UTC)
     checked = skipped = multi = 0
+    by_h: dict[int, list[int]] = {h: [0, 0] for h in study.HORIZONS}  # h -> [checked, skipped]
     cases = [(lo + timedelta(seconds=float(rng.uniform(0, 150 * 86400)))) for _ in range(60)]
     cases += [
         datetime.combine(date(2016, 3, 11), time(15, 0), MARKET_TZ),  # close entry, exit 03-14+
@@ -306,7 +307,7 @@ def test_s1_the_simulator_reproduces_study_outcome(seed: int) -> None:
             if entry is None or point is None:
                 continue
             assert (entry.index, entry.at) == point
-            for h in (1, 5, 20):
+            for h in study.HORIZONS:  # 1, 5, 20 and 60 (spec §E.3 S1)
                 bps = (7.0, 15.0, 30.0)[n % 3]
                 want = study.outcome(bars, symbol, point, h, bps)
                 got = src.simulate(
@@ -315,6 +316,7 @@ def test_s1_the_simulator_reproduces_study_outcome(seed: int) -> None:
                 if want is None:
                     assert isinstance(got, PathSkip), (published, symbol, h)
                     skipped += 1
+                    by_h[h][1] += 1
                     continue
                 assert not isinstance(got, PathSkip), (published, symbol, h)
                 t = got.trade
@@ -326,8 +328,10 @@ def test_s1_the_simulator_reproduces_study_outcome(seed: int) -> None:
                 assert t.exit_decided_at == Session.of(t.exit_session).close
                 assert got.reason == "time_stop" and got.terminal_state == "EXITED"
                 checked += 1
+                by_h[h][0] += 1
                 multi += t.sessions_held > 1
     assert checked > 200 and skipped > 0 and multi > 100
+    assert by_h[60][0] > 20 and by_h[60][1] > 20  # h=60 runs past the calendar for later events
 
 
 async def test_s1_matches_study_evaluate_on_the_database(engine: AsyncEngine) -> None:
@@ -356,7 +360,7 @@ async def test_s1_matches_study_evaluate_on_the_database(engine: AsyncEngine) ->
         )
         for n in range(40)
     ]
-    want = await study.evaluate(engine, observations, horizons=(1, 5, 20))
+    want = await study.evaluate(engine, observations)  # study.HORIZONS: 1, 5, 20, 60
     src = await DailyBarSource.load(engine, ["AAA", "BBB"])
     assert src.sessions == sessions
     got = []
@@ -364,7 +368,7 @@ async def test_s1_matches_study_evaluate_on_the_database(engine: AsyncEngine) ->
         entry = src.entry(obs.published_at)
         if entry is None:
             continue
-        for h in (1, 5, 20):
+        for h in study.HORIZONS:
             out = src.simulate(
                 entry,
                 story_id=f"{n}:{h}",
@@ -377,6 +381,7 @@ async def test_s1_matches_study_evaluate_on_the_database(engine: AsyncEngine) ->
                 got.append((obs.published_at, h, out.trade.r_net_abn))
     expected = [(o.published_at, h, r) for o, h, r in want]
     assert len(got) == len(expected) > 60
+    assert sum(h == 60 for _, h, _ in expected) > 5
     for (t1, h1, r1), (t2, h2, r2) in zip(sorted(got), sorted(expected), strict=True):
         assert (t1, h1) == (t2, h2) and abs(r1 - r2) <= EPS
 
