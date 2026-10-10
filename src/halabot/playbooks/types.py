@@ -156,18 +156,28 @@ class BarSeries:
         return cls(i, f, f, f, f, f, f, i, i, f)
 
     def head(self, n: int) -> BarSeries:
-        """The first ``n`` bars (views, still read-only)."""
+        """The first ``n`` bars, as read-only **copies**.
+
+        A view would keep the whole path reachable through ``.base``; a copy
+        holds bars ``0 .. n-1`` and nothing else, so what a playbook is given
+        exposes no bar it cannot see yet. The simulator keeps one head per
+        symbol, rebuilt only when ``n`` changes (``sim._Market``).
+        """
+
+        def cut[A: np.generic](a: NDArray[A]) -> NDArray[A]:
+            return _frozen(a[:n].copy())
+
         return BarSeries(
-            self.ts[:n],
-            self.o[:n],
-            self.h[:n],
-            self.l[:n],
-            self.c[:n],
-            self.v[:n],
-            self.vw[:n],
-            self.visible_at[:n],
-            self.k[:n],
-            self.scale[:n],
+            cut(self.ts),
+            cut(self.o),
+            cut(self.h),
+            cut(self.l),
+            cut(self.c),
+            cut(self.v),
+            cut(self.vw),
+            cut(self.visible_at),
+            cut(self.k),
+            cut(self.scale),
         )
 
     def in_s_units(self) -> BarSeries:
@@ -193,18 +203,6 @@ class BarSeries:
     def bar_time(self, i: int) -> datetime:
         """Bar ``i``'s start as a UTC datetime."""
         return from_us(int(self.ts[i]) * 1_000_000)
-
-
-@dataclass(frozen=True, slots=True)
-class DailyPoint:
-    """One raw daily bar and its A-factor; satisfies ``interfaces.DailyPointLike``."""
-
-    o: float
-    h: float
-    l: float  # noqa: E741 - the bar's low, named as in o/h/l/c
-    c: float
-    v: float
-    a: float | None = None
 
 
 @dataclass(slots=True)
@@ -499,7 +497,6 @@ __all__ = [
     "Cancel",
     "ComplianceIn",
     "CostMode",
-    "DailyPoint",
     "Execution",
     "FillIn",
     "Finish",

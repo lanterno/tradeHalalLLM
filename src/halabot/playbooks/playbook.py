@@ -1,26 +1,53 @@
-"""The Playbook protocol and the views a playbook decides from.
+"""The Playbook protocol, its factory, and the views a playbook decides from.
 
-A playbook is a pure state machine: the driver (the simulator here, a live
-driver in Phase 4) calls :meth:`Playbook.start` once and :meth:`Playbook.on`
-for every input, and applies the intents it returns. Everything it may look
-at comes through :class:`Ctx`:
+**The contract a playbook implements** (``bounce.py`` and every later one):
+
+* It is a pure state machine. The driver (the simulator here, a live
+  driver in Phase 4) calls :meth:`Playbook.start` once, then
+  :meth:`Playbook.on` for every input, and applies the intents each call
+  returns, in order. Nothing else reaches it: no clock, no database, no
+  daily bar of the current or a later session.
+* :meth:`Playbook.live` is True while the playbook holds its symbol:
+  watching, armed, entering or entered (spec §D.10). While one playbook on
+  a symbol is live, a story starting on that symbol is ``blocked_open``
+  (its items still reach the live playbook as ``NewsIn``). The simulator
+  asks ``live()`` after every call; it never reads state names for this.
+* :meth:`Playbook.state` is the state's name, for the records only
+  (``StoryOutcome.terminal_state``, the transitions).
+* **The buy** is ``Submit("buy", facts=TradeFacts(...))``: the trade record
+  is built from those facts (P0, levels, cost, rank, beta). A buy without
+  facts is rejected (``no_facts``).
+* **Every sell** carries its exit reason in ``Submit.reason`` (``target``,
+  ``stop``, ``abort``, ``compliance``, ``time_stop``); a sell without one
+  is recorded as ``"unspecified"``. Sells are whole: a partial one is
+  rejected (``partial_exit``).
+* **State changes** are reported with ``Transition(to, reason)``. The first
+  one whose ``reason`` is :data:`TRIGGERED` (``Transition(state,
+  reason="triggered")``, usually a self-transition) sets ``triggered_at``;
+  the first into a state named ``armed`` (any case: :data:`ARMED`) sets
+  ``armed_at``.
+* **A terminal state ends with** ``Finish(reason)`` (exited, expired,
+  dismissed). Without it the story runs to the deadline session's close.
+  A ``Finish`` while holding makes the simulator sell (``time_stop``).
+* The simulator itself enforces the compliance exit (``ComplianceIn`` tells
+  the playbook), the flatten at close - 5 min of the deadline session, day
+  orders, and the admission rules (``rules.py``).
+
+**The factory** (:class:`PlaybookFactory`) builds one playbook per started
+story and says, before any is built, how many sessions its paths need
+(``path_sessions``) and the playbook's name and version (the run row). It
+receives the story as the simulator's point-in-time view (``sim.PitStory``),
+clamped to the simulated ``now``.
+
+**What a playbook sees** comes through :class:`Ctx`:
 
 * ``market`` shows only bars already **visible** at ``now`` (``bars``
-  end at ``searchsorted(visible_at, now, 'right')``); prices are raw, and
-  ``to_s_units`` (or ``BarSeries.in_s_units``) puts them in session-S units
-  with the A-ratios. No daily bar of the current or a later session is
-  reachable.
+  end at ``searchsorted(visible_at, now, 'right')``, copied, so no later
+  bar is reachable); prices are raw, and ``to_s_units`` (or
+  ``BarSeries.in_s_units``) puts them in session-S units with the
+  A-ratios.
 * ``story.card_at(now)`` labels the story from items available by ``now``.
 * ``position`` is the story's own position and working orders.
-
-Conventions the simulator reads from the intents:
-
-* ``Transition(to, reason)`` records a state change; the first transition to
-  ``"ARMED"`` sets ``armed_at``, and the first with ``reason == TRIGGERED``
-  (usually a self-transition) sets ``triggered_at``.
-* A playbook is **live** while its state is in :data:`LIVE_STATES` and it has
-  not finished; a story starting on the same symbol meanwhile is
-  ``blocked_open``.
 """
 
 from __future__ import annotations
@@ -34,7 +61,7 @@ from halabot.playbooks.interfaces import CardView, ContextView, StoryView
 from halabot.playbooks.types import BarSeries, Input, Intent, Session, WorkingOrder
 
 TRIGGERED: Final = "triggered"
-LIVE_STATES: Final = frozenset({"WATCHING", "ARMED", "ENTERING", "ENTERED"})
+ARMED: Final = "armed"  # compared case-insensitively: "ARMED" and StrEnum auto() both count
 
 
 class MarketView(Protocol):
@@ -108,17 +135,55 @@ class Playbook(Protocol):
 
     def start(self, ctx: Ctx) -> list[Intent]: ...
     def on(self, ev: Input, ctx: Ctx) -> list[Intent]: ...
-    def state(self) -> str: ...
+
+    def state(self) -> str:
+        """The current state's name, for the records."""
+        ...
+
+    def live(self) -> bool:
+        """Watching, armed, entering or entered: the symbol is taken (``blocked_open``)."""
+        ...
 
 
-PlaybookFactory = Callable[[StoryView], Playbook]
+class PlaybookFactory(Protocol):
+    """Builds a story's playbook; knows its paths' length and its name before building one."""
+
+    @property
+    def name(self) -> str: ...
+    @property
+    def version(self) -> str: ...
+    @property
+    def path_sessions(self) -> int: ...
+
+    def __call__(self, story: StoryView) -> Playbook:
+        """The playbook of ``story`` (the simulator's point-in-time view of it)."""
+        ...
+
+
+@dataclass(frozen=True, slots=True)
+class Factory:
+    """A :class:`PlaybookFactory` around a function.
+
+    A spawn process pool pickles the factory, so ``make`` must then be a
+    module-level function or class, not a closure (``sim.run``).
+    """
+
+    make: Callable[[StoryView], Playbook]
+    name: str
+    version: str
+    path_sessions: int
+
+    def __call__(self, story: StoryView) -> Playbook:
+        return self.make(story)
+
 
 __all__ = [
-    "LIVE_STATES",
+    "ARMED",
     "TRIGGERED",
     "CardView",
     "ContextView",
     "Ctx",
+    "Factory",
     "MarketView",
     "Playbook",
     "PlaybookFactory",

@@ -8,7 +8,8 @@ the bot (``rules.py``: halal at the order boundary, fail closed; long-only)
 and fill by a fixed market-order rule (``exchange.py``). Paths load behind a
 window guard that keeps pre-registered windows closed until the ledger says
 they may open (``loader.py``); results go to ``hb_playbook_*``
-(``records.py``).
+(``records.py``). What a playbook must do is the contract at the top of
+``playbook.py``.
 
 Research only: nothing here places an order, and nothing imports
 ``halabot.execution``.

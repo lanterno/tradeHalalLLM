@@ -70,15 +70,16 @@ class StoryView(Protocol):
 class DailyPointLike(Protocol):
     """One raw daily bar: the official open and close of a session.
 
-    ``context.DailyPoint`` carries more (high, low, volume and the
-    A-factor); the simulator reads only the official prices, for its
-    close fallbacks and the SPY legs that go with them.
+    ``context.DailyPoint`` (``day, open, high, low, close, volume, adj``)
+    satisfies it; the simulator reads only the official prices, for its
+    close fallbacks, the daily legs' marks and the SPY legs that go with
+    them. A-factors come from ``ContextView.adj``.
     """
 
     @property
-    def o(self) -> float: ...
+    def open(self) -> float: ...
     @property
-    def c(self) -> float: ...
+    def close(self) -> float: ...
 
 
 class ContextView(Protocol):

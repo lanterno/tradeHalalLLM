@@ -36,8 +36,9 @@ and bars not yet visible stay with the simulator.
   (``unresolved``); the trade is always kept.
 
 **Per symbol**, stories run in start order and only one playbook may be
-live (``playbook.LIVE_STATES``) at a time: a story starting meanwhile is
-``blocked_open``. ``stop_at="entry"`` stops a story at its entry fill
+live (``Playbook.live()``) at a time: a story starting meanwhile is
+``blocked_open``, before any eligibility its own playbook would judge (it
+never gets one). ``stop_at="entry"`` stops a story at its entry fill
 (Stage A); ``assume_full_hold`` then keeps the symbol blocked through the
 deadline session.
 
@@ -83,7 +84,7 @@ from halabot.playbooks.loader import (
     Window,
     WindowUnlock,
 )
-from halabot.playbooks.playbook import LIVE_STATES, TRIGGERED, Ctx, Playbook, PlaybookFactory
+from halabot.playbooks.playbook import ARMED, TRIGGERED, Ctx, Playbook, PlaybookFactory
 from halabot.playbooks.records import Leg, OutcomeSink, RunInfo, StoryOutcome, TradeRecord
 from halabot.playbooks.types import (
     BarIn,
@@ -118,6 +119,7 @@ from halal_trader.data.minutes import BarArrays
 logger = logging.getLogger(__name__)
 
 StopAt = Literal["entry", "end"]
+MakePlaybook = Callable[[StoryView], Playbook]
 
 # Heap payload kinds.
 _EXCH, _NOTE, _SESSION, _SPY, _BAR, _NEWS, _TIMER = range(7)
@@ -150,7 +152,7 @@ class SymbolState:
 
 
 class _Market:
-    """``MarketView`` over one path: bars visible at ``now`` only."""
+    """``MarketView`` over one path: bars visible at ``now`` only, as copies."""
 
     __slots__ = ("_a_s", "_b_s", "_bars", "_cache", "_ctx", "_now_s", "_spy", "_symbol")
 
@@ -164,7 +166,7 @@ class _Market:
         self._a_s = ctx.adj(symbol, s)
         self._b_s = ctx.adj(SPY, s)
         self._now_s = 0
-        self._cache: dict[tuple[str, int], BarSeries] = {}
+        self._cache: dict[str, tuple[int, BarSeries]] = {}  # symbol -> (n, its head copy)
 
     def set_now(self, now_us: int) -> None:
         self._now_s = now_us // US
@@ -179,10 +181,10 @@ class _Market:
     def bars(self, symbol: str) -> BarSeries:
         series = self._series(symbol)
         n = int(np.searchsorted(series.visible_at, self._now_s, side="right"))
-        key = (symbol, n)
-        if key not in self._cache:
-            self._cache = {key: series.head(n)}  # one view per (symbol, now) is enough
-        return self._cache[key]
+        hit = self._cache.get(symbol)
+        if hit is None or hit[0] != n:
+            hit = self._cache[symbol] = (n, series.head(n))  # a copy: no later bar behind it
+        return hit[1]
 
     def last(self, symbol: str) -> float | None:
         series = self._series(symbol)
@@ -292,7 +294,7 @@ class _StoryRun:
     def __init__(
         self,
         story: StoryView,
-        pb: Playbook,
+        make_playbook: MakePlaybook,
         path: PathData,
         spy: SpyData,
         ctx: ContextView,
@@ -306,17 +308,11 @@ class _StoryRun:
         keep_transitions: bool,
         run_id: str,
     ) -> None:
-        if pb.path_sessions != len(path.sessions):
-            raise ValueError(
-                f"{story.story_id}: the playbook runs {pb.path_sessions} sessions, "
-                f"the path has {len(path.sessions)}"
-            )
         if path.sessions[0].day != story.session or path.symbol != story.symbol:
             raise ValueError(
                 f"{story.story_id}: the path is {path.symbol} from {path.sessions[0].day}"
             )
         self.story = story
-        self.pb = pb
         self.path = path
         self.ctx = ctx
         self.cfg = cfg
@@ -381,6 +377,13 @@ class _StoryRun:
         self.unlive_us: int | None = None
         self.bar_i = int(np.searchsorted(self.bars.visible_at, start_us // US, side="right"))
         self.spy_i = int(np.searchsorted(self.spy.visible_at, start_us // US, side="right"))
+        # Built last, from the story as known at the start (the factory may keep it).
+        self.pb: Playbook = make_playbook(self.pit(story))
+        if self.pb.path_sessions != self.n:
+            raise ValueError(
+                f"{story.story_id}: the playbook runs {self.pb.path_sessions} sessions, "
+                f"the path has {self.n}"
+            )
 
     # ── helpers ──
 
@@ -533,8 +536,8 @@ class _StoryRun:
                 self.intents.append((now, it))
             if isinstance(it, Transition):
                 if self.keep:
-                    self.transitions.append((now, label, it.to, it.reason))
-                if it.to == "ARMED" and self.armed_at is None:
+                    self.transitions.append((now, str(label), str(it.to), it.reason))
+                if self.armed_at is None and str(it.to).casefold() == ARMED:
                     self.armed_at = now
                 if it.reason == TRIGGERED and self.triggered_at is None:
                     self.triggered_at = now
@@ -548,7 +551,7 @@ class _StoryRun:
                 self.heap.push(max(to_us(it.at), self.now_us), Priority.TIMER, (_TIMER, it.tag))
             elif isinstance(it, Finish):
                 self._finish(it.reason)
-        if self.unlive_us is None and (self.finished or self.pb.state() not in LIVE_STATES):
+        if self.unlive_us is None and (self.finished or not self.pb.live()):
             self.unlive_us = self.now_us
 
     # ── orders ──
@@ -748,8 +751,8 @@ class _StoryRun:
         last = len(self.bars) - 1
         lk = int(self.bars.k[last])
         fb = unfilled_exit(
-            official_close=float(dp.c) if dp is not None else None,
-            spy_close=float(spy_dp.c) if spy_dp is not None else self._spy_last_close(k),
+            official_close=float(dp.close) if dp is not None else None,
+            spy_close=float(spy_dp.close) if spy_dp is not None else self._spy_last_close(k),
             spare=spare,
             spy_spare=spy_spare,
             spare_open_us=spare_open,
@@ -819,7 +822,7 @@ class _StoryRun:
             story_id=self.story.story_id,
             symbol=self.symbol,
             session=self.sessions[0].day,
-            terminal_state=self.pb.state(),
+            terminal_state=str(self.pb.state()),
             reason=reason,
             skip=None,
             triggered_at=self.triggered_at,
@@ -860,7 +863,7 @@ class _StoryRun:
         a = self.ctx.adj(symbol, day)
         dp = self.ctx.daily(symbol, day)
         if dp is not None and a is not None:
-            return float(dp.c) * a / base
+            return float(dp.close) * a / base
         series = self.spy if spy else self.bars
         idx = np.nonzero(series.k == k)[0]
         if len(idx):
@@ -1055,7 +1058,7 @@ def _closed(
 def simulate_symbol(
     symbol: str,
     stories: Sequence[StoryView],
-    make_playbook: PlaybookFactory,
+    make_playbook: MakePlaybook,
     paths: Mapping[str, PathData | PathSkip],
     spy: SpyData,
     ctx: ContextView,
@@ -1074,6 +1077,11 @@ def simulate_symbol(
     skipped); ``news_from`` (default: ``stories``) are every story of the
     symbol whose items a live playbook hears. ``state`` carries the
     symbol's blocking across calls (batches) and is updated in place.
+
+    ``make_playbook`` is called once per story that runs (never for a
+    blocked or skipped one), with the story as :class:`PitStory` at its
+    start; a :class:`~halabot.playbooks.playbook.PlaybookFactory` or any
+    such callable.
     """
     state = state if state is not None else SymbolState()
     news = news_items(news_from if news_from is not None else stories)
@@ -1096,7 +1104,7 @@ def simulate_symbol(
             continue
         run = _StoryRun(
             story,
-            make_playbook(story),
+            make_playbook,
             item,
             spy,
             ctx,
@@ -1123,7 +1131,7 @@ def worker_of(symbol: str, workers: int) -> int:
 
 def simulate_many(
     stories: Sequence[StoryView],
-    make_playbook: PlaybookFactory,
+    make_playbook: MakePlaybook,
     paths: Mapping[str, PathData | PathSkip],
     spy: SpyData,
     ctx: ContextView,
@@ -1209,7 +1217,7 @@ class _Shared:
 
     by_id: dict[str, StoryView]
     carriers: dict[str, list[StoryView]]
-    make_playbook: PlaybookFactory
+    make_playbook: MakePlaybook
     ctx: ContextView
     cfg: SimConfig
     stop_at: StopAt
@@ -1299,29 +1307,27 @@ async def run(
     """Load paths behind the window guard, simulate every started story, write the outcomes.
 
     ``stories`` are every story of the symbols concerned (the ones that never
-    start still bring their news to a live playbook). Batches are simulated
-    in session order; inside a batch the symbols are split over ``workers``
-    processes (``parallel``; default: when ``workers > 1`` and ``fork``
-    exists), and each symbol's blocking state carries from batch to batch.
+    start still bring their news to a live playbook). ``make_playbook`` gives
+    the paths' length (``path_sessions``) and the playbook's name and version
+    for the run row, and builds one playbook per story that runs. Batches are
+    simulated in session order; inside a batch the symbols are split over
+    ``workers`` processes (``parallel``; default: when ``workers > 1`` and
+    ``fork`` exists), and each symbol's blocking state carries from batch to
+    batch.
     """
     global _SHARED
     by_symbol = _group(stories)
-    starts = {s.story_id: start_time(s) for s in stories}
-    started = [s for s in stories if starts[s.story_id] is not None]
-    probe = {s.story_id: make_playbook(s) for s in started}
-    requests = [
-        PathRequest(s.story_id, s.symbol, s.session, probe[s.story_id].path_sessions)
-        for s in started
-    ]
-    first = next(iter(probe.values()), None)
+    started = [s for s in stories if start_time(s) is not None]
+    n_sessions = make_playbook.path_sessions
+    requests = [PathRequest(s.story_id, s.symbol, s.session, n_sessions) for s in started]
     run_id = await sink.begin(
         RunInfo(
             window=str(window),
             window_end=window_end,
             feed=cfg.feed.name,
             stop_at=stop_at,
-            playbook=first.name if first is not None else "",
-            playbook_version=first.version if first is not None else "",
+            playbook=make_playbook.name,
+            playbook_version=make_playbook.version,
             sim=cfg.as_config(),
         )
     )
@@ -1414,6 +1420,7 @@ async def run(
 
 
 __all__ = [
+    "MakePlaybook",
     "PitStory",
     "RunSummary",
     "SimConfig",
