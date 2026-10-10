@@ -128,3 +128,39 @@ def test_calendar_walks_skip_weekends_and_holidays() -> None:
         date(2026, 11, 30),
     ]
     assert trading_days_back(date(2026, 11, 29), 1) == [date(2026, 11, 27)]  # a Sunday
+
+
+def test_history_matches_the_broker_calendar_session_counts() -> None:
+    """2016-2027 sessions per year, as Alpaca's /v2/calendar gave them on 2026-10-10.
+
+    Research walks these sessions back to 2016 (the news engine's minute-level
+    history), so a missing holiday there shifts every later session by a day.
+    """
+    sessions = {
+        2016: 252,
+        2017: 251,
+        2018: 251,
+        2019: 252,
+        2020: 253,
+        2021: 252,
+        2022: 251,
+        2023: 250,
+        2024: 252,
+        2025: 250,
+        2026: 251,
+        2027: 251,
+    }
+    for year, expected in sessions.items():
+        d, n = date(year, 1, 1), 0
+        while d.year == year:
+            n += is_trading_day(d)
+            d += timedelta(days=1)
+        assert n == expected, year
+
+
+def test_one_off_closures_and_historic_half_days() -> None:
+    assert not is_trading_day(date(2018, 12, 5))  # mourning, George H. W. Bush
+    assert not is_trading_day(date(2025, 1, 9))  # mourning, Jimmy Carter
+    assert effective_close_time(date(2018, 12, 24)) == EARLY_CLOSE
+    assert effective_close_time(date(2020, 11, 27)) == EARLY_CLOSE
+    assert effective_close_time(date(2021, 12, 23)) == MARKET_CLOSE  # Christmas observed Fri 24
