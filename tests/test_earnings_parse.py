@@ -494,6 +494,13 @@ def test_a_guided_figure_is_never_a_fragment_nor_the_guidance_it_replaces(
          1.10, 1.10, 1.05),
         ("Acme Updates FY EPS Guidance (From $1.00 To ~$0.90) Vs $1.05 Est", "updates",
          0.90, 0.90, 1.05),
+        # ... the "To" after the old figure, "Down" or "Up" between them.
+        ("Acme Lowers FY EPS Guidance (From $1.10 Down To $0.95) Vs $1.05 Est", "lowers",
+         0.95, 0.95, 1.05),
+        ("Acme Updates FY EPS Guidance (From $1.00-$1.10 To $0.90-$1.00) Vs $1.05 Est",
+         "updates", 0.90, 1.00, 1.05),
+        ("Acme Updates FY EPS Guidance (From $1.20 Up To $1.30) Vs $1.25 Est", "updates",
+         1.30, 1.30, 1.25),
         # Guidance kept as it was: "from" introduces its range when no "to" follows.
         ("PPL Reaffirms FY2017 EPS Guidance from $1.92-2.12 vs $2.16 Est", "reaffirms",
          1.92, 2.12, 2.16),
@@ -519,6 +526,28 @@ def test_the_guided_figure_is_the_new_guidance_as_stated(
     assert f["low"] == pytest.approx(low) and f["high"] == pytest.approx(high)
     assert f["estimate"] == pytest.approx(estimate) and "not_comparable" not in f
     assert f["surprise"] == pytest.approx(((low + high) / 2 - estimate) / abs(estimate))
+
+
+@pytest.mark.parametrize(
+    ("before", "new"),
+    [
+        ("(From $1.00 To ", True),
+        ("(From $1.00 To ~", True),
+        ("(From $1.20B To ", True),
+        ("(From $(0.10) To ", True),
+        ("(From $(1.2)B To ", True),
+        ("(From $1.10 Down To ", True),
+        ("(Prior $1.00 Up To ", True),
+        ("(Prior Up To ", False),
+        ("(Previously Raised To ", False),
+        ("(Previously Lowered To ~", False),
+        ("(Prior Outlook Had Called For ", False),
+    ],
+)
+def test_only_a_to_after_the_old_figure_introduces_the_new_guidance(before: str, new: bool) -> None:
+    from halal_trader.events.earnings_parse import _TO_END
+
+    assert (_TO_END.search(before) is not None) is new
 
 
 def test_a_glued_parenthesis_never_flips_a_figure_s_sign() -> None:
@@ -555,6 +584,12 @@ def test_a_glued_parenthesis_never_flips_a_figure_s_sign() -> None:
         ("Acme Lowers FY EPS Guidance (From Its Earlier $1.10) Vs $1.05 Est", "lowers"),
         ("Acme Lowers FY EPS Guidance (Previously Expected EPS In The Range $1.10-$1.20) Vs "
          "$1.05 Est", "lowers"),
+        # Constructed: a "To" after a word, not after the old figure, introduces
+        # the old figure (a false +23.8% raise, on a cut too).
+        ("Acme Updates FY EPS Guidance (Prior Up To $1.30) Vs $1.05 Est", "updates"),
+        ("Acme Updates FY EPS Guidance (Previously Lowered To $1.30) Vs $1.05 Est", "updates"),
+        ("Acme Lowers FY EPS Guidance (Previously Raised To $1.30) Vs $1.05 Est", "lowers"),
+        ("Acme Updates FY EPS Guidance (Prior Up To ~$1.30) Vs $1.05 Est", "updates"),
     ],
 )  # fmt: skip
 def test_guidance_without_a_reliable_figure_keeps_its_action(headline: str, action: str) -> None:
