@@ -42,10 +42,12 @@ clamped to the simulated ``now``.
 **What a playbook sees** comes through :class:`Ctx`:
 
 * ``market`` shows only bars already **visible** at ``now`` (``bars``
-  end at ``searchsorted(visible_at, now, 'right')``, copied, so no later
-  bar is reachable); prices are raw, and ``to_s_units`` (or
+  end at ``searchsorted(visible_at, now, 'right')``: read-only views of a
+  buffer filled as bars become visible, so no later bar is reachable,
+  not even through ``.base``); prices are raw, and ``to_s_units`` (or
   ``BarSeries.in_s_units``) puts them in session-S units with the
-  A-ratios.
+  A-ratios. A series a playbook keeps stays valid: later bars never
+  change it.
 * ``story.card_at(now)`` labels the story from items available by ``now``.
 * ``position`` is the story's own position and working orders.
 """

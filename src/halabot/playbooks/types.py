@@ -20,7 +20,7 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from enum import StrEnum
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
 from numpy.typing import NDArray
@@ -158,29 +158,19 @@ class BarSeries:
         f = _frozen(np.empty(0, dtype=np.float64))
         return cls(i, f, f, f, f, f, f, i, i, f)
 
-    def head(self, n: int) -> BarSeries:
-        """The first ``n`` bars, as read-only **copies**.
-
-        A view would keep the whole path reachable through ``.base``; a copy
-        holds bars ``0 .. n-1`` and nothing else, so what a playbook is given
-        exposes no bar it cannot see yet. The simulator keeps one head per
-        symbol, rebuilt only when ``n`` changes (``sim._Market``).
-        """
-
-        def cut[A: np.generic](a: NDArray[A]) -> NDArray[A]:
-            return _frozen(a[:n].copy())
-
-        return BarSeries(
-            cut(self.ts),
-            cut(self.o),
-            cut(self.h),
-            cut(self.l),
-            cut(self.c),
-            cut(self.v),
-            cut(self.vw),
-            cut(self.visible_at),
-            cut(self.k),
-            cut(self.scale),
+    def columns(self) -> tuple[NDArray[Any], ...]:
+        """The arrays in field order (``BarSeries(*columns)`` rebuilds the series)."""
+        return (
+            self.ts,
+            self.o,
+            self.h,
+            self.l,
+            self.c,
+            self.v,
+            self.vw,
+            self.visible_at,
+            self.k,
+            self.scale,
         )
 
     def in_s_units(self) -> BarSeries:
@@ -206,6 +196,51 @@ class BarSeries:
     def bar_time(self, i: int) -> datetime:
         """Bar ``i``'s start as a UTC datetime."""
         return from_us(int(self.ts[i]) * 1_000_000)
+
+
+class VisibleBars:
+    """The visible head of one path's :class:`BarSeries`, grown in place.
+
+    :meth:`head` returns read-only views ``buf[:n]`` of buffers the size of
+    the path. A buffer is filled only up to the largest ``n`` asked so far,
+    and ``n`` never goes back (a run's clock only moves forward), so a
+    view's ``.base`` holds the bars visible by then and zeros after them:
+    no later bar is reachable through it. Each bar is copied once, when it
+    becomes visible, so a playbook reading its bars on every bar costs
+    linear time over a path (a fresh copy per bar cost quadratic time).
+    The head of the current ``n`` is cached: asking twice returns the same
+    object.
+    """
+
+    __slots__ = ("_bufs", "_head", "_n", "_read_only", "_src")
+
+    def __init__(self, series: BarSeries) -> None:
+        self._src = series.columns()
+        self._bufs = tuple(np.zeros_like(a) for a in self._src)
+        # Read-only views of the buffers: their slices are read-only too, and
+        # their ``.base`` is the buffer (numpy points a view at the owner).
+        self._read_only = tuple(_frozen(b.view()) for b in self._bufs)
+        self._n = 0
+        self._head: BarSeries | None = None
+
+    def __len__(self) -> int:
+        """How many bars are visible (filled) so far."""
+        return self._n
+
+    def head(self, n: int) -> BarSeries:
+        """The first ``n`` bars as read-only views; ``n`` may not go back."""
+        if n < self._n:
+            raise ValueError(f"visible bars only grow: {n} asked after {self._n}")
+        if n > len(self._bufs[0]):
+            raise ValueError(f"{n} bars asked of a path of {len(self._bufs[0])}")
+        if n > self._n:
+            for buf, src in zip(self._bufs, self._src):
+                buf[self._n : n] = src[self._n : n]
+            self._n = n
+            self._head = None
+        if self._head is None:
+            self._head = BarSeries(*(a[:n] for a in self._read_only))
+        return self._head
 
 
 @dataclass(slots=True)
@@ -533,6 +568,7 @@ __all__ = [
     "TimerIn",
     "TradeFacts",
     "Transition",
+    "VisibleBars",
     "WorkingOrder",
     "path_days",
 ]

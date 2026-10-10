@@ -121,6 +121,7 @@ from halabot.playbooks.types import (
     TimerIn,
     TradeFacts,
     Transition,
+    VisibleBars,
     WorkingOrder,
 )
 from halal_trader.core import events
@@ -163,9 +164,15 @@ class SymbolState:
 
 
 class _Market:
-    """``MarketView`` over one path: bars visible at ``now`` only, as copies."""
+    """``MarketView`` over one path: bars visible at ``now`` only.
 
-    __slots__ = ("_a_s", "_b_s", "_bars", "_cache", "_ctx", "_now_s", "_spy", "_symbol")
+    ``bars`` hands out read-only views of a buffer filled as bars become
+    visible (:class:`~halabot.playbooks.types.VisibleBars`, one per symbol,
+    made on first use): nothing past ``now`` is behind them, and reading
+    them on every bar costs linear time over the path.
+    """
+
+    __slots__ = ("_a_s", "_b_s", "_bars", "_ctx", "_now_s", "_spy", "_symbol", "_visible")
 
     def __init__(
         self, symbol: str, bars: BarSeries, spy: BarSeries, ctx: ContextView, s: date
@@ -177,7 +184,7 @@ class _Market:
         self._a_s = ctx.adj(symbol, s)
         self._b_s = ctx.adj(SPY, s)
         self._now_s = 0
-        self._cache: dict[str, tuple[int, BarSeries]] = {}  # symbol -> (n, its head copy)
+        self._visible: dict[str, VisibleBars] = {}
 
     def set_now(self, now_us: int) -> None:
         self._now_s = now_us // US
@@ -192,10 +199,10 @@ class _Market:
     def bars(self, symbol: str) -> BarSeries:
         series = self._series(symbol)
         n = int(np.searchsorted(series.visible_at, self._now_s, side="right"))
-        hit = self._cache.get(symbol)
-        if hit is None or hit[0] != n:
-            hit = self._cache[symbol] = (n, series.head(n))  # a copy: no later bar behind it
-        return hit[1]
+        visible = self._visible.get(symbol)
+        if visible is None:
+            visible = self._visible[symbol] = VisibleBars(series)
+        return visible.head(n)
 
     def last(self, symbol: str) -> float | None:
         series = self._series(symbol)
