@@ -465,7 +465,9 @@ def test_the_cell_statistics() -> None:
     assert stats["cont_3_n"] == 39
     assert stats["cont_3_mean"] == pytest.approx(sum(v for v, _ in c3) / 39)  # type: ignore[misc]
     assert stats["cont_3_se"] == pytest.approx(_cr1([v for v, _ in c3], [d for _, d in c3]))  # type: ignore[misc]
-    # The machine: the blocked story is not a run; P(trigger) over the runs.
+    # The machine: the blocked story is counted, and is not a run; P(trigger) over the runs.
+    assert (stats["id_starters"], stats["id_blocked"]) == (40, 1)
+    assert stats["id_blocked_share"] == pytest.approx(1 / 40)
     runs = [r.id_run for r in rows if r.id_run and r.id_run.ran]
     assert stats["id_runs"] == len(runs) == 39
     assert stats["id_p_trigger"] == pytest.approx(sum(m.triggered for m in runs) / 39)
@@ -483,6 +485,7 @@ def test_the_cell_statistics() -> None:
     )
     assert "id_r_mean_abort" not in stats and stats["id_share_abort"] == 0.0
     assert stats["md3_runs"] == 0.0 and "md3_p_trigger" not in stats
+    assert stats["md3_starters"] == 0.0 and math.isnan(stats["md3_blocked_share"])
 
 
 def test_a_value_that_is_not_finite_is_left_out_and_counted() -> None:
@@ -608,6 +611,8 @@ def test_a_machine_run_reads_the_outcome_and_its_trade() -> None:
         "A:2017-03-09", "A", S2, "SKIPPED", "units_missing", "units_missing", None, None, None
     )
     assert not MachineRun.of(blocked).ran and not MachineRun.of(skipped).ran
+    assert MachineRun.of(blocked).blocked and not MachineRun.of(skipped).blocked
+    assert not run.blocked
     assert MachineRun.of(blocked).exit_reason is None
     assert MachineRun.of(skipped).skip == "units_missing"
 

@@ -31,7 +31,9 @@ from halal_trader.events.atlas import (
 )
 from halal_trader.events.h1 import NAME as H1_NAME
 from halal_trader.events.h1 import STAGE_A_FAIL
+from halal_trader.events.stories import build_range
 from tests._atlas import CONFIG, END, S1, S2, START, daily_closes, register_h1, seed_world
+from tests._stories import news_row, ny, store
 
 COST = 7.0 / 1e4  # study.cost_bps for a rank below 300, one way
 
@@ -262,6 +264,72 @@ async def test_spy_regimes_do_not_move_with_the_range(world: AsyncEngine) -> Non
     by_id = {r.story_id: r for r in full.rows}
     alfa = by_id["ALFA:2017-03-07"]
     assert alfa.spy_vol == expected.vol_tercile(S1) and alfa.spy_trend == expected.trend(S1)
+
+
+async def _add_headline(engine: AsyncEngine, n: int, day: date, headline: str) -> None:
+    """One more ALFA headline at 08:00 on ``day``, and March's stories built again."""
+    await store(engine, [news_row(n, "ALFA", ny(day, 8), headline)])
+    await build_range(engine, start=date(2017, 3, 1), end=date(2017, 3, 31))
+
+
+async def test_a_story_is_blocked_behind_a_live_story_of_its_own_lane(world: AsyncEngine) -> None:
+    await _add_headline(world, 7, S2, "Goldman Sachs Downgrades Alfa to Sell")
+    result = await run_atlas(world, start=START, end=END)
+    by_id = {r.story_id: r for r in result.rows}
+    first, second = by_id["ALFA:2017-03-07"], by_id["ALFA:2017-03-08"]
+    assert (first.lane, second.lane) == ("NSN_CORE", "NSN_CORE") and second.nsn
+    # MD3: the first holds from S1 10:06 to its target at S2's noon, so the second
+    # starts at S2's open behind it. ID: the first is flat by S1's close.
+    assert first.md3_run is not None and first.md3_run.exit_reason == "target"
+    assert second.md3_run is not None and second.md3_run.blocked and not second.md3_run.ran
+    assert second.id_run is not None and not second.id_run.blocked and second.id_run.ran
+    stats = atlas.cell_stats([r for r in result.rows if r.type == "analyst_downgrade"])
+    assert (stats["md3_starters"], stats["md3_blocked"], stats["md3_runs"]) == (2, 1, 1)
+    assert stats["md3_blocked_share"] == 0.5
+    assert (stats["id_starters"], stats["id_blocked"], stats["id_runs"]) == (2, 0, 2)
+    md3 = result.meta["machine_lanes"]["MD3"]
+    assert md3["NSN_CORE"]["terminal:DISMISSED/blocked_open"] == 1
+    assert result.meta["machine"]["MD3"]["terminal:DISMISSED/blocked_open"] == 1
+
+
+async def test_another_lane_never_blocks_a_story(
+    world: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await _add_headline(
+        world, 7, S2, "Morgan Stanley Maintains Equal-Weight on Alfa, Lowers Price Target to $90"
+    )
+    result = await run_atlas(world, start=START, end=END)
+    by_id = {r.story_id: r for r in result.rows}
+    cut = by_id["ALFA:2017-03-08"]
+    assert (cut.type, cut.nsn, cut.lane) == ("analyst_pt_cut", False, "analyst_pt_cut")
+    # Its own lane: nothing of it is live when it starts, though ALFA's NSN story holds.
+    assert cut.md3_run is not None and cut.md3_run.ran and not cut.md3_run.blocked
+    assert by_id["ALFA:2017-03-07"].md3_run is not None
+    assert by_id["ALFA:2017-03-07"].md3_run.exit_reason == "target"
+    assert set(result.meta["machine_lanes"]["MD3"]) == {
+        "NSN_CORE",
+        "analyst_pt_cut",
+        "dilution",
+        "fraud_probe",
+    }
+    # One run for every lane (the defect) would have blocked it behind the NSN position.
+    monkeypatch.setattr(
+        atlas,
+        "lanes_of",
+        lambda units: {"all": {u.story.story_id: u for u in units if u.lane is not None}},
+    )
+    merged = await run_atlas(world, start=START, end=END)
+    cut_merged = next(r for r in merged.rows if r.story_id == "ALFA:2017-03-08")
+    assert cut_merged.md3_run is not None and cut_merged.md3_run.blocked
+
+
+async def test_workers_do_not_change_the_atlas(world: AsyncEngine) -> None:
+    one = await run_atlas(world, start=START, end=END, workers=1)
+    three = await run_atlas(world, start=START, end=END, workers=3)
+    a, b = atlas.to_json(one), atlas.to_json(three)
+    assert json.dumps(a["rows"]) == json.dumps(b["rows"])
+    assert json.dumps(a["cells"]) == json.dumps(b["cells"])
+    assert a["meta"]["counts"] == b["meta"]["counts"]
 
 
 # ── the command ───────────────────────────────────────────────
