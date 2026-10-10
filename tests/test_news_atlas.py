@@ -441,6 +441,38 @@ def test_the_cell_statistics() -> None:
     assert stats["md3_runs"] == 0.0 and "md3_p_trigger" not in stats
 
 
+def test_a_value_that_is_not_finite_is_left_out_and_counted() -> None:
+    rows = []
+    for i in range(MIN_N):
+        bad = i < 3
+        m = measures(
+            low_sigma=math.nan if i == 0 else -3.0 - i / 10,
+            retrace_max_s=math.inf if i == 1 else 0.4,
+        )
+        cont = (math.nan if bad else 0.01 * i, 0.02, 0.03)
+        run = _run(True, "target", math.nan if i == 2 else 0.001 * i)
+        rows.append(row(i, DAYS[i % MIN_DATES], measures=m, cont=cont, id_run=run))
+    stats = cell_stats(rows)  # no ValueError from the clustered means
+    # One NaN low_sigma, one infinite retrace (its drop), three NaN cont_1, one NaN r.
+    assert stats["nonfinite"] == 6
+    assert stats["drops"] == MIN_N - 1
+    assert stats["cont_1_n"] == MIN_N - 3
+    finite = [0.01 * i for i in range(3, MIN_N)]
+    assert stats["cont_1_mean"] == pytest.approx(sum(finite) / len(finite))
+    assert math.isfinite(stats["cont_1_se"])
+    rs = [0.001 * i for i in range(MIN_N) if i != 2]
+    assert stats["id_trades"] == MIN_N  # the NaN trade is still a trade (and a target)
+    assert stats["id_share_target"] == 1.0
+    assert stats["id_r_mean"] == pytest.approx(sum(rs) / len(rs))
+    assert stats["id_r_mean_target"] == stats["id_r_mean"]
+    lows = sorted(-3.0 - i / 10 for i in range(1, MIN_N))
+    assert stats["low_sigma_q50"] == pytest.approx(float(np.quantile(lows, 0.5)))
+    # The whole table builds, and the file stays plain JSON.
+    cells = cells_of(rows, years=1.0)
+    assert next(c for c in cells if c.table == "type").stats is not None
+    json.dumps(to_json(Atlas(rows=rows, cells=cells)), allow_nan=False)
+
+
 def test_cells_cover_every_table_sorted_by_key() -> None:
     rows = [
         row(1, DAYS[0], type="earnings_miss", measures=measures(-6.0), timing="in_session"),
