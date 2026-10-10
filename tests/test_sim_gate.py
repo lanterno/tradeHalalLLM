@@ -583,7 +583,12 @@ def test_r2_judges_the_strong_groups_mean_against_the_legacy_clustered_interval(
     # Set-aside and implausible headlines leave the comparison.
     odd = [*close[1:], _trade(close[0].story_id, 50.0, 150.0, 200.0, 200.0)]
     aside = r2_result(hs, study_r, r1_trades, [ids[4]], _summary(len(ids)), odd)
-    assert aside.metrics["realistic"]["n"] == 4 and aside.metrics["excluded"]["set_aside"] == 1
+    assert aside.metrics["realistic"]["n"] == 4
+    assert aside.metrics["excluded"] == {
+        "set_aside": 1,
+        "no_trade": 0,
+        "implausible_or_no_spy": 1,
+    }
     none = r2_result(hs, {}, [], (), _summary(len(ids)), [])
     assert not none.passed and describe(none) == "not computable"
 
