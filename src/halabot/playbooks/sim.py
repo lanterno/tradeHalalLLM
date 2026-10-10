@@ -49,6 +49,13 @@ legacy study, which held through its exit whatever the screen said: under
 one the simulator skips the screen at entry, the flatten and the pre-open
 compliance exit, so the exit is the model's own (``time_stop``).
 
+**An explicit set.** Given ``expected`` (story id -> (symbol, session)),
+:func:`run` simulates exactly those stories and accounts for each one in
+:attr:`RunSummary.dropped`: every id without a usable result gets its reason
+(:func:`drop_reason`), including ids it never simulated (``no_story``,
+``no_session``, ``not_started``). The reactor gate R1 runs its pinned
+headlines this way (``legacy.py``).
+
 **Determinism.** Symbols are independent, so they are split over workers by
 ``crc32(symbol) % workers`` and the records are identical for any worker
 count (``records.outcomes_sha256``). :func:`run` keeps no module state:
@@ -126,6 +133,7 @@ from halabot.playbooks.types import (
 )
 from halal_trader.core import events
 from halal_trader.data.minutes import BarArrays
+from halal_trader.market_hours import is_trading_day
 
 logger = logging.getLogger(__name__)
 
@@ -1219,6 +1227,33 @@ def _group(stories: Sequence[StoryView]) -> dict[str, list[StoryView]]:
 # stale or unreadable adjustment, and one for more than 5 bars failing the sanity rule.
 DATA_SKIPS: Final = ("adjust_defect", "bad_bars")
 
+# Why a story of an explicit set (``run(expected=...)``) has no usable result, besides the
+# loader's skip reasons, ``blocked_open`` and the playbook's own reason for not trading.
+NO_STORY: Final = "no_story"  # in the set, but no story with that id was given
+NO_SESSION: Final = "no_session"  # its session is not a trading day
+NOT_STARTED: Final = "not_started"  # never NSN by its entry cutoff
+NO_SPY: Final = "no_spy"  # a trade without a SPY price (its abnormal return is NaN)
+NO_RETURN: Final = "no_return"  # any other trade whose net abnormal return is not finite
+
+
+def drop_reason(outcome: StoryOutcome, stop_at: StopAt = "end") -> str | None:
+    """Why ``outcome`` gave no usable result, or None when it did.
+
+    Under ``stop_at="end"`` a result is a trade with a finite ``r_net_abn``;
+    under ``"entry"`` (Stage A) it is an entry. Otherwise the reason is the
+    outcome's: the loader's skip reason, ``blocked_open``, or the playbook's
+    last reason (``entry_unfilled`` for an entry that never filled); a trade
+    without a SPY price is ``no_spy``.
+    """
+    if stop_at == "entry":
+        return None if outcome.entered else outcome.reason or outcome.terminal_state
+    t = outcome.trade
+    if t is None:
+        return outcome.reason or outcome.terminal_state
+    if math.isfinite(t.r_net_abn):
+        return None
+    return NO_SPY if "no_spy" in t.flags else NO_RETURN
+
 
 @dataclass(frozen=True, slots=True)
 class RunSummary:
@@ -1233,7 +1268,11 @@ class RunSummary:
       wherever the cut bar lies, which is conservative; the list is kept
       apart from ``bar_drop_ids``, and a story can be in both;
     * ``spare_drop_ids``: stories whose spare session (``PathData.spare``,
-      read only by a ``no_market`` exit) lost bars to the rule.
+      read only by a ``no_market`` exit) lost bars to the rule;
+    * ``expected`` and ``dropped``: under ``run(expected=...)``, the size of
+      the explicit set and, for each of its ids without a usable result,
+      the reason (:func:`drop_reason`, or ``no_story``, ``no_session``,
+      ``not_started`` for an id never simulated). Otherwise 0 and empty.
 
     The legacy studies read every stored row and skip nothing for data
     reasons, so these are the stories where a gate-only replication can
@@ -1260,6 +1299,8 @@ class RunSummary:
     spy_drop_ids: tuple[str, ...] = ()  # sorted
     spy_drop_days: dict[str, int] = field(default_factory=dict)
     spare_drop_ids: tuple[str, ...] = ()  # sorted
+    expected: int = 0
+    dropped: dict[str, str] = field(default_factory=dict)  # story id -> reason
 
     def data_filtered(self) -> frozenset[str]:
         """The stories this run's data rules treated unlike a study reading every row:
@@ -1284,7 +1325,42 @@ class RunSummary:
             "spy_drop_ids": list(self.spy_drop_ids),
             "spy_drop_days": dict(sorted(self.spy_drop_days.items())),
             "spare_drop_ids": list(self.spare_drop_ids),
+            "expected": self.expected,
+            "dropped": dict(sorted(self.dropped.items())),
         }
+
+
+def _explicit(
+    stories: Sequence[StoryView], expected: Mapping[str, tuple[str, date]]
+) -> tuple[list[StoryView], dict[str, str]]:
+    """The stories of an explicit set to simulate, and why each other id of it has no result.
+
+    Raises ``ValueError`` for a story outside the set, given twice, or whose
+    (symbol, session) is not the set's.
+    """
+    seen: set[str] = set()
+    keep: list[StoryView] = []
+    absent: dict[str, str] = {}
+    for s in stories:
+        sid = s.story_id
+        if sid in seen:
+            raise ValueError(f"story {sid} is given twice")
+        seen.add(sid)
+        want = expected.get(sid)
+        if want is None:
+            raise ValueError(f"story {sid} is not in the expected set")
+        if (s.symbol, s.session) != tuple(want):
+            raise ValueError(
+                f"story {sid} is {s.symbol} {s.session}; the expected set says {want[0]} {want[1]}"
+            )
+        if is_trading_day(s.session):
+            keep.append(s)
+        else:
+            absent[sid] = NO_SESSION
+    for sid in expected:
+        if sid not in seen:
+            absent[sid] = NO_STORY
+    return keep, absent
 
 
 @dataclass(frozen=True, slots=True)
@@ -1468,6 +1544,7 @@ async def run(
     keep_transitions: bool = False,
     batch_paths: int = 250,
     parallel: Parallel = None,
+    expected: Mapping[str, tuple[str, date]] | None = None,
 ) -> RunSummary:
     """Load paths behind the window guard, simulate every started story, write the outcomes.
 
@@ -1476,15 +1553,21 @@ async def run(
     the paths' length (``path_sessions``) and the playbook's name and version
     for the run row, and builds one playbook per story that runs.
 
-    **Nothing is written until the run may proceed:** the unlock is verified
-    against the ledger, the calendar is checked, and every day of every
-    requested path is checked against the window guard (a path crossing
-    ``window_end`` raises ``loader.WindowLocked`` here), and a process pool
-    is started, all before ``sink.begin``; under spawn the run's state (the
-    factory, the context, the config and the stories) must pickle
-    (:func:`check_picklable`, a ``ValueError`` naming the part that does
-    not) and load in a worker. A gate-only fill model (``legacy.py``) needs
-    a gate unlock.
+    ``expected`` makes the run an explicit set (story id -> (symbol,
+    session), e.g. R1's pinned headlines): every story given must be in it,
+    once, with that symbol and session (else ``ValueError``); a story whose
+    session is not a trading day is not simulated; and the summary accounts
+    for every id of the set (:attr:`RunSummary.dropped`).
+
+    **Nothing is written until the run may proceed:** the explicit set is
+    checked, the unlock is verified against the ledger, the calendar is
+    checked, and every day of every requested path is checked against the
+    window guard (a path crossing ``window_end`` raises
+    ``loader.WindowLocked`` here), and a process pool is started, all before
+    ``sink.begin``; under spawn the run's state (the factory, the context,
+    the config and the stories) must pickle (:func:`check_picklable`, a
+    ``ValueError`` naming the part that does not) and load in a worker. A
+    gate-only fill model (``legacy.py``) needs a gate unlock.
 
     Batches are simulated in session order; inside a batch the symbols are
     split over ``workers`` (:func:`pool_method` chooses processes or this
@@ -1499,6 +1582,10 @@ async def run(
     fill = fill_model(cfg)
     if fill.gate_only and unlock.gate is None:
         raise ValueError(f"the {fill.name!r} fill model replicates a legacy study: gate runs only")
+    given = len(stories)
+    absent: dict[str, str] = {}
+    if expected is not None:
+        stories, absent = _explicit(stories, expected)
     method = pool_method(parallel, workers)
     by_symbol = _group(stories)
     started = [s for s in stories if start_time(s) is not None]
@@ -1529,6 +1616,10 @@ async def run(
     bar_drop_ids: list[str] = []
     spy_drop_ids: list[str] = []
     spare_drop_ids: list[str] = []
+    dropped: dict[str, str] = dict(absent)
+    if expected is not None:
+        running = {s.story_id for s in started}
+        dropped.update({s.story_id: NOT_STARTED for s in stories if s.story_id not in running})
     n_out = entries = trades = n_batches = 0
     loop = asyncio.get_running_loop()
     try:
@@ -1612,6 +1703,8 @@ async def run(
                     skip_ids.setdefault(o.skip, []).append(o.story_id)
                 entries += o.entered
                 trades += o.trade is not None
+                if expected is not None and (why := drop_reason(o, stop_at)) is not None:
+                    dropped[o.story_id] = why
             n_out += len(outcomes)
             await sink.write(outcomes)
             n_batches += 1
@@ -1633,7 +1726,7 @@ async def run(
             pool.shutdown(cancel_futures=True)
     summary = RunSummary(
         run_id=run_id,
-        stories=len(stories),
+        stories=given,
         started=len(started),
         outcomes=n_out,
         entries=entries,
@@ -1646,6 +1739,8 @@ async def run(
         spy_drop_ids=tuple(sorted(spy_drop_ids)),
         spy_drop_days={d.isoformat(): n for d, n in sorted(loader.spy_dropped.items())},
         spare_drop_ids=tuple(sorted(spare_drop_ids)),
+        expected=len(expected) if expected is not None else 0,
+        dropped=dict(sorted(dropped.items())),
     )
     await sink.finish(summary.as_dict())
     logger.info(
@@ -1666,6 +1761,11 @@ async def run(
 
 __all__ = [
     "DATA_SKIPS",
+    "NOT_STARTED",
+    "NO_RETURN",
+    "NO_SESSION",
+    "NO_SPY",
+    "NO_STORY",
     "MakePlaybook",
     "Parallel",
     "PitStory",
@@ -1673,6 +1773,7 @@ __all__ = [
     "SimConfig",
     "StopAt",
     "SymbolState",
+    "drop_reason",
     "news_items",
     "pool_method",
     "run",
