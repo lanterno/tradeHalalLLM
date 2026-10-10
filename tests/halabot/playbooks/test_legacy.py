@@ -270,7 +270,7 @@ class _Trade:
 def test_r1_sets_aside_the_loader_rules_the_study_never_had() -> None:
     """Each id with every reason; SPY's cut bars apart from the stock's; coverage skips stay."""
     summary = _summary(
-        list("abcmnpstux"),
+        list("abcmnpstuxy"),
         skip_ids={
             "bad_bars": ("b",),
             "adjust_defect": ("a",),
@@ -281,7 +281,8 @@ def test_r1_sets_aside_the_loader_rules_the_study_never_had() -> None:
             "halted_all_day": ("h",),
         },
         bar_drop_ids=("c", "x"),
-        spy_drop_ids=("s", "x"),
+        spy_drop_ids=("s", "x", "y"),  # SPY's bars cut on S
+        spy_drop_from_start_ids=("s", "x"),  # at or after the decision: y decided after the cut
         spare_drop_ids=("p",),  # R1 never reads the spare session
     )
     assert R1_SET_ASIDE == ("adjust_defect", "bad_bars", "no_daily", "spy_thin")
@@ -305,7 +306,8 @@ def test_r1_compares_the_rest_and_caps_the_set_aside() -> None:
         ids,
         dropped=dict.fromkeys(ids[190:], "entry_unfilled"),
         bar_drop_ids=(ids[0],),
-        spy_drop_ids=(ids[0],),  # one headline, two reasons
+        spy_drop_ids=(ids[0],),
+        spy_drop_from_start_ids=(ids[0],),  # one headline, two reasons
         skip_ids={"no_daily": (ids[199],)},  # set aside, and dropped by both sides
     )
     study = {ids[5], *ids[190:]}

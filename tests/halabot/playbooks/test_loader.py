@@ -495,6 +495,25 @@ async def test_bars_cut_on_the_spare_session_are_counted_apart(engine: AsyncEngi
     assert loader.counts["spare_dropped_bars"] == 7 and loader.counts["dropped_bars"] == 0
 
 
+async def test_spy_bars_cut_keep_their_timestamps(engine: AsyncEngine) -> None:
+    """Each SPY session that lost bars maps to the cut bars' ts, none of them kept."""
+    await seed_calendar(engine, date(2016, 1, 4), END)
+    insane = (10.0, 9.0, 8.0, 9.5, 1.0, 9.5)  # h < max(o, c)
+    cut = {(11, 0): insane, (15, 59): insane}
+    await seed_bars(engine, "SPY", session_bars(MON, price=200.0, rows=cut))
+    await seed_bars(engine, "SPY", session_bars(TUE, price=200.0))
+    for d in (MON, TUE):
+        await seed_bars(engine, "OK", session_bars(d))
+    await mark_done(engine, [("SPY", MON), ("SPY", TUE), ("OK", MON), ("OK", TUE)])
+    loader = MinuteBarLoader(engine, window=Window.GATE, window_end=END, unlock=WindowUnlock())
+    (item,) = [x async for x in loader.paths([PathRequest("ok", "OK", MON, 2)], Context())]
+    assert isinstance(item, PathData) and item.dropped == 0  # the stock's bars are clean
+    assert loader.spy_dropped == {MON: (epoch(MON, 11, 0), epoch(MON, 15, 59))}
+    assert loader.counts["spy_dropped_bars"] == 2
+    kept = (await loader.spy()).days[MON]
+    assert len(kept) == 388 and not set(loader.spy_dropped[MON]) & set(kept.ts.tolist())
+
+
 async def test_a_path_past_the_window_end_is_refused(engine: AsyncEngine) -> None:
     ctx = await _market(engine)
     loader = MinuteBarLoader(engine, window=Window.GATE, window_end=TUE, unlock=WindowUnlock())

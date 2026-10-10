@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from halabot.playbooks import sim
 from halabot.playbooks.legacy import (
+    SPY_BARS_CUT,
     HarnessStory,
     HoldFactory,
     r1_dropped,
@@ -326,6 +327,50 @@ async def test_r1_in_miniature_compares_the_run_with_the_study(engine: AsyncEngi
         r1_dropped(HEADS, summary, [t for t in trades if t.story_id != "h-ok"], study_dropped)
 
 
+async def test_r1_sets_aside_a_cut_spy_bar_only_for_headlines_deciding_at_or_before_it(
+    engine: AsyncEngine,
+) -> None:
+    """SPY's 11:00 bar is cut: the study, on the stored rows, still reads it.
+
+    For a headline deciding at 11:00 the cut bar is the study's SPY entry, so
+    the legs differ: set aside. For one deciding at 10:01 it lies between the
+    entry and the exit and changes nothing, but the rule ("decision at or
+    before a cut bar") sets it aside too. One deciding at 11:01 is compared.
+    """
+    await seed_calendar(engine, date(2016, 1, 4), END)
+    insane = (210.0, 205.0, 190.0, 208.0, 1e5, 300.0)  # h < max(o, c): cut by the rule
+    await seed_bars(engine, "SPY", session_bars(MON, price=200.0, rows={(11, 0): insane}))
+    heads = {
+        "h-before": ("AAA", et(MON, 10, 0)),  # decides 10:01
+        "h-at": ("BBB", et(MON, 10, 59)),  # decides 11:00, the cut bar's start
+        "h-after": ("CCC", et(MON, 11, 0)),  # decides 11:01
+    }
+    for symbol, _ in heads.values():
+        await seed_bars(engine, symbol, session_bars(MON, price=50.0))
+    stories = [reactor_story(i, s, t) for i, (s, t) in heads.items()]
+    expected = {i: (s, MON) for i, (s, _) in heads.items()}
+    await mark_done(engine, [*expected.values(), ("SPY", MON)])
+    units = frozenset(expected.values())
+    await register_gate_units(engine, "g1", units)
+    unlock = WindowUnlock(gate="g1", units=units, units_sha=unit_set_sha(units))
+    sink = MemorySink()
+    summary = await _reactor_run(engine, stories, expected, unlock, sink)
+    assert summary.spy_drop_days == {"2016-03-07": 1}
+    assert summary.spy_drop_ids == ("h-after", "h-at", "h-before")  # the whole day
+    assert summary.spy_drop_from_start_ids == ("h-at", "h-before")
+    trades = [o.trade for o in sink.outcomes if o.trade is not None]
+    legs = {t.story_id: (t.spy_entry_px, t.spy_exit_px) for t in trades}
+    spy_rows = await minutes.read(engine, "SPY", MON)
+    study = {
+        i: intraday.entry_and_close(spy_rows, t + intraday.LATENCY) for i, (_, t) in heads.items()
+    }
+    assert study["h-at"] == (300.0, 200.0) and legs["h-at"] == (200.0, 200.0)  # 11:00 against 11:01
+    assert study["h-before"] == legs["h-before"] and study["h-after"] == legs["h-after"]
+    check = r1_dropped(heads, summary, trades, set())
+    assert check.set_aside == {"h-at": (SPY_BARS_CUT,), "h-before": (SPY_BARS_CUT,)}
+    assert check.kept == ("h-after",) and check.identical
+
+
 async def test_a_run_logs_its_start_batches_and_end(
     engine: AsyncEngine, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -353,11 +398,12 @@ async def test_a_run_lists_the_stories_its_data_rules_touched(engine: AsyncEngin
     await seed_bars(engine, "BAD", session_bars(MON, rows={(9, 30 + i): insane for i in range(6)}))
     await seed_bars(engine, "TWO", session_bars(MON, rows={(9, 31): insane, (9, 32): insane}))
     await seed_bars(engine, "SPYCUT", session_bars(TUE))  # its own bars clean, SPY's cut
+    await seed_bars(engine, "LATE", session_bars(TUE))  # starts at 11:30, after SPY's cut bar
     await seed_bars(engine, "DEFECT", session_bars(MON))
     await seed_bars(engine, "SPARE", session_bars(MON))
     await seed_bars(engine, "SPARE", session_bars(TUE, rows={(9, 40): insane}))  # its spare
     days = [(s, MON) for s in ("OK", "BAD", "TWO", "DEFECT", "SPARE")] + [("SPYCUT", TUE)]
-    await mark_done(engine, [*days, ("SPARE", TUE), ("SPY", MON), ("SPY", TUE)])
+    await mark_done(engine, [*days, ("LATE", TUE), ("SPARE", TUE), ("SPY", MON), ("SPY", TUE)])
     # DEFECT's adjusted series halves on 2016-02-01 while raw / adjusted holds still (stale).
     closes = {
         d: (100.0 if d < date(2016, 2, 1) else 50.0)
@@ -366,6 +412,7 @@ async def test_a_run_lists_the_stories_its_data_rules_touched(engine: AsyncEngin
     }
     await seed_daily(engine, "DEFECT", closes, adjusted=closes)
     stories = [story(s, d, downgrade(d)) for s, d in days]
+    stories.append(story("LATE", TUE, downgrade(TUE, 11, 30)))
     sink = MemorySink()
     summary = await run(
         engine,
@@ -384,7 +431,8 @@ async def test_a_run_lists_the_stories_its_data_rules_touched(engine: AsyncEngin
         "adjust_defect": ("DEFECT:2016-03-07",),
     }
     assert summary.bar_drop_ids == ("TWO:2016-03-07",)  # the stock's own bars
-    assert summary.spy_drop_ids == ("SPYCUT:2016-03-08",)  # SPY's, on a path session
+    assert summary.spy_drop_ids == ("LATE:2016-03-08", "SPYCUT:2016-03-08")  # SPY's, on S
+    assert summary.spy_drop_from_start_ids == ("SPYCUT:2016-03-08",)  # LATE started after it
     assert summary.spy_drop_days == {"2016-03-08": 1}
     assert summary.spare_drop_ids == ("SPARE:2016-03-07",)  # the spare (TUE), not the path
     assert summary.skips == {"bad_bars": 1, "adjust_defect": 1}
@@ -397,13 +445,15 @@ async def test_a_run_lists_the_stories_its_data_rules_touched(engine: AsyncEngin
         "bad_bars": ["BAD:2016-03-07"],
     }
     assert sink.summary["bar_drop_ids"] == ["TWO:2016-03-07"]
-    assert sink.summary["spy_drop_ids"] == ["SPYCUT:2016-03-08"]
+    assert sink.summary["spy_drop_ids"] == ["LATE:2016-03-08", "SPYCUT:2016-03-08"]
+    assert sink.summary["spy_drop_from_start_ids"] == ["SPYCUT:2016-03-08"]
     assert sink.summary["spy_drop_days"] == {"2016-03-08": 1}
     assert sink.summary["spare_drop_ids"] == ["SPARE:2016-03-07"]
     assert {o.story_id for o in sink.outcomes if o.skip is None} == {
         "OK:2016-03-07",
         "TWO:2016-03-07",
         "SPYCUT:2016-03-08",
+        "LATE:2016-03-08",
         "SPARE:2016-03-07",
     }
 
