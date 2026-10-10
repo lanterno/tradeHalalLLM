@@ -1286,13 +1286,18 @@ async def preconditions(
     checks.append(await check_news_d3(engine))
     if plan is None:
         try:
-            from halal_trader.events.units import h1_plan
+            from halal_trader.events.units import PlanError, h1_plan
         except ImportError as exc:
             checks.append(Check("D4", False, f"plan H is not available: {exc}"))
             checks.append(Check("D5", False, "plan H is not available"))
             plan = None
         else:
-            plan = await h1_plan(engine)
+            try:
+                plan = await h1_plan(engine)
+            except PlanError as exc:  # stories not built, a gate set out of range...
+                checks.append(Check("D4", False, f"plan H refused: {exc}"))
+                checks.append(Check("D5", False, "plan H refused"))
+                plan = None
     units: set[tuple[str, date]] | None = None
     if plan is not None:
         done = await minutes.done_units(engine)
