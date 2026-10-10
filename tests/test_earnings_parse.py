@@ -594,6 +594,42 @@ def test_units_across_a_suffix_boundary_still_compare() -> None:
 
 
 @pytest.mark.parametrize(
+    ("headline", "eps", "estimate"),
+    [
+        ("Ralph Lauren Q4 Adj. EPS $(0.68) Misses $0.01 Estimate, Sales $1.30B Beat $1.29B "
+         "Estimate", -0.68, 0.01),
+        ("Phillips 66 Q3 Adj. EPS $(0.01) Beats $(0.79) Estimate", -0.01, -0.79),
+        ("Coinbase Glb Q4 EPS $1.04 Beats $(0.01) Estimate, Sales $953.79M Beat $822.36M "
+         "Estimate", 1.04, -0.01),
+    ],
+)  # fmt: skip
+def test_an_eps_near_zero_compares_whatever_the_ratio(
+    headline: str, eps: float, estimate: float
+) -> None:
+    # Over 50 times apart, but the smaller side is under $0.10: no dropped suffix.
+    (r,) = parse_headline(headline)
+    f = r.fields
+    assert f["eps"] == pytest.approx(eps) and f["eps_estimate"] == pytest.approx(estimate)
+    assert f["eps_surprise"] == pytest.approx((eps - estimate) / abs(estimate))
+    assert "eps_not_comparable" not in f and "not_comparable" not in f
+
+
+@pytest.mark.parametrize(
+    "headline",
+    [
+        # Garbled figures a dollar or more apart from a real estimate still do not compare.
+        "Akamai Reports Q3 EPS $68 vs $0.61 Est., Sales $584M vs $571.9M Est.",
+        "Bidu Q1 EPS $1,89 Beats $1.66 Est; Revenue $4.29B Beats $4.22B Est",
+        "ILG Reports Q3 EPS 40.25 vs $0.26 Est, Rev $418M vs $387M Est",
+        "Bloom Energy Q4 EPS $(12) Misses $(0.18) Estimate, Sales $213.6M Beat $206.95M Estimate",
+    ],
+)
+def test_a_garbled_eps_still_does_not_compare(headline: str) -> None:
+    r = parse_headline(headline)[0]
+    assert r.fields["eps_not_comparable"] is True and r.fields["eps_surprise"] is None
+
+
+@pytest.mark.parametrize(
     "headline",
     [
         "Celgene Sees Q4 Adj EPS $1.18 Vs Est $1.30, Sees FY 2016 Adj EPS $5.50-$5.70 VS Est "
@@ -782,6 +818,7 @@ def test_parser_sha_pins_every_pattern() -> None:
     assert src["PARSE_ORDER"] == ",".join(ep.PARSE_ORDER)
     # The constants that shape a read, beside the patterns.
     assert src["UNIT_RATIO"] == repr(ep.UNIT_RATIO) == "50.0"
+    assert src["EPS_RATIO_FLOOR"] == repr(ep.EPS_RATIO_FLOOR) == "0.1"
     assert src["OLD_WINDOW"] == repr(ep.OLD_WINDOW) == "40"
     assert src["KEEP_ACTIONS"] == "affirms,maintains,reaffirms,reiterates,sees"
     want = hashlib.sha256(json.dumps(src, sort_keys=True).encode()).hexdigest()[:12]
