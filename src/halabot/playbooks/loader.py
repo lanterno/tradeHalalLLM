@@ -18,17 +18,23 @@
   2025-12-01..2026-10-09); and the ledger must hold the pin, a
   ``quant_trials`` row ``kind='gate-units'``, ``name=`` :data:`GATE_UNITS_NAME`,
   ``config={"gate": <id>, "units_sha": <sha>}``, which the gate code writes
-  with :func:`register_gate_units` before it runs. SPY is admitted on the
-  days of those units.
+  with :func:`register_gate_units` before it runs, and it must be the gate's
+  current pin. SPY is admitted on the days of those units.
 
-**One pin per gate.** :func:`register_gate_units` refuses a set whose sha
-differs from a pin the gate already has (re-registering the same set is a
-no-op), and refuses a set that does not hash to ``expected_sha`` when the
-caller passes one (the plan's ``UnitPlan.sha("gate_<id>")``, so a gate's set
-is the one plan H fetched). :meth:`WindowGuard.verify` opens a gate only when
-the ledger holds exactly one pin for it, equal to ``unlock.units_sha``: two
-registrations racing with different sets leave two pins, and then neither
-opens (fail closed).
+**One pin per gate, re-pinned only with a reason.** :func:`register_gate_units`
+refuses a set whose sha differs from the gate's pin (re-registering the same
+set is a no-op), and refuses a set that does not hash to ``expected_sha``
+when the caller passes one (the plan's ``UnitPlan.sha("gate_<id>")``, so a
+gate's set is the one plan H fetched). An upstream data fix (the aliases,
+the stories) legitimately changes a selection; then ``supersede=<reason>``
+re-pins: a new ``gate-units`` row, ``config={"gate", "units_sha",
+"supersedes": <the pin it replaces>, "reason"}``. The old pin stays on the
+ledger; the **latest** pin is the gate's (:func:`gate_pin`), so the old set
+never opens again. Every change of set must be such a re-pin of the row
+before it (:func:`current_pin`): two registrations racing with different
+sets, or two re-pins of the same pin, leave a change nobody sanctioned, and
+then no set opens (fail closed) until a re-pin with a reason settles it.
+:meth:`WindowGuard.verify` opens a gate only for its current pin.
 
 The sue range ends at :func:`sue_last_exit`, the last h=20 exit session of an
 observation published by 2019-12-31 (spec §H: ``gate_sue`` holds the entry
@@ -85,6 +91,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import hashlib
+import logging
 from collections import Counter
 from collections.abc import AsyncIterator, Iterable, Sequence
 from dataclasses import dataclass
@@ -98,6 +105,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from halabot.playbooks.interfaces import ContextView
 from halabot.playbooks.types import PathData, PathSkip, Session, SpyData, path_days
+from halal_trader.core import events
 from halal_trader.data import minutes
 from halal_trader.data.minutes import BarArrays
 from halal_trader.market_hours import (
@@ -109,6 +117,8 @@ from halal_trader.market_hours import (
 
 if TYPE_CHECKING:
     from halal_trader.compliance.runner import CorporateActions
+
+logger = logging.getLogger(__name__)
 
 SPY: Final = "SPY"
 LOCK_START: Final = date(2016, 10, 1)  # from here a registered preregistration is needed
@@ -220,17 +230,63 @@ def check_gate_units(gate: str, units: Iterable[tuple[str, date]]) -> frozenset[
     return out
 
 
-async def gate_pins(engine: AsyncEngine, gate: str) -> set[str]:
-    """Every unit-set sha the ledger pins for ``gate`` (one at most, by registration)."""
+@dataclass(frozen=True, slots=True)
+class GatePin:
+    """One ``gate-units`` row: the set it pins and, for a re-pin, the pin it replaces and why."""
+
+    row_id: int
+    sha: str
+    supersedes: str | None = None
+    reason: str | None = None
+
+
+async def gate_pin_rows(engine: AsyncEngine, gate: str) -> list[GatePin]:
+    """Every ``gate-units`` row of ``gate``, oldest first."""
     async with engine.connect() as conn:
         rows = await conn.execute(
             text(
-                "SELECT DISTINCT config->>'units_sha' AS sha FROM quant_trials "
-                "WHERE kind = :k AND name = :n AND config->>'gate' = :g"
+                "SELECT id, config->>'units_sha' AS sha, config->>'supersedes' AS supersedes, "
+                "config->>'reason' AS reason FROM quant_trials "
+                "WHERE kind = :k AND name = :n AND config->>'gate' = :g ORDER BY id"
             ),
             {"k": GATE_UNITS_KIND, "n": GATE_UNITS_NAME, "g": gate},
         )
-        return {str(r.sha) for r in rows}
+        return [GatePin(int(r.id), str(r.sha), r.supersedes, r.reason) for r in rows]
+
+
+async def gate_pins(engine: AsyncEngine, gate: str) -> set[str]:
+    """Every unit-set sha the ledger has pinned for ``gate``, superseded ones included."""
+    return {p.sha for p in await gate_pin_rows(engine, gate)}
+
+
+def current_pin(gate: str, rows: Sequence[GatePin]) -> str | None:
+    """The gate's pin: the latest row's set, or None when nothing is pinned.
+
+    Every change of set along the rows (oldest first) must be a re-pin that
+    supersedes the row just before it; :class:`WindowLocked` otherwise (two
+    registrations raced with different sets, two re-pins replaced the same
+    pin, or a row was written by hand): no set opens. A later re-pin of the
+    row before it settles the gate again.
+    """
+    ordered = sorted(rows, key=lambda p: p.row_id)
+    unsanctioned: GatePin | None = None
+    for before, pin in zip(ordered, ordered[1:]):
+        if pin.supersedes is not None:  # a re-pin is sanctioned only over the row before it
+            unsanctioned = None if pin.supersedes == before.sha else pin
+        elif pin.sha != before.sha:
+            unsanctioned = pin
+    if unsanctioned is not None:
+        raise WindowLocked(
+            f"gate {gate!r}: ledger row {unsanctioned.row_id} pins {unsanctioned.sha[:12]} "
+            "without superseding the pin before it (a race, or a row written by hand); "
+            "no unit set opens until a re-pin with a reason"
+        )
+    return ordered[-1].sha if ordered else None
+
+
+async def gate_pin(engine: AsyncEngine, gate: str) -> str | None:
+    """``gate``'s current pin (:func:`current_pin`) as the ledger holds it."""
+    return current_pin(gate, await gate_pin_rows(engine, gate))
 
 
 async def register_gate_units(
@@ -239,18 +295,25 @@ async def register_gate_units(
     units: Iterable[tuple[str, date]],
     *,
     expected_sha: str | None = None,
+    supersede: str | None = None,
 ) -> str:
     """Pin ``gate``'s unit set in the ledger before the gate runs; returns its sha256.
 
     Writes one ``quant_trials`` row (``kind='gate-units'``, no Sharpe, so it
-    is never counted as a trial) unless the same pin exists. Refuses
-    (:class:`WindowLocked`) a unit outside the gate's dates, a set that
-    does not hash to ``expected_sha`` when one is given (the units plan
-    passes ``UnitPlan.sha("gate_<id>")``), and a set other than the one
-    the gate is already pinned to: one pin per gate.
+    is never counted as a trial) unless the set is already the gate's pin.
+    Refuses (:class:`WindowLocked`) a unit outside the gate's dates, a set
+    that does not hash to ``expected_sha`` when one is given (the units plan
+    passes ``UnitPlan.sha("gate_<id>")``), and a set other than the gate's
+    pin, unless ``supersede`` gives the reason for a re-pin (an upstream data
+    fix changed the selection): the row then records ``supersedes`` (the
+    pin it replaces, the latest row's) and ``reason``, and the new set is
+    the gate's pin from then on. A re-pin also settles a gate whose rows
+    conflict (:func:`current_pin`).
     """
     from halal_trader.db.repos.quant_trials import QuantTrialRepoImpl
 
+    if supersede is not None and not supersede.strip():
+        raise WindowLocked(f"gate {gate!r}: a re-pin needs a reason")
     unit_set = check_gate_units(gate, units)
     sha = unit_set_sha(unit_set)
     if expected_sha is not None and sha != expected_sha:
@@ -258,19 +321,47 @@ async def register_gate_units(
             f"gate {gate!r}: the unit set hashes to {sha[:12]}, "
             f"not the expected {expected_sha[:12]}"
         )
-    pins = await gate_pins(engine, gate)
-    if others := sorted(pins - {sha}):
-        raise WindowLocked(
-            f"gate {gate!r} is already pinned to {others[0][:12]}; one pin per gate, not {sha[:12]}"
-        )
-    if sha not in pins:
-        lo, hi = GATE_RANGES[gate]
-        await QuantTrialRepoImpl(engine).record_trial(
-            name=GATE_UNITS_NAME,
-            kind=GATE_UNITS_KIND,
-            config={"gate": gate, "units_sha": sha},
-            window=f"{lo}..{hi}",
-            metrics={"units": len(unit_set)},
+    rows = await gate_pin_rows(engine, gate)
+    try:
+        pinned = current_pin(gate, rows)
+    except WindowLocked:
+        if supersede is None:
+            raise
+        pinned = None  # a conflict: only a re-pin of the latest row settles it
+    if pinned == sha:
+        return sha
+    config: dict[str, str] = {"gate": gate, "units_sha": sha}
+    if rows:
+        old = rows[-1].sha
+        if supersede is None:
+            raise WindowLocked(
+                f"gate {gate!r} is already pinned to {old[:12]}; one pin per gate, not "
+                f"{sha[:12]} (a re-pin needs a reason)"
+            )
+        config |= {"supersedes": old, "reason": supersede.strip()}
+    lo, hi = GATE_RANGES[gate]
+    row_id = await QuantTrialRepoImpl(engine).record_trial(
+        name=GATE_UNITS_NAME,
+        kind=GATE_UNITS_KIND,
+        config=config,
+        window=f"{lo}..{hi}",
+        metrics={"units": len(unit_set)},
+    )
+    if "supersedes" in config:
+        logger.warning(
+            "gate %s re-pinned: %s supersedes %s (%s)",
+            gate,
+            sha[:12],
+            config["supersedes"][:12],
+            config["reason"],
+            extra={
+                "event": events.GATE_UNITS_REPINNED,
+                "gate": gate,
+                "units_sha": sha,
+                "supersedes": config["supersedes"],
+                "reason": config["reason"],
+                "trial_id": row_id,
+            },
         )
     return sha
 
@@ -304,15 +395,18 @@ class WindowGuard:
             raise WindowLocked("an unlock needs the preregistered config_hash")
         if u.gate is not None:
             assert u.units_sha is not None  # checked at construction
-            pins = await gate_pins(engine, u.gate)
-            if u.units_sha not in pins:
+            rows = await gate_pin_rows(engine, u.gate)
+            pin = current_pin(u.gate, rows)  # WindowLocked on a change nobody sanctioned
+            if pin != u.units_sha:
+                if any(p.sha == u.units_sha for p in rows):
+                    assert pin is not None
+                    raise WindowLocked(
+                        f"gate {u.gate!r}: unit set {u.units_sha[:12]} was superseded; "
+                        f"the gate's pin is {pin[:12]}"
+                    )
                 raise WindowLocked(
                     f"gate {u.gate!r}: unit set {u.units_sha[:12]} is not pinned in the ledger "
                     f"(register_gate_units)"
-                )
-            if len(pins) > 1:
-                raise WindowLocked(
-                    f"gate {u.gate!r} has {len(pins)} pinned unit sets; one pin per gate"
                 )
             self._gate_ok = True
         async with engine.connect() as conn:
@@ -703,6 +797,7 @@ __all__ = [
     "WINDOW_START",
     "CalendarMismatch",
     "Gate",
+    "GatePin",
     "MinuteBarLoader",
     "PathRequest",
     "SpyData",
@@ -713,6 +808,9 @@ __all__ = [
     "batches_of",
     "check_calendar",
     "check_gate_units",
+    "current_pin",
+    "gate_pin",
+    "gate_pin_rows",
     "gate_pins",
     "register_gate_units",
     "sane",
