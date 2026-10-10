@@ -31,6 +31,7 @@ from halal_trader.events.stories import (
     fact_keys,
     federal_holidays,
     filing_public_at,
+    has_analyst_slot,
     jaccard,
     reaction_session,
     shingles,
@@ -201,13 +202,52 @@ def test_an_analyst_headline_with_no_clause_about_the_company_is_dropped() -> No
     rows = [
         # Apple is named, but in no action's slot: the action is about Intel.
         news("AAPL", ny(TUE, 8), "Morgan Stanley Downgrades Intel, Says Apple Orders Weak"),
-        # The verb without any slot at all.
-        news("AAPL", ny(TUE, 8, 1), "Apple Maintains Lead In Smartphones"),
         news("AAPL", ny(TUE, 8, 2), DOWNGRADE),
     ]
     story = one(rows, counters=c)
     assert [i.raw.headline for i in story.items] == [DOWNGRADE]
-    assert c["entity_analyst"] == 2
+    assert c["entity_analyst"] == 1 and c["analyst_no_slot"] == 0
+
+
+def test_an_analyst_headline_with_no_slot_is_checked_and_classified_whole() -> None:
+    c: Counter[str] = Counter()
+    rows = [
+        news("AAPL", ny(TUE, 8), "Vetr Issues Downgrade To Hold On Apple"),
+        news("AAPL", ny(TUE, 8, 1), "Apple Cuts FY24 Revenue Guidance, Reiterates Adj EPS Outlook"),
+        news("AAPL", ny(TUE, 8, 2), "Apple Initiates Bankruptcy Proceedings For Its Unit"),
+        news("AAPL", ny(TUE, 8, 3), "Apple Maintains Lead In Smartphones"),
+        # No slot and no name: dropped as any other news.
+        news("AAPL", ny(TUE, 8, 4), "Regulators Reiterate Concerns, Analyst Downgrade Looms"),
+    ]
+    story = one(rows, counters=c)
+    assert [i.itype for i in story.items] == [
+        "analyst_downgrade",
+        "guidance_cut",
+        "insolvency",
+        "analyst_other",
+    ]
+    assert c["analyst_no_slot"] == 5 and c["entity"] == 1 and c["entity_analyst"] == 0
+    assert story.card_at(story.close).structural is True  # the veto is no longer lost
+
+
+def test_the_slot_forms_the_clause_rule_reads() -> None:
+    intel, amd = ALIASES["INTC"], ALIASES["AMD"]
+    on = "UPDATE: Morgan Stanley Maintains Overweight On Intel, Downgrades AMD To Equal-Weight"
+    assert analyst_clause(on, intel) == "UPDATE: Morgan Stanley Maintains Overweight On Intel"
+    assert analyst_clause(on, amd) == "Downgrades AMD To Equal-Weight"
+    both = "Jefferies Initiates Intel With Buy; Initiates AMD With A Hold"
+    assert analyst_clause(both, intel) == "Jefferies Initiates Intel With Buy"
+    assert analyst_clause(both, amd) == "Initiates AMD With A Hold"
+    for no_slot in (
+        "Raymond James Initiates Coverage With Underperform Rating On Intel",
+        "Intel Initiates Phase 3 Trial Of A Chip In Patients With Severe Boredom",
+        "Intel Initiates $10B Buyback",
+        "Apple Maintains Lead In Smartphones",
+    ):
+        assert not has_analyst_slot(no_slot), no_slot
+    built = by_id(build([news("INTC", ny(TUE, 8), on), news("AMD", ny(TUE, 8), on)], ALIASES))
+    assert built["INTC:2024-05-07"].items[0].itype == "analyst_other"
+    assert built["AMD:2024-05-07"].items[0].itype == "analyst_downgrade"
 
 
 # ── time (spec §A.2 step 4, §A.3) ─────────────────────────────
