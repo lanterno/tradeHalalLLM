@@ -200,6 +200,8 @@ T_MIN: Final = 2.0
 ALPHA: Final = 0.05
 COST_X: Final = 1.5  # T3: the mean must stay positive at 1.5x costs (one more side)
 SKIP_MAX: Final = 0.02  # Stage A: data skips per eligible NSN story, each window
+# Stage A's verdict when no cell is eligible (the atlas may run after it).
+STAGE_A_FAIL: Final = "fail: insufficient events"
 UNRESOLVED_MAX: Final = 0.005  # T6
 BOOK_SLOTS: Final = 8
 BOOK_LOSS_LIMIT: Final = 0.02
@@ -2177,7 +2179,7 @@ async def stage_a(
     if not budget_ok:
         verdict_ = "blocked: data skips"
     elif not eligible:
-        verdict_ = "fail: insufficient events"
+        verdict_ = STAGE_A_FAIL
     else:
         verdict_ = "pass"
     trial_id = await _record(
@@ -3064,6 +3066,7 @@ __all__ = [
     "REQUIRED_CHECKS",
     "REQUIRED_GATES",
     "SENSITIVITIES",
+    "STAGE_A_FAIL",
     "TAG",
     "Amendment",
     "Carrier",
