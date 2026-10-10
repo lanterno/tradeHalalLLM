@@ -70,9 +70,10 @@ anchor bar is visible: every bar before it is visible by then.
 **Structural items** (spec §B.1: "veto before entry, abort after") reach
 the playbook from the story's own card and, for the symbol's other stories
 (a blocked story, or the next session's), only as ``NewsIn``. An item
-*brings a structural item* when it is the story's own and adds a structural
-type to its card's vetoes, or it is another story's and that story's card
-is structural (every such item counts, not only the first).
+*brings a structural item* when it adds a structural type to its story's
+card's vetoes, the playbook's own story or another alike: an item of a type
+the card already holds, or one that types nothing (noise, a law firm),
+brings none.
 
 * H1 (``require_family``): any structural item known while WATCHING or
   ARMED ends the story EXPIRED (``veto``), the own one through E5's family
@@ -590,15 +591,12 @@ class OverreactionBounce:
     def _brings_structural(ev: NewsIn) -> bool:
         """Whether the item(s) usable at ``ev.at`` bring a structural item (module docstring).
 
-        The story's own: a structural type its card's vetoes lacked just
-        before. Another story's: any item once that story's card is
-        structural.
+        A structural type the vetoes of their story's card (the playbook's
+        own or another) lacked just before.
         """
         after = ev.story.card_at(ev.at)
         if not after.structural:
             return False
-        if not ev.own:
-            return True
         before = ev.story.card_at(ev.at - _TICK)
         return bool(_structural(after.vetoes) - _structural(before.vetoes))
 
