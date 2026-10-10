@@ -12,17 +12,22 @@ not asked for again, and a session fetched before its close is.
 Fetching groups units by session and asks for many symbols per request (a
 page holds 10,000 bars across them), so a backfill costs about one request
 per 25 symbol-sessions rather than one each.
+
+Simulators read many units at once with :func:`read_windows`, one query per
+batch of units, as numpy arrays.
 """
 
 from __future__ import annotations
 
 import logging
 from collections import defaultdict
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
+import numpy as np
+from numpy.typing import NDArray
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
@@ -33,6 +38,7 @@ logger = logging.getLogger(__name__)
 TASK = "minute"
 _INSERT_CHUNK = 5_000
 _SETTLED = timedelta(minutes=20)  # the SIP embargo (16 min) and a margin
+_WINDOW_BATCH = 1_000  # units per read_windows query
 
 
 @dataclass(frozen=True, slots=True)
@@ -172,4 +178,88 @@ async def read_sessions(
                             float(r.vwap) if r.vwap is not None else None,
                         )
                     )
+    return out
+
+
+@dataclass(frozen=True, slots=True)
+class BarArrays:
+    """One unit's regular-session bars as arrays, oldest first.
+
+    ``ts`` is the minute's start in epoch seconds (UTC); ``vw`` is NaN where
+    the bar carries no VWAP.
+    """
+
+    ts: NDArray[np.int64]
+    o: NDArray[np.float64]
+    h: NDArray[np.float64]
+    l: NDArray[np.float64]  # noqa: E741 - the bar's low, named as in o/h/l/c
+    c: NDArray[np.float64]
+    v: NDArray[np.float64]
+    vw: NDArray[np.float64]
+
+    def __len__(self) -> int:
+        return len(self.ts)
+
+    @classmethod
+    def empty(cls) -> BarArrays:
+        f = np.empty(0, dtype=np.float64)
+        return cls(np.empty(0, dtype=np.int64), f, f, f, f, f, f)
+
+
+_READ_WINDOWS = text(
+    """
+    WITH w(i, symbol, lo, hi) AS (
+        SELECT * FROM unnest(CAST(:i AS int[]), CAST(:s AS text[]),
+                             CAST(:lo AS timestamptz[]), CAST(:hi AS timestamptz[]))
+    )
+    SELECT w.i,
+           array_agg(CAST(extract(epoch FROM m.ts) AS bigint) ORDER BY m.ts) AS ts,
+           array_agg(m.open ORDER BY m.ts) AS o,
+           array_agg(m.high ORDER BY m.ts) AS h,
+           array_agg(m.low ORDER BY m.ts) AS l,
+           array_agg(m.close ORDER BY m.ts) AS c,
+           array_agg(m.volume ORDER BY m.ts) AS v,
+           array_agg(coalesce(m.vwap, 'NaN'::float8) ORDER BY m.ts) AS vw
+    FROM w JOIN minute_bars m ON m.symbol = w.symbol AND m.ts >= w.lo AND m.ts < w.hi
+    GROUP BY w.i
+    """
+)
+
+
+async def read_windows(
+    engine: AsyncEngine, units: Sequence[tuple[str, date]]
+) -> dict[tuple[str, date], BarArrays]:
+    """Each (symbol, session) unit's stored regular-session bars, as arrays.
+
+    One query per batch of units: the units are unnested into
+    ``[open, effective close)`` windows (:func:`session_bounds`) and joined
+    to ``minute_bars``, so neither extended-hours rows nor the stored close
+    bar of a session can come back. Every unit asked for is in the result,
+    an empty one when it has no bars.
+    """
+    wanted = sorted(set(units))
+    out: dict[tuple[str, date], BarArrays] = {u: BarArrays.empty() for u in wanted}
+    async with engine.connect() as conn:
+        for start in range(0, len(wanted), _WINDOW_BATCH):
+            chunk = wanted[start : start + _WINDOW_BATCH]
+            bounds = [session_bounds(day) for _, day in chunk]
+            rows = await conn.execute(
+                _READ_WINDOWS,
+                {
+                    "i": list(range(len(chunk))),
+                    "s": [symbol for symbol, _ in chunk],
+                    "lo": [lo for lo, _ in bounds],
+                    "hi": [hi for _, hi in bounds],
+                },
+            )
+            for r in rows:
+                out[chunk[r.i]] = BarArrays(
+                    np.asarray(r.ts, dtype=np.int64),
+                    np.asarray(r.o, dtype=np.float64),
+                    np.asarray(r.h, dtype=np.float64),
+                    np.asarray(r.l, dtype=np.float64),
+                    np.asarray(r.c, dtype=np.float64),
+                    np.asarray(r.v, dtype=np.float64),
+                    np.asarray(r.vw, dtype=np.float64),
+                )
     return out
