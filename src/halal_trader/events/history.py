@@ -450,7 +450,8 @@ async def _unmark_stories(conn: AsyncConnection, times: dict[str, datetime]) -> 
 
 async def _retime(conn: AsyncConnection, times: dict[str, datetime]) -> None:
     """Stamp every row of each accession, under every symbol, at its header time,
-    and withdraw the stories' marks that makes stale (:func:`_unmark_stories`)."""
+    and withdraw the stories' complete marks the move makes stale
+    (:func:`_unmark_stories`)."""
     if times:
         await _unmark_stories(conn, times)
         await conn.execute(
