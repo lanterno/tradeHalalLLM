@@ -18,10 +18,12 @@ it, every comparison strict:
   ``A(d) = close_all(d)/close_raw(d)``. The ratio holds exactly the corporate
   actions effective at S's open, which are announced beforehand.
 * **Volatility.** σ and β come from the 60 sessions whose close is strictly
-  before the news (``at_news``): pre-open news uses S−1 back, news after the
-  close of N uses N back, news late in N's session N−1 back. At least 40
-  daily abnormal returns ``C_all(x)/C_all(x−1) − 1 − (SPY the same)`` must
-  be valid, else ``no_sigma``.
+  before the news (``at_news``, always required): pre-open news uses S−1
+  back, news after the close of N uses N back, news late in N's session N−1
+  back. At least 40 daily abnormal returns ``C_all(x)/C_all(x−1) − 1 − (SPY
+  the same)`` must be valid, else ``no_sigma``. News at or after S's close,
+  or no later than S−2's close, cannot belong to a story reacting in S
+  (every story item comes after S−1's close less 90 minutes): refused.
 * **Descriptives** (ATR, dollar volume, momentum, levels) use sessions up to
   S−1, and are NaN where their bars are missing; they gate nothing.
   **Facts** are the earnings facts published strictly before ``at``.
@@ -265,17 +267,20 @@ class PitContext:
         symbol: str,
         session: date,
         *,
+        at_news: datetime,
         universe: Universe = "primary",
-        at_news: datetime | None = None,
     ) -> Eligibility:
-        """Whether ``symbol`` is in ``universe`` at reaction session ``session``.
+        """Whether ``symbol`` is in ``universe`` at reaction session ``session``
+        for a story whose news came at ``at_news``.
 
         The first failing rule names the reason, in the order screen, CIK,
         rank, share class, daily bars, price, σ. σ is judged at ``at_news``
-        when given, otherwise at S's open (the sessions through S−1).
+        (C.1), the window :meth:`pre_event` uses, so a story is never counted
+        eligible on one σ window and traded on another.
         """
         j = self._session(session)
         series = self._loaded(symbol)
+        k = self._news_index(j, at_news)
         month = session.replace(day=1)
         rank = self._ranks[month].get(symbol)
         as_of = self._screen_as_of(session)
@@ -311,8 +316,7 @@ class PitContext:
             return result("no_daily")
         if prev_close < MIN_PREV_CLOSE:
             return result("price")
-        when = at_news if at_news is not None else session_bounds(session)[0]
-        if series is None or self._sigma_beta(series, j, when) is None:
+        if series is None or self._sigma_beta(series, k) is None:
             return result("no_sigma")
         return result("ok")
 
@@ -321,13 +325,14 @@ class PitContext:
         ``at_news``; None without the previous close and A-ratios, or without σ."""
         j = self._session(session)
         series = self._loaded(symbol)
+        k = self._news_index(j, at_news)
         if series is None:
             return None
         prev_close = _prev_close_s(series, j)
         spy_prev_close = _prev_close_s(self._spy, j)
         if prev_close is None or spy_prev_close is None:
             return None
-        fit = self._sigma_beta(series, j, at_news)
+        fit = self._sigma_beta(series, k)
         if fit is None:
             return None
         sigma, sigma_n, beta = fit
@@ -456,22 +461,33 @@ class PitContext:
             self._winners[key] = {cik: symbol for cik, (_, symbol) in best.items()}
         return self._winners[key]
 
-    def _sigma_beta(
-        self, series: _Series, j: int, at_news: datetime
-    ) -> tuple[float, int, float] | None:
-        """(σ, valid returns, clipped β) over the 60 sessions closed strictly
-        before ``at_news``; None under 40 valid returns.
+    def _news_index(self, j: int, at_news: datetime) -> int:
+        """k, the number of sessions closed strictly before ``at_news``, for a
+        story reacting in session j: always j−1 or j.
 
         News at or after session j's close cannot belong to a story reacting
-        in session j, so it is refused rather than let σ see that session.
+        in j, and news no later than j−2's close belongs to an earlier
+        session (a story's items come after j−1's close less 90 minutes).
+        Either is a caller's mistake (say, a parent story's time), refused
+        rather than let σ see session j or quietly measure an older window.
         """
         if at_news.tzinfo is None:
             raise ValueError("at_news must be timezone-aware")
-        k = bisect_left(self._closes, at_news)  # sessions[:k] closed before the news
         if at_news >= self._closes[j]:
             raise ValueError(
                 f"news at {at_news} is after the close of its story's session {self.sessions[j]}"
             )
+        k = bisect_left(self._closes, at_news)  # sessions[:k] closed before the news
+        if k < j - 1:
+            raise ValueError(
+                f"news at {at_news} is no later than the close of {self.sessions[j - 2]}: "
+                f"too early for a story reacting in {self.sessions[j]}"
+            )
+        return k
+
+    def _sigma_beta(self, series: _Series, k: int) -> tuple[float, int, float] | None:
+        """(σ, valid returns, clipped β) over the 60 sessions before index ``k``
+        (those closed strictly before the news); None under 40 valid returns."""
         lo = max(k - SIGMA_SESSIONS, 1)  # a return on x needs the close of x-1
         if k - lo < SIGMA_MIN_OBS:
             return None
