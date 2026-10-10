@@ -7,6 +7,11 @@ A cell with fewer than :data:`MIN_N` stories or :data:`MIN_DATES` distinct
 dates shows its counts only. Any idea taken from it becomes a new
 registered trial, fitted on train and tested once on validation.
 
+The counts-only rule is the cells' (the printed tables and the file's
+``cells``): the file's ``rows`` keep every unit's measures and machine
+fields, ``r`` included, whatever cell it falls in, so each table can be
+audited story by story. Nothing aggregates them outside the cells.
+
 **When it may run** (:func:`h1_closed`, checked before anything else is
 read). The newest ``research.news.h1`` preregistration must have, under its
 config hash, a ``verdict`` row or a ``stage-a`` row recording
@@ -988,7 +993,10 @@ def _plain(x: Any) -> Any:
 
 
 def to_json(atlas: Atlas) -> dict[str, Any]:
-    """The file's content: ``meta``, every cell, every row (``cont`` keyed by horizon)."""
+    """The file's content: ``meta``, every cell, every row (``cont`` keyed by horizon).
+
+    Rows keep their per-story values in counts-only cells too (module docstring).
+    """
     rows = []
     for r in atlas.rows:
         d = asdict(r)
