@@ -146,6 +146,9 @@ def trading_day(monkeypatch: pytest.MonkeyPatch) -> None:
     import halal_trader.trading.scheduler as sched
 
     monkeypatch.setattr(sched, "now_eastern", lambda: et(10, 6, 9, 5))
+    # The job checks the calendar by today_eastern(): pin it too, or the tests
+    # fail whenever they run on a weekend or a holiday.
+    monkeypatch.setattr(sched, "today_eastern", lambda: et(10, 6, 9, 5).date())
 
 
 async def test_a_failed_recommendation_is_retried_once_before_it_alerts(
