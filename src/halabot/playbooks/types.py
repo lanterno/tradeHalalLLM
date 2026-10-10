@@ -20,7 +20,7 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from enum import StrEnum
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import numpy as np
 from numpy.typing import NDArray
@@ -44,6 +44,9 @@ from halal_trader.market_hours import (
     is_trading_day,
     next_trading_day,
 )
+
+if TYPE_CHECKING:
+    from halabot.playbooks.exchange import FillModel
 
 # ── sessions ──────────────────────────────────────────────────
 
@@ -470,12 +473,21 @@ Intent = Submit | Cancel | SetTimer | Transition | Finish
 
 @dataclass(frozen=True, slots=True)
 class SimConfig:
+    """The simulator's constants.
+
+    ``fill`` is the fill model (``exchange.FillModel``). None means the D.5
+    market rule (``exchange.MARKET_FILL``), the only one a trial uses;
+    ``legacy.py`` holds the gate-only models that replicate the legacy
+    studies (``legacy.reactor_config()``, ``legacy.daily_config()``).
+    """
+
     feed: FeedProfile = SIP_RT
     order_lag: timedelta = ORDER_LAG
     gap: timedelta = GAP
     cost: CostMode = "study"
     reference_notional: float = 10_000.0
     allowed_kinds: frozenset[OrderKind] = frozenset({OrderKind.MARKET})
+    fill: FillModel | None = None
 
     def as_config(self) -> dict[str, object]:
         """The constants as plain JSON (for the run row and trial configs)."""
@@ -487,6 +499,7 @@ class SimConfig:
             "cost": self.cost,
             "reference_notional": self.reference_notional,
             "allowed_kinds": sorted(str(k) for k in self.allowed_kinds),
+            "fill": self.fill.name if self.fill is not None else "market",
         }
 
 

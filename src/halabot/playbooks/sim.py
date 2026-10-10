@@ -42,6 +42,10 @@ never gets one). ``stop_at="entry"`` stops a story at its entry fill
 (Stage A); ``assume_full_hold`` then keeps the symbol blocked through the
 deadline session.
 
+**Fill models.** The exchange fills by ``SimConfig.fill`` (the D.5 market
+rule unless a gate-only model from ``legacy.py`` is given; :func:`run`
+accepts those only under a gate unlock).
+
 **Determinism.** Symbols are independent, so they are split over workers by
 ``crc32(symbol) % workers`` and the records are identical for any worker
 count (``records.outcomes_sha256``). :func:`run` keeps no module state:
@@ -72,7 +76,7 @@ from halabot.playbooks import rules
 from halabot.playbooks.clock import US, EventHeap, Priority, from_us, span_us, to_us
 from halabot.playbooks.exchange import (
     Exchange,
-    first_eligible,
+    fill_model,
     in_surcharge_window,
     one_way_bps,
     spy_fill,
@@ -349,6 +353,7 @@ class _StoryRun:
         self.spy_data = spy
         self.market = _Market(self.symbol, self.bars, self.spy, ctx, s_day)
         self.exchange = Exchange(cfg)
+        self.fill = fill_model(cfg)
         self.position = _Position(self)
         self.open_us = [to_us(s.open) for s in self.sessions]
         self.close_us = [to_us(s.close) for s in self.sessions]
@@ -582,12 +587,16 @@ class _StoryRun:
                 or any(o.side == "buy" for o in self.exchange.working)
                 or self.state.holds(self.now_us)
             )
-            why = rules.admit_buy(
-                verdict=self.ctx.screen_verdict(self.symbol, s.day),
-                decided_us=self.now_us,
-                session=s,
-                held=held,
-            )
+            if self.fill.gate_only:
+                # A legacy study's replication (sim.run allows it under a gate unlock only).
+                why = rules.POSITION_HELD if held else None
+            else:
+                why = rules.admit_buy(
+                    verdict=self.ctx.screen_verdict(self.symbol, s.day),
+                    decided_us=self.now_us,
+                    session=s,
+                    held=held,
+                )
             active = rules.buy_active_at(self.now_us, self.lag_us, s)
             if why is not None or active is None:
                 self._reject(order_id, "buy", why or rules.MARKET_CLOSED)
@@ -619,7 +628,7 @@ class _StoryRun:
         self._schedule(order)
 
     def _schedule(self, order: WorkingOrder) -> None:
-        i = first_eligible(self.bars, order.active_at_us, order.k)
+        i = self.exchange.due(self.bars, order)
         if i is None:
             self.due.pop(order.order_id, None)
             return
@@ -662,8 +671,7 @@ class _StoryRun:
         k = int(self.bars.k[i])
         for ex in self.exchange.on_bar(i, self.bars, session_open_us=self.open_us[k]):
             self.due.pop(ex.order.order_id, None)
-            assert ex.bar_ts is not None
-            spy_px, spy_flags = spy_fill(self.spy, ex.bar_ts, ex.k, use_open="gap_fill" in ex.flags)
+            spy_px, spy_flags = self.fill.spy_price(self.spy, ex)
             self._executed(ex, spy_px, spy_flags, ex.k)
             fill = self._fill_in(ex, ex.filled_at_us + US)
             self.heap.push(ex.filled_at_us + US, Priority.FILL, (_NOTE, fill))
@@ -710,7 +718,7 @@ class _StoryRun:
                 if not self._working_sell():
                     self._submit(Submit("sell", reason="compliance"), by_sim=True)
                 self._deliver(ComplianceIn(now, s.day, verdict))
-        elif kind == "flatten" and k == self.deadline:
+        elif kind == "flatten" and k == self.deadline and not self.fill.gate_only:
             self._cancel_buys("flatten", inline=True)
             if self.qty > 0 and not self._working_sell():
                 self._submit(Submit("sell", reason="time_stop"), by_sim=True)
@@ -749,9 +757,16 @@ class _StoryRun:
             self._fallback(order, k)
 
     def _fallback(self, o: WorkingOrder, k: int) -> None:
-        """Fill an exit that found no bar on the deadline session (``exchange.unfilled_exit``)."""
-        day = self.sessions[k].day
+        """Fill an exit still open at the deadline's close: the fill model's way, else
+        the market rule's fallback (``exchange.unfilled_exit``)."""
         close = self.close_us[k]
+        own = self.fill.at_close(self.bars, self.spy, k)
+        if own is not None:
+            ex = Execution(o, k, own.i, own.bar_ts, own.price, close, own.flags)
+            self._executed(ex, own.spy_price, (), k)
+            self._deliver(self._fill_in(ex, self.now_us))
+            return
+        day = self.sessions[k].day
         dp = self.ctx.daily(self.symbol, day)
         spy_dp = self.ctx.daily(SPY, day)
         spare, spy_spare = self._spare_series()
@@ -1374,13 +1389,16 @@ async def run(
     against the ledger, the calendar is checked, and every day of every
     requested path is checked against the window guard (a path crossing
     ``window_end`` raises ``loader.WindowLocked`` here), all before
-    ``sink.begin``.
+    ``sink.begin``. A gate-only fill model (``legacy.py``) needs a gate unlock.
 
     Batches are simulated in session order; inside a batch the symbols are
     split over ``workers`` (:func:`pool_method` chooses processes or this
     one), and each symbol's blocking state carries from batch to batch. The
     run keeps no module state, so several runs may share an event loop.
     """
+    fill = fill_model(cfg)
+    if fill.gate_only and unlock.gate is None:
+        raise ValueError(f"the {fill.name!r} fill model replicates a legacy study: gate runs only")
     method = pool_method(parallel, workers)
     by_symbol = _group(stories)
     started = [s for s in stories if start_time(s) is not None]

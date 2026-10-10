@@ -24,13 +24,17 @@ trade; the trade is always kept.
 2x, or the "surcharge" reporting model (half-spread doubled in the first 15
 minutes after the session's first bar or 5 minutes after a gap, plus a
 square-root impact).
+
+**Fill models** (:class:`FillModel`, ``SimConfig.fill``). Everything above is
+the D.5 market rule, :data:`MARKET_FILL`, the only model a trial uses. The
+gate-only models that replicate the legacy studies live in ``legacy.py``.
 """
 
 from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Literal
+from typing import Final, Literal, Protocol
 
 import numpy as np
 
@@ -132,13 +136,18 @@ def one_way_bps(
 
 @dataclass(frozen=True, slots=True)
 class FallbackFill:
-    """How an exit left without a bar on its deadline session is filled."""
+    """How an exit still working (or a position still held) at the deadline's close is filled.
 
-    rule: Literal["close_fallback", "no_market", "unresolved"]
+    ``close_fallback``, ``no_market`` and ``unresolved`` are the market
+    rule's (:func:`unfilled_exit`); ``last_close`` is the gate-only models'
+    exit at the session's last bar (``legacy.py``).
+    """
+
+    rule: Literal["close_fallback", "no_market", "unresolved", "last_close"]
     price: float  # raw
     spy_price: float
-    bar_ts: int | None = None  # the spare session's filling bar (no_market), epoch s
-    i: int = -1  # its index in the spare series
+    bar_ts: int | None = None  # the filling bar (no_market: the spare's; last_close: S's), epoch s
+    i: int = -1  # its index in its series
     flags: tuple[str, ...] = ()
 
 
@@ -180,13 +189,111 @@ def unfilled_exit(
     return FallbackFill("unresolved", last_close, spy_px, flags=("unresolved", *spy_flags))
 
 
+# ── fill models ───────────────────────────────────────────────
+
+
+class FillModel(Protocol):
+    """Which bar fills a working order, at what price, and how a held position ends.
+
+    The simulator asks it for every order (``SimConfig.fill``; None is
+    :data:`MARKET_FILL`). A model never fills on a bar that starts before
+    the order is active.
+    """
+
+    @property
+    def name(self) -> str:
+        """Recorded in the run's ``config["sim"]["fill"]``."""
+        ...
+
+    @property
+    def gate_only(self) -> bool:
+        """True for a model that replicates a legacy study (``legacy.py``).
+
+        The simulator then admits a buy without the screen or the entry
+        window (still inside the session, one position at a time) and skips
+        the deadline's flatten; ``sim.run`` accepts it only under a gate
+        unlock. Never True for a trial.
+        """
+        ...
+
+    def due(self, bars: BarSeries, order: WorkingOrder) -> int | None:
+        """The bar ``order`` fills on: one of session ``order.k`` with ``ts >= active_at``.
+
+        None while no such bar exists, or when the model fills this order
+        some other way (a gate model's exits: :meth:`at_close`).
+        """
+        ...
+
+    def price(
+        self, bars: BarSeries, i: int, order: WorkingOrder, *, gap_us: int, session_open_us: int
+    ) -> tuple[float, tuple[str, ...]]:
+        """(raw price, flags) of ``order`` filling on bar ``i``."""
+        ...
+
+    def spy_price(self, spy: BarSeries, ex: Execution) -> tuple[float, tuple[str, ...]]:
+        """SPY's price (raw) and flags for the leg that goes with the stock fill ``ex``."""
+        ...
+
+    def at_close(self, bars: BarSeries, spy: BarSeries, k: int) -> FallbackFill | None:
+        """How an exit still open at path session ``k``'s close (the deadline) is filled.
+
+        None: the market rule's fallback (:func:`unfilled_exit`: the
+        official close, the next session, or the last trade).
+        """
+        ...
+
+
+class MarketFill:
+    """The D.5 market rule (module docstring): the only fill model a trial uses."""
+
+    __slots__ = ()
+
+    @property
+    def name(self) -> str:
+        return "market"
+
+    @property
+    def gate_only(self) -> bool:
+        return False
+
+    def due(self, bars: BarSeries, order: WorkingOrder) -> int | None:
+        return first_eligible(bars, order.active_at_us, order.k)
+
+    def price(
+        self, bars: BarSeries, i: int, order: WorkingOrder, *, gap_us: int, session_open_us: int
+    ) -> tuple[float, tuple[str, ...]]:
+        return market_fill(
+            bars, i, order.active_at_us, gap_us=gap_us, session_open_us=session_open_us
+        )
+
+    def spy_price(self, spy: BarSeries, ex: Execution) -> tuple[float, tuple[str, ...]]:
+        assert ex.bar_ts is not None
+        return spy_fill(spy, ex.bar_ts, ex.k, use_open="gap_fill" in ex.flags)
+
+    def at_close(self, bars: BarSeries, spy: BarSeries, k: int) -> FallbackFill | None:
+        return None
+
+
+MARKET_FILL: Final[FillModel] = MarketFill()
+
+
+def fill_model(cfg: SimConfig) -> FillModel:
+    """The fill model ``cfg`` names: its ``fill``, else the market rule."""
+    return cfg.fill if cfg.fill is not None else MARKET_FILL
+
+
 class Exchange:
     """Working orders and their fills; pure, so a live driver can reuse it on live bars."""
 
     def __init__(self, cfg: SimConfig) -> None:
         self._cfg = cfg
+        self._fill = fill_model(cfg)
         self._gap_us = span_us(cfg.gap)
         self._working: dict[str, WorkingOrder] = {}
+
+    @property
+    def fill(self) -> FillModel:
+        return self._fill
 
     @property
     def working(self) -> tuple[WorkingOrder, ...]:
@@ -210,8 +317,12 @@ class Exchange:
     def cancel(self, order_id: str) -> WorkingOrder | None:
         return self._working.pop(order_id, None)
 
+    def due(self, bars: BarSeries, order: WorkingOrder) -> int | None:
+        """The bar ``order`` will fill on, by the fill model (None: not on a bar yet)."""
+        return self._fill.due(bars, order)
+
     def on_bar(self, i: int, bars: BarSeries, *, session_open_us: int) -> list[Execution]:
-        """Fill every working order whose first eligible bar is ``i`` (sells first).
+        """Fill every working order the fill model makes due on bar ``i`` (sells first).
 
         Whether ``i`` is its session's first bar comes from ``bars.k``; a
         session's first bar is never "after a gap" from the previous session,
@@ -224,12 +335,14 @@ class Exchange:
         for order in orders:
             if order.k != k or ts * US < order.active_at_us:
                 continue
-            due = first_eligible(bars, order.active_at_us, order.k)
+            due = self._fill.due(bars, order)
+            if due is None:
+                continue  # the model fills it otherwise (a gate model's exit, at the close)
             if due != i:
                 raise AssertionError(f"{order.order_id} was due on bar {due}, tested on {i}")
             assert ts * US >= order.active_at_us  # every fill bar starts at or after active_at
-            price, flags = market_fill(
-                bars, i, order.active_at_us, gap_us=self._gap_us, session_open_us=session_open_us
+            price, flags = self._fill.price(
+                bars, i, order, gap_us=self._gap_us, session_open_us=session_open_us
             )
             ref_qty = self._cfg.reference_notional / price
             out.append(
@@ -256,8 +369,12 @@ class Exchange:
 
 
 __all__ = [
+    "MARKET_FILL",
     "Exchange",
     "FallbackFill",
+    "FillModel",
+    "MarketFill",
+    "fill_model",
     "first_eligible",
     "in_surcharge_window",
     "market_fill",
