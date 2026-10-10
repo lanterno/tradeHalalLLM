@@ -14,12 +14,18 @@ Retry-After and never closer together than EDGAR's spacing. Before that,
 one flaky response aborted the night's screen. What still fails after the
 retries raises ``SecUnavailable``; the screen decides whether that sinks
 the run (a frame, the ticker map) or only the one company (its SIC code).
+
+A filing's acceptance time is read from its index header (``acceptance``),
+not from the submissions JSON: the JSON's ``acceptanceDateTime`` is late by
+exactly New York's UTC offset (4 h in summer, 5 h in winter) for about a
+third of filings, and no filer or period predicts which.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time
@@ -39,6 +45,10 @@ _DOMESTIC_ANNUAL = {"10-K"}
 _RETRIES = 4  # after the first try: five in all
 _BACKOFF_S = 2.0  # 2, 4, 8, 16 s between tries, unless Retry-After asks for more
 _MAX_WAIT_S = 120.0  # the longest single wait, whatever Retry-After says
+# A header's acceptance time is New York wall time to the second. The page
+# wraps the SGML header in an HTML comment; the escaped form is matched too.
+_ACCEPTED = re.compile(r"(?:<|&lt;)ACCEPTANCE-DATETIME(?:>|&gt;)\s*(\d{14})")
+_ACCESSION = re.compile(r"(\d{10})-?(\d{2})-?(\d{6})")
 
 
 class SecUnavailable(RuntimeError):
@@ -61,10 +71,45 @@ class _SharedPacer(http.Pacer):
 def filed_at(filed: date, accepted: str | None = None) -> datetime:
     """When a filing became public, in UTC: EDGAR's acceptance time when it
     has one, else 17:00 ET on the filing date (after the close, so nothing
-    reads it as known during that session)."""
+    reads it as known during that session).
+
+    ``accepted`` is the submissions JSON's ``acceptanceDateTime``, which is
+    hours late for about a third of filings: :meth:`SecClient.acceptance`
+    reads the true time from the filing's header."""
     if accepted:
         return datetime.fromisoformat(accepted.replace("Z", "+00:00"))
     return datetime.combine(filed, time(17), MARKET_TZ).astimezone(UTC)
+
+
+def accession_dashed(accession: str) -> str:
+    """An accession number in EDGAR's dashed form (0000320193-23-000104), from
+    either form; ValueError when it is not one."""
+    m = _ACCESSION.fullmatch(accession.strip())
+    if m is None:
+        raise ValueError(f"not an accession number: {accession!r}")
+    return "-".join(m.groups())
+
+
+def header_url(cik: int, accession: str) -> str:
+    """A filing's index-header page, in the archive folder of ``cik``."""
+    acc = accession_dashed(accession)
+    return (
+        f"https://www.sec.gov/Archives/edgar/data/{cik}/{acc.replace('-', '')}/"
+        f"{acc}-index-headers.html"
+    )
+
+
+def parse_acceptance(header: str) -> datetime | None:
+    """A filing header's ``<ACCEPTANCE-DATETIME>`` (New York time) in UTC, or
+    None when it has none."""
+    m = _ACCEPTED.search(header)
+    if m is None:
+        return None
+    try:
+        local = datetime.strptime(m.group(1), "%Y%m%d%H%M%S")
+    except ValueError:
+        return None
+    return local.replace(tzinfo=MARKET_TZ).astimezone(UTC)
 
 
 @dataclass(frozen=True, slots=True)
@@ -144,6 +189,22 @@ class SecClient:
     async def text(self, url: str) -> str | None:
         response = await self._fetch(url)
         return response.text if response is not None else None
+
+    async def acceptance(self, cik: int, accession: str) -> datetime | None:
+        """When EDGAR accepted a filing, to the second and in UTC, from its index header.
+
+        None when the archive has no header for it under ``cik`` (a 404: a
+        filing's folder is under the company's CIK, not under the filing
+        agent's that its accession number often starts with), the header has
+        no acceptance time, or ``accession`` is not an accession number. A
+        failure that outlasts the retries raises SecUnavailable.
+        """
+        try:
+            url = header_url(cik, accession)
+        except ValueError:
+            return None
+        body = await self.text(url)
+        return parse_acceptance(body) if body else None
 
     async def submissions(self, cik: int) -> dict[str, Any] | None:
         payload = await self._get(f"https://data.sec.gov/submissions/CIK{cik:010d}.json")
