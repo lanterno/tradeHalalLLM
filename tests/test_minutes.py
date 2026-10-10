@@ -133,3 +133,22 @@ async def test_the_client_asks_for_many_symbols_and_follows_pages() -> None:
     assert calls[0]["symbols"] == "AAPL,MSFT"
     assert {s: len(v) for s, v in got.items()} == {"AAPL": 1, "MSFT": 2}
     assert len(one) == 1
+
+
+async def test_the_client_asks_for_another_feed_only_when_told() -> None:
+    feeds: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        feeds.append(request.url.params["feed"])
+        return httpx.Response(200, json={"bars": {"AAPL": [_raw(MON, 9, 30)]}})
+
+    client = AlpacaMarketData(
+        "k", "s", client=httpx.AsyncClient(transport=httpx.MockTransport(handler)), min_interval_s=0
+    )
+    lo, hi = minutes.session_bounds(MON)
+    try:
+        await client.minute_bars("AAPL", start=lo, end=hi)
+        iex = await client.minute_bars_many(["AAPL"], start=lo, end=hi, feed="iex")
+    finally:
+        await client.aclose()
+    assert feeds == ["sip", "iex"] and len(iex["AAPL"]) == 1
