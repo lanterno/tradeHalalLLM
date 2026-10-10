@@ -7,6 +7,7 @@ earnings parser, types from the real taxonomy. No database and no price.
 from __future__ import annotations
 
 import itertools
+import json
 import random
 from collections import Counter
 from dataclasses import replace
@@ -919,6 +920,17 @@ def test_the_builder_pins_its_own_constants() -> None:
     assert stories.STORIES_SHA == stories._sha(stories.sources())
     assert stories.STORIES_SHA != stories._sha(stories.sources() | {"DUP_JACCARD": "0.61"})
     assert {"EDGAR_CLOSURES", "STOPWORDS", "CLAUSE_SPLIT", "NEWS_LAG_S"} <= stories.sources().keys()
+
+
+def test_a_rules_version_bump_moves_the_pin_and_keys_no_table(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert stories.sources()["RULES_VERSION"] == json.dumps(stories.RULES_VERSION)
+    before, version = stories._sha(stories.sources()), stories.BUILDER_VERSION
+    monkeypatch.setattr(stories, "RULES_VERSION", "stories-rules-next")
+    assert stories._sha(stories.sources()) != before
+    assert stories.BUILDER_VERSION == version  # aliases and stories keep their key
+    assert stories.build_unit(date(2024, 5, 6), date(2024, 5, 10), "x").startswith(f"{version}:")
 
 
 async def test_pins_gather_every_sha(monkeypatch: pytest.MonkeyPatch) -> None:
