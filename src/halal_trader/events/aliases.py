@@ -30,7 +30,9 @@ Slots are learned only from rows that are their symbol's own
 
 The matchers are built from the stored rows alone, so ``alias_sha`` pins
 exactly what the entity check uses; a change to ``TICKER_RENAMES`` takes
-effect at the next build.
+effect at the next build. A build needs the renamed tickers' news first
+(``renames.backfill_renamed_news``) and refuses while a month of it is
+missing, unless forced.
 """
 
 from __future__ import annotations
@@ -327,8 +329,20 @@ async def _persist(engine: AsyncEngine, rows: list[AliasRow]) -> None:
             )
 
 
-async def build_aliases(engine: AsyncEngine, market: Any) -> int:
-    """Learn every symbol's aliases and store them (replacing this version's); returns rows."""
+async def build_aliases(engine: AsyncEngine, market: Any, *, force: bool = False) -> int:
+    """Learn every symbol's aliases and store them (replacing this version's); returns rows.
+
+    Refuses (``renames.RenamedNewsError``) while a month of the renamed
+    tickers' news is missing: the set would lack their old names ("Priceline",
+    "Square") and ``alias_sha`` would pin it anyway. ``force`` builds regardless.
+    """
+    if not force:
+        missing = await renames.missing_units(engine)
+        if missing:
+            raise renames.RenamedNewsError(
+                f"{len(missing)} month(s) of renamed-ticker news not fetched yet "
+                f"(first: {missing[0]}); run `halal-trader events renames backfill` first"
+            )
     learned = learned_aliases(await learn_slots(engine))
     names = await _asset_names(engine, market)
     symbols = await _news_symbols(engine) | set(learned)

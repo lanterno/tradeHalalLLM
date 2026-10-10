@@ -158,8 +158,14 @@ def aliases_group() -> None:
 
 
 @aliases_group.command("build")
-def aliases_build_cmd() -> None:
+@click.option(
+    "--force",
+    is_flag=True,
+    help="Build even though months of renamed-ticker news are missing.",
+)
+def aliases_build_cmd(force: bool) -> None:
     """Learn every symbol's aliases and store them (replaces this builder version's)."""
+    from halal_trader.events.renames import RenamedNewsError
 
     async def _run(engine: Any, settings: Any) -> tuple[int, str]:
         from halal_trader.data.alpaca_market import AlpacaMarketData
@@ -167,12 +173,15 @@ def aliases_build_cmd() -> None:
 
         market = AlpacaMarketData.from_settings(settings)
         try:
-            rows = await build_aliases(engine, market)
+            rows = await build_aliases(engine, market, force=force)
         finally:
             await market.aclose()
         return rows, await alias_sha(engine)
 
-    rows, sha = run_db(_run)
+    try:
+        rows, sha = run_db(_run)
+    except RenamedNewsError as e:
+        fail(f"{e} (or pass --force)")
     console.print(f"{rows} alias row(s) stored; alias_sha {sha}")
 
 
