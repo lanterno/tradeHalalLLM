@@ -1223,10 +1223,6 @@ def _group(stories: Sequence[StoryView]) -> dict[str, list[StoryView]]:
 # ── the driver ────────────────────────────────────────────────
 
 
-# The loader's data rules (``loader.py``), which no legacy study applied: a skip for a
-# stale or unreadable adjustment, and one for more than 5 bars failing the sanity rule.
-DATA_SKIPS: Final = ("adjust_defect", "bad_bars")
-
 # Why a story of an explicit set (``run(expected=...)``) has no usable result, besides the
 # loader's skip reasons, ``blocked_open`` and the playbook's own reason for not trading.
 NO_STORY: Final = "no_story"  # in the set, but no story with that id was given
@@ -1274,15 +1270,7 @@ class RunSummary:
       the reason (:func:`drop_reason`, or ``no_story``, ``no_session``,
       ``not_started`` for an id never simulated). Otherwise 0 and empty.
 
-    The legacy studies read every stored row and skip nothing for data
-    reasons, so these are the stories where a gate-only replication can
-    differ from its study by construction (a missing entry or exit bar,
-    another first bar after the decision): :meth:`data_filtered` gathers
-    them for the R1 gate (spec §E.2), which sets them aside and counts them
-    before it compares dropped sets. The coverage skips (``units_missing``,
-    ``halted_all_day``, ``spy_missing``, ``no_daily``) are listed too: a
-    study run on the same stored rows drops or computes those headlines on
-    its own terms, and the gate reports any it kept.
+    ``legacy.r1_set_aside`` reads these lists for the reactor gate R1.
     """
 
     run_id: str
@@ -1301,13 +1289,6 @@ class RunSummary:
     spare_drop_ids: tuple[str, ...] = ()  # sorted
     expected: int = 0
     dropped: dict[str, str] = field(default_factory=dict)  # story id -> reason
-
-    def data_filtered(self) -> frozenset[str]:
-        """The stories this run's data rules treated unlike a study reading every row:
-        skipped as ``bad_bars`` or ``adjust_defect``, or loaded with its own bars or
-        SPY's cut."""
-        ids = {i for reason in DATA_SKIPS for i in self.skip_ids.get(reason, ())}
-        return frozenset(ids | set(self.bar_drop_ids) | set(self.spy_drop_ids))
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -1576,8 +1557,8 @@ async def run(
 
     The summary lists the skipped story ids by reason and the stories whose
     bars, SPY's bars or spare-session bars the sanity rule cut, each list
-    apart (:class:`RunSummary`): a legacy replication (R1) sets
-    :meth:`RunSummary.data_filtered` apart before it compares dropped sets.
+    apart (:class:`RunSummary`); the reactor gate R1 sets some of them aside
+    before it compares dropped sets (``legacy.r1_set_aside``).
     """
     fill = fill_model(cfg)
     if fill.gate_only and unlock.gate is None:
@@ -1760,7 +1741,6 @@ async def run(
 
 
 __all__ = [
-    "DATA_SKIPS",
     "NOT_STARTED",
     "NO_RETURN",
     "NO_SESSION",

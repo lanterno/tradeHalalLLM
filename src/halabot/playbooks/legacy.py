@@ -19,20 +19,53 @@ Each headline is a :func:`reactor_story`, deciding at ``published + 60 s``
 (the news-lag override, ``intraday.LATENCY``); the playbook is :class:`Hold`
 (buy at the start, hold), built by :class:`HoldFactory`.
 
-**What R1 must set apart.** ``intraday.run`` reads every stored minute row
-and drops a headline only when no bar starts after its decision (stock or
-SPY) or the move is implausible (``_PLAUSIBLE``, which the gate applies
-itself). ``sim.run`` loads paths through the loader's data rules, which
-the study never had: a path is skipped as ``bad_bars`` (more than 5 bars
-failing the sanity rule) or ``adjust_defect`` (a stale or unreadable
-adjustment), and a kept path has its 1 to 5 failing bars removed, as SPY's
-sessions have theirs. Such a headline can be dropped by one side only, or
-fill on another bar. ``RunSummary.data_filtered()`` lists exactly those
-story ids (``skip_ids`` by reason and ``bar_drop_ids``): R1 sets them
-aside on both sides and reports their count, then requires the identical
-dropped set and ``|Δr| <= 1e-10`` on the rest. The coverage skips in
-``skip_ids`` (``spy_missing``, ``no_daily``, ...) are compared, not set
-aside: the study on the same rows must drop them too, or R1 reports them.
+**How R1 compares dropped sets** (:func:`r1_dropped`). The pinned headline
+set H (R0's, headline id -> (symbol, New York day)) runs as an explicit
+set: ``sim.run(..., expected=H)`` with one :func:`reactor_story` per
+headline, so every id of H is accounted for. The study (``intraday.run``
+on H) drops a headline when its day is not a session, when no stock bar or
+no SPY bar starts at or after its decision, or when the move is
+implausible; the simulator gives each id of H without a finite return its
+reason in ``RunSummary.dropped`` (``no_session``, ``entry_unfilled`` for a
+decision with no stock bar after it, ``no_spy`` for one with no SPY bar
+after it, ``halted_all_day``, ...). Then:
+
+1. **Set aside** (:func:`r1_set_aside`, on both sides) the headlines the
+   loader treated by rules the study never had (:data:`R1_SET_ASIDE`):
+
+   * the skips ``adjust_defect`` (a stale or unreadable adjustment),
+     ``bad_bars`` (more than 5 bars failing the sanity rule), ``no_daily``
+     (no A-factor for the stock: the study never reads daily bars) and
+     ``spy_thin`` (a SPY session with bars, but fewer than the loader's
+     300: the study needs one after its decision);
+   * ``bars_cut`` (``RunSummary.bar_drop_ids``): the sanity rule cut 1 to
+     5 of the stock's bars on S, so the entry or the last bar can differ;
+   * ``spy_bars_cut`` (``RunSummary.spy_drop_ids``): it cut any of SPY's
+     bars on S. The whole day is set aside, wherever the cut bar lies
+     relative to the decision: conservative, and its own reason so its
+     cost in coverage shows per headline.
+
+   A headline with several reasons lists them all. The set-aside is
+   capped, pre-stated: more than :data:`R1_SET_ASIDE_CAP` (1%) of H set
+   aside fails R1, whatever the comparison. Its count, by reason, goes
+   with the gate row (:meth:`R1Dropped.as_config`).
+2. **The study's plausibility filter** (``intraday._PLAUSIBLE`` on the
+   raw exit/entry ratio) applies to the simulator's trades
+   (:func:`reactor_plausible`): an implausible trade is dropped as
+   ``implausible``.
+3. **Compare** the rest: the simulator's dropped ids must equal the
+   study's exactly. Each id dropped by one side only is listed
+   (``sim_only`` with the simulator's reason, ``study_only``), and R1
+   passes the dropped-set check only when both lists are empty and the
+   set-aside is within its cap. The coverage skips (``units_missing``,
+   ``spy_missing``, ``halted_all_day``) and ``blocked_open`` are compared,
+   not set aside: the study on the same rows must drop those headlines too
+   (no stock bar, no SPY bar), or the lists show them.
+4. On the headlines both sides kept (:attr:`R1Dropped.kept`), the gate
+   requires ``|Δr| <= 1e-10``.
+
+``RunSummary.spare_drop_ids`` is not set aside: R1's exit is S's last bar
+(``GateFill.at_close``), so the spare session is never read.
 
 **S1, the daily-bar study** (``events/study.evaluate``): :func:`daily_config`
 with :class:`DailyBarSource`, which turns an observation into a pseudo path
@@ -59,7 +92,8 @@ model's, recorded as ``time_stop``. Nothing here places an order.
 from __future__ import annotations
 
 import math
-from collections.abc import Iterable, Mapping, Sequence
+from collections import Counter
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Final, Literal
@@ -71,8 +105,8 @@ from halabot.playbooks.clock import HARNESS
 from halabot.playbooks.exchange import FallbackFill, first_eligible
 from halabot.playbooks.interfaces import CardView, StoryView
 from halabot.playbooks.playbook import TRIGGERED, Ctx
-from halabot.playbooks.records import StoryOutcome
-from halabot.playbooks.sim import simulate_symbol
+from halabot.playbooks.records import StoryOutcome, TradeRecord
+from halabot.playbooks.sim import RunSummary, simulate_symbol
 from halabot.playbooks.types import (
     BarSeries,
     Execution,
@@ -94,6 +128,7 @@ from halabot.playbooks.types import (
 )
 from halal_trader.data.minutes import BarArrays
 from halal_trader.events import study
+from halal_trader.events.intraday import _PLAUSIBLE as STUDY_PLAUSIBLE  # read, not copied
 from halal_trader.events.intraday import LATENCY
 from halal_trader.market_hours import MARKET_TZ
 
@@ -289,6 +324,132 @@ class HoldFactory:
         return Hold(self.path_sessions, self.facts[story.story_id])
 
 
+# ── R1: the dropped sets ──────────────────────────────────────
+
+# The loader's skips the reactor study has no counterpart for (module docstring). Not
+# ``types.DATA_SKIPS``, the Stage A data-skip set: ``no_daily`` is a coverage skip there,
+# and ``units_missing`` / ``spy_missing`` are data skips that R1 compares.
+R1_SET_ASIDE: Final = ("adjust_defect", "bad_bars", "no_daily", "spy_thin")
+BARS_CUT: Final = "bars_cut"  # the sanity rule cut 1 to 5 of the stock's bars on S
+SPY_BARS_CUT: Final = "spy_bars_cut"  # it cut SPY's bars on S: the whole day, conservatively
+R1_SET_ASIDE_CAP: Final = 0.01  # pre-stated: more than 1% of the headlines set aside fails R1
+IMPLAUSIBLE: Final = "implausible"  # a trade outside the study's _PLAUSIBLE exit/entry ratio
+
+
+def r1_set_aside(summary: RunSummary) -> dict[str, tuple[str, ...]]:
+    """Each headline R1 sets aside, with every reason (:data:`R1_SET_ASIDE`,
+    :data:`BARS_CUT`, :data:`SPY_BARS_CUT`), sorted by id."""
+    out: dict[str, list[str]] = {}
+    for reason in R1_SET_ASIDE:
+        for sid in summary.skip_ids.get(reason, ()):
+            out.setdefault(sid, []).append(reason)
+    for sid in summary.bar_drop_ids:
+        out.setdefault(sid, []).append(BARS_CUT)
+    for sid in summary.spy_drop_ids:
+        out.setdefault(sid, []).append(SPY_BARS_CUT)
+    return {sid: tuple(out[sid]) for sid in sorted(out)}
+
+
+def reactor_plausible(trade: TradeRecord) -> bool:
+    """The study's filter on a trade: ``lo < exit / entry < hi`` on raw prices
+    (``intraday._PLAUSIBLE``; R1's path is the one session S)."""
+    lo, hi = STUDY_PLAUSIBLE
+    return lo < trade.exit_px / trade.entry_px < hi
+
+
+@dataclass(frozen=True, slots=True)
+class R1Dropped:
+    """R1's dropped-set check (module docstring, steps 1 to 3).
+
+    ``passed`` needs the set-aside within :data:`R1_SET_ASIDE_CAP` and no
+    headline dropped by one side only; ``kept`` are the headlines both sides
+    kept, on which the gate compares returns.
+    """
+
+    headlines: int
+    set_aside: dict[str, tuple[str, ...]]  # id -> every reason
+    sim_only: dict[str, str]  # dropped by the simulator alone: id -> its reason
+    study_only: tuple[str, ...]  # dropped by the study alone
+    kept: tuple[str, ...]  # sorted
+
+    @property
+    def compared(self) -> int:
+        """Headlines outside the set-aside."""
+        return self.headlines - len(self.set_aside)
+
+    @property
+    def share(self) -> float:
+        """The set-aside's share of the headlines."""
+        return len(self.set_aside) / self.headlines if self.headlines else 0.0
+
+    @property
+    def within_cap(self) -> bool:
+        return self.share <= R1_SET_ASIDE_CAP
+
+    @property
+    def identical(self) -> bool:
+        return not self.sim_only and not self.study_only
+
+    @property
+    def passed(self) -> bool:
+        return self.within_cap and self.identical
+
+    def as_config(self) -> dict[str, object]:
+        """What the gate row records of the check (counts, the cap, every mismatch)."""
+        by_reason = Counter(r for reasons in self.set_aside.values() for r in reasons)
+        return {
+            "headlines": self.headlines,
+            "set_aside": len(self.set_aside),
+            "set_aside_by_reason": dict(sorted(by_reason.items())),
+            "set_aside_share": self.share,
+            "set_aside_cap": R1_SET_ASIDE_CAP,
+            "set_aside_rules": [*R1_SET_ASIDE, BARS_CUT, SPY_BARS_CUT],
+            "compared": self.compared,
+            "kept": len(self.kept),
+            "sim_only": dict(sorted(self.sim_only.items())),
+            "study_only": list(self.study_only),
+        }
+
+
+def r1_dropped(
+    headlines: Collection[str],
+    summary: RunSummary,
+    trades: Iterable[TradeRecord],
+    study_dropped: Iterable[str],
+) -> R1Dropped:
+    """Compare the simulator's dropped headlines with the study's (module docstring).
+
+    ``headlines`` are H's ids, ``summary`` the explicit-set run over them
+    (``sim.run(..., expected=H)``), ``trades`` its trade records, and
+    ``study_dropped`` the ids ``intraday.run`` returned no outcome for.
+    Raises ``ValueError`` when the run was not over H or an id is not H's.
+    """
+    ids = set(headlines)
+    if summary.expected != len(ids):
+        raise ValueError(
+            f"the run accounted for {summary.expected} headlines, not H's {len(ids)}: "
+            f"run it with expected=H"
+        )
+    study = set(study_dropped)
+    sim = dict(summary.dropped)
+    for t in trades:
+        if t.story_id not in sim and not reactor_plausible(t):
+            sim[t.story_id] = IMPLAUSIBLE
+    stray = sorted((study | set(sim)) - ids)
+    if stray:
+        raise ValueError(f"{len(stray)} dropped ids are not in H: {', '.join(stray[:5])}")
+    aside = r1_set_aside(summary)
+    return R1Dropped(
+        headlines=len(ids),
+        set_aside=aside,
+        sim_only={
+            sid: why for sid, why in sorted(sim.items()) if sid not in study and sid not in aside
+        },
+        study_only=tuple(sorted(study - set(sim) - set(aside))),
+        kept=tuple(sorted(ids - set(sim) - study - set(aside))),
+    )
+
+
 # ── S1: pseudo paths from daily bars ──────────────────────────
 
 
@@ -413,6 +574,11 @@ class DailyBarSource:
 
 
 __all__ = [
+    "BARS_CUT",
+    "IMPLAUSIBLE",
+    "R1_SET_ASIDE",
+    "R1_SET_ASIDE_CAP",
+    "SPY_BARS_CUT",
     "DailyBarFill",
     "DailyBarSource",
     "DailyEntry",
@@ -422,7 +588,11 @@ __all__ = [
     "Hold",
     "HoldFactory",
     "LegacyReactorFill",
+    "R1Dropped",
     "daily_config",
+    "r1_dropped",
+    "r1_set_aside",
     "reactor_config",
+    "reactor_plausible",
     "reactor_story",
 ]

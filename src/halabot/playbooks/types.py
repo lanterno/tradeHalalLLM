@@ -275,7 +275,9 @@ SkipReason = Literal[
 # The data skips (spec §D.9): the loader could not trust the stored data. Stage A's
 # data-skip limit counts these. ``spy_thin`` (a done SPY session with bars, but fewer
 # than 300, or 150 on an early close) is split from the spec's ``spy_missing``. The
-# coverage skips (``halted_all_day``, ``no_daily``) are not data errors.
+# coverage skips (``halted_all_day``, ``no_daily``) are not data errors. Not to be
+# confused with ``legacy.R1_SET_ASIDE``: the loader rules the reactor study never
+# applied, which R1 sets aside before it compares.
 DATA_SKIPS: frozenset[str] = frozenset(
     {"units_missing", "spy_missing", "spy_thin", "adjust_defect", "bad_bars"}
 )
