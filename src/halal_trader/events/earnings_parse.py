@@ -29,7 +29,8 @@ nothing returns no facts, never a guess. Year-over-year comparisons
 * the figure and its estimate are not in the same units: one carries a
   K/M/B suffix and the other none ("EPS $5.54-$5.61 Vs $5.66B Est."), or
   one is more than :data:`UNIT_RATIO` times the other ("Q1 2024 Vs $149.45M
-  Est.", the year read as the EPS).
+  Est.", the year read as the EPS), unless it is an EPS whose smaller side
+  is under :data:`EPS_RATIO_FLOOR` ("EPS $(0.68) Misses $0.01 Estimate").
 
 **Guidance figures.** ``GUIDE_V4``'s lazy gap can stop on the wrong number:
 a fragment glued to the token before it (the "1" of "Q1", the "-$1.85" of
@@ -203,6 +204,9 @@ _SUFFIXED = re.compile(r"[KMB]\)?$", re.I)
 # A figure more than this many times its estimate (or less than its 1/50th)
 # is in other units: Benzinga dropped or added a suffix.
 UNIT_RATIO: Final = 50.0
+# ... except an EPS whose smaller side is under this many dollars: a loss of
+# $(0.01) against $(0.60) is a real comparison, not a dropped suffix.
+EPS_RATIO_FLOOR: Final = 0.10
 # The metric a statement names: a statement's clause runs to the next one.
 _METRIC_WORD = re.compile(r"\b(?:EPS|Sales|Revenues?|Revs?)\b", re.I)
 # A "May Not Compare" closing its segment qualifies every statement in it.
@@ -248,17 +252,25 @@ class EarningsFacts:
 
 
 def _same_units(
-    figures: Sequence[str | None], estimate: str, value: float | None, est: float | None
+    figures: Sequence[str | None],
+    estimate: str,
+    value: float | None,
+    est: float | None,
+    *,
+    per_share: bool,
 ) -> bool:
     """Whether a figure (stated as ``figures``) and its estimate are in the same
     units: all carry a K/M/B suffix or none does, and neither is more than
-    :data:`UNIT_RATIO` times the other (a zero compares with anything)."""
+    :data:`UNIT_RATIO` times the other (a zero compares with anything, and so
+    does an EPS whose smaller side is under :data:`EPS_RATIO_FLOOR`)."""
     stated = [t.strip() for t in (*figures, estimate) if t]
     if len({_SUFFIXED.search(t) is not None for t in stated}) > 1:
         return False
-    if value and est:
-        return 1 / UNIT_RATIO <= abs(value / est) <= UNIT_RATIO
-    return True
+    if not value or not est:
+        return True
+    if per_share and min(abs(value), abs(est)) < EPS_RATIO_FLOOR:
+        return True
+    return 1 / UNIT_RATIO <= abs(value / est) <= UNIT_RATIO
 
 
 def _flagged(segment: str, start: int, end: int) -> bool:
@@ -291,9 +303,13 @@ def _comparison(
     estimate: str,
     value: float | None,
     est: float | None,
+    *,
+    per_share: bool,
 ) -> bool:
     """Whether the statement ``m`` read compares its figure with its estimate."""
-    return not _flagged(segment, m.start(), m.end()) and _same_units(figures, estimate, value, est)
+    return not _flagged(segment, m.start(), m.end()) and _same_units(
+        figures, estimate, value, est, per_share=per_share
+    )
 
 
 def _sales_after(segment: str, after: int) -> tuple[re.Match[str], str, bool] | None:
@@ -322,7 +338,9 @@ def _with_sales(fields: dict[str, object], segment: str, after: int) -> dict[str
         "sales_surprise": _surprise(sales, ref) if estimated else None,
         "sales_verdict": verdict,
     }
-    if estimated and not _comparison(segment, s, (s["sales"],), s["ref"], sales, ref):
+    if estimated and not _comparison(
+        segment, s, (s["sales"],), s["ref"], sales, ref, per_share=False
+    ):
         stated = _not_comparable(stated, "sales")
     return stated
 
@@ -337,7 +355,7 @@ def _eps_result(m: re.Match[str], segment: str, *, verdict: str, estimated: bool
         "eps_surprise": _surprise(eps, ref) if estimated else None,
         "eps_verdict": verdict,
     }
-    if estimated and not _comparison(segment, m, (m["eps"],), m["ref"], eps, ref):
+    if estimated and not _comparison(segment, m, (m["eps"],), m["ref"], eps, ref, per_share=True):
         fields = _not_comparable(fields, "eps")
     return EarningsFacts("result", _with_sales(fields, segment, m.end()))
 
@@ -424,7 +442,10 @@ def _guidance(
         "previous": previous,
         "qualifier": (qualifier or "").lower() or None,
     }
-    if not _comparison(segment, g, (low_text, high_text), g["est"], mid, est):
+    metric = fields["metric"]
+    if not _comparison(
+        segment, g, (low_text, high_text), g["est"], mid, est, per_share=metric == "eps"
+    ):
         fields = _not_comparable(fields, None)
     return EarningsFacts("guidance", fields)
 
@@ -485,7 +506,7 @@ def _segment_fact(segment: str, prior: Sequence[EarningsFacts]) -> EarningsFacts
             "sales_surprise": _surprise(sales, ref),
             "sales_verdict": m["verdict"].lower(),
         }
-        if not _comparison(segment, m, (m["sales"],), m["ref"], sales, ref):
+        if not _comparison(segment, m, (m["sales"],), m["ref"], sales, ref, per_share=False):
             fields = _not_comparable(fields, "sales")
         return EarningsFacts("result", fields)
     return None
@@ -541,6 +562,7 @@ def sources() -> dict[str, str]:
     return {name: rx.pattern for name, rx in patterns.items()} | {
         "PARSE_ORDER": ",".join(PARSE_ORDER),
         "UNIT_RATIO": repr(UNIT_RATIO),
+        "EPS_RATIO_FLOOR": repr(EPS_RATIO_FLOOR),
         "OLD_WINDOW": repr(OLD_WINDOW),
         "KEEP_ACTIONS": ",".join(sorted(KEEP_ACTIONS)),
         "EXTRACTOR": EXTRACTOR,
