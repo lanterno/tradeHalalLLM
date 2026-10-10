@@ -69,7 +69,11 @@ with one of: timing, rank, SPY 20-day realised-volatility tercile, SPY
 above or below its 200-day SMA (both known at S: closes through S-1),
 screen regime (2020-10-01), analyst-coverage regime (2018-01-01),
 Technology. ``coverage`` counts every unit by type and path outcome
-(measured, or the loader's skip). Cells hold the measured stories.
+(measured, or the loader's skip). Cells hold the measured stories. A
+cell's ``per_year`` is its n over its own time in years of 252 sessions
+(:class:`Exposure`): the range's sessions, or, in a table keyed by a state
+of the calendar (:data:`DATED`: SPY's states and the two regimes), the
+range's sessions in that state.
 
 **SPY's regimes** (:func:`spy_state`) come from a SPY-only context of the
 whole atlas range, whatever ``start`` and ``end`` are asked: the tercile
@@ -160,6 +164,10 @@ SPY_VOL_SESSIONS: Final = 20
 SPY_SMA_SESSIONS: Final = 200
 SCREEN_BREAK: Final = date(2020, 10, 1)
 ANALYST_BREAK: Final = date(2018, 1, 1)
+SESSIONS_PER_YEAR: Final = 252
+# The marginals keyed by a state of the calendar at S (a regime, SPY's state):
+# their per-year rate divides by the time that state covers in the range.
+DATED: Final = ("spy_vol", "spy_trend", "screen_regime", "analyst_regime")
 EXIT_REASONS: Final = ("target", "stop", "abort", "compliance", "time_stop")
 VARIANTS: Final = (("ID", 1), ("MD3", 3))
 OUTPUT_NAME: Final = f"news_atlas-{builder.BUILDER_VERSION}.json"
@@ -654,6 +662,11 @@ def continuation(ctx: PitContext, symbol: str, session: date) -> tuple[float | N
 # ── cells (pure) ───────────────────────────────────────────────
 
 
+def regime(day: date, start: date) -> str:
+    """``before`` a regime that starts on ``start``, else ``from``."""
+    return "before" if day < start else "from"
+
+
 def keys_of(row: AtlasRow) -> dict[str, tuple[str, ...]]:
     """Every table's key for a measured row."""
     t = row.type
@@ -665,10 +678,39 @@ def keys_of(row: AtlasRow) -> dict[str, tuple[str, ...]]:
         "rank": (t, "rank<300" if row.rank < RANK_SPLIT else "rank300-999"),
         "spy_vol": (t, row.spy_vol),
         "spy_trend": (t, row.spy_trend),
-        "screen_regime": (t, "before" if row.session < SCREEN_BREAK else "from"),
-        "analyst_regime": (t, "before" if row.session < ANALYST_BREAK else "from"),
+        "screen_regime": (t, regime(row.session, SCREEN_BREAK)),
+        "analyst_regime": (t, regime(row.session, ANALYST_BREAK)),
         "sector": (t, "tech" if row.tech else "other"),
     }
+
+
+@dataclass(frozen=True, slots=True)
+class Exposure:
+    """How long each cell's stories could arise in, in years of :data:`SESSIONS_PER_YEAR`
+    sessions: the whole range, or for a :data:`DATED` table the sessions in its state."""
+
+    total: float
+    states: Mapping[tuple[str, str], float] = field(default_factory=dict)  # (table, state)
+
+    def years(self, table: str, key: tuple[str, ...]) -> float:
+        if table in DATED:
+            return self.states.get((table, key[-1]), 0.0)
+        return self.total
+
+
+def exposure(sessions: Sequence[date], regimes: SpyRegimes) -> Exposure:
+    """The range's :class:`Exposure`: its ``sessions`` counted whole, and by the state
+    each :data:`DATED` table gives the session (the key a story of it would take)."""
+    states: Counter[tuple[str, str]] = Counter()
+    for day in sessions:
+        states[("spy_vol", regimes.vol_tercile(day))] += 1
+        states[("spy_trend", regimes.trend(day))] += 1
+        states[("screen_regime", regime(day, SCREEN_BREAK))] += 1
+        states[("analyst_regime", regime(day, ANALYST_BREAK))] += 1
+    return Exposure(
+        len(sessions) / SESSIONS_PER_YEAR,
+        {k: n / SESSIONS_PER_YEAR for k, n in sorted(states.items())},
+    )
 
 
 def _finite(values: Iterable[float | None]) -> tuple[NDArray[np.float64], int]:
@@ -786,12 +828,13 @@ def _sort_key(table: str, key: tuple[str, ...]) -> tuple[Any, ...]:
     return (key[0], *rest)
 
 
-def cells_of(rows: Sequence[AtlasRow], *, years: float) -> list[AtlasCell]:
+def cells_of(rows: Sequence[AtlasRow], *, exposure: Exposure) -> list[AtlasCell]:
     """Every table's cells, sorted by key (never by a statistic).
 
     Measured rows (a path) fill the tables; ``coverage`` counts every row
     by type and path outcome. A cell under :data:`MIN_N` stories or
-    :data:`MIN_DATES` dates carries counts only.
+    :data:`MIN_DATES` dates carries counts only. ``per_year`` is n over the
+    cell's own time (:meth:`Exposure.years`); NaN when that is none.
     """
     groups: dict[tuple[str, tuple[str, ...]], list[AtlasRow]] = defaultdict(list)
     for row in rows:
@@ -805,6 +848,7 @@ def cells_of(rows: Sequence[AtlasRow], *, years: float) -> list[AtlasCell]:
         n = len(members)
         dates = len({r.session for r in members})
         enough = table != "coverage" and n >= MIN_N and dates >= MIN_DATES
+        years = exposure.years(table, key)
         cells.append(
             AtlasCell(
                 table=table,
@@ -817,10 +861,6 @@ def cells_of(rows: Sequence[AtlasRow], *, years: float) -> list[AtlasCell]:
         )
     cells.sort(key=lambda c: (TABLES.index(c.table), _sort_key(c.table, c.key)))
     return cells
-
-
-def years_of(start: date, end: date) -> float:
-    return ((end - start).days + 1) / 365.25
 
 
 # ── printing and the file ──────────────────────────────────────
@@ -849,7 +889,7 @@ _HEAD: Final = (
 
 def _line(cell: AtlasCell) -> str:
     key = " / ".join(cell.key)
-    head = f"{key[:43]:<44}{cell.n:>6}{cell.dates:>6}{cell.per_year:>7.1f}"
+    head = f"{key[:43]:<44}{cell.n:>6}{cell.dates:>6}{_f(cell.per_year, '.1f'):>7}"
     s = cell.stats
     if s is None:
         return head + "  counts only"
@@ -1330,7 +1370,10 @@ async def run_atlas(
     counts["missing_rebuilt"] = len(chosen) - counts["rebuilt"]
     meta["counts"] = dict(sorted(counts.items()))
     meta["machine"] = {v: _merge(s) for v, s in summaries.items()}
-    cells = cells_of(rows, years=years_of(start, end))
+    exposed = exposure(h1.sessions_between(start, end), regimes)
+    meta["years"] = exposed.total
+    meta["state_years"] = {f"{t}:{k}": y for (t, k), y in exposed.states.items()}
+    cells = cells_of(rows, exposure=exposed)
     return Atlas(rows=rows, cells=cells, meta=meta)
 
 
@@ -1351,11 +1394,13 @@ __all__ = [
     "MIN_N",
     "OUTPUT_NAME",
     "TABLES",
+    "DATED",
     "Atlas",
     "AtlasCell",
     "AtlasLocked",
     "AtlasRow",
     "AtlasStory",
+    "Exposure",
     "MachineRun",
     "PathMeasures",
     "Registration",
@@ -1369,10 +1414,12 @@ __all__ = [
     "context_end",
     "continuation",
     "detection",
+    "exposure",
     "h1_closed",
     "keys_of",
     "output_path",
     "path_measures",
+    "regime",
     "rebuild",
     "run_atlas",
     "spy_regimes",
@@ -1382,5 +1429,4 @@ __all__ = [
     "timing_of",
     "to_json",
     "write_atlas",
-    "years_of",
 ]
