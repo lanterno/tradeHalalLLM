@@ -148,18 +148,26 @@ async def test_units_are_pinned_checked_done_and_read_behind_the_guard(
     await mark_done(engine, [("SPY", day), ("SPY", later)])
     await require_done(engine, ["s1-calib"], unit_set)
 
-    planned = units.UnitPlan({"gate_calib": unit_set}).sha("gate_calib")
+    plan = units.UnitPlan({"gate_calib": unit_set})  # plan H's gate_calib
+    planned = plan.sha("gate_calib")
     with pytest.raises(WindowLocked, match="not pinned"):
         await read_gate_bars(engine, "calib", unit_set, planned, date(2016, 9, 30))
     with pytest.raises(WindowLocked, match="does not match"):
         await read_gate_bars(engine, "calib", unit_set, "0" * 64, date(2016, 9, 30))
-    sha = await pin_units(engine, "calib", "gate_calib", unit_set)
+    # A set that is not plan H's is refused, naming both hashes, and pins nothing.
+    stray = {("AAA", day)}
+    stray_sha = units.UnitPlan({"gate_calib": frozenset(stray)}).sha("gate_calib")
+    with pytest.raises(GateRefused, match=f"hashes to {stray_sha}, but plan H's to {planned}"):
+        await pin_units(engine, "calib", "gate_calib", stray, plan)
+    assert await gate_pins(engine, "calib") == set()
+    sha = await pin_units(engine, "calib", "gate_calib", unit_set, plan)
     assert sha == planned
-    assert await pin_units(engine, "calib", "gate_calib", unit_set) == sha  # a no-op
+    assert await pin_units(engine, "calib", "gate_calib", unit_set, plan) == sha  # a no-op
     assert await gate_pins(engine, "calib") == {sha}
-    other = units.UnitPlan({"gate_calib": frozenset({("BBB", day)})}).sha("gate_calib")
+    moved = units.UnitPlan({"gate_calib": frozenset({("BBB", day)})})  # plan H changed since
+    other = moved.sha("gate_calib")
     with pytest.raises(GateRefused, match=f"pinned to {sha}, but .* hashes to {other}"):
-        await pin_units(engine, "calib", "gate_calib", {("BBB", day)})
+        await pin_units(engine, "calib", "gate_calib", {("BBB", day)}, moved)
     assert await gate_pins(engine, "calib") == {sha}
     bars, cut = await read_gate_bars(engine, "calib", unit_set, sha, date(2016, 9, 30))
     assert cut == 1 and len(bars[("AAA", day)]) == 389 and len(bars[("SPY", later)]) == 390
@@ -246,6 +254,7 @@ async def test_the_reactor_gates_run_on_the_pinned_set_and_write_three_rows(
     assert all(r.config["units_sha"] == sha for r in rows) and await gate_pins(
         engine, "reactor"
     ) == {sha}
+    assert sha == (await units.h1_plan(engine, parts=["gate_reactor"])).sha("gate_reactor")
     assert rows[1].config["run_sim"]["fill"] == "legacy-reactor"
     assert rows[2].config["run_sim"]["fill"] == "gate-market"
     assert rows[0].window == "2026-03-02..2026-03-04"
@@ -286,6 +295,27 @@ async def test_the_reactor_gates_refuse_a_set_other_than_the_pinned_one(
     assert both in out.refused["r1"]
     assert await gate_pins(reactor_world, "reactor") == {pinned}
     assert await gate_rows(reactor_world) == []
+
+
+async def test_the_reactor_gates_refuse_a_set_plan_h_did_not_select(
+    reactor_world: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The gate's headlines against plan H's: another set is refused before any pin."""
+    real = units.h1_plan
+    elsewhere = frozenset({("AAA", R_DAYS[0])})
+
+    async def h1_plan(engine: AsyncEngine, **kw: Any) -> units.UnitPlan:
+        plan = await real(engine, **kw)
+        return units.UnitPlan({**plan.parts, "gate_reactor": elsewhere})
+
+    monkeypatch.setattr(units, "h1_plan", h1_plan)
+    gate = units.UnitPlan({"gate_reactor": units.reactor_units(reactor_headlines())})
+    planned = units.UnitPlan({"gate_reactor": elsewhere})
+    out = await run_reactor(reactor_world)
+    assert out.results == [] and set(out.refused) == {"r0", "r1", "r2"}
+    want = f"hashes to {gate.sha('gate_reactor')}, but plan H's to {planned.sha('gate_reactor')}"
+    assert want in out.refused["r0"]
+    assert await gate_pins(reactor_world, "reactor") == set()
 
 
 async def test_r0_fails_when_the_study_would_have_to_fetch(
@@ -438,6 +468,9 @@ async def test_the_sue_gates_run_and_minute_mode_matches_daily_mode(sue_world: A
     assert [r.config["gate"] for r in rows] == ["s0", "s1", "s1-calib", "s2", "s3"]
     assert rows[2].config["units_sha"] == next(iter(await gate_pins(engine, "calib")))
     assert rows[3].config["units_sha"] == next(iter(await gate_pins(engine, "sue")))
+    plan = await units.h1_plan(engine, parts=["gate_calib", "gate_sue"])
+    assert rows[2].config["units_sha"] == plan.sha("gate_calib")
+    assert rows[3].config["units_sha"] == plan.sha("gate_sue")
 
 
 async def test_sigma_c_leaves_out_the_events_meeting_h1s_units(
@@ -576,6 +609,9 @@ async def test_g1_runs_on_the_stored_stories_and_writes_three_rows(g1_world: Asy
     rows = await gate_rows(engine)
     assert [r.config["gate"] for r in rows] == ["g1-synthetic", "g1-lookahead", "g1-determinism"]
     assert rows[1].config["units_sha"] == next(iter(await gate_pins(engine, "g1")))
+    assert rows[1].config["units_sha"] == (await units.h1_plan(engine, parts=["gate_g1"])).sha(
+        "gate_g1"
+    )
     assert rows[2].config["workers"] == 2 and rows[1].window == "2016-01-04..2016-09-30"
 
 
