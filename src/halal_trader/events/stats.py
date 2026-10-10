@@ -26,7 +26,7 @@ from collections import defaultdict
 from collections.abc import Callable, Hashable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
-from typing import Final
+from typing import Final, Protocol
 
 import numpy as np
 
@@ -68,13 +68,24 @@ class NWMean:
     p_one_sided: float
 
 
+class LegLike(Protocol):
+    """One held session of one trade: its day and its net abnormal return.
+
+    The simulator's ``records.Leg`` satisfies it; so does :class:`Leg`.
+    """
+
+    @property
+    def day(self) -> date: ...
+    @property
+    def abn(self) -> float: ...
+
+
 @dataclass(frozen=True, slots=True)
 class Leg:
-    """One held session of one trade: its return that day, net and abnormal."""
+    """A plain :class:`LegLike`: a day and that day's net abnormal return."""
 
     day: date
-    ret: float
-    story_id: str
+    abn: float
 
 
 def p_one_sided(t: float, df: float) -> float:
@@ -199,26 +210,25 @@ def newey_west_mean(series: Sequence[float], *, lags: int = NW_LAGS) -> NWMean |
 
 
 def calendar_series(
-    legs: Mapping[str, Sequence[Leg]], sessions: Sequence[date]
+    legs: Mapping[str, Sequence[LegLike]], sessions: Sequence[date]
 ) -> list[tuple[date, float]]:
     """One point per session with at least one open trade: the equal-weighted
-    mean of that session's legs, in session order.
+    mean of that session's legs' ``abn``, in session order.
 
     ``legs`` maps a story id to its trade's legs. A leg on a day that is not
-    one of ``sessions``, or filed under another story's id, is an error, not
+    one of ``sessions``, or with a non-finite return, is an error, not
     something to drop.
     """
     known = set(sessions)
     by_day: dict[date, list[float]] = defaultdict(list)
     for story_id, story_legs in legs.items():
         for leg in story_legs:
-            if leg.story_id != story_id:
-                raise ValueError(f"a leg of {leg.story_id} is filed under {story_id}")
-            if leg.day not in known:
-                raise ValueError(f"{story_id} has a leg on {leg.day}, which is not a session")
-            if not math.isfinite(leg.ret):
-                raise ValueError(f"{story_id} has a non-finite leg on {leg.day}")
-            by_day[leg.day].append(leg.ret)
+            day, abn = leg.day, float(leg.abn)
+            if day not in known:
+                raise ValueError(f"{story_id} has a leg on {day}, which is not a session")
+            if not math.isfinite(abn):
+                raise ValueError(f"{story_id} has a non-finite leg on {day}")
+            by_day[day].append(abn)
     return [
         (day, math.fsum(rets) / len(rets)) for day in sorted(known) if (rets := by_day.get(day))
     ]
