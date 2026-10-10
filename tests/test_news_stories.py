@@ -9,6 +9,7 @@ from __future__ import annotations
 import itertools
 import random
 from collections import Counter
+from dataclasses import replace
 from datetime import UTC, date, datetime, time, timedelta
 
 import pytest
@@ -419,6 +420,40 @@ def test_a_correction_also_supersedes_by_text_and_only_corrections_do() -> None:
     assert jaccard(shingles(first.headline), shingles(corr.headline)) >= 0.5
     assert supersedes[corr.event_id] == (first.event_id,)
     assert supersedes[plain.event_id] == ()
+
+
+def test_only_a_substantive_correction_supersedes() -> None:
+    miss = news("AAPL", ny(TUE, 8), MISS)
+    noise = news("AAPL", ny(TUE, 9), "CORRECTION: " + MISS + ": What To Expect")
+    mover = news("AAPL", ny(TUE, 9, 30), "CORRECTION: Apple Shares Are Trading Lower After Miss")
+    story = one([miss, noise, mover])
+    assert [i.itype for i in story.items] == ["earnings_fact", "noise", "mover"]
+    assert jaccard(shingles(miss.headline), shingles(noise.headline)) >= 0.5
+    assert all(i.supersedes == () for i in story.items)
+    assert story.card_at(story.close).type == "earnings_miss"
+
+
+def test_nsn_is_re_read_at_every_item() -> None:
+    # A cut guided below consensus vetoes the miss. Were a noise item to take the
+    # guidance away (the builder never lets one), the card would turn NSN at it.
+    guide = news("AAPL", ny(TUE, 7), "Apple Sees Q3 Sales $80.000B-$82.000B vs $85.000B Est")
+    miss = news("AAPL", ny(TUE, 8), MISS)
+    noise = news("AAPL", ny(TUE, 9), "Why Apple Shares Are Trading Lower")
+    built = one([guide, miss, noise])
+    assert built.nsn_at(built.close) is None
+    g, m, n = built.items
+    forced = Story(built.story_id, "AAPL", TUE, [g, m, replace(n, supersedes=(guide.event_id,))])
+    assert forced.card_at(ny(TUE, 9, 9)).type == "guidance_cut"
+    assert forced.card_at(ny(TUE, 9, 10)).family == "NSN_CORE"
+    assert forced.nsn_at(forced.close) == ny(TUE, 9, 10)
+    assert forced.at_news() == ny(TUE, 9)
+    # Of items arriving together, the substantive one made it.
+    dg = news("AAPL", ny(TUE, 10), DOWNGRADE)
+    noisy = news("AAPL", ny(TUE, 10), "Why Apple Shares Are Trading Lower Today")
+    together = one([noisy, dg])
+    assert together.nsn_at(together.close) == ny(TUE, 10, 10)
+    trigger = together._trigger()
+    assert trigger is not None and trigger.itype == "analyst_downgrade"
 
 
 def test_fact_keys_name_each_statement() -> None:
