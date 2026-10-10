@@ -39,7 +39,7 @@ from datetime import UTC, date, datetime, time, timedelta
 from typing import Any, Final
 
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncEngine
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from halal_trader.compliance.sec import SecClient, accession_dashed, filed_at
 from halal_trader.core.num import to_float
@@ -324,6 +324,7 @@ class _Filing:
     symbols: tuple[str, ...]
     published_at: datetime  # as stored (the earliest, if its rows disagree)
     priority: int
+    unstamped: int  # its rows in the window not stamped from the header
 
 
 async def _stored_filings(
@@ -334,7 +335,8 @@ async def _stored_filings(
     async with engine.connect() as conn:
         rows = await conn.execute(
             text(
-                "SELECT source_id, symbol, kind, published_at, payload->'items' AS items "
+                "SELECT source_id, symbol, kind, published_at, payload->'items' AS items, "
+                "payload->>'time_source' AS time_source "
                 "FROM events WHERE source = 'sec' AND kind = ANY(:kinds) "
                 "AND published_at >= :t0 AND published_at < :t1"
             ),
@@ -353,6 +355,7 @@ async def _stored_filings(
             symbols=tuple(sorted({r.symbol for r in rs})),
             published_at=min(r.published_at for r in rs),
             priority=min(filing_priority(r.kind, [str(x) for x in (r.items or [])]) for r in rs),
+            unstamped=sum(r.time_source != "header" for r in rs),
         )
         for acc, rs in grouped.items()
     ]
@@ -379,8 +382,44 @@ class FilingTimes:
     corrected: int = 0  # of those, filings stored at another time
     rows: int = 0  # event rows retimed (an accession can be stored under two symbols)
     missing: int = 0  # filings with no header under any candidate CIK
-    done_before: int = 0  # filings an earlier pass finished (skipped)
+    done_before: int = 0  # filings an earlier pass finished (no request)
+    # Rows of those that another path stored since at the JSON's time (a second
+    # symbol), given the time their filing's corrected rows carry.
+    copied: int = 0
     deltas: Counter[int] = field(default_factory=Counter)  # stored minus header, s -> filings
+
+
+async def header_times(engine: AsyncEngine, accessions: Iterable[str]) -> dict[str, datetime]:
+    """Accession -> its header's acceptance time, for the filings with a stored row
+    stamped from it (``time_source: header``)."""
+    ids = sorted(set(accessions))
+    if not ids:
+        return {}
+    async with engine.connect() as conn:
+        rows = await conn.execute(
+            text(
+                "SELECT source_id, min(published_at) AS at FROM events "
+                "WHERE source = 'sec' AND source_id = ANY(:ids) "
+                "AND payload->>'time_source' = 'header' GROUP BY source_id"
+            ),
+            {"ids": ids},
+        )
+        return {r.source_id: r.at for r in rows}
+
+
+async def _retime(conn: AsyncConnection, times: dict[str, datetime]) -> None:
+    """Stamp every row of each accession, under every symbol, at its header time."""
+    if times:
+        await conn.execute(
+            text(
+                "UPDATE events SET published_at = :t, seen_at = :t, "
+                "payload = COALESCE(payload, CAST('{}' AS JSONB)) "
+                "|| jsonb_build_object('time_source', 'header') "
+                "WHERE source = 'sec' AND source_id = :acc AND (published_at <> :t "
+                "OR seen_at <> :t OR payload->>'time_source' IS DISTINCT FROM 'header')"
+            ),
+            [{"acc": acc, "t": t} for acc, t in times.items()],
+        )
 
 
 async def _write_times(
@@ -389,17 +428,7 @@ async def _write_times(
     """Stamp each accession's rows at its header time and mark the units done, in one
     transaction: a unit is done only with its rows written."""
     async with engine.begin() as conn:
-        if fixes:
-            await conn.execute(
-                text(
-                    "UPDATE events SET published_at = :t, seen_at = :t, "
-                    "payload = COALESCE(payload, CAST('{}' AS JSONB)) "
-                    "|| jsonb_build_object('time_source', 'header') "
-                    "WHERE source = 'sec' AND source_id = :acc AND (published_at <> :t "
-                    "OR seen_at <> :t OR payload->>'time_source' IS DISTINCT FROM 'header')"
-                ),
-                [{"acc": acc, "t": t} for acc, (t, _) in fixes.items()],
-            )
+        await _retime(conn, {acc: t for acc, (t, _) in fixes.items()})
         units = [{"t": TIMES_TASK, "u": acc, "n": d} for acc, (_, d) in fixes.items()]
         units += [{"t": TIMES_MISSING_TASK, "u": acc, "n": 0} for acc in missing]
         if units:
@@ -441,7 +470,9 @@ async def correct_filing_times(
     the header's time as ``published_at`` and ``seen_at`` and
     ``time_source: header`` in their payload; its unit in ``filing-times``
     records how far off the stored time was. A rerun skips finished units
-    and rewrites nothing that is already right.
+    and rewrites nothing that is already right, except a row another path
+    stored since under a second symbol at the JSON's time: it takes the time
+    its filing's corrected rows carry, with no request and outside ``limit``.
 
     ``concurrency`` requests are in flight at once: a header takes about
     0.4 s to come back, and the client's pacer still spaces the requests
@@ -449,13 +480,28 @@ async def correct_filing_times(
     the pass after writing every header read before it.
     """
     out = FilingTimes()
-    done = await _done(engine, TIMES_TASK) | await _done(engine, TIMES_MISSING_TASK)
+    read_before = await _done(engine, TIMES_TASK)
+    no_header = await _done(engine, TIMES_MISSING_TASK)
+    filings = await _stored_filings(engine, start, end, forms)
+    known = await header_times(
+        engine, [f.accession for f in filings if f.accession in read_before and f.unstamped]
+    )
     todo: list[_Filing] = []
-    for filing in await _stored_filings(engine, start, end, forms):
-        if filing.accession in done:
+    copies: dict[str, datetime] = {}
+    for filing in filings:
+        if filing.accession in no_header or (
+            filing.accession in read_before and not filing.unstamped
+        ):
             out.done_before += 1
-        else:
+        elif filing.accession in known:  # read before; a row stored late since
+            out.done_before += 1
+            out.copied += filing.unstamped
+            copies[filing.accession] = known[filing.accession]
+        else:  # never read, or read with no stamped row left to copy from
             todo.append(filing)
+    if copies:
+        async with engine.begin() as conn:
+            await _retime(conn, copies)
     if limit is not None:
         todo = todo[: max(limit, 0)]
     if not todo:

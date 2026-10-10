@@ -122,7 +122,8 @@ def filings_fix_times_cmd(start: Any, end: Any, limit: int | None) -> None:
     The submissions JSON's time is hours late for about a third of filings.
     One EDGAR request per filing, at EDGAR's pace (about 7 a second): the
     history from 2016 takes about 7 hours. Finished filings are skipped,
-    so an interrupted run picks up where it stopped.
+    so an interrupted run picks up where it stopped; a row stored since
+    under a second symbol takes its filing's corrected time, unrequested.
     """
     import httpx
 
@@ -151,6 +152,7 @@ def filings_fix_times_cmd(start: Any, end: Any, limit: int | None) -> None:
         f"{start:%Y-%m-%d}..{last}: {times.checked} filing(s) read, {times.corrected} "
         f"corrected ({times.rows} row(s)), {times.missing} without a header; "
         f"{times.done_before} done before"
+        + (f" ({times.copied} row(s) stored late since, retimed)" if times.copied else "")
     )
     if not times.deltas:
         return
