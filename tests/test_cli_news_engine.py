@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from halal_trader.cli import cli
 from halal_trader.data.alpaca_market import AlpacaMarketData
-from tests.test_ticker_renames import _Market, _seed_candidates, small_map  # noqa: F401
+from tests._renames import NewsMarket, seed_candidates_data
 
 
 def _run(database_url: str, work: Callable[[AsyncEngine], Awaitable[Any]]) -> Any:
@@ -28,7 +28,7 @@ def _run(database_url: str, work: Callable[[AsyncEngine], Awaitable[Any]]) -> An
 
 
 def test_the_seed_command_lists_candidates_and_their_mapping(database_url: str) -> None:
-    _run(database_url, _seed_candidates)
+    _run(database_url, seed_candidates_data)
     result = CliRunner().invoke(cli, ["events", "renames", "seed"])
     assert result.exit_code == 0, result.output
     lines = result.output.splitlines()
@@ -46,9 +46,9 @@ def test_the_backfill_command_paces_the_client_at_the_rate(
 ) -> None:
     made: list[dict[str, Any]] = []
 
-    def from_settings(cls: type, settings: Any, **kwargs: Any) -> _Market:
+    def from_settings(cls: type, settings: Any, **kwargs: Any) -> NewsMarket:
         made.append(kwargs)
-        return _Market()
+        return NewsMarket()
 
     monkeypatch.setattr(AlpacaMarketData, "from_settings", classmethod(from_settings))
     result = CliRunner().invoke(cli, ["events", "renames", "backfill", "--rate", "6000000"])
@@ -61,7 +61,7 @@ def test_the_alias_build_command_stores_and_pins_the_set(
     database_url: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
-        AlpacaMarketData, "from_settings", classmethod(lambda cls, settings, **kw: _Market())
+        AlpacaMarketData, "from_settings", classmethod(lambda cls, settings, **kw: NewsMarket())
     )
     result = CliRunner().invoke(cli, ["events", "aliases", "build"])
     assert result.exit_code == 0, result.output

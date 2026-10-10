@@ -8,8 +8,6 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from halal_trader.data.alpaca_market import Asset, NewsArticle
-from halal_trader.events import renames
 from halal_trader.events.renames import (
     FIRST_SESSIONS,
     TASK,
@@ -22,8 +20,8 @@ from halal_trader.events.renames import (
     unit,
     window,
 )
-from halal_trader.events.store import EventRecord, EventRecorder
-from halal_trader.market_hours import MARKET_TZ, is_trading_day, next_trading_day
+from halal_trader.market_hours import is_trading_day, next_trading_day
+from tests._renames import NewsMarket, article, ny, seed_candidates_data
 
 # ── the map ───────────────────────────────────────────────────
 
@@ -90,14 +88,10 @@ def test_months_cut_a_window_at_calendar_months() -> None:
     assert unit("FB", date(2016, 1, 1)) == "FB:2016-01"
 
 
-def _article(n: int, symbols: tuple[str, ...], when: datetime) -> NewsArticle:
-    return NewsArticle(n, f"headline {n}", "s", f"https://x/{n}", "benzinga", symbols, when)
-
-
 def test_old_ticker_articles_become_events_of_the_current_symbol() -> None:
     when = datetime(2019, 5, 1, 14, tzinfo=UTC)
     recs = renamed_records(
-        [_article(1, ("FB", "AAPL"), when), _article(2, ("AAPL",), when)], "FB", "META"
+        [article(1, ("FB", "AAPL"), when), article(2, ("AAPL",), when)], "FB", "META"
     )
     assert [(r.symbol, r.source_id, r.kind, r.published_at) for r in recs] == [
         ("META", "alpaca:1", "news", when)
@@ -109,63 +103,10 @@ def test_old_ticker_articles_become_events_of_the_current_symbol() -> None:
 # ── seeding ───────────────────────────────────────────────────
 
 
-async def _screen(engine: AsyncEngine, rows: list[tuple[date, str, str]]) -> None:
-    async with engine.begin() as conn:
-        await conn.execute(
-            text(
-                "INSERT INTO halal_screen_results (as_of, symbol, cik, sic_description, verdict, "
-                "reasons, metrics, method, screened_at) "
-                "VALUES (:a, :s, 1, '', :v, '[]', '{}', 't', now())"
-            ),
-            [{"a": a, "s": s, "v": v} for a, s, v in rows],
-        )
-
-
-async def _news(engine: AsyncEngine, rows: list[tuple[int, str, datetime]]) -> None:
-    await EventRecorder(engine, raise_errors=True).record(
-        [
-            EventRecord("alpaca", f"alpaca:{n}", "news", symbol, at, at, {"symbols": [symbol]})
-            for n, symbol, at in rows
-        ]
-    )
-
-
-def _ny(day: date, hour: int = 12) -> datetime:
-    return datetime(day.year, day.month, day.day, hour, tzinfo=MARKET_TZ)
-
-
-async def _seed_candidates(engine: AsyncEngine) -> None:
-    q = date(2016, 9, 30)
-    await _screen(
-        engine,
-        [
-            (q, "LATE", "halal"),
-            (q, "EARLY", "halal"),
-            (q, "EDGE", "halal"),
-            (q, "SILENT", "halal"),
-            (date(2026, 9, 30), "FRESH", "halal"),
-            (q, "NEVER", "not_halal"),
-            (q, "META", "not_halal"),
-            (date(2017, 3, 31), "META", "halal"),
-        ],
-    )
-    await _news(
-        engine,
-        [
-            (1, "LATE", _ny(date(2018, 1, 2))),
-            (2, "LATE", _ny(date(2019, 1, 2))),
-            (3, "EARLY", _ny(date(2016, 10, 3))),
-            (4, "EDGE", _ny(q + timedelta(days=365), 23)),  # 23:00 New York = next day UTC
-            (5, "NEVER", _ny(date(2020, 1, 2))),
-            (6, "META", _ny(date(2021, 6, 30))),
-        ],
-    )
-
-
 async def test_seeding_flags_news_that_starts_over_a_year_after_the_first_halal_screen(
     engine: AsyncEngine,
 ) -> None:
-    await _seed_candidates(engine)
+    await seed_candidates_data(engine)
     assert await seed_candidates(engine, today=date(2026, 10, 10)) == [
         ("LATE", date(2016, 9, 30), date(2018, 1, 2)),
         ("META", date(2017, 3, 31), date(2021, 6, 30)),
@@ -174,34 +115,6 @@ async def test_seeding_flags_news_that_starts_over_a_year_after_the_first_halal_
 
 
 # ── the backfill ──────────────────────────────────────────────
-
-
-class _Market:
-    def __init__(self) -> None:
-        self.calls: list[tuple[list[str], datetime, datetime, int]] = []
-
-    async def news(
-        self, symbols: list[str], *, start: datetime, end: datetime, max_pages: int
-    ) -> list[NewsArticle]:
-        self.calls.append((list(symbols), start, end, max_pages))
-        n = len(self.calls)
-        return [_article(n, (symbols[0], "AAPL"), start + timedelta(hours=12))]
-
-    async def inactive_assets(self) -> list[Asset]:
-        return []
-
-    async def aclose(self) -> None:
-        return None
-
-
-@pytest.fixture
-def small_map(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        renames,
-        "TICKER_RENAMES",
-        {"OLDA": ("NEWA", date(2016, 2, 10)), "OLDB": ("NEWA", date(2016, 3, 4))},
-    )
-    monkeypatch.setattr(renames, "FIRST_SESSIONS", {})
 
 
 async def _stored(engine: AsyncEngine) -> list[tuple[str, str, list[str]]]:
@@ -224,16 +137,16 @@ async def _units(engine: AsyncEngine) -> dict[str, int]:
 async def test_backfill_fetches_each_old_month_and_files_it_under_the_current_symbol(
     engine: AsyncEngine,
 ) -> None:
-    market = _Market()
+    market = NewsMarket()
     stored = await backfill_renamed_news(engine, market, rate_per_min=600_000)
     assert stored == 4
     second = timedelta(seconds=1)
     assert market.calls == [
-        (["OLDA"], _ny(date(2016, 1, 1), 0), _ny(date(2016, 2, 1), 0) - second, 500),
-        (["OLDA"], _ny(date(2016, 2, 1), 0), _ny(date(2016, 2, 11), 0) - second, 500),
+        (["OLDA"], ny(date(2016, 1, 1), 0), ny(date(2016, 2, 1), 0) - second, 500),
+        (["OLDA"], ny(date(2016, 2, 1), 0), ny(date(2016, 2, 11), 0) - second, 500),
         # OLDB names the company from the session after OLDA's last
-        (["OLDB"], _ny(date(2016, 2, 11), 0), _ny(date(2016, 3, 1), 0) - second, 500),
-        (["OLDB"], _ny(date(2016, 3, 1), 0), _ny(date(2016, 3, 5), 0) - second, 500),
+        (["OLDB"], ny(date(2016, 2, 11), 0), ny(date(2016, 3, 1), 0) - second, 500),
+        (["OLDB"], ny(date(2016, 3, 1), 0), ny(date(2016, 3, 5), 0) - second, 500),
     ]
     assert await _stored(engine) == [
         ("NEWA", "alpaca:1", ["OLDA", "AAPL"]),  # payload.symbols as Benzinga sent it
@@ -247,18 +160,18 @@ async def test_backfill_fetches_each_old_month_and_files_it_under_the_current_sy
         "OLDB:2016-02": 1,
         "OLDB:2016-03": 1,
     }
-    again = _Market()
+    again = NewsMarket()
     assert await backfill_renamed_news(engine, again, rate_per_min=600_000) == 0
     assert again.calls == []  # every unit is done
 
 
 @pytest.mark.usefixtures("small_map")
 async def test_a_month_not_over_yet_is_fetched_but_not_marked_done(engine: AsyncEngine) -> None:
-    market = _Market()
-    await backfill_renamed_news(engine, market, rate_per_min=600_000, now=_ny(date(2016, 3, 4), 20))
+    market = NewsMarket()
+    await backfill_renamed_news(engine, market, rate_per_min=600_000, now=ny(date(2016, 3, 4), 20))
     assert len(market.calls) == 4
     assert "OLDB:2016-03" not in await _units(engine)
-    again = _Market()
-    await backfill_renamed_news(engine, again, rate_per_min=600_000, now=_ny(date(2016, 3, 5), 1))
-    assert [(c[0], c[1]) for c in again.calls] == [(["OLDB"], _ny(date(2016, 3, 1), 0))]
+    again = NewsMarket()
+    await backfill_renamed_news(engine, again, rate_per_min=600_000, now=ny(date(2016, 3, 5), 1))
+    assert [(c[0], c[1]) for c in again.calls] == [(["OLDB"], ny(date(2016, 3, 1), 0))]
     assert (await _units(engine))["OLDB:2016-03"] == 0  # the same article again: nothing new
