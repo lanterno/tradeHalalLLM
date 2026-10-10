@@ -685,6 +685,45 @@ def exit_test_cmd() -> None:
             )
 
 
+@events.command("sim-gate")
+@click.argument("group", type=click.Choice(["lookahead", "reactor", "sue", "all"]))
+@click.option(
+    "--workers",
+    default=6,
+    show_default=True,
+    help="G1's determinism check: the records of 1 and of this many workers must agree.",
+)
+def sim_gate_cmd(group: str, workers: int) -> None:
+    """The Phase 0 gates: run a group, one quant_trials row per gate (spec §E).
+
+    lookahead: g1-synthetic, g1-lookahead, g1-determinism; reactor: r0, r1,
+    r2; sue: s0, s1, s1-calib, s2, s3. A gate whose minute units are not all
+    done is refused (no row). Exits 1 when a gate fails or is refused.
+    """
+
+    async def _run(engine: Any, settings: Any) -> Any:
+        from halal_trader.events.sim_gate import run_gates
+
+        return await run_gates(engine, group, workers=workers)  # type: ignore[arg-type]
+
+    from halal_trader.events.sim_gate import describe
+
+    done = run_db(_run)
+    for r in done.results:
+        mark = "PASS" if r.passed else "FAIL"
+        console.print(f"{mark} {r.gate:14} {describe(r)}", markup=False, highlight=False)
+    for gate, why in sorted(done.refused.items()):
+        console.print(f"REFUSED {gate:11} {why}", markup=False, highlight=False)
+    if not done.passed:
+        failed = [r.gate for r in done.results if not r.passed]
+        parts = []
+        if failed:
+            parts.append(f"failed: {', '.join(failed)}")
+        if done.refused:
+            parts.append(f"refused: {', '.join(sorted(done.refused))}")
+        fail("; ".join(parts))
+
+
 @events.command("atlas")
 @click.option("--start", type=click.DateTime(["%Y-%m-%d"]), default="2016-10-03")
 @click.option("--end", type=click.DateTime(["%Y-%m-%d"]), default="2021-12-23")
