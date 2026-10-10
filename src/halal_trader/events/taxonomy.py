@@ -362,14 +362,16 @@ DILUTION: Final = re.compile(
     re.I,
 )
 # Not a cut: raising the lower end of a range ("Raises Lower End Of FY21
-# Guidance"), or lowering what the company spends ("Cuts FY20 Capex Guidance",
-# "Reduces Annual Cash Burn Guidance"); "At The Lower End Of Guidance" is one.
+# Guidance"), lowering what the company spends ("Cuts FY20 Capex Guidance",
+# "Reduces Annual Cash Burn Guidance"), or an analyst's price target, "Target"
+# alone on the older wires ("Lowers Target To $75 ... Risk To Full Year
+# Guidance"); "At The Lower End Of Guidance" is one.
 GUIDANCE_CUT: Final = re.compile(
     r"\b(?:Cuts?|Lowers?(?![- ]End\b)|"
     r"(?<!Raises )(?<!Raised )(?<!Raise )(?<!Increases )(?<!Raises The )(?<!Raised The )"
     r"Lower(?=[- ]End\b)|"
     r"Lowered|Slashes|Reduces|Trims|Withdraws|Withdrew|Suspends|Pulls|Pulled)\b"
-    r"(?:(?!Price Target|\bPT\b|\bCap(?:ital )?Ex|\bOpEx\b|Capital Spending|\bSpending\b|"
+    r"(?:(?!\bTargets?\b|\bPT\b|\bCap(?:ital )?Ex|\bOpEx\b|Capital Spending|\bSpending\b|"
     r"Cash Burn|\bCosts?\b|\bExpenses?\b|Tax Rate).){0,50}"
     r"\b(?:Guidance|Outlook|Forecast|Guide|"
     r"(?:Financial|Long-Term|Margin|Revenue|Sales|Earnings|Growth) Targets?)\b|"
