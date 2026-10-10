@@ -908,6 +908,8 @@ def test_parser_sha_pins_every_pattern() -> None:
     assert src["OLD_WINDOW"] == repr(ep.OLD_WINDOW) == "40"
     assert src["KEEP_ACTIONS"] == "affirms,maintains,reaffirms,reiterates,sees"
     assert json.loads(src["SCALE"]) == ep.SCALE == {"K": 1e3, "M": 1e6, "B": 1e9}
+    with pytest.raises(TypeError):  # pinned at import: no write can change it after
+        ep.SCALE["T"] = 1e12  # type: ignore[index]
     assert src["SURPRISE_FLOOR"] == repr(ep.SURPRISE_FLOOR) == "0.01"
     assert src["SEGMENT_SEP"] == ep.SEGMENT_SEP == ";"
     want = hashlib.sha256(json.dumps(src, sort_keys=True).encode()).hexdigest()[:12]
