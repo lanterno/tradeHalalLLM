@@ -9,8 +9,9 @@ the only evidence a strategy cannot have been fitted to -- has no gaps:
 * EPS facts again for companies that filed a 10-Q or 10-K in the last week;
 * any insider-transaction quarter SEC has published since the last run;
 * earnings facts from the new headlines (every headline again after a
-  parser change, then the superseded parser's facts are deleted), and LLM
-  scores for new company headlines (research budget pool; stops at its cap).
+  parser change, then the superseded parser's facts are deleted, except in
+  a block of :func:`keeping_superseded`), and LLM scores for new company
+  headlines (research budget pool; stops at its cap).
 
 Each step reports its own error; none blocks the others.
 """
@@ -18,6 +19,9 @@ Each step reports its own error; none blocks the others.
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from typing import Any
@@ -37,6 +41,22 @@ FILINGS_EVERY = timedelta(days=7)
 # requests to spare.
 HEADER_BUDGET = 1000
 CATCH_UP = timedelta(days=30)  # what a run's spare requests correct
+# Whether the facts step deletes the superseded parsers' facts. The bot's
+# evening run does: it runs the fleet's parser. A hand run keeps them unless
+# asked (`books run --drop-superseded`): from any other checkout the drop
+# deletes the facts the bot reads. Context-local, like the LLM meter.
+_drop_superseded: ContextVar[bool] = ContextVar("events_drop_superseded", default=True)
+
+
+@contextmanager
+def keeping_superseded() -> Iterator[None]:
+    """Run every facts step inside this block (and its tasks) without deleting
+    the superseded parsers' facts."""
+    token = _drop_superseded.set(False)
+    try:
+        yield
+    finally:
+        _drop_superseded.reset(token)
 
 
 @dataclass
@@ -206,6 +226,9 @@ async def refresh_events(engine: AsyncEngine, settings: Any, *, today: date) -> 
             # Extracting first keeps the older labels' facts when it fails (its
             # error skips the drop), for a rollback to read.
             stored = await extract_all(engine)
+            if not _drop_superseded.get():
+                logger.info("event refresh facts: the superseded parsers' facts are kept")
+                return stored
             dropped = await drop_superseded(engine)
             if dropped:
                 logger.info("event refresh facts: deleted %d superseded fact row(s)", dropped)

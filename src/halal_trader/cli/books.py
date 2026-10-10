@@ -65,20 +65,38 @@ def rename_cmd(old: str, new: str) -> None:
 
 
 @books.command("run")
-def run_cmd() -> None:
-    """The evening run by hand: top up bars, re-screen if a week old, advance every book."""
+@click.option(
+    "--drop-superseded",
+    is_flag=True,
+    help=(
+        "Also delete the facts every other v4 parser stored, as the bot's evening run "
+        "does. Only from the parser the fleet runs: from any other, this deletes the "
+        "facts the bot reads."
+    ),
+)
+def run_cmd(drop_superseded: bool) -> None:
+    """The evening run by hand: top up bars, re-screen if a week old, advance every book.
+
+    It refreshes the events as the bot's evening run does, but keeps the facts
+    of superseded parsers unless --drop-superseded is given."""
 
     async def work(engine: Any, settings: Any) -> Any:
+        from contextlib import nullcontext
+
+        from halal_trader.events.daily import keeping_superseded
         from halal_trader.market_hours import today_eastern
         from halal_trader.research.daily import run_research
 
-        return await run_research(engine, settings, today=today_eastern())
+        with nullcontext() if drop_superseded else keeping_superseded():
+            return await run_research(engine, settings, today=today_eastern())
 
     run = run_db(work)
     console.print(f"bars stored: {run.bars_stored}")
     console.print(f"screened: {run.screened if run.screened is not None else 'skipped (fresh)'}")
     for name, n in run.books.items():
         console.print(f"book {name}: {n} session(s) appended")
+    if not drop_superseded:
+        console.print("superseded parsers' facts kept (--drop-superseded deletes them)")
     for error in run.errors:
         console.print(f"[red]{error}[/red]")
 
