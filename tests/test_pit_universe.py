@@ -72,6 +72,28 @@ async def test_equal_dollar_volumes_rank_by_symbol(engine: AsyncEngine) -> None:
     assert await universe_at(engine, date(2026, 3, 15), top_n=2) == ["ALF", "MID"]
 
 
+async def test_identical_histories_rank_the_same_way_on_every_read(engine: AsyncEngine) -> None:
+    """A rename stored under both tickers has byte-identical bars; float sums taken in
+    different orders could tell them apart, exact decimals cannot."""
+    year = month_starts(date(2025, 3, 1), date(2026, 2, 1))
+    awkward = [0.1, 0.2, 0.3, 1e8 + 0.7, 3.3, 1e-3, 7.77, 2e7 / 3, 0.01, 9.9, 4.4, 1e6 + 0.1]
+    for symbol in ("NEW", "OLD"):  # same bars, inserted in opposite month orders
+        months = list(zip(year, awkward))
+        if symbol == "OLD":
+            months.reverse()
+        async with engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "INSERT INTO monthly_bars (symbol, month, close, volume, vwap) "
+                    "VALUES (:s, :m, 50.0, :v, 50.0)"
+                ),
+                [{"s": symbol, "m": m, "v": v} for m, v in months],
+            )
+
+    for _ in range(5):
+        assert await universe_at(engine, date(2026, 3, 15), top_n=2) == ["NEW", "OLD"]
+
+
 async def test_pit_schedule_joins_that_months_universe_with_the_last_screen_before_it(
     engine: AsyncEngine,
 ) -> None:
