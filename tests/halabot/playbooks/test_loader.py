@@ -10,6 +10,8 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from halabot.playbooks.loader import (
+    GATE_RANGES,
+    GATE_UNITS_NAME,
     CalendarMismatch,
     MinuteBarLoader,
     PathRequest,
@@ -19,6 +21,7 @@ from halabot.playbooks.loader import (
     WindowUnlock,
     batches_of,
     check_calendar,
+    register_gate_units,
     sane,
     unit_set_sha,
 )
@@ -113,26 +116,93 @@ async def test_the_holdout_opens_only_after_a_passing_verdict(engine: AsyncEngin
     assert no_holdout.allows("AAA", date(2024, 12, 31))
 
 
-def test_a_gate_unlock_admits_exactly_its_registered_units() -> None:
+REACTOR_END = date(2026, 10, 9)
+
+
+def _gate(gate: str, units: frozenset[tuple[str, date]], sha: str | None = None) -> WindowGuard:
+    unlock = WindowUnlock(gate=gate, units=units, units_sha=sha or unit_set_sha(units))  # type: ignore[arg-type]
+    return WindowGuard(window=Window.GATE, window_end=REACTOR_END, unlock=unlock)
+
+
+async def test_a_gate_unlock_admits_exactly_its_pinned_units(engine: AsyncEngine) -> None:
     units = frozenset({("AAA", date(2025, 12, 4)), ("BBB", date(2025, 12, 5))})
-    unlock = WindowUnlock(gate="reactor", units=units, units_sha=unit_set_sha(units))
-    guard = WindowGuard(window=Window.GATE, window_end=date(2026, 10, 9), unlock=unlock)
+    sha = await register_gate_units(engine, "reactor", units)
+    assert sha == unit_set_sha(units)
+    guard = _gate("reactor", units)
+    assert not guard.allows("AAA", date(2025, 12, 4))  # nothing opens before the ledger check
+    await guard.verify(engine)
     assert guard.allows("AAA", date(2025, 12, 4)) and guard.allows("BBB", date(2025, 12, 5))
     assert guard.allows("SPY", date(2025, 12, 4))  # SPY on the days of the set
     assert not guard.allows("BBB", date(2025, 12, 4))
     assert not guard.allows("SPY", date(2025, 12, 8))
     assert not guard.allows("AAA", MON)  # outside the set, even where nothing is locked
     with pytest.raises(WindowLocked, match="sha256"):
-        WindowGuard(
-            window=Window.GATE,
-            window_end=date(2026, 10, 9),
-            unlock=WindowUnlock(gate="reactor", units=units, units_sha=unit_set_sha(set())),
-        )
+        _gate("reactor", units, unit_set_sha({("AAA", date(2025, 12, 4))}))
     with pytest.raises(WindowLocked):
-        WindowGuard(
-            window=Window.GATE, window_end=date(2026, 10, 9), unlock=WindowUnlock(gate="sue")
-        )
+        WindowGuard(window=Window.GATE, window_end=REACTOR_END, unlock=WindowUnlock(gate="sue"))
     assert unit_set_sha([("A", MON), ("B", TUE)]) == unit_set_sha([("B", TUE), ("A", MON)])
+
+
+async def test_an_unpinned_gate_set_is_refused(engine: AsyncEngine) -> None:
+    """A set whose sha matches itself still opens nothing until the gate code pins it."""
+    pinned = frozenset({("AAA", date(2025, 12, 4))})
+    await register_gate_units(engine, "reactor", pinned)
+    other = frozenset({("AAA", date(2025, 12, 4)), ("MSFT", date(2026, 3, 2))})
+    guard = _gate("reactor", other)  # self-consistent, but never registered
+    with pytest.raises(WindowLocked, match="not pinned"):
+        await guard.verify(engine)
+    assert not guard.allows("MSFT", date(2026, 3, 2))
+    # The same set pinned for another gate does not count either.
+    g1 = frozenset({("AAA", date(2016, 3, 7))})
+    await register_gate_units(engine, "g1", g1)
+    with pytest.raises(WindowLocked, match="not pinned"):
+        await _gate("calib", g1).verify(engine)
+    await _gate("g1", g1).verify(engine)
+
+
+async def test_a_gate_reads_only_inside_its_dates(engine: AsyncEngine) -> None:
+    assert GATE_RANGES == {
+        "g1": (date(2016, 1, 4), date(2016, 9, 30)),
+        "calib": (date(2016, 1, 4), date(2016, 9, 30)),
+        "sue": (date(2016, 1, 4), date(2019, 12, 31)),
+        "reactor": (date(2025, 12, 1), date(2026, 10, 9)),
+    }
+    cases = [
+        ("g1", ("AAPL", date(2016, 10, 3))),  # train
+        ("calib", ("AAPL", date(2015, 12, 31))),
+        ("sue", ("MSFT", date(2020, 1, 2))),
+        ("reactor", ("AAPL", date(2025, 6, 2))),  # the clean holdout
+        ("reactor", ("MSFT", date(2019, 5, 1))),
+    ]
+    for gate, bad in cases:
+        units = frozenset({bad, ("SPY", GATE_RANGES[gate][0])})
+        with pytest.raises(WindowLocked, match="outside"):
+            await register_gate_units(engine, gate, units)  # type: ignore[arg-type]
+        with pytest.raises(WindowLocked, match="outside"):
+            _gate(gate, units)  # even with a matching sha
+    async with engine.connect() as conn:
+        rows = await conn.scalar(text("SELECT count(*) FROM quant_trials"))
+    assert rows == 0  # nothing out of range was ever pinned
+    with pytest.raises(WindowLocked, match="empty"):
+        await register_gate_units(engine, "g1", [])
+    edges = frozenset({("AAA", date(2016, 1, 4)), ("AAA", date(2016, 9, 30))})
+    assert await register_gate_units(engine, "g1", edges) == unit_set_sha(edges)
+
+
+async def test_pinning_is_idempotent_and_never_a_trial(engine: AsyncEngine) -> None:
+    units = [("AAA", date(2017, 5, 1)), ("BBB", date(2018, 2, 1))]
+    first = await register_gate_units(engine, "sue", units)
+    again = await register_gate_units(engine, "sue", list(reversed(units)))
+    assert first == again
+    async with engine.connect() as conn:
+        rows = (
+            await conn.execute(text("SELECT name, kind, config, metrics FROM quant_trials"))
+        ).all()
+    assert len(rows) == 1
+    (row,) = rows
+    assert (row.name, row.kind) == (GATE_UNITS_NAME, "gate-units")
+    assert row.config == {"gate": "sue", "units_sha": first}
+    assert "active_sr_period" not in (row.metrics or {})  # never counted for the DSR
 
 
 # ── the calendar ──
@@ -289,6 +359,36 @@ async def test_a_path_past_the_window_end_is_refused(engine: AsyncEngine) -> Non
     loader = MinuteBarLoader(engine, window=Window.GATE, window_end=WED, unlock=WindowUnlock())
     (item,) = [x async for x in loader.paths([PathRequest("ok", "OK", MON, 3)], ctx)]
     assert isinstance(item, PathData) and item.spare is None
+
+
+def test_check_refuses_every_unreadable_path_day_up_front() -> None:
+    """No database: the guard alone, before any batch would load."""
+    loader = MinuteBarLoader(None, window=Window.GATE, window_end=TUE, unlock=WindowUnlock())  # type: ignore[arg-type]
+    loader.check([PathRequest("a", "OK", MON, 2)])  # MON..TUE
+    with pytest.raises(WindowLocked, match="2016-03-09 is after the window's end"):
+        loader.check([PathRequest("a", "OK", MON, 2), PathRequest("b", "OK", MON, 3)])
+    train = MinuteBarLoader(
+        None,  # type: ignore[arg-type]
+        window=Window.TRAIN,
+        window_end=date(2021, 12, 31),
+        unlock=WindowUnlock(),
+    )
+    with pytest.raises(WindowLocked, match="preregistration"):
+        train.check([PathRequest("c", "AAA", date(2016, 9, 30), 2)])  # crosses into 2016-10-03
+
+
+async def test_a_pinned_gate_set_loads_its_paths_and_nothing_else(engine: AsyncEngine) -> None:
+    ctx = await _market(engine)
+    units = frozenset({("OK", MON), ("OK", TUE), ("OK", WED)})
+    await register_gate_units(engine, "g1", units)
+    unlock = WindowUnlock(gate="g1", units=units, units_sha=unit_set_sha(units))
+    loader = MinuteBarLoader(engine, window=Window.GATE, window_end=END, unlock=unlock)
+    await loader.prepare()
+    loader.check([PathRequest("ok", "OK", MON, 3)])
+    with pytest.raises(WindowLocked, match="outside gate 'g1'"):
+        loader.check([PathRequest("five", "FIVE", MON, 1)])
+    (item,) = [x async for x in loader.paths([PathRequest("ok", "OK", MON, 3)], ctx)]
+    assert isinstance(item, PathData) and item.spare is None  # THU is not in the set
 
 
 async def test_the_loader_refuses_to_start_on_a_calendar_mismatch(engine: AsyncEngine) -> None:
