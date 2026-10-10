@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping
+from datetime import UTC, date, datetime
 
 import numpy as np
 
@@ -398,6 +399,9 @@ def test_buys_outside_the_entry_window_or_without_facts_are_rejected() -> None:
         def state(self) -> str:
             return self._s
 
+        def live(self) -> bool:
+            return self._s == "WATCHING"
+
         def start(self, ctx: Ctx) -> list[Intent]:
             return [Transition("WATCHING")]
 
@@ -433,6 +437,9 @@ def test_timers_and_cancels_reach_the_playbook() -> None:
 
         def state(self) -> str:
             return self._s
+
+        def live(self) -> bool:
+            return self._s == "WATCHING"
 
         def start(self, ctx: Ctx) -> list[Intent]:
             return [SetTimer(et(MON, 11, 0), "t1")]
@@ -773,3 +780,63 @@ def test_a_playbook_sees_the_story_only_as_of_now() -> None:
         "AAA", [st], lambda s: Look(s), {st.story_id: pd}, spy_data([MON]), Context(), SimConfig()
     )
     assert isinstance(seen[0], PitStory)
+
+
+# ── a path across a daylight-saving change ──
+
+DST_FRI = date(2016, 3, 11)  # EST: the session opens 14:30 UTC
+DST_MON = date(2016, 3, 14)  # EDT from Sunday 2016-03-13: 13:30 UTC
+DST_TUE = date(2016, 3, 15)
+
+
+def test_a_path_across_the_spring_dst_change_keeps_new_york_hours() -> None:
+    st = story("AAA", DST_FRI, downgrade(DST_FRI))
+    days = [DST_FRI, DST_MON, DST_TUE]
+    mon_rows = {(9, 31): (99.0, 99.5, 98.8, 99.2, 1_000.0, 99.1)}
+    tue_rows = {(15, 56): (101.0, 101.2, 100.8, 101.0, 1_000.0, 101.1)}
+    bars = [session_bars(DST_FRI), session_bars(DST_MON, rows=mon_rows)]
+    bars.append(session_bars(DST_TUE, rows=tue_rows))
+    pd = path(st.story_id, "AAA", days, bars)
+    assert [s.open for s in pd.sessions] == [
+        datetime(2016, 3, 11, 14, 30, tzinfo=UTC),
+        datetime(2016, 3, 14, 13, 30, tzinfo=UTC),
+        datetime(2016, 3, 15, 13, 30, tzinfo=UTC),
+    ]
+    marks = {("AAA", DST_FRI): daily(100.0), ("SPY", DST_FRI): daily(200.0)}
+
+    # The compliance exit: decided at MON's pre-open, 09:20 EDT, filled on the 09:31 bar.
+    rec = Recorder(sessions=3, target=1.0)
+    ctx = Context(verdicts={("AAA", DST_MON): "not_halal"}, daily=marks)
+    t = run_one(st, pd, ctx=ctx, factory=rec).trade
+    assert t is not None and t.exit_reason == "compliance"
+    assert t.entry_bar_ts == datetime(2016, 3, 11, 14, 51, tzinfo=UTC)  # 09:51 EST
+    assert t.exit_decided_at == datetime(2016, 3, 14, 13, 20, tzinfo=UTC)  # 09:20 EDT
+    assert t.exit_active_at == datetime(2016, 3, 14, 13, 30, 3, tzinfo=UTC)
+    assert (t.exit_bar_ts, t.exit_px) == (datetime(2016, 3, 14, 13, 31, tzinfo=UTC), 99.1)
+    assert t.hold_minutes == 369 + 1  # 09:51 -> 16:00 EST, then 09:30 -> 09:31 EDT
+    opens = [e.at for e in rec.made[0].seen if isinstance(e, SessionIn) and e.kind == "open"]
+    assert opens == [et(DST_FRI, 9, 30), et(DST_MON, 9, 30)]
+    assert opens == [
+        datetime(2016, 3, 11, 14, 30, tzinfo=UTC),
+        datetime(2016, 3, 14, 13, 30, tzinfo=UTC),
+    ]
+
+    # Held to the deadline: the flatten is 15:55 EDT on TUE, the legs FRI, MON, TUE.
+    held = run_one(st, pd, ctx=Context(daily=marks), toy={"sessions": 3, "target": 1.0}).trade
+    assert held is not None and held.exit_reason == "time_stop"
+    assert held.exit_decided_at == datetime(2016, 3, 15, 19, 55, tzinfo=UTC)
+    assert (held.exit_bar_ts, held.exit_px) == (datetime(2016, 3, 15, 19, 56, tzinfo=UTC), 101.1)
+    assert held.hold_minutes == 369 + 390 + 386  # FRI 09:51 -> TUE 15:56, 390 a session
+
+
+def test_an_overnight_exit_across_dst_works_at_the_edt_open() -> None:
+    fri = story("AAA", DST_FRI, downgrade(DST_FRI))
+    mon = story("AAA", DST_MON, Item(et(DST_FRI, 18, 0), "offering", structural=True))
+    days = [DST_FRI, DST_MON, DST_TUE]
+    pd = path(fri.story_id, "AAA", days, [session_bars(d) for d in days])
+    out = run_one(fri, pd, toy={"sessions": 3, "target": 1.0}, news_from=[fri, mon])
+    t = out.trade
+    assert t is not None and t.exit_reason == "abort"
+    assert t.exit_decided_at == datetime(2016, 3, 11, 23, 0, tzinfo=UTC)  # 18:00 EST
+    assert t.exit_active_at == datetime(2016, 3, 14, 13, 30, 3, tzinfo=UTC)  # 09:30:03 EDT
+    assert t.exit_bar_ts == datetime(2016, 3, 14, 13, 31, tzinfo=UTC)

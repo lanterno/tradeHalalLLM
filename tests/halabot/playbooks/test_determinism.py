@@ -12,7 +12,7 @@ from halabot.playbooks.records import MemorySink, outcomes_sha256
 from halabot.playbooks.sim import run, simulate_many, start_time, worker_of
 from halabot.playbooks.types import SimConfig
 from tests.halabot.playbooks._seed import seed_calendar, seed_market
-from tests.halabot.playbooks._support import Toy
+from tests.halabot.playbooks._support import Toy, ToyFactory
 from tests.halabot.playbooks._synth import WEEK, random_market
 
 
@@ -56,7 +56,7 @@ async def test_run_is_identical_for_one_and_six_worker_processes(engine: AsyncEn
         summary = await run(
             engine,
             market.stories,
-            lambda s: Toy(s, sessions=3, target=0.005),
+            ToyFactory(sessions=3, target=0.005),
             context=market.ctx,
             window=Window.GATE,
             window_end=date(2016, 3, 31),

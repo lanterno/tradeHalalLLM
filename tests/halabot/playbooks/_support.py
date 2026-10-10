@@ -23,7 +23,6 @@ from halabot.playbooks.sim import SymbolState, simulate_symbol
 from halabot.playbooks.types import (
     BarIn,
     ComplianceIn,
-    DailyPoint,
     FillIn,
     Finish,
     Input,
@@ -223,6 +222,17 @@ def downgrade(day: date, hh: int = 8, mm: int = 0) -> Item:
 # ── context ──
 
 
+@dataclass(frozen=True, slots=True)
+class Daily:
+    """A raw daily bar shaped like ``context.DailyPoint`` (the fields the simulator reads)."""
+
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float
+
+
 class Context:
     """A ContextView: A-factors (1.0 unless set), verdicts (halal unless set), daily bars."""
 
@@ -231,7 +241,7 @@ class Context:
         *,
         adj: Mapping[tuple[str, date], float | None] | None = None,
         verdicts: Mapping[tuple[str, date], str] | None = None,
-        daily: Mapping[tuple[str, date], DailyPoint] | None = None,
+        daily: Mapping[tuple[str, date], Daily] | None = None,
         sessions: Sequence[date] = (),
     ) -> None:
         self._adj = dict(adj or {})
@@ -245,16 +255,18 @@ class Context:
     def screen_verdict(self, symbol: str, day: date) -> str:
         return self._verdicts.get((symbol, day), "halal")
 
-    def daily(self, symbol: str, day: date) -> DailyPoint | None:
+    def daily(self, symbol: str, day: date) -> Daily | None:
         return self._daily.get((symbol, day))
 
 
-def daily(c: float, o: float | None = None) -> DailyPoint:
+def daily(c: float, o: float | None = None) -> Daily:
     o = c if o is None else o
-    return DailyPoint(o, max(o, c), min(o, c), c, 1e6)
+    return Daily(o, max(o, c), min(o, c), c, 1e6)
 
 
 # ── the toy playbook ──
+
+LIVE = frozenset({"WATCHING", "ARMED", "ENTERING", "ENTERED"})  # the toy's own live states
 
 FACTS = TradeFacts(
     family_type="analyst_downgrade",
@@ -296,6 +308,9 @@ class Toy:
 
     def state(self) -> str:
         return self._state
+
+    def live(self) -> bool:
+        return self._state in LIVE
 
     def _go(self, to: str, reason: str) -> Transition:
         self._state = to
@@ -356,16 +371,42 @@ class Toy:
 
 
 class Recorder:
-    """A toy factory that keeps every playbook it made."""
+    """A toy factory that keeps every playbook it made, and the story each got."""
+
+    name = Toy.name
+    version = Toy.version
 
     def __init__(self, **kwargs: object) -> None:
         self.kwargs = kwargs
         self.made: list[Toy] = []
+        self.stories: list[object] = []
+
+    @property
+    def path_sessions(self) -> int:
+        return int(self.kwargs.get("sessions", 1))  # type: ignore[call-overload]
 
     def __call__(self, story: object) -> Toy:
         toy = Toy(story, **self.kwargs)  # type: ignore[arg-type]
         self.made.append(toy)
+        self.stories.append(story)
         return toy
+
+
+@dataclass(frozen=True, slots=True)
+class ToyFactory:
+    """A picklable PlaybookFactory of toys (a spawn pool needs one)."""
+
+    sessions: int = 1
+    target: float = 0.01
+    name: str = Toy.name
+    version: str = Toy.version
+
+    @property
+    def path_sessions(self) -> int:
+        return self.sessions
+
+    def __call__(self, story: object) -> Toy:
+        return Toy(story, sessions=self.sessions, target=self.target)
 
 
 DEFAULT_CFG = SimConfig()

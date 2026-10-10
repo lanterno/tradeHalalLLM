@@ -26,7 +26,6 @@ from halabot.playbooks.records import StoryOutcome
 from halabot.playbooks.sim import simulate_symbol
 from halabot.playbooks.types import (
     BarIn,
-    DailyPoint,
     PathData,
     SimConfig,
     SpyData,
@@ -34,7 +33,7 @@ from halabot.playbooks.types import (
     Transition,
 )
 from halal_trader.data.minutes import BarArrays
-from tests.halabot.playbooks._support import FACTS, Context, Story, Toy
+from tests.halabot.playbooks._support import FACTS, Context, Daily, Story, Toy
 from tests.halabot.playbooks._synth import Market, random_market
 
 
@@ -70,7 +69,7 @@ class _NoisyContext(Context):
         super().__init__()
         self._base = base
         self._rng = rng
-        self._cache: dict[tuple[str, object], DailyPoint | None] = {}
+        self._cache: dict[tuple[str, object], Daily | None] = {}
 
     def adj(self, symbol, day):  # type: ignore[no-untyped-def]
         return self._base.adj(symbol, day)
@@ -84,7 +83,7 @@ class _NoisyContext(Context):
             dp = self._base.daily(symbol, day)
             if dp is not None:
                 o, c = (float(x) for x in self._rng.uniform(1, 500, 2))
-                dp = DailyPoint(o, max(o, c), min(o, c), c, dp.v, dp.a)
+                dp = Daily(o, max(o, c), min(o, c), c, dp.volume)
             self._cache[key] = dp
         return self._cache[key]
 
