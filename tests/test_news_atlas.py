@@ -635,6 +635,11 @@ def test_the_range_never_leaves_train() -> None:
         check_range(date(2016, 9, 30), date(2017, 1, 3))
     with pytest.raises(ValueError, match="before start"):
         check_range(date(2018, 1, 3), date(2017, 1, 3))
+    # A weekend or a holiday end is refused before anything is read.
+    with pytest.raises(ValueError, match="2019-06-30 is not a trading session.*2019-06-28"):
+        check_range(date(2016, 10, 3), date(2019, 6, 30))
+    with pytest.raises(ValueError, match="2017-07-04 is not a trading session.*2017-07-03"):
+        check_range(date(2016, 10, 3), date(2017, 7, 4))
     # The context reads daily bars to its end + 7 days: never past 2021-12-31.
     assert context_end(date(2021, 12, 23)) == date(2021, 12, 24)
     assert context_end(date(2017, 3, 10)) == date(2017, 3, 17)

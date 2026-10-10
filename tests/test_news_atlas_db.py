@@ -264,6 +264,24 @@ def test_the_command_refuses_a_range_past_train() -> None:
     assert result.exit_code == 1 and "ends by 2021-12-23" in result.output
 
 
+def test_the_command_refuses_an_end_that_is_not_a_session() -> None:
+    result = CliRunner().invoke(cli, ["events", "atlas", "--end", "2019-06-30"])
+    assert result.exit_code == 1
+    assert "2019-06-30 is not a trading session" in result.output
+    assert "Traceback" not in result.output
+
+
+async def test_a_weekend_end_is_refused_before_the_database(
+    engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def never(*args: object, **kwargs: object) -> None:
+        raise AssertionError("read the ledger before the range was checked")
+
+    monkeypatch.setattr(atlas, "h1_closed", never)
+    with pytest.raises(ValueError, match="not a trading session"):
+        await run_atlas(engine, start=START, end=date(2017, 3, 11))
+
+
 @pytest.mark.usefixtures("small_map")
 def test_the_command_prints_the_tables_and_writes_the_file(
     database_url: str, tmp_path: Path
