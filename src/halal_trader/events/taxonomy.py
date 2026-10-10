@@ -365,15 +365,19 @@ DILUTION: Final = re.compile(
 # Guidance"), lowering what the company spends ("Cuts FY20 Capex Guidance",
 # "Reduces Annual Cash Burn Guidance"), or an analyst's price target, "Target"
 # alone on the older wires ("Lowers Target To $75 ... Risk To Full Year
-# Guidance", "Cuts Square Target Due To ... 2020 Guidance"); "At The Lower End
-# Of Guidance" is one, and so are a company's targets listed with its guidance
-# ("Lowers Profit Targets And Outlook", "Lowers Long-Term Targets, Outlook").
+# Guidance", "Cuts Square Target Due To ... 2020 Guidance", "Lowers Target,
+# Maintains Overweight After Guidance"); "At The Lower End Of Guidance" is
+# one, and so are a company's targets listed with its guidance, the list
+# running straight into it ("Lowers Profit Targets And Outlook", "Lowers
+# Long-Term Targets, Outlook").
 GUIDANCE_CUT: Final = re.compile(
     r"\b(?:Cuts?|Lowers?(?![- ]End\b)|"
     r"(?<!Raises )(?<!Raised )(?<!Raise )(?<!Increases )(?<!Raises The )(?<!Raised The )"
     r"Lower(?=[- ]End\b)|"
     r"Lowered|Slashes|Reduces|Trims|Withdraws|Withdrew|Suspends|Pulls|Pulled)\b"
-    r"(?:(?!\bPrice Targets?\b|\bTargets?\b(?!\s*(?:,|&|And\b))|\bPT\b|"
+    r"(?:(?!\bPrice Targets?\b|"
+    r"\bTargets?\b(?!\s*(?:,|&|And\b)\s*(?:Its\s+|The\s+)?(?:Guidance|Outlook|Forecast)\b)|"
+    r"\bPT\b|"
     r"\bCap(?:ital )?Ex|\bOpEx\b|Capital Spending|\bSpending\b|"
     r"Cash Burn|\bCosts?\b|\bExpenses?\b|Tax Rate).){0,50}"
     r"\b(?:Guidance|Outlook|Forecast|Guide|"
