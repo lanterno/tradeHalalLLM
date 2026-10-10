@@ -59,7 +59,9 @@ class Market:
     sessions: int
 
 
-def random_market(seed: int, symbols: int, *, sessions: int | None = None) -> Market:
+def random_market(
+    seed: int, symbols: int, *, sessions: int | None = None, prefix: str = "S"
+) -> Market:
     """``symbols`` names, each with a story on WEEK[0] and often one on WEEK[1] or WEEK[2]."""
     rng = np.random.default_rng(seed)
     n = sessions or int(rng.choice([1, 3]))
@@ -70,7 +72,7 @@ def random_market(seed: int, symbols: int, *, sessions: int | None = None) -> Ma
     for d in WEEK:
         daily_points[("SPY", d)] = daily(float(spy.days[d].c[-1]), float(spy.days[d].o[0]))
     for j in range(symbols):
-        symbol = f"S{j:03d}"
+        symbol = f"{prefix}{j:03d}"
         p = float(rng.uniform(10, 300))
         bars = {}
         for d in WEEK:

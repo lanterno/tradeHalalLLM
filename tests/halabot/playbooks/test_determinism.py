@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import random
+import sys
 from datetime import date
 
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -51,7 +52,7 @@ async def test_run_is_identical_for_one_and_six_worker_processes(engine: AsyncEn
     await seed_calendar(engine, date(2016, 1, 4), date(2016, 3, 31))
     await seed_market(engine, market)
 
-    async def go(workers: int, batch: int):  # type: ignore[no-untyped-def]
+    async def go(workers: int, batch: int, parallel=None):  # type: ignore[no-untyped-def]
         sink = MemorySink(run_id="00000000-0000-0000-0000-000000000001")
         summary = await run(
             engine,
@@ -65,11 +66,18 @@ async def test_run_is_identical_for_one_and_six_worker_processes(engine: AsyncEn
             sink=sink,
             workers=workers,
             batch_paths=batch,
+            parallel=parallel,
         )
         return sink, summary
 
     one, s1 = await go(1, 250)
-    six, s6 = await go(6, 3)  # forked workers, and many small batches
+    six, s6 = await go(6, 3)  # six partitions, many small batches (in-process on macOS)
+    spawned, s3 = await go(3, 4, "spawn")  # a spawn pool: the factory and context pickle
+    assert outcomes_sha256(spawned.outcomes) == outcomes_sha256(one.outcomes)
+    assert s3.trades == s1.trades
+    if sys.platform != "darwin":  # a fork pool exists only off macOS
+        forked, _ = await go(6, 3, "fork")
+        assert outcomes_sha256(forked.outcomes) == outcomes_sha256(one.outcomes)
     started = [st for st in market.stories if start_time(st) is not None]
     assert len(started) < len(market.stories)  # some never become NSN: news carriers only
     assert s1.outcomes == len(one.outcomes) == s1.started == len(started)
