@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import math
 from collections import Counter
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, time, timedelta
 from itertools import count
@@ -24,7 +25,7 @@ from halabot.playbooks import legacy
 from halabot.playbooks.bounce import OverreactionBounce
 from halabot.playbooks.clock import SIP_RT
 from halabot.playbooks.records import TradeRecord
-from halabot.playbooks.sim import RunSummary, simulate_symbol
+from halabot.playbooks.sim import RunSummary, id_set_sha, simulate_symbol
 from halabot.playbooks.types import (
     BarIn,
     Session,
@@ -501,6 +502,7 @@ class _Trade:
     spy_exit_px: float
     cost_bps: float
     r_net_abn: float
+    run_id: str = "r"  # _summary's run
 
 
 def _trade(sid: str, e: float, x: float, se: float, sx: float, c: float = 7.0) -> TradeRecord:
@@ -508,7 +510,9 @@ def _trade(sid: str, e: float, x: float, se: float, sx: float, c: float = 7.0) -
     return cast(TradeRecord, _Trade(sid, e, x, se, sx, c, r))
 
 
-def _summary(n: int, **kw: Any) -> RunSummary:
+def _summary(ids: Sequence[str], **kw: Any) -> RunSummary:
+    """Run ``r``'s summary over the explicit set ``ids``."""
+    n = len(ids)
     base: dict[str, Any] = dict(
         run_id="r",
         stories=n,
@@ -522,6 +526,7 @@ def _summary(n: int, **kw: Any) -> RunSummary:
         skip_ids={},
         bar_drop_ids=(),
         expected=n,
+        expected_sha=id_set_sha(ids),
     )
     return RunSummary(**{**base, **kw})
 
@@ -531,11 +536,11 @@ def test_r1_passes_when_every_kept_headline_matches_and_fails_otherwise() -> Non
     ids = list(explicit_set(hs))
     trades = [_trade(sid, 50.0, 50.5 + 0.1 * k, 200.0, 200.2) for k, sid in enumerate(ids[:-1])]
     study_r = {t.story_id: t.r_net_abn for t in trades}
-    summary = _summary(len(ids), dropped={ids[-1]: "entry_unfilled"})
+    summary = _summary(ids, dropped={ids[-1]: "entry_unfilled"})
     ok = r1_result(hs, summary, trades, study_r)
     assert ok.passed and ok.metrics["compared"] == len(ids) - 1
     assert ok.metrics["max_abs_diff"] == 0.0 and ok.metrics["over_tolerance"] == 0
-    assert "skip_ids" not in ok.metrics["run"]
+    assert not {"skip_ids", "spy_drop_from_start_ids", "dropped"} & set(ok.metrics["run"])
     off = dict(study_r)
     off[ids[0]] += 1e-9
     bad = r1_result(hs, summary, trades, off)
@@ -567,7 +572,7 @@ def test_r2_judges_the_strong_groups_mean_against_the_legacy_clustered_interval(
     r1_trades = [_trade(s, 50.0, 50.0 * (1 + rng.normal(0, 0.01)), 200.0, 200.0) for s in ids]
     study_r = {t.story_id: t.r_net_abn for t in r1_trades}
     close = [_trade(t.story_id, t.entry_px * 1.0002, t.exit_px, 200.0, 200.0) for t in r1_trades]
-    r2 = r2_result(hs, study_r, r1_trades, (), _summary(len(ids)), close)
+    r2 = r2_result(hs, study_r, r1_trades, (), _summary(ids), close)
     assert r2.passed, r2.metrics
     lo, hi = r2.metrics["legacy_ci95"]
     assert lo <= r2.metrics["realistic"]["mean"] <= hi
@@ -578,18 +583,18 @@ def test_r2_judges_the_strong_groups_mean_against_the_legacy_clustered_interval(
     assert "clustered t" in describe(r2)
     # Realistic fills 5% worse: far outside the interval.
     far = [_trade(t.story_id, t.entry_px * 1.05, t.exit_px, 200.0, 200.0) for t in r1_trades]
-    bad = r2_result(hs, study_r, r1_trades, (), _summary(len(ids)), far)
+    bad = r2_result(hs, study_r, r1_trades, (), _summary(ids), far)
     assert not bad.passed and bad.metrics["realistic"]["mean"] < lo
     # Set-aside and implausible headlines leave the comparison.
     odd = [*close[1:], _trade(close[0].story_id, 50.0, 150.0, 200.0, 200.0)]
-    aside = r2_result(hs, study_r, r1_trades, [ids[4]], _summary(len(ids)), odd)
+    aside = r2_result(hs, study_r, r1_trades, [ids[4]], _summary(ids), odd)
     assert aside.metrics["realistic"]["n"] == 4
     assert aside.metrics["excluded"] == {
         "set_aside": 1,
         "no_trade": 0,
         "implausible_or_no_spy": 1,
     }
-    none = r2_result(hs, {}, [], (), _summary(len(ids)), [])
+    none = r2_result(hs, {}, [], (), _summary(ids), [])
     assert not none.passed and describe(none) == "not computable"
 
 
