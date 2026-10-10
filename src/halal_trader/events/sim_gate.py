@@ -15,12 +15,15 @@ selection (``units.g1_stories``, ``units.calib_pairs``,
 never a rebuilt one, and **refuses to run** (:class:`GateRefused`, no row)
 while any of those units, or SPY's on their days, is not a done unit of the
 minute backfill. Only then does it pin the set,
-``loader.register_gate_units(engine, gate, units, expected_sha=UnitPlan.sha(part))``
-(:func:`pin_units`), so a refused run writes no pin. The ledger keeps one
-pin per gate: a set other than the pinned one (the selection changed, say
-after the 8-K times moved) is refused too, naming both hashes, and never
-crashes the run. Bars are read only through the loader's window guard (the
-gate unlock admits exactly the pinned set).
+``loader.register_gate_units(engine, gate, units, expected_sha=plan.sha(part))``
+(:func:`pin_units`), so a refused run writes no pin. ``plan`` is plan H as
+``units.h1_plan(engine, parts=[part])`` selects it (:func:`plan_h`), the
+sets the minute backfill fetches: the gate's selection must hash to plan
+H's, else it is refused naming both hashes. The ledger keeps one pin per
+gate: a set other than the pinned one (the selection changed, say after the
+8-K times moved) is refused too, naming both hashes, and never crashes the
+run. Bars are read only through the loader's window guard (the gate unlock
+admits exactly the pinned set).
 
 **G1, mechanics and look-ahead** (``lookahead``: :func:`run_lookahead`):
 
@@ -55,12 +58,13 @@ are in the holdout, 2025-12..2026-10, read as the gate's pinned set only):
   decomposition (entry rule, exit rule) are reported.
 
 **G3, the SUE replication** (``sue``: :func:`run_sue`). Σ_c is
-``units.sue_complement`` given H1's own units, the ``train`` and
-``validation`` parts (``units.h1_windows``): an event whose entry or exit
-session meets them is dropped (counted ``h1_overlap``), so the gate never
-reads H1's universe (spec §E.3); Σ_s is ``units.sue_sample`` of it.
+``units.sue_complement`` given H1's own units, plan H's ``train`` and
+``validation`` parts (``units.h1_windows``, selected once with the two gate
+parts): an event whose entry or exit session meets them is dropped (counted
+``h1_overlap``), so the gate never reads H1's universe (spec §E.3); Σ_s is
+``units.sue_sample`` of it.
 
-* ``s0``:``events study sue --start 2016 --end 2019 --by bucket``, recomputed
+* ``s0``: ``events study sue --start 2016 --end 2019 --by bucket``, recomputed
   (the 8-K times are being corrected from EDGAR headers, so the values it
   computes become the reference) with its deltas against the numbers the
   plan recorded (IC +0.04..0.09 at 5-20 d, mid-cap 20 d D10-D1 +1.98%); then
@@ -144,6 +148,7 @@ from halabot.playbooks.loader import (
     gate_pins,
     register_gate_units,
     sane,
+    unit_set_sha,
 )
 from halabot.playbooks.lookahead import Probe, check_symbol, fill_bar_violations
 from halabot.playbooks.playbook import TRIGGERED, Ctx
@@ -252,6 +257,7 @@ P99_CAL_X: Final = 1.5
 MIN_COVERAGE: Final = 0.90
 S3_NEWS_LAG: Final = timedelta(seconds=600)
 SUE_END: Final = units.SUE_RANGE[1]
+SUE_PLAN_PARTS: Final = ("train", "validation", "gate_calib", "gate_sue")
 
 CRITERIA: Final[dict[str, str]] = {
     "g1-lookahead": (
@@ -409,20 +415,37 @@ def _pin_conflict(gate: Gate, part: str, pinned: str, sha: str) -> GateRefused:
     )
 
 
-async def pin_units(engine: AsyncEngine, gate: Gate, part: str, unit_set: Iterable[Unit]) -> str:
+async def plan_h(engine: AsyncEngine, *parts: str) -> UnitPlan:
+    """Plan H's selection of ``parts``, by plan H's own code (``units.h1_plan``): the sets
+    the minute backfill fetches, against which a gate's pin is checked."""
+    return await units.h1_plan(engine, parts=list(parts))
+
+
+async def pin_units(
+    engine: AsyncEngine, gate: Gate, part: str, unit_set: Iterable[Unit], plan: UnitPlan
+) -> str:
     """Pin a gate's unit set (the units module's selection for ``part``); returns its sha256.
 
+    ``plan`` is plan H's selection (:func:`plan_h`): the set must hash to
+    ``plan.sha(part)``, which ``loader.register_gate_units`` gets as its
+    ``expected_sha``, so the gate reads the units the backfill fetched.
     Called only once the gate may run (its units are done), so a refused run
-    writes no pin. :class:`GateRefused`, naming both hashes, when the gate is
-    already pinned to another set (``loader.register_gate_units`` keeps one
-    pin per gate): the selection changed since.
+    writes no pin. :class:`GateRefused`, naming both hashes, when the set is
+    not plan H's, or when the gate is already pinned to another set
+    (``register_gate_units`` keeps one pin per gate: the selection changed
+    since).
     """
-    plan = UnitPlan({part: frozenset(unit_set)})
-    sha = plan.sha(part)
+    unit_set = frozenset(unit_set)
+    sha, planned = unit_set_sha(unit_set), plan.sha(part)
+    if sha != planned:
+        raise GateRefused(
+            f"{gate}: this run's {part} set hashes to {sha}, but plan H's to {planned}; "
+            "the gate reads only the units plan H fetched"
+        )
     if others := sorted(await gate_pins(engine, gate) - {sha}):
         raise _pin_conflict(gate, part, others[0], sha)
     try:
-        return await register_gate_units(engine, gate, plan.parts[part], expected_sha=sha)
+        return await register_gate_units(engine, gate, unit_set, expected_sha=planned)
     except WindowLocked:
         if others := sorted(await gate_pins(engine, gate) - {sha}):  # pinned meanwhile
             raise _pin_conflict(gate, part, others[0], sha) from None
@@ -1169,7 +1192,7 @@ async def run_lookahead(
             raise GateRefused("g1: the selection is empty (no gate_g1 story)")
         await require_done(engine, ["g1-lookahead", "g1-determinism"], unit_set)
         built = await g1_rebuild(engine, chosen)
-        sha = await pin_units(engine, "g1", "gate_g1", unit_set)
+        sha = await pin_units(engine, "g1", "gate_g1", unit_set, await plan_h(engine, "gate_g1"))
         world = await g1_world(engine, chosen, unit_set, sha, built=built)
     except GateRefused as e:
         out.refuse(["g1-lookahead", "g1-determinism"], str(e))
@@ -1551,7 +1574,8 @@ async def run_reactor(engine: AsyncEngine, *, workers: int = 1, write: bool = Tr
         if not unit_set:
             raise GateRefused("reactor: the pinned headline set has no session")
         await require_done(engine, list(REACTOR_IDS), unit_set)
-        sha = await pin_units(engine, "reactor", "gate_reactor", unit_set)
+        plan = await plan_h(engine, "gate_reactor")
+        sha = await pin_units(engine, "reactor", "gate_reactor", unit_set, plan)
     except GateRefused as e:
         out.refuse(REACTOR_IDS, str(e))
         return out
@@ -2196,20 +2220,21 @@ async def run_sue(
 ) -> GateRun:
     """G3: ``s0``, ``s1``, ``s1-calib``, ``s2`` and ``s3`` (module docstring).
 
-    Σ_c needs H1's train and validation parts first (``units.h1_windows``,
-    as plan H selects them). S0 and S1 read daily bars only and always run. ``s1-calib`` is refused
-    while a calibration unit is not done; S2 and S3 while a ``gate_sue`` unit
-    is not done; S2 also needs this run's ``s1-calib`` to have passed (its
-    p99_cal is S2's bound).
+    Plan H is selected first (:func:`plan_h`: ``train``, ``validation``,
+    ``gate_calib`` and ``gate_sue``, the H1 windows computed once): Σ_c drops
+    the events meeting its train and validation parts, and the calibration
+    and Σ_s pins are checked against its two gate parts. S0 and S1 read
+    daily bars only and always run. ``s1-calib`` is refused while a
+    calibration unit is not done; S2 and S3 while a ``gate_sue`` unit is not
+    done; S2 also needs this run's ``s1-calib`` to have passed (its p99_cal
+    is S2's bound).
     """
     observations = await units.load_sue_observations(engine)
-    windows = await units.h1_windows(engine)
+    plan = await plan_h(engine, *SUE_PLAN_PARTS)
+    h1_units = plan.parts["train"] | plan.parts["validation"]
     counts: Counter[str] = Counter()
     complement = await units.sue_complement(
-        engine,
-        h1_units=windows["train"] | windows["validation"],
-        observations=observations,
-        counts=counts,
+        engine, h1_units=h1_units, observations=observations, counts=counts
     )
     obs_c = observations_of(complement)
     out = GateRun()
@@ -2230,7 +2255,11 @@ async def run_sue(
     except ValueError as exc:
         sigma_c, error = None, str(exc)
     s0 = s0_result(table, sigma_c, error)
-    s0.metrics["sigma_c"] = {"events": len(complement), "counts": dict(sorted(counts.items()))}
+    s0.metrics["sigma_c"] = {
+        "events": len(complement),
+        "counts": dict(sorted(counts.items())),
+        "h1_units": len(h1_units),
+    }
     await done(s0)
 
     # S1: DailyBarSource through the simulator, against study.evaluate on Σ_c.
@@ -2255,7 +2284,7 @@ async def run_sue(
     p99_cal: float | None = None
     pairs = await units.calib_pairs(engine, observations=observations)
     try:
-        cal = await _calibrate(engine, pairs)
+        cal = await _calibrate(engine, pairs, plan)
     except GateRefused as e:
         out.refuse(["s1-calib"], str(e))
     else:
@@ -2265,7 +2294,7 @@ async def run_sue(
     # S2 and S3 on Σ_s.
     sample = units.sue_sample(complement)
     try:
-        clock, real, c2, c3, pinned = await _sue_minutes(engine, sample)
+        clock, real, c2, c3, pinned = await _sue_minutes(engine, sample, plan)
     except GateRefused as e:
         out.refuse(["s2", "s3"], str(e))
         return out
@@ -2279,15 +2308,16 @@ async def run_sue(
     return out
 
 
-async def _calibrate(engine: AsyncEngine, pairs: Sequence[Unit]) -> GateResult:
-    """``s1-calib`` on the calibration pairs (pinned, done-checked, read behind the guard)."""
+async def _calibrate(engine: AsyncEngine, pairs: Sequence[Unit], plan: UnitPlan) -> GateResult:
+    """``s1-calib`` on the calibration pairs (done-checked, pinned against ``plan``'s
+    ``gate_calib``, read behind the guard)."""
     from halal_trader.events.context import PitContext
 
     calib = frozenset(units.calib_units(pairs))
     if not calib:
         raise GateRefused("s1-calib: no calibration pair")
     await require_done(engine, ["s1-calib"], calib)
-    sha = await pin_units(engine, "calib", "gate_calib", calib)
+    sha = await pin_units(engine, "calib", "gate_calib", calib, plan)
     bars, cut = await read_gate_bars(engine, "calib", calib, sha, units.CALIB_CAP)
     names = sorted({s for s, _ in pairs})
     pit = await PitContext.load(engine, symbols=names, start=units.G1_RANGE[0], end=units.CALIB_CAP)
@@ -2299,17 +2329,18 @@ async def _calibrate(engine: AsyncEngine, pairs: Sequence[Unit]) -> GateResult:
 
 
 async def _sue_minutes(
-    engine: AsyncEngine, sample: Sequence[SueEvent]
+    engine: AsyncEngine, sample: Sequence[SueEvent], plan: UnitPlan
 ) -> tuple[list[Paired], list[Paired], Counter[str], Counter[str], dict[str, Any]]:
     """Σ_s paired with the study's daily returns: on the study's clock (S2) and with
-    realistic fills (S3); the counts of what each left out; the pin."""
+    realistic fills (S3); the counts of what each left out; the pin (against ``plan``'s
+    ``gate_sue``)."""
     from halal_trader.events.context import PitContext
 
     sue_units = frozenset(units.sue_units(sample))
     if not sue_units:
         raise GateRefused("s2/s3: Σ_s is empty")
     await require_done(engine, ["s2", "s3"], sue_units)
-    sha = await pin_units(engine, "sue", "gate_sue", sue_units)
+    sha = await pin_units(engine, "sue", "gate_sue", sue_units, plan)
     window_end = max(d for _, d in sue_units)
     bars, cut = await read_gate_bars(engine, "sue", sue_units, sha, window_end)
     names = sorted({e.symbol for e in sample})
@@ -2472,6 +2503,7 @@ __all__ = [
     "decomposition",
     "determinism",
     "explicit_set",
+    "g1_rebuild",
     "g1_sessions",
     "g1_world",
     "gate_config",
@@ -2479,6 +2511,7 @@ __all__ = [
     "liquidity_eligibility",
     "lookahead",
     "pin_units",
+    "plan_h",
     "r0_result",
     "r1_result",
     "r2_result",
