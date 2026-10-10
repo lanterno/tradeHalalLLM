@@ -178,7 +178,10 @@ def minutes_cmd(
         from halal_trader.events import units
 
         counts: Counter[str] = Counter()
-        plan = await units.h1_plan(engine, parts=parts or None, counts=counts)
+        try:
+            plan = await units.h1_plan(engine, parts=parts or None, counts=counts)
+        except units.PlanError as exc:
+            fail(f"plan {plan_name} refused, nothing fetched: {exc}")
         return plan, counts
 
     if dry_run:
@@ -254,8 +257,11 @@ def _dry_run_lines(plan: Any, counts: Counter[str], done: set[str], rate: int) -
     )
     if counts:
         lines.append("selection: " + ", ".join(f"{k} {v}" for k, v in sorted(counts.items())))
-    for part, n in sorted(plan.outside_gate_ranges().items()):
-        lines.append(f"warning: {part} has {n} unit(s) outside its gate's dates")
+    if "gate_sue" in plan.parts:
+        lines.append(
+            f"gate_sue: {counts.get('sue.h1_overlap', 0)} SUE complement event(s) dropped "
+            "because their units meet the train or validation part"
+        )
     return lines
 
 
