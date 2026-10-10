@@ -381,6 +381,63 @@ def test_tickers_are_the_symbol_and_its_old_ones() -> None:
     assert tickers_of("AAPL") == ("AAPL",)
 
 
+@pytest.mark.parametrize(
+    ("symbol", "headline"),
+    [
+        # the stored headlines each override was added for (overrides alone, no names)
+        ("GWW", "Grainger Reports Q2 Adj. EPS $2.74 vs $2.65 Est."),
+        ("DAL", "Delta Says Working to Fix Systems Outage"),
+        ("PG", "P&G CFO Says We Are Seeing That Consumers Are Becoming More Thrifty"),
+        ("JNJ", "J&J Shares Quiet As Committee Recommends Change"),
+        ("JNJ", "Fate Therapeutics Announces Termination Of Collaboration With Janssen"),
+        ("LLY", "Lilly And Kumquat Biosciences Announce Collaboration"),
+        ("BMY", "Bristol Myers Squibb's Mavacamten Aces Late-Stage Trial"),
+        ("SMCI", "Supermicro CEO Charles Liang Posts On X"),
+        ("CART", "Instacart IPO Indicating $39 On 728K Shares"),
+        ("PRLB", "Protolabs Announces $50M Increase To Existing Stock Repurchase"),
+        ("SDGR", "Schrödinger Awarded $4.9M Grant To Accelerate Drug Discovery"),
+        ("SMG", "ScottsMiracle-Gro Reaffirms FY25 Sales"),
+        ("LPX", "LP Building Solutions Sees Siding Solutions FY22 Revenue Growth"),
+        ("LPX", "Louisiana Pacific Q3 EPS $0.32 vs $0.37 Est"),
+        ("BDX", "BD Receives FDA 510(k) Clearance For Advanced Microbiology Solution"),
+        ("NXH", "Overstock Shares Up 4%; Feb $60 Calls Active"),
+        ("KNX", "Knight Transportation Q2 EPS $0.56 Misses $0.57 Estimate"),
+        ("NNN", "National Retail Properties Raises Guidance"),
+        ("AGNT", "eXp Realty Expands Into Chile"),
+        ("AGNT", "eXp World Says Court Grants Preliminary Approval"),
+    ],
+)
+def test_overrides_name_what_the_headlines_call_a_company(symbol: str, headline: str) -> None:
+    aliases = _matchers_of(alias_rows([symbol], {}, {}))
+    assert aliases[symbol].matches(headline)
+
+
+@pytest.mark.parametrize(
+    ("symbol", "headline"),
+    [
+        ("DAL", "Deltagen Spikes Higher"),  # no letter may follow
+        ("BDX", "BDSI Reports Q2 Sales"),
+        ("LLY", "Lillys Fashion Opens Store"),
+        ("NXH", "Overstocked Retailers Cut Prices"),
+    ],
+)
+def test_overrides_do_not_match_inside_other_words(symbol: str, headline: str) -> None:
+    aliases = _matchers_of(alias_rows([symbol], {}, {}))
+    assert not aliases[symbol].matches(headline)
+
+
+def _matchers_of(rows: list[AliasRow]) -> dict[str, AliasMatcher]:
+    """Matchers from rows, as ``load_aliases`` builds them from the stored ones."""
+    aliases: dict[str, list[str]] = {}
+    tickers: dict[str, list[str]] = {}
+    for r in rows:
+        (tickers if r.source == "ticker" else aliases).setdefault(r.symbol, []).append(r.alias)
+    return {
+        s: AliasMatcher(s, tuple(aliases.get(s, ())), tuple(tickers.get(s, ())))
+        for s in aliases.keys() | tickers.keys()
+    }
+
+
 def test_rows_combine_the_four_sources() -> None:
     rows = alias_rows(
         ["META", "F", "ZZZZ"],
