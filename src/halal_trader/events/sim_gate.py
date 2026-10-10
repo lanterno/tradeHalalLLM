@@ -9,14 +9,18 @@ reads the latest row of each id (:data:`GATE_IDS`). Every gate is
 deterministic (seed 20261010), so a rerun on the same data writes the same
 numbers.
 
-**Unit sets.** A gate that reads minute bars pins its unit set first,
+**Unit sets.** A gate that reads minute bars takes the units module's own
+selection (``units.g1_stories``, ``units.calib_pairs``,
+``units.sue_complement`` + ``units.sue_sample``, ``units.reactor_headlines``),
+never a rebuilt one, and **refuses to run** (:class:`GateRefused`, no row)
+while any of those units, or SPY's on their days, is not a done unit of the
+minute backfill. Only then does it pin the set,
 ``loader.register_gate_units(engine, gate, units, expected_sha=UnitPlan.sha(part))``
-with the units module's own selection (``units.g1_stories``,
-``units.calib_pairs``, ``units.sue_complement`` + ``units.sue_sample``,
-``units.reactor_headlines``), never a rebuilt one, and **refuses to run**
-(:class:`GateRefused`, no row) while any of those units, or SPY's on their
-days, is not a done unit of the minute backfill. Bars are read only through
-the loader's window guard (the gate unlock admits exactly the pinned set).
+(:func:`pin_units`), so a refused run writes no pin. The ledger keeps one
+pin per gate: a set other than the pinned one (the selection changed, say
+after the 8-K times moved) is refused too, naming both hashes, and never
+crashes the run. Bars are read only through the loader's window guard (the
+gate unlock admits exactly the pinned set).
 
 **G1, mechanics and look-ahead** (``lookahead``: :func:`run_lookahead`):
 
@@ -134,8 +138,10 @@ from halabot.playbooks.loader import (
     PathRequest,
     Window,
     WindowGuard,
+    WindowLocked,
     WindowUnlock,
     check_calendar,
+    gate_pins,
     register_gate_units,
     sane,
 )
@@ -396,10 +402,31 @@ def with_spy(unit_set: Iterable[Unit]) -> frozenset[Unit]:
     return frozenset(out | {(SPY, d) for _, d in out})
 
 
+def _pin_conflict(gate: Gate, part: str, pinned: str, sha: str) -> GateRefused:
+    return GateRefused(
+        f"{gate}: the gate is pinned to {pinned}, but this run's {part} set hashes to {sha}; "
+        "one pin per gate, so the selection changed since the pin and the gate does not run"
+    )
+
+
 async def pin_units(engine: AsyncEngine, gate: Gate, part: str, unit_set: Iterable[Unit]) -> str:
-    """Pin a gate's unit set (the units module's selection for ``part``); returns its sha256."""
+    """Pin a gate's unit set (the units module's selection for ``part``); returns its sha256.
+
+    Called only once the gate may run (its units are done), so a refused run
+    writes no pin. :class:`GateRefused`, naming both hashes, when the gate is
+    already pinned to another set (``loader.register_gate_units`` keeps one
+    pin per gate): the selection changed since.
+    """
     plan = UnitPlan({part: frozenset(unit_set)})
-    return await register_gate_units(engine, gate, plan.parts[part], expected_sha=plan.sha(part))
+    sha = plan.sha(part)
+    if others := sorted(await gate_pins(engine, gate) - {sha}):
+        raise _pin_conflict(gate, part, others[0], sha)
+    try:
+        return await register_gate_units(engine, gate, plan.parts[part], expected_sha=sha)
+    except WindowLocked:
+        if others := sorted(await gate_pins(engine, gate) - {sha}):  # pinned meanwhile
+            raise _pin_conflict(gate, part, others[0], sha) from None
+        raise
 
 
 async def require_done(engine: AsyncEngine, gates: Sequence[str], unit_set: Iterable[Unit]) -> None:
@@ -1036,24 +1063,14 @@ def g1_sessions(story: GateStory, hold: int) -> int:
     return min(hold, len(units.path(story.session, units.PATH_SESSIONS, units.G1_RANGE[1])))
 
 
-async def g1_world(
-    engine: AsyncEngine,
-    chosen: Sequence[GateStory],
-    unit_set: frozenset[Unit],
-    sha: str,
-    *,
-    cells: Sequence[int] = G1_CELLS,
-) -> LookaheadWorld:
-    """The 500 gate stories rebuilt from the event store, their context and their paths.
+async def g1_rebuild(engine: AsyncEngine, chosen: Sequence[GateStory]) -> dict[str, Story]:
+    """Every story of the gate stories' symbols, rebuilt from the event store, by id.
 
     :class:`GateRefused` when a rebuilt story is missing or no longer agrees
     with the stored selection (NSN by its cutoff): the stories are stale.
     """
-    from halal_trader.events.context import PitContext
-
-    lo, hi = units.G1_RANGE
     symbols = sorted({g.symbol for g in chosen})
-    built = {s.story_id: s for s in await rebuild_stories(engine, symbols, end=hi)}
+    built = {s.story_id: s for s in await rebuild_stories(engine, symbols, end=units.G1_RANGE[1])}
     stale = []
     for g in chosen:
         s = built.get(g.story_id)
@@ -1064,6 +1081,26 @@ async def g1_world(
             f"g1: {len(stale)} gate stories differ when rebuilt (first: {', '.join(stale[:5])}); "
             "rebuild them with `halal-trader events stories build`"
         )
+    return built
+
+
+async def g1_world(
+    engine: AsyncEngine,
+    chosen: Sequence[GateStory],
+    unit_set: frozenset[Unit],
+    sha: str,
+    *,
+    cells: Sequence[int] = G1_CELLS,
+    built: Mapping[str, Story] | None = None,
+) -> LookaheadWorld:
+    """The 500 gate stories rebuilt from the event store (:func:`g1_rebuild`, unless
+    ``built`` holds them), their context and their paths behind the gate's pin."""
+    from halal_trader.events.context import PitContext
+
+    lo, hi = units.G1_RANGE
+    symbols = sorted({g.symbol for g in chosen})
+    if built is None:
+        built = await g1_rebuild(engine, chosen)
     modes: dict[str, Mode] = {g.story_id: "nsn" if g.nsn else "other" for g in chosen}
     stories = [
         G1Story(s, modes.get(sid))
@@ -1130,9 +1167,10 @@ async def run_lookahead(
     try:
         if not unit_set:
             raise GateRefused("g1: the selection is empty (no gate_g1 story)")
-        sha = await pin_units(engine, "g1", "gate_g1", unit_set)
         await require_done(engine, ["g1-lookahead", "g1-determinism"], unit_set)
-        world = await g1_world(engine, chosen, unit_set, sha)
+        built = await g1_rebuild(engine, chosen)
+        sha = await pin_units(engine, "g1", "gate_g1", unit_set)
+        world = await g1_world(engine, chosen, unit_set, sha, built=built)
     except GateRefused as e:
         out.refuse(["g1-lookahead", "g1-determinism"], str(e))
         return out
@@ -1512,8 +1550,8 @@ async def run_reactor(engine: AsyncEngine, *, workers: int = 1, write: bool = Tr
     try:
         if not unit_set:
             raise GateRefused("reactor: the pinned headline set has no session")
-        sha = await pin_units(engine, "reactor", "gate_reactor", unit_set)
         await require_done(engine, list(REACTOR_IDS), unit_set)
+        sha = await pin_units(engine, "reactor", "gate_reactor", unit_set)
     except GateRefused as e:
         out.refuse(REACTOR_IDS, str(e))
         return out
@@ -2248,8 +2286,8 @@ async def _calibrate(engine: AsyncEngine, pairs: Sequence[Unit]) -> GateResult:
     calib = frozenset(units.calib_units(pairs))
     if not calib:
         raise GateRefused("s1-calib: no calibration pair")
-    sha = await pin_units(engine, "calib", "gate_calib", calib)
     await require_done(engine, ["s1-calib"], calib)
+    sha = await pin_units(engine, "calib", "gate_calib", calib)
     bars, cut = await read_gate_bars(engine, "calib", calib, sha, units.CALIB_CAP)
     names = sorted({s for s, _ in pairs})
     pit = await PitContext.load(engine, symbols=names, start=units.G1_RANGE[0], end=units.CALIB_CAP)
@@ -2270,8 +2308,8 @@ async def _sue_minutes(
     sue_units = frozenset(units.sue_units(sample))
     if not sue_units:
         raise GateRefused("s2/s3: Σ_s is empty")
-    sha = await pin_units(engine, "sue", "gate_sue", sue_units)
     await require_done(engine, ["s2", "s3"], sue_units)
+    sha = await pin_units(engine, "sue", "gate_sue", sue_units)
     window_end = max(d for _, d in sue_units)
     bars, cut = await read_gate_bars(engine, "sue", sue_units, sha, window_end)
     names = sorted({e.symbol for e in sample})
