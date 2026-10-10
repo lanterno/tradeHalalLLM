@@ -197,6 +197,7 @@ __all__ = [
     "persist",
     "pins",
     "reaction_session",
+    "require_built",
     "shingles",
     "story_row",
     "uncovered_sessions",
@@ -1153,6 +1154,38 @@ def uncovered_sessions(
     return out
 
 
+async def require_built(engine: AsyncEngine, start: date, end: date) -> None:
+    """Refuse (:class:`StoriesNotReady`) when a session in [start, end] lies in
+    no range completely built from the current inputs (:func:`built_ranges`).
+
+    A build that stopped part-way, or none at all, would be read as if it held
+    every story, and one built from other aliases, pins or extractor
+    (:func:`inputs_sha`) as if it were today's. Whatever reads
+    ``news_stories`` for a result asks this first: the counts, plan H
+    (``units.h1_plan``) and the atlas (``atlas.run_atlas``).
+    """
+    current = await inputs_sha(engine)
+    async with engine.connect() as conn:
+        marks = await _marks(conn)
+    gaps = uncovered_sessions(
+        [(m.start, m.end) for m in marks if m.inputs == current], start=start, end=end
+    )
+    if not gaps:
+        return
+    stale = [d for d in gaps if any(m.start <= d <= m.end for m in marks)]
+    other = (
+        f"; {len(stale)} of them built from other inputs (first: {stale[0]}), "
+        "since changed: aliases, pins or extractor"
+        if stale
+        else ""
+    )
+    raise StoriesNotReady(
+        f"{len(gaps)} session(s) in {start}..{end} have no complete {BUILDER_VERSION} "
+        f"build from the current inputs {current} (first: {gaps[0]}){other}; "
+        "run `halal-trader events stories build` over them"
+    )
+
+
 async def withdraw_marks(conn: AsyncConnection, start: date, end: date | None = None) -> None:
     """Withdraw the complete marks over [start, end] (every session from
     ``start`` on, without ``end``), on ``conn``: in the caller's transaction.
@@ -1351,32 +1384,11 @@ async def count_stories(
     at a time, each year's context loaded for that year's symbols only.
 
     Refuses (:class:`StoriesNotReady`) when a session in [start, end] lies in
-    no range completely built from the current inputs (:func:`built_ranges`):
-    a build that stopped part-way, or none at all, would be counted as if it
-    held every story, and one built from other aliases, pins or extractor
-    (:func:`inputs_sha`) as if it were today's.
+    no range completely built from the current inputs (:func:`require_built`).
     """
     from halabot.playbooks.types import Session
 
-    current = await inputs_sha(engine)
-    async with engine.connect() as conn:
-        marks = await _marks(conn)
-    gaps = uncovered_sessions(
-        [(m.start, m.end) for m in marks if m.inputs == current], start=start, end=end
-    )
-    if gaps:
-        stale = [d for d in gaps if any(m.start <= d <= m.end for m in marks)]
-        other = (
-            f"; {len(stale)} of them built from other inputs (first: {stale[0]}), "
-            "since changed: aliases, pins or extractor"
-            if stale
-            else ""
-        )
-        raise StoriesNotReady(
-            f"{len(gaps)} session(s) in {start}..{end} have no complete {BUILDER_VERSION} "
-            f"build from the current inputs {current} (first: {gaps[0]}){other}; "
-            "run `halal-trader events stories build` over them"
-        )
+    await require_built(engine, start, end)
     counts = StoryCounts()
     for year in range(start.year, end.year + 1):
         lo, hi = max(start, date(year, 1, 1)), min(end, date(year, 12, 31))
