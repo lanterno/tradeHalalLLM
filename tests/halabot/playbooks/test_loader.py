@@ -30,7 +30,7 @@ from halabot.playbooks.loader import (
     sue_last_exit,
     unit_set_sha,
 )
-from halabot.playbooks.types import PathData, PathSkip
+from halabot.playbooks.types import DATA_SKIPS, PathData, PathSkip
 from halal_trader.db.repos.quant_trials import QuantTrialRepoImpl, config_hash
 from halal_trader.events import study
 from halal_trader.market_hours import MARKET_TZ, is_trading_day
@@ -416,8 +416,8 @@ async def test_paths_and_every_skip_reason(engine: AsyncEngine) -> None:
         "nodaily": "no_daily",
         "bad": "bad_bars",
         "defect": "adjust_defect",
-        "friday": "spy_missing",
-        "late": "spy_missing",
+        "friday": "spy_thin",  # bars, but fewer than 300
+        "late": "spy_missing",  # none at all
     }
     ok = got["ok"]
     assert isinstance(ok, PathData)
@@ -428,7 +428,19 @@ async def test_paths_and_every_skip_reason(engine: AsyncEngine) -> None:
     assert isinstance(five, PathData) and five.dropped == 5 and len(five.bars[0]) == 385
     spy = await loader.spy()
     assert set(spy.days) >= {MON, TUE, WED, THU}
-    assert loader.counts["skip:spy_missing"] == 2 and loader.counts["paths"] == 2
+    assert loader.counts["skip:spy_missing"] == 1 and loader.counts["skip:spy_thin"] == 1
+    assert loader.counts["paths"] == 2
+    data = {r for r in skips.values() if r in DATA_SKIPS}  # Stage A's data skips
+    assert data == {"units_missing", "bad_bars", "adjust_defect", "spy_thin", "spy_missing"}
+
+
+async def test_a_spy_session_without_an_a_factor_is_spy_missing(engine: AsyncEngine) -> None:
+    """SPY's bars are complete on TUE, but it has no A-factor there: missing, not thin."""
+    await _market(engine)
+    loader = MinuteBarLoader(engine, window=Window.GATE, window_end=END, unlock=WindowUnlock())
+    no_adj = Context(adj={("SPY", TUE): None})
+    (item,) = [x async for x in loader.paths([PathRequest("ok", "OK", MON, 3)], no_adj)]
+    assert isinstance(item, PathSkip) and item.reason == "spy_missing"
 
 
 async def test_a_path_past_the_window_end_is_refused(engine: AsyncEngine) -> None:
