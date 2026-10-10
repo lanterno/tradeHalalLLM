@@ -241,3 +241,16 @@ async def test_today_against_the_benchmarks_uses_the_snapshots_move(engine) -> N
     assert spus["diff_pts"] == pytest.approx(10 / 1020 - 0.025, abs=1e-4)
     assert body["cash"] == 50.0
     assert [h["symbol"] for h in body["holdings"] if h["shares"]] == ["MSFT"]
+
+
+async def test_the_next_rebalance_is_asked_for_the_next_runs_day(engine, monkeypatch) -> None:
+    """Saturday after a month's rebalance, with the rule changing on Monday:
+    Monday's run is monthly, as the run itself will decide."""
+    from halal_trader.portfolio import core_executor
+
+    await _seed(engine)  # a monthly run on Monday 5 October
+    monkeypatch.setattr(core_executor, "RULE_SINCE", date(2026, 10, 12))
+    saturday = datetime(2026, 10, 10, 12, 0, tzinfo=MARKET_TZ)
+    body = await build(engine, SETTINGS, now=saturday)
+    assert body["monthly_due"] is True
+    assert body["next_rebalance"].startswith("2026-10-12T15:40")
