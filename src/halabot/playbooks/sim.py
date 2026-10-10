@@ -1224,9 +1224,9 @@ class RunSummary:
     """What a run did, by count, and the story ids a legacy replication must set apart.
 
     ``skip_ids`` lists every skipped story by its reason, and
-    ``bar_drop_ids`` the stories simulated although the bar sanity rule
-    removed bars from their path (1 to 5 of the symbol's, or any of SPY's on
-    a path session). The legacy studies read every stored row and skip
+    ``bar_drop_ids`` the stories whose path loaded although the bar sanity
+    rule removed bars from it (1 to 5 of the symbol's, or any of SPY's on a
+    path session). The legacy studies read every stored row and skip
     nothing for data reasons, so these are the stories where a gate-only
     replication can differ from its study by construction (a missing entry
     or exit bar, another first bar after the decision): :meth:`data_filtered`
@@ -1248,11 +1248,11 @@ class RunSummary:
     skips: dict[str, int]
     loader: dict[str, int]
     skip_ids: dict[str, tuple[str, ...]]  # reason -> sorted story ids
-    bar_drop_ids: tuple[str, ...]  # sorted; simulated with bars dropped by the sanity rule
+    bar_drop_ids: tuple[str, ...]  # sorted; a path loaded with bars cut by the sanity rule
 
     def data_filtered(self) -> frozenset[str]:
         """The stories this run's data rules treated unlike a study reading every row:
-        skipped as ``bad_bars`` or ``adjust_defect``, or simulated with bars dropped."""
+        skipped as ``bad_bars`` or ``adjust_defect``, or loaded with bars cut."""
         ids = {i for reason in DATA_SKIPS for i in self.skip_ids.get(reason, ())}
         return frozenset(ids | set(self.bar_drop_ids))
 
@@ -1476,8 +1476,8 @@ async def run(
     one), and each symbol's blocking state carries from batch to batch. The
     run keeps no module state, so several runs may share an event loop.
 
-    The summary lists the skipped story ids by reason and the stories
-    simulated with bars dropped by the sanity rule (:class:`RunSummary`):
+    The summary lists the skipped story ids by reason and the stories whose
+    path loaded with bars cut by the sanity rule (:class:`RunSummary`):
     a legacy replication (R1) sets :meth:`RunSummary.data_filtered` apart
     before it compares dropped sets.
     """
