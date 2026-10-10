@@ -18,8 +18,8 @@ builder version in ``story_aliases`` so the set the pre-registration pins
   ``LEARN_MIN_SHARE`` of the symbol's slots (with its first word, under the
   same rule). This recovers abbreviated names ("Square", "JB Hunt Transport
   Servs");
-* **override** -- ``ALIAS_OVERRIDES``: the brands a headline uses for a few
-  large companies (Google, YouTube, AWS, Instagram, ...);
+* **override** -- ``ALIAS_OVERRIDES``: the brands and short names a headline
+  uses for some companies (Google, AWS, J&J, Lilly, Grainger, ...);
 * **ticker** -- the symbol and its old tickers (``renames.TICKER_RENAMES``),
   matched case-sensitively and optionally after a ``$``. Only tickers of two
   characters or more: "F" or "T" would match words;
@@ -113,14 +113,35 @@ ALIAS_OVERRIDES: Final[dict[str, tuple[str, ...]]] = {
     "TSLA": ("Tesla",),
     "NVDA": ("Nvidia",),
     "AMD": ("AMD", "Advanced Micro"),
+    # The name the headlines use where no source gives it: found where a
+    # 2016-2024 PIT-halal rank<1000 name's single-symbol articles passed the
+    # entity check less than half the time in a year, or least often overall.
+    "BDX": ("BD",),
+    "BMY": ("Bristol Myers",),  # the hyphen went in 2020
+    "CART": ("Instacart",),
+    "DAL": ("Delta",),  # "delta" is GENERIC
+    "GWW": ("Grainger",),
+    "JNJ": ("J&J", "Janssen"),
+    "LLY": ("Lilly",),
+    "LPX": ("Louisiana Pacific", "LP Building Solutions"),
+    "PG": ("P&G",),
+    "PRLB": ("Protolabs",),
+    "SDGR": ("Schrödinger",),
+    "SMCI": ("Supermicro",),
+    "SMG": ("ScottsMiracle-Gro",),
 }
 # A company's names from before a rename (source e), measured on the stored
 # news: the five the entity check missed most, which the old tickers' pools
-# give now but a rebuild's counts could drop.
+# give now but a rebuild's counts could drop, and those no pool gives (it
+# spells the name otherwise, or the ticker did not change).
 FORMER_NAME_OVERRIDES: Final[dict[str, tuple[str, ...]]] = {
+    "AGNT": ("eXp World", "eXp Realty"),  # EXPI to 2026-05
     "BKNG": ("Priceline",),  # PCLN to 2018-02
     "IQV": ("Quintiles", "QuintilesIMS", "Quintiles IMS"),  # Q to 2017-11
     "KDP": ("Dr Pepper Snapple", "Dr Pepper"),  # DPS to 2018-07
+    "KNX": ("Knight Transportation",),  # Knight-Swift from 2017-09, same ticker
+    "NNN": ("National Retail",),  # National Retail Properties to 2023; "national" is GENERIC
+    "NXH": ("Overstock",),  # OSTK to 2023-11; its slot is "Overstock.com"
     "TPR": ("Coach",),  # COH to 2017-10
     "TT": ("Ingersoll-Rand",),  # IR to 2020-02
 }
