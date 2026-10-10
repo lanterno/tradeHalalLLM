@@ -106,6 +106,7 @@ import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, timedelta
+from typing import TYPE_CHECKING
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -114,6 +115,9 @@ from halal_trader.compliance.aaoifi import Fundamentals, ScreenResult, screen
 from halal_trader.compliance.sec import Company, Fact, SecClient, SecUnavailable
 from halal_trader.compliance.successors import lineage
 from halal_trader.data.store import last_closes
+
+if TYPE_CHECKING:
+    from halal_trader.compliance.index_veto import Peer
 
 logger = logging.getLogger(__name__)
 
@@ -720,14 +724,24 @@ async def gather(
 
 
 async def run_screen(
-    sec: SecClient, engine: AsyncEngine, symbols: Sequence[str], as_of: date
+    sec: SecClient,
+    engine: AsyncEngine,
+    symbols: Sequence[str],
+    as_of: date,
+    *,
+    peers: Mapping[str, Peer] | None = None,
 ) -> list[ScreenResult]:
-    """Screen ``symbols`` as of ``as_of`` and store every verdict with its inputs."""
+    """Screen ``symbols`` as of ``as_of`` and store every verdict with its inputs.
+
+    ``peers``: for a re-screen of a few names, the date's other screened
+    names, so the index veto sizes its range as the full run did
+    (``index_veto.apply_veto``).
+    """
     from halal_trader.compliance.index_veto import apply_veto, require_board, views_at
 
     fundamentals, meta, titles, audit = await gather(sec, engine, symbols, as_of)
     views = await views_at(engine, as_of)
-    results = apply_veto([screen(f) for f in fundamentals], titles, views)
+    results = apply_veto([screen(f) for f in fundamentals], titles, views, peers)
     results = require_board(results, {f.symbol: f.sic for f in fundamentals}, titles, views)
     async with engine.begin() as conn:
         for f, r in zip(fundamentals, results, strict=True):

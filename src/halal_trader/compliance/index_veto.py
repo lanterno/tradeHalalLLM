@@ -41,6 +41,7 @@ import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import date, timedelta
+from typing import NamedTuple
 
 import numpy as np
 from sqlalchemy import text
@@ -140,12 +141,31 @@ async def views_at(engine: AsyncEngine, as_of: date) -> list[IndexView]:
     ]
 
 
+class Peer(NamedTuple):
+    """A name screened on the same date but outside this run (its stored row)."""
+
+    market_cap: float | None
+    title: str  # SEC company name
+
+
 def apply_veto(
-    results: Sequence[ScreenResult], titles: Mapping[str, str], views: Sequence[IndexView]
+    results: Sequence[ScreenResult],
+    titles: Mapping[str, str],
+    views: Sequence[IndexView],
+    peers: Mapping[str, Peer] | None = None,
 ) -> list[ScreenResult]:
-    """Fail every pass an index excluded within its size range."""
+    """Fail every pass an index excluded within its size range.
+
+    ``peers`` serve a re-screen of a few names: the date's other screened
+    names, which size each index's range as the full run did. Without them
+    a handful of names prices too few held ones (MIN_PRICED) and nothing is
+    vetoed. They are never vetoed themselves.
+    """
     out = list(results)
-    caps = {r.symbol: r.metrics.get("market_cap") for r in results}
+    peers = peers or {}
+    caps = {s: p.market_cap for s, p in peers.items()}
+    caps.update({r.symbol: r.metrics.get("market_cap") for r in results})
+    titles = {**{s: p.title for s, p in peers.items()}, **titles}
     for view in views:
         priced = [c for s, c in caps.items() if c and held(view, s, titles.get(s, ""))]
         if len(priced) < MIN_PRICED:
