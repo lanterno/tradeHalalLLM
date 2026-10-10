@@ -2366,6 +2366,7 @@ def s3_result(
         ok = bool(d_in and ic_in and d_sign and ic_sign and coverage >= MIN_COVERAGE)
         passed = passed and ok
         per[str(h)] = {
+            "n": len(rows),
             "coverage": coverage,
             "daily": daily.as_dict(),
             "realistic": {"d10_d1": real_d, "ic": real_ic},
