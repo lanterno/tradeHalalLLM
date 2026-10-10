@@ -537,13 +537,14 @@ def parse_headline(headline: str) -> list[EarningsFacts]:
 # a surprise, no result read after a forecast verb, and the sales stated after
 # an inline EPS. The news engine reads v4; v3 rows stay in event_facts.
 EXTRACTOR_V3: Final = "benzinga-earnings-v3"
-EXTRACTOR: Final = "benzinga-earnings-v4"
+# v4's family: the stored label is this, "+", then the parser's pin (EXTRACTOR).
+EXTRACTOR_V4: Final = "benzinga-earnings-v4"
 
 
 def sources() -> dict[str, str]:
     """Every pattern's source text, the parse order, the constants that shape a
     read (the windows, ratios and floors, the verbs, the scale and the separator)
-    and the extractor, for the pins."""
+    and the extractor's family, for the pins."""
     patterns = {
         "_RESULT": _RESULT,
         "_INLINE": _INLINE,
@@ -576,38 +577,48 @@ def sources() -> dict[str, str]:
         "SCALE": json.dumps(SCALE, sort_keys=True),
         "SURPRISE_FLOOR": repr(SURPRISE_FLOOR),
         "SEGMENT_SEP": SEGMENT_SEP,
-        "EXTRACTOR": EXTRACTOR,
+        "EXTRACTOR_V4": EXTRACTOR_V4,
     }
 
 
 # The parser's pin in the news engine's pre-registration: a change to any
 # pattern or constant above is a new parser, so a new trial.
 PARSER_SHA: Final = hashlib.sha256(json.dumps(sources(), sort_keys=True).encode()).hexdigest()[:12]
+# The label every fact this parser stores carries, and the one every reader
+# selects: a parser change is a new label, so no reader sees a fact an older
+# parser read, and extract_all re-reads every event under the new one.
+EXTRACTOR: Final = f"{EXTRACTOR_V4}+{PARSER_SHA}"
 
 
 async def extract_all(engine: Any, *, batch: int = 5000) -> int:
-    """Parse every news event this extractor version has not seen; returns facts stored.
+    """Parse every news event this parser (``EXTRACTOR``) has not read; returns
+    facts stored.
 
     An event with no earnings statement is marked with a ``none`` fact so it
-    is not re-read, and so the parse rate can be measured.
+    is not re-read, and so the parse rate can be measured. Once every event is
+    read, the facts of every older v4 label are deleted (:func:`drop_superseded`);
+    v3's stay.
     """
     from sqlalchemy import text
 
-    stored = 0
+    stored, after = 0, 0
     while True:
         async with engine.connect() as conn:
             rows = (
                 await conn.execute(
                     text(
                         "SELECT e.id, e.payload->>'headline' AS h FROM events e "
-                        "WHERE e.kind = 'news' AND NOT EXISTS (SELECT 1 FROM event_facts f "
+                        "WHERE e.kind = 'news' AND e.id > :after AND NOT EXISTS ("
+                        "SELECT 1 FROM event_facts f "
                         "WHERE f.event_id = e.id AND f.extractor = :x) ORDER BY e.id LIMIT :n"
                     ),
-                    {"x": EXTRACTOR, "n": batch},
+                    {"x": EXTRACTOR, "after": after, "n": batch},
                 )
             ).all()
         if not rows:
+            await drop_superseded(engine, batch=batch)
             return stored
+        after = rows[-1].id
         facts = []
         for r in rows:
             parsed = parse_headline(r.h or "")
@@ -623,3 +634,38 @@ async def extract_all(engine: Any, *, batch: int = 5000) -> int:
                 facts,
             )
         stored += sum(1 for f in facts if f["k"] != "none")
+
+
+async def drop_superseded(engine: Any, *, batch: int = 5000) -> int:
+    """Delete the facts of every v4 label but ``EXTRACTOR``, ``batch`` rows a
+    transaction; returns rows deleted. The bare ``benzinga-earnings-v4`` of the
+    parsers that stored no pin counts as superseded; v3's rows stay."""
+    from sqlalchemy import text
+
+    dropped, after = 0, 0
+    while True:
+        async with engine.begin() as conn:
+            ids = (
+                (
+                    await conn.execute(
+                        text(
+                            "DELETE FROM event_facts WHERE id IN (SELECT id FROM event_facts "
+                            "WHERE id > :after AND (extractor = :v4 OR extractor LIKE :older) "
+                            "AND extractor <> :x ORDER BY id LIMIT :n) RETURNING id"
+                        ),
+                        {
+                            "after": after,
+                            "v4": EXTRACTOR_V4,
+                            "older": f"{EXTRACTOR_V4}+%",
+                            "x": EXTRACTOR,
+                            "n": batch,
+                        },
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        if not ids:
+            return dropped
+        dropped += len(ids)
+        after = max(ids)
