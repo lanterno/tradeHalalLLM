@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Awaitable, Callable
 from datetime import date
 from typing import Any, TypeVar
 
 import click
 
-from halal_trader.cli._run import run_db
+from halal_trader.cli._run import fail, run_db
 from halal_trader.logging import console
 
 T = TypeVar("T")
@@ -126,6 +127,136 @@ def pit_universe_cmd(top: int, since: Any) -> None:
     symbols, rows, members, stored = _with_store(work)
     console.print(f"monthly bars: {rows} rows for {symbols} symbols (listed and delisted)")
     console.print(f"{members} names were ever in the top {top}; daily rows stored: {stored}")
+
+
+# events/units.PARTS, spelled out so `--help` does not import the planner (a test keeps them equal).
+MINUTE_PARTS = (
+    "spy",
+    "gate_g1",
+    "gate_calib",
+    "gate_sue",
+    "gate_reactor",
+    "train",
+    "validation",
+)
+
+
+@data.command("minutes")
+@click.option(
+    "--plan",
+    "plan_name",
+    type=click.Choice(["h1"]),
+    required=True,
+    help="Which unit plan: h1 is the news engine's Phase 0/1 plan (spec §H).",
+)
+@click.option(
+    "--part",
+    "parts",
+    multiple=True,
+    type=click.Choice(MINUTE_PARTS),
+    help="Only these parts (repeatable); every part by default.",
+)
+@click.option("--dry-run", is_flag=True, help="Print the counts and the estimate; fetch nothing.")
+@click.option(
+    "--rate", default=100, show_default=True, type=click.IntRange(min=1), help="Requests a minute."
+)
+@click.option(
+    "--force", is_flag=True, help="Fetch during market hours or the research job's window too."
+)
+def minutes_cmd(
+    plan_name: str, parts: tuple[str, ...], dry_run: bool, rate: int, force: bool
+) -> None:
+    """Fetch the minute bars of a unit plan, part by part (resumable).
+
+    Each (symbol, session) unit is marked done once fetched, empty ones
+    included, so a rerun asks only for what is missing. A real run stops
+    at the next session batch when US market hours or the evening research
+    job begin (unless --force); run it again later to resume.
+    """
+
+    async def _plan(engine: Any) -> tuple[Any, Counter[str]]:
+        from halal_trader.events import units
+
+        counts: Counter[str] = Counter()
+        plan = await units.h1_plan(engine, parts=parts or None, counts=counts)
+        return plan, counts
+
+    if dry_run:
+
+        async def _dry(engine: Any, settings: Any) -> tuple[Any, Counter[str], set[str]]:
+            from halal_trader.data.minutes import done_units
+
+            plan, counts = await _plan(engine)
+            return plan, counts, await done_units(engine)
+
+        plan, counts, done = run_db(_dry)
+        for line in _dry_run_lines(plan, counts, done, rate):
+            console.print(line, highlight=False)
+        return
+
+    from datetime import UTC, datetime
+
+    from halal_trader.events import units
+
+    if not force and (why := units.busy(datetime.now(UTC))) is not None:
+        fail(f"not fetching during {why}; run later, or pass --force")
+
+    async def _fetch(engine: Any, settings: Any) -> Any:
+        from halal_trader.data.alpaca_market import AlpacaMarketData
+
+        plan, _ = await _plan(engine)
+        console.print(f"plan {plan_name}: {len(plan.all())} units in {len(plan.parts)} part(s)")
+        market = AlpacaMarketData.from_settings(settings, min_interval_s=60.0 / rate)
+        try:
+            return await units.fetch(
+                engine,
+                market,
+                plan,
+                stop=None if force else units.busy,
+                on_part=lambda part, n, bars: console.print(
+                    f"  {part}: {n} unit(s) fetched, {bars} bar(s) stored"
+                ),
+            )
+        finally:
+            await market.aclose()
+
+    report = run_db(_fetch)
+    if report.stopped is not None:
+        fail(f"stopped at {report.stopped}; run the command again later to resume")
+    console.print(
+        f"done: {sum(report.fetched.values())} unit(s) fetched, "
+        f"{sum(report.stored.values())} bar(s) stored"
+    )
+
+
+def _dry_run_lines(plan: Any, counts: Counter[str], done: set[str], rate: int) -> list[str]:
+    from halal_trader.events import units
+
+    rows = units.estimate(plan, done)
+    lines = [
+        f"plan h1 (seed {units.SEED}), parts in fetch order; requests at "
+        f"{units.SYMBOLS_PER_REQUEST} symbols and {units.PAGE_BARS:,} bars a page, "
+        f"{units.BARS_PER_UNIT} bars a unit",
+        f"{'part':<13}{'units':>8}{'new':>8}{'done':>8}{'fetch':>8}{'sessions':>9}"
+        f"{'requests':>9}  {'first':<11}{'last':<11}sha",
+    ]
+    for r in rows:
+        lines.append(
+            f"{r.part:<13}{r.units:>8}{r.new:>8}{r.done:>8}{r.to_fetch:>8}{r.sessions:>9}"
+            f"{r.requests:>9}  {r.first or '-'!s:<11}{r.last or '-'!s:<11}{r.sha[:12]}"
+        )
+    unique = len(plan.all())
+    fetch = sum(r.to_fetch for r in rows)
+    requests = sum(r.requests for r in rows)
+    lines.append(
+        f"unique units {unique}; to fetch {fetch}; about {requests} request(s), "
+        f"{units.hours_at(requests, rate):.1f} h at {rate} a minute"
+    )
+    if counts:
+        lines.append("selection: " + ", ".join(f"{k} {v}" for k, v in sorted(counts.items())))
+    for part, n in sorted(plan.outside_gate_ranges().items()):
+        lines.append(f"warning: {part} has {n} unit(s) outside its gate's dates")
+    return lines
 
 
 @data.command("fundamentals")
