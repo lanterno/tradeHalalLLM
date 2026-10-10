@@ -303,16 +303,21 @@ def test_the_synthetic_world_is_seeded_and_holds_both_kinds_of_story() -> None:
 
 def test_g1_passes_the_bounce_on_synthetic_paths() -> None:
     world = synthetic_world(n_paths=120)
-    ok, metrics = lookahead(world, require_trades=True)
+    ok, metrics = lookahead(world)
     assert ok, metrics
     for hold in ("hold1", "hold3"):
         cell = metrics["cells"][hold]
         assert cell["mismatches"] == 0 and cell["fill_bar_violations"] == []
         assert cell["probes"] == 5 * 120 and cell["checked"] >= cell["probes"] // 2
         assert cell["trades"] > 0 and cell["stories"] == 120
+        assert cell["entries"] >= cell["trades"] and cell["exits"] > 0
         states = {k.split("/")[0] for k in cell["terminal"]}
         assert {"EXITED", "EXPIRED", "DISMISSED"} <= states
-    again_ok, again = lookahead(world, require_trades=True)
+        dismissed = sum(n for k, n in cell["terminal"].items() if k.startswith("DISMISSED/"))
+        assert cell["outcomes"] == sum(cell["terminal"].values()) == cell["started"]
+        assert cell["dismissed"] == dismissed and 0 < cell["dismissed_share"] < 1
+        assert cell["dismissed_share"] == dismissed / cell["outcomes"]
+    again_ok, again = lookahead(world)
     assert again_ok and again == metrics  # seeded: a rerun is identical
 
 
@@ -357,16 +362,23 @@ def test_g1_fails_a_playbook_that_peeks() -> None:
     assert "1 checked" not in describe(GateResult("g1-synthetic", ok, metrics))
 
 
-def test_g1_with_trades_required_fails_a_market_without_any() -> None:
-    w = synthetic_world(n_paths=20, cells=(1,))
-    flat = {
-        sid: (pre, replace(cast(LiquidityEligibility, e), eligible=False, reason="rank"))
-        for sid, (pre, e) in w.context.items()
-    }
-    dull = LookaheadWorld(w.stories, w.paths, w.spy, w.ctx, flat, w.holds)  # type: ignore[arg-type]
-    ok, metrics = lookahead(dull, require_trades=True)
-    assert not ok and metrics["cells"]["hold1"]["trades"] == 0
-    assert lookahead(dull)[0]  # invariant all the same
+def test_g1_fails_a_cell_that_never_enters() -> None:
+    """Every story dismissed for want of σ: invariant, but no order was ever exercised."""
+    w = synthetic_world(n_paths=20, cells=(1, 3))
+    no_sigma = LiquidityEligibility(False, "no_pre_event", None, study.cost_bps(None))
+    blind = dict.fromkeys(w.context, (None, no_sigma))
+    dull = LookaheadWorld(w.stories, w.paths, w.spy, w.ctx, blind, w.holds)  # type: ignore[arg-type]
+    ok, metrics = lookahead(dull)
+    assert not ok
+    for hold in ("hold1", "hold3"):
+        cell = metrics["cells"][hold]
+        assert not cell["passed"] and cell["mismatches"] == 0 and cell["checked"] > 0
+        assert cell["entries"] == cell["trades"] == cell["exits"] == 0
+        assert cell["dismissed"] == cell["outcomes"] > 0 and cell["dismissed_share"] == 1.0
+        assert set(cell["terminal"]) == {"DISMISSED/no_pre_event"}
+    assert "0 entries, 0 trades, 0 exits, 100% dismissed" in describe(
+        GateResult("g1-lookahead", ok, metrics)
+    )
 
 
 def test_determinism_agrees_across_worker_counts() -> None:

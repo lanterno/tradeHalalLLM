@@ -546,7 +546,8 @@ def bounce_rows(exit_px: float) -> dict[tuple[int, int], tuple[float, ...]]:
 
 
 @pytest.fixture
-async def g1_world(engine: AsyncEngine) -> AsyncEngine:
+async def g1_world(engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch) -> AsyncEngine:
+    monkeypatch.setattr(sim_gate, "G1_MIN_STORIES", 3)  # the world's three stories, not 500
     days = sessions(date(2015, 1, 2), date(2016, 10, 31))
     eves = {d for d in days if next_trading_day(d) in G1_DAYS}
     for sym, base in (("SPY", 200.0), ("AAA", 100.0), ("BBB", 60.0)):
@@ -606,6 +607,8 @@ async def test_g1_runs_on_the_stored_stories_and_writes_three_rows(g1_world: Asy
         c = look["cells"][cell]
         assert c["stories"] == 3 and c["started"] == 3 and c["probes"] == 15
         assert c["trades"] >= 2 and c["mismatches"] == 0
+        assert c["entries"] >= c["trades"] and c["exits"] >= 1
+        assert c["dismissed_share"] == c["dismissed"] / c["outcomes"]
     rows = await gate_rows(engine)
     assert [r.config["gate"] for r in rows] == ["g1-synthetic", "g1-lookahead", "g1-determinism"]
     assert rows[1].config["units_sha"] == next(iter(await gate_pins(engine, "g1")))
@@ -613,6 +616,17 @@ async def test_g1_runs_on_the_stored_stories_and_writes_three_rows(g1_world: Asy
         "gate_g1"
     )
     assert rows[2].config["workers"] == 2 and rows[1].window == "2016-01-04..2016-09-30"
+
+
+async def test_g1_refuses_its_real_gates_below_500_stories(
+    g1_world: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sim_gate, "G1_MIN_STORIES", 500)
+    out = await run_lookahead(g1_world, workers=2, synthetic_paths=20)
+    assert [r.gate for r in out.results] == ["g1-synthetic"]
+    assert set(out.refused) == {"g1-lookahead", "g1-determinism"}
+    assert "holds 3 stories, fewer than the 500" in out.refused["g1-lookahead"]
+    assert await gate_pins(g1_world, "g1") == set()
 
 
 async def test_g1_refuses_its_real_gates_while_a_unit_is_not_done(g1_world: AsyncEngine) -> None:
