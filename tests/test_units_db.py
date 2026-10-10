@@ -26,7 +26,7 @@ from halal_trader.data.minutes import session_bounds
 from halal_trader.data.universe import month_starts
 from halal_trader.events import context, units
 from halal_trader.events.context import PitContext
-from halal_trader.events.stories import BUILDER_VERSION
+from halal_trader.events.stories import BUILDER_VERSION, StoriesNotReady
 from halal_trader.events.study import Observation
 from halal_trader.events.units import (
     LiquidityRanks,
@@ -46,7 +46,7 @@ from halal_trader.events.units import (
     window_units,
 )
 from halal_trader.market_hours import MARKET_TZ
-from tests._stories import filing_row, news_row, store
+from tests._stories import filing_row, mark_built, news_row, store
 
 
 def ny(day: date, hh: int, mm: int = 0) -> datetime:
@@ -606,6 +606,7 @@ async def test_the_plan_holds_every_part_and_each_gate_pins_its_set(
     on = {"OVR": lambda d: d >= date(2017, 3, 2)}
     fake_context(monkeypatch, broad=["AAA", "OVR"], closes={"AAA": 20.0}, on=on)
     counts: Counter[str] = Counter()
+    await mark_built(engine, units.G1_RANGE[0], units.VALIDATION[1])
 
     plan = await h1_plan(engine, counts=counts)
 
@@ -637,6 +638,26 @@ async def test_the_plan_holds_every_part_and_each_gate_pins_its_set(
     assert sue.fetch_order() == ["gate_sue"] and sue.parts["gate_sue"] == plan.parts["gate_sue"]
     with pytest.raises(units.PlanError, match="unknown part"):
         await h1_plan(engine, parts=["holdout"])
+
+
+async def test_the_plan_reads_only_stories_a_complete_build_covers(
+    engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def never(*args: object, **kwargs: object) -> None:
+        raise AssertionError("read stories no complete build covers")
+
+    monkeypatch.setattr(units, "read_stories", never)
+    assert (await h1_plan(engine, parts=["spy"])).fetch_order() == ["spy"]  # reads no story
+    whole = r"reads stories no complete build covers: 1322 session\(s\) in 2016-10-03\.\.2021-12-31"
+    with pytest.raises(units.PlanError, match=whole) as refused:
+        await h1_plan(engine)
+    assert isinstance(refused.value.__cause__, StoriesNotReady)
+    await mark_built(engine, *units.TRAIN)
+    with pytest.raises(units.PlanError, match=r"in 2022-01-03\.\.2024-12-31 have no complete"):
+        await h1_plan(engine, parts=["gate_sue"])  # Σ_c reads both windows' stories
+    await mark_built(engine, *units.VALIDATION)
+    with pytest.raises(units.PlanError, match=r"in 2016-01-04\.\.2016-09-30 have no complete"):
+        await h1_plan(engine, parts=["gate_g1"])
 
 
 async def test_the_plan_refuses_reactor_headlines_outside_the_gates_dates(

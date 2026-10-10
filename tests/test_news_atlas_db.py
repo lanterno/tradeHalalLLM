@@ -36,7 +36,7 @@ from halal_trader.events.h1 import NAME as H1_NAME
 from halal_trader.events.h1 import STAGE_A_FAIL
 from halal_trader.events.stories import StoriesNotReady, build_range, pins
 from tests._atlas import CONFIG, END, S1, S2, START, daily_closes, register_h1, seed_world
-from tests._stories import add_aliases, news_row, ny, store
+from tests._stories import add_aliases, mark_built, news_row, ny, store
 
 COST = 7.0 / 1e4  # study.cost_bps for a rank below 300, one way
 
@@ -131,8 +131,26 @@ def test_changed_pins_names_every_difference() -> None:
 
 async def test_a_range_without_stories_is_refused(engine: AsyncEngine, small_map: None) -> None:
     await seed_world(engine)
+    april = date(2017, 4, 3)
+    await mark_built(engine, april, april)  # built from today's inputs, and empty
     with pytest.raises(StoriesNotReady, match="no stories-v1 stories with S in 2017-04-03"):
-        await run_atlas(engine, start=date(2017, 4, 3), end=date(2017, 4, 3))
+        await run_atlas(engine, start=april, end=april)
+
+
+async def test_a_range_no_complete_build_covers_is_refused_before_its_stories_are_read(
+    engine: AsyncEngine, small_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await seed_world(engine)
+    # A forced rebuild of March is never marked complete: its stories are not read.
+    await build_range(engine, start=date(2017, 3, 1), end=date(2017, 3, 31), force=True)
+
+    async def never(*args: object, **kwargs: object) -> None:
+        raise AssertionError("read stories no complete build covers")
+
+    monkeypatch.setattr(atlas, "candidates", never)
+    refused = r"5 session\(s\) in 2017-03-06\.\.2017-03-10 have no complete stories-v1 build"
+    with pytest.raises(StoriesNotReady, match=refused):
+        await run_atlas(engine, start=START, end=END)
 
 
 # ── a seeded week ─────────────────────────────────────────────
@@ -424,13 +442,14 @@ def test_the_command_refuses_a_range_past_train() -> None:
 
 
 @pytest.mark.usefixtures("small_map")
-def test_the_command_refuses_a_range_without_stories(database_url: str) -> None:
-    _run(database_url, seed_world)
+def test_the_command_refuses_a_range_no_complete_build_covers(database_url: str) -> None:
+    _run(database_url, seed_world)  # March is built, April is not
     result = CliRunner().invoke(
         cli, ["events", "atlas", "--start", "2017-04-03", "--end", "2017-04-03"]
     )
     assert result.exit_code == 1
-    assert "no stories-v1 stories" in result.output and "Traceback" not in result.output
+    assert "1 session(s) in 2017-04-03..2017-04-03 have no complete stories-v1" in result.output
+    assert "Traceback" not in result.output
 
 
 def test_the_command_refuses_an_end_that_is_not_a_session() -> None:
