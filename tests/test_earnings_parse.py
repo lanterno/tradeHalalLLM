@@ -695,12 +695,29 @@ def test_a_sales_figure_after_a_forecast_verb_is_not_the_results() -> None:
          "vs $213.78M Est", True, False),
         ("AerCap Holdings Q1 EPS $1.72 Beats $1.57 Estimate, May Not Compare, Sales $1.22B Miss "
          "$1.23B Estimate", True, False),
+        # The flag's other forms.
+        ("Westlake Chemical Q3 EPS $0.51 vs $0.89 Est, Revenue $1.28B vs $1.52B Est, Does Not "
+         "Compare", True, True),
+        ("Northern Oil and Gas Q1 EPS $0.27 vs $(0.02) Est, Sales $48.85M vs $47.75M Est, Does "
+         "Not Compare", True, True),
+        ("Unity Software Q2 Adj. EPS $0.18 Beats $(0.27) Estimate (may not be comparable), Sales "
+         "$440.944M Beat $425.459M Estimate.", True, False),
+        ("Brookfield Asset Mgmt Q4 EPS $0.34 Misses $0.60 Estimate, May Not Be Comparable. Sales "
+         "$1.394B Miss $1.609B Estimate.", True, False),
+        # A segment that only flags covers every statement in the headline.
+        ("Assurant Reports Q4 EPS $0.97 vs. Est. $1.51, Rev. $2.547B vs. Est. $2B; Estimates May "
+         "Not Compare", True, True),
+        ("Sanchez Energy Reports Q1 EPS $(1.20) vs. Est. $(0.12), Rev. $79.816M vs. Est. $127.2M; "
+         "Estimates Do Not Compare", True, True),
+        # Constructed: a segment naming a metric flags only its own statements.
+        ("Acme Q1 EPS $1.00 Beats $0.90 Estimate, Sales $5.0B Beat $4.9B Estimate; Sales May Not "
+         "Compare", False, False),
     ],
 )  # fmt: skip
 def test_may_not_compare_with_or_without_to(headline: str, eps: bool, sales: bool) -> None:
     (r,) = parse_headline(headline)
     f = r.fields
-    assert f["not_comparable"] is True
+    assert f.get("not_comparable", False) is (eps or sales)
     for metric, flagged in (("eps", eps), ("sales", sales)):
         assert f.get(f"{metric}_not_comparable", False) is flagged
         assert (f[f"{metric}_surprise"] is None) is flagged
@@ -712,6 +729,47 @@ def test_a_guide_closed_by_may_not_compare_has_no_surprise() -> None:
     )
     assert g.fields["not_comparable"] is True and g.fields["surprise"] is None
     assert g.fields["mid"] == pytest.approx(6.265)
+
+
+@pytest.mark.parametrize(
+    "flag",
+    [
+        "May Not Compare",
+        "May Not Compare To",
+        "Does Not Compare",
+        "Do Not Compare To",
+        "May Not Be Comparable To",
+        "(may not be comparable)",
+        "May Not Be Compared To",
+        "Not Comparable To",
+        "Which May Not Compare To",
+    ],
+)
+def test_every_form_of_the_not_comparable_flag(flag: str) -> None:
+    from halal_trader.events.earnings_parse import NOT_COMPARABLE
+
+    assert NOT_COMPARABLE.search(f"Acme Q1 EPS $0.34 {flag} $0.60 Estimate") is not None
+    (r,) = parse_headline(f"Acme Q1 EPS $0.34 Misses $0.60 Estimate, {flag} Estimates")
+    assert r.fields["eps_not_comparable"] is True and r.fields["eps_surprise"] is None
+
+
+def test_a_flag_closing_the_segment_or_alone_in_one_covers_the_statement() -> None:
+    # Carlyle 2017-02-08: a false miss (NSN_CORE) while only "May Not Compare" was read.
+    (r,) = parse_headline("Carlyle Group Q4 EPS $(0.16) vs $0.41 Est, Does Not Compare")
+    assert r.fields["eps_not_comparable"] is True and r.fields["eps_surprise"] is None
+    # Rambus 2018-01-29: the note in its own segment, a false structural cut before.
+    (g,) = parse_headline(
+        "Rambus Sees Q1 Adj. EPS $(0.19)-$(0.12) vs $0.18 Est., Sales $41M-$47M vs $100.7M Est.; "
+        "BZ NOTE: Forecast Likely Does Not Compare As Co.'s Results Account For ASC 606"
+    )
+    assert g.kind == "guidance" and g.fields["not_comparable"] is True
+    assert g.fields["surprise"] is None and g.fields["mid"] == pytest.approx(-0.155)
+    # Constructed: a segment stating a figure is no headline-wide flag.
+    r, *_ = parse_headline(
+        "Acme Q1 EPS $1.00 Beats $0.90 Estimate; Sees Q2 EPS $1.20 May Not Compare To $1.30 Est"
+    )
+    assert r.fields["eps_surprise"] == pytest.approx(0.1 / 0.9)
+    assert "not_comparable" not in r.fields
 
 
 @pytest.mark.parametrize(
