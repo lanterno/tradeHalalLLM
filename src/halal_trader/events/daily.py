@@ -201,10 +201,14 @@ async def refresh_events(engine: AsyncEngine, settings: Any, *, today: date) -> 
         async def facts() -> int:
             from halal_trader.events.earnings_parse import drop_superseded, extract_all
 
-            # Every event is read under the deployed parser's label before an
-            # older label's facts go: the readers never see a gap.
+            # The readers select only EXTRACTOR's facts: from a parser deploy
+            # until extract_all returns they see none, whatever the order here.
+            # Extracting first keeps the older labels' facts when it fails (its
+            # error skips the drop), for a rollback to read.
             stored = await extract_all(engine)
-            await drop_superseded(engine)
+            dropped = await drop_superseded(engine)
+            if dropped:
+                logger.info("event refresh facts: deleted %d superseded fact row(s)", dropped)
             return stored
 
         async def scores() -> int:
