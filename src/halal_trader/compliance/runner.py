@@ -103,7 +103,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 
@@ -359,6 +359,22 @@ async def _mapped_by_name(engine: AsyncEngine) -> dict[str, tuple[int, str]]:
     return await mapped_ciks(engine)
 
 
+async def company_map(sec: SecClient, engine: AsyncEngine) -> dict[str, Company]:
+    """Ticker -> SEC company as a screen reads it: SEC's current ticker file, then
+    the tickers it no longer lists, matched to their filer by name
+    (compliance/delisted.py). SEC's own current mapping wins."""
+    companies = await sec.companies()
+    for sym, (cik, title) in (await _mapped_by_name(engine)).items():
+        companies.setdefault(sym, Company(cik, sym, title))
+    return companies
+
+
+def company_of(companies: Mapping[str, Company], symbol: str) -> Company | None:
+    """``symbol``'s company in a ``company_map`` (SEC writes BRK.B as BRK-B)."""
+    sym = symbol.upper()
+    return companies.get(sym) or companies.get(sym.replace(".", "-"))
+
+
 # Ratios a split or reverse split is declared in. A one-session jump in raw /
 # adjusted close within SPLIT_TOLERANCE of one is a split; any other jump over
 # ADJUSTMENT_JUMP is an adjustment we cannot read (a spin-off, a big special
@@ -515,11 +531,7 @@ async def gather(
 ) -> tuple[list[Fundamentals], dict[str, tuple[int | None, str]], dict[str, str], Audit]:
     """Fundamentals for each symbol, (cik, SIC description) for the record, company
     names, and the intermediate figures worth keeping beside each verdict."""
-    companies = await sec.companies()
-    # Tickers SEC no longer lists, matched to their filer by name
-    # (compliance/delisted.py); SEC's own current mapping wins.
-    for sym, (cik, title) in (await _mapped_by_name(engine)).items():
-        companies.setdefault(sym, Company(cik, sym, title))
+    companies = await company_map(sec, engine)
     periods = recent_quarter_instants(as_of)
     frames = {
         c: await _instant(sec, c, periods)
@@ -612,7 +624,7 @@ async def gather(
     failed: list[str] = []
     for symbol in symbols:
         sym = symbol.upper()
-        company = companies.get(sym) or companies.get(sym.replace(".", "-"))
+        company = company_of(companies, sym)
         if company is None:
             out.append(Fundamentals(sym, None, None, prices.get(sym), None, None, None, None))
             meta[sym] = (None, UNMAPPED)
