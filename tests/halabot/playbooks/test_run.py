@@ -200,8 +200,8 @@ async def test_a_run_logs_its_start_batches_and_end(
     assert records[-1].trades == summary.trades  # type: ignore[attr-defined]
 
 
-async def test_a_run_lists_the_stories_its_data_rules_set_apart(engine: AsyncEngine) -> None:
-    """bad_bars and adjust_defect skips, and paths whose bars (or SPY's) the sanity rule cut."""
+async def test_a_run_lists_the_stories_its_data_rules_touched(engine: AsyncEngine) -> None:
+    """Skips by reason; paths whose own bars, SPY's or the spare session's were cut, apart."""
     await seed_calendar(engine, date(2016, 1, 4), END)
     insane = (10.0, 9.0, 8.0, 9.5, 1.0, 9.5)  # h < max(o, c)
     await seed_bars(engine, "SPY", session_bars(MON, price=200.0))
@@ -240,7 +240,9 @@ async def test_a_run_lists_the_stories_its_data_rules_set_apart(engine: AsyncEng
         "bad_bars": ("BAD:2016-03-07",),
         "adjust_defect": ("DEFECT:2016-03-07",),
     }
-    assert summary.bar_drop_ids == ("SPYCUT:2016-03-08", "TWO:2016-03-07")
+    assert summary.bar_drop_ids == ("TWO:2016-03-07",)  # the stock's own bars
+    assert summary.spy_drop_ids == ("SPYCUT:2016-03-08",)  # SPY's, on a path session
+    assert summary.spy_drop_days == {"2016-03-08": 1}
     assert summary.data_filtered() == {
         "BAD:2016-03-07",
         "DEFECT:2016-03-07",
@@ -256,7 +258,9 @@ async def test_a_run_lists_the_stories_its_data_rules_set_apart(engine: AsyncEng
         "adjust_defect": ["DEFECT:2016-03-07"],
         "bad_bars": ["BAD:2016-03-07"],
     }
-    assert sink.summary["bar_drop_ids"] == ["SPYCUT:2016-03-08", "TWO:2016-03-07"]
+    assert sink.summary["bar_drop_ids"] == ["TWO:2016-03-07"]
+    assert sink.summary["spy_drop_ids"] == ["SPYCUT:2016-03-08"]
+    assert sink.summary["spy_drop_days"] == {"2016-03-08": 1}
     assert sink.summary["spare_drop_ids"] == ["SPARE:2016-03-07"]
     assert {o.story_id for o in sink.outcomes if o.skip is None} == {
         "OK:2016-03-07",
