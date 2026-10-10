@@ -672,6 +672,40 @@ def test_flatten_hold_without_a_fill_by_the_flatten_expires() -> None:
     assert out.reason == "entry_unfilled"
 
 
+@pytest.mark.parametrize(
+    ("published", "entry_bar"),
+    [((15, 51, 30), (15, 53)), ((15, 52, 30), (15, 54))],
+)
+def test_flatten_hold_sells_a_buy_filled_as_the_flatten_passes(
+    published: tuple[int, int, int], entry_bar: tuple[int, int]
+) -> None:
+    """A buy on the 15:54 bar is filled when the 15:55 flatten arrives, its notice a second
+    later: it is sold at once on the 15:56 bar, never left to the official close."""
+    day = MON
+    st = legacy.reactor_story("AAA:z", "AAA", et(day, *published))
+    px = {m: 50.0 + 0.1 * m for m in range(50, 60)}
+    rising = {(15, m): (p, p + 0.1, p - 0.1, p, 1e3, p) for m, p in px.items()}
+    bars = session_bars(day, price=50.0, rows=rising)
+    facts = TradeFacts("reactor", "gate", "legacy", cost_bps=7.0, rank=10, tech=False)
+    official = Context(daily={("AAA", day): Daily(50.0, 60.0, 49.0, 55.0, 1e6)})  # not a bar
+    (out,) = simulate_symbol(
+        "AAA",
+        [st],
+        FlattenHoldFactory({st.story_id: facts}),
+        {st.story_id: path(st.story_id, "AAA", [day], [bars])},
+        SpyData({day: session_bars(day, price=200.0)}),
+        official,
+        realistic_config(),
+        keep_transitions=True,
+    )
+    t = out.trade
+    assert t is not None and out.terminal_state == "EXITED" and t.exit_reason == "time_stop"
+    assert t.entry_bar_ts == et(day, *entry_bar)
+    assert t.exit_bar_ts == et(day, 15, 56) and "close_fallback" not in t.flags
+    assert t.exit_px != 55.0
+    assert [to for _, _, to, _ in out.transitions] == ["ENTERING", "ENTERED", "EXITING", "EXITED"]
+
+
 # ── G3: SUE ──
 
 
