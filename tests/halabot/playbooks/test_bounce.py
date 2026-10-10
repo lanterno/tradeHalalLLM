@@ -3,19 +3,8 @@
 Every scenario is built by hand on synthetic minute bars; entry and exit
 times, bars and prices are exact, and returns are checked to 1e-12 against
 the spec §G.6 formula. Stories are labelled by the real taxonomy
-(``_bounce.TStory``).
-
-**The base path** (MON 2016-03-07, a downgrade public at 07:00, so the
-story starts at the open, "out": P0 = 100, SPY0 = 200; σ 0.018, so thr =
-0.036):
-
-* 09:30 c 96 (D = -0.04: triggered when visible, 09:31:05); flat 96;
-* 09:45 l 94 (L = 94, t_L 09:45); flat 94.8 to 10:04;
-* 10:05 c 95.4 > AVWAP 3431.9/36 = 95.33, and 95.4 - 94 = 1.4 <= 0.25 x 6:
-  armed (20 min quiet) and entered when visible, 10:06:05; the buy works at
-  10:06:08 and fills on the 10:07 bar at its VWAP 95.45. L* = 94, TGT = 97;
-* 10:30 c 97.0 >= TGT: the target, decided 10:31:05, filled on the 10:32 bar
-  at 97.1. SPY's legs: 200.5 at 10:07, 201.0 at 10:32.
+(``_bounce.TStory``). The base path and the "in" path are described in
+``_bounce``'s docstring.
 """
 
 from __future__ import annotations
@@ -40,9 +29,18 @@ from halabot.playbooks.playbook import PlaybookFactory
 from halabot.playbooks.records import StoryOutcome, TradeRecord
 from halabot.playbooks.types import SetTimer, SimConfig, SpyData, Submit
 from tests.halabot.playbooks._bounce import (
+    BASE_LEVELS,
+    BASE_ROWS,
     EPS,
+    IN_LEVELS,
+    IN_ROWS,
+    IN_SPY,
+    SPY_ROWS,
+    A,
     TStory,
     bars,
+    base_bars,
+    base_story,
     eligibility,
     pre_event,
     r_expected,
@@ -64,25 +62,7 @@ from tests.halabot.playbooks._support import (
     path,
 )
 
-A = "AAA"
 LAG = timedelta(seconds=3)
-
-BASE_LEVELS = [((9, 30), 96.0), ((9, 46), 94.8), ((10, 6), 95.4), ((10, 8), 96.0)]
-BASE_ROWS: dict[tuple[int, int], Row] = {
-    (9, 30): (97.0, 97.0, 96.0, 96.0, 1_000.0, 96.5),
-    (9, 45): (96.0, 96.0, 94.0, 94.5, 1_000.0, 95.0),
-    (10, 5): (94.8, 95.5, 94.7, 95.4, 1_000.0, 95.2),
-    (10, 7): (95.4, 95.6, 95.3, 95.5, 1_000.0, 95.45),
-}
-TARGET_LEVELS = [((10, 31), 97.0)]
-TARGET_ROWS: dict[tuple[int, int], Row] = {
-    (10, 30): (96.5, 97.2, 96.4, 97.0, 1_000.0, 96.9),
-    (10, 32): (97.0, 97.3, 96.9, 97.2, 2_000.0, 97.1),
-}
-SPY_ROWS: dict[tuple[int, int], Row] = {
-    (10, 7): (200.0, 200.6, 199.9, 200.0, 1e5, 200.5),
-    (10, 32): (200.0, 201.2, 199.8, 200.0, 1e5, 201.0),
-}
 ENTRY = (et(MON, 10, 6, 5), et(MON, 10, 7), 95.45)
 OPEN = et(MON, 9, 30)
 
@@ -91,16 +71,6 @@ def nxt(hm: tuple[int, int], n: int = 1) -> tuple[int, int]:
     """The minute ``n`` after ``hm``."""
     m = hm[0] * 60 + hm[1] + n
     return m // 60, m % 60
-
-
-def base_story(day: date = MON, *extra: tuple[datetime, str], parent: bool = False) -> TStory:
-    return tstory(A, day, (et(day, 7, 0), "analyst_downgrade"), *extra, parent=parent)
-
-
-def base_bars(*, target: bool = True, rows: dict[tuple[int, int], Row] | None = None, **kw):  # type: ignore[no-untyped-def]
-    levels = BASE_LEVELS + (TARGET_LEVELS if target else [])
-    merged = BASE_ROWS | (TARGET_ROWS if target else {}) | (rows or {})
-    return bars(MON, levels, merged, **kw)
 
 
 def one(
@@ -434,29 +404,6 @@ def test_a_veto_before_the_open_expires_at_the_start() -> None:
         (et(MON, 9, 30), "WATCHING", "detected"),
         (et(MON, 9, 30), "EXPIRED", "veto"),
     ]
-
-
-# "In" stories: the path before the news is flat 100, 10:49 closes 100.2 (P0), SPY is flat
-# 201 (SPY0 201, not its previous close 200). σ 0.01, so thr is the 0.03 floor.
-IN_LEVELS = [
-    ((9, 30), 100.0),
-    ((10, 52), 96.6),
-    ((10, 56), 96.3),
-    ((11, 16), 96.8),
-    ((11, 18), 97.5),
-    ((11, 41), 98.2),
-]
-IN_ROWS: dict[tuple[int, int], Row] = {
-    (10, 49): (100.0, 100.3, 99.9, 100.2, 1_000.0, 100.1),
-    (10, 50): (100.2, 100.2, 97.0, 97.2, 1_000.0, 98.0),  # D = -0.0299: not yet
-    (10, 51): (97.2, 97.3, 96.5, 96.6, 1_000.0, 96.9),  # D = -0.0359: triggered
-    (10, 55): (96.6, 96.6, 96.0, 96.2, 1_000.0, 96.1),  # L = 96.0
-    (11, 15): (96.3, 96.9, 96.25, 96.8, 1_000.0, 96.7),  # 20 min quiet, > AVWAP 96.43
-    (11, 17): (96.8, 97.0, 96.7, 96.9, 1_000.0, 96.85),
-    (11, 40): (97.5, 98.3, 97.4, 98.2, 1_000.0, 98.0),  # >= TGT 98.1
-    (11, 42): (98.2, 98.4, 98.1, 98.3, 1_000.0, 98.25),
-}
-IN_SPY: dict[tuple[int, int], Row] = {(11, 42): (201.0, 201.4, 200.9, 201.0, 1e5, 201.3)}
 
 
 @pytest.mark.parametrize("parent", [False, True])

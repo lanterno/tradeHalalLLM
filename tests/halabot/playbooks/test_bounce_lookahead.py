@@ -37,8 +37,15 @@ from halabot.playbooks.sim import run, simulate_many, simulate_symbol
 from halabot.playbooks.types import PathData, SimConfig, SpyData
 from halal_trader.data.minutes import BarArrays
 from tests.halabot.playbooks._bounce import (
+    IN_LEVELS,
+    IN_ROWS,
+    IN_SPY,
+    SPY_ROWS,
+    A,
     TStory,
     bars,
+    base_bars,
+    base_story,
     bounce_market,
     eligibility,
     pre_event,
@@ -47,15 +54,6 @@ from tests.halabot.playbooks._bounce import (
 )
 from tests.halabot.playbooks._seed import seed_calendar, seed_market
 from tests.halabot.playbooks._support import MON, THU, TUE, WED, Context, Story, et, path
-from tests.halabot.playbooks.test_bounce import (
-    IN_LEVELS,
-    IN_ROWS,
-    IN_SPY,
-    SPY_ROWS,
-    A,
-    base_bars,
-    base_story,
-)
 from tests.halabot.playbooks.test_lookahead import (
     _fill_bars_known_by,
     _NoisyContext,

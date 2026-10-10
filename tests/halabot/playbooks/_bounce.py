@@ -3,6 +3,22 @@
 :class:`TStory` labels itself with ``taxonomy.resolve`` (the H1 family, the
 unclear and structural vetoes, followers by spec §A.5(b)), so the playbook
 is tested against the rules it will run on, not a stand-in.
+
+**The base path** (``base_story``, ``base_bars``; MON 2016-03-07, a
+downgrade public at 07:00, so the story starts at the open, "out": P0 =
+100, SPY0 = 200; σ 0.018, so thr = 0.036):
+
+* 09:30 c 96 (D = -0.04: triggered when visible, 09:31:05); flat 96;
+* 09:45 l 94 (L = 94, t_L 09:45); flat 94.8 to 10:04;
+* 10:05 c 95.4 > AVWAP 3431.9/36 = 95.33, and 95.4 - 94 = 1.4 <= 0.25 x 6:
+  armed (20 min quiet) and entered when visible, 10:06:05; the buy works at
+  10:06:08 and fills on the 10:07 bar at its VWAP 95.45. L* = 94, TGT = 97;
+* 10:30 c 97.0 >= TGT: the target, decided 10:31:05, filled on the 10:32 bar
+  at 97.1. SPY's legs (``SPY_ROWS``): 200.5 at 10:07, 201.0 at 10:32.
+
+**The "in" path** (``IN_LEVELS``, ``IN_ROWS``, ``IN_SPY``): flat 100 before
+the news, 10:49 closes 100.2 (P0), SPY flat 201 (SPY0 201, not its previous
+close 200); with σ 0.01, thr is the 0.03 floor.
 """
 
 from __future__ import annotations
@@ -24,6 +40,7 @@ from halal_trader.events.earnings_parse import EarningsFacts
 from halal_trader.events.taxonomy import FAMILY, REACTIVE, StoryCard, resolve
 from halal_trader.market_hours import next_trading_day, previous_trading_day
 from tests.halabot.playbooks._support import (
+    MON,
     Context,
     Item,
     Row,
@@ -213,6 +230,64 @@ def spy(
     return SpyData({d: bars(d, [((9, 30), price)], rows.get(d), volume=1e5) for d in days})
 
 
+# ── the base path and the "in" path (module docstring) ──
+
+A = "AAA"
+BASE_LEVELS = [((9, 30), 96.0), ((9, 46), 94.8), ((10, 6), 95.4), ((10, 8), 96.0)]
+BASE_ROWS: dict[tuple[int, int], Row] = {
+    (9, 30): (97.0, 97.0, 96.0, 96.0, 1_000.0, 96.5),
+    (9, 45): (96.0, 96.0, 94.0, 94.5, 1_000.0, 95.0),
+    (10, 5): (94.8, 95.5, 94.7, 95.4, 1_000.0, 95.2),
+    (10, 7): (95.4, 95.6, 95.3, 95.5, 1_000.0, 95.45),
+}
+TARGET_LEVELS = [((10, 31), 97.0)]
+TARGET_ROWS: dict[tuple[int, int], Row] = {
+    (10, 30): (96.5, 97.2, 96.4, 97.0, 1_000.0, 96.9),
+    (10, 32): (97.0, 97.3, 96.9, 97.2, 2_000.0, 97.1),
+}
+SPY_ROWS: dict[tuple[int, int], Row] = {
+    (10, 7): (200.0, 200.6, 199.9, 200.0, 1e5, 200.5),
+    (10, 32): (200.0, 201.2, 199.8, 200.0, 1e5, 201.0),
+}
+IN_LEVELS = [
+    ((9, 30), 100.0),
+    ((10, 52), 96.6),
+    ((10, 56), 96.3),
+    ((11, 16), 96.8),
+    ((11, 18), 97.5),
+    ((11, 41), 98.2),
+]
+IN_ROWS: dict[tuple[int, int], Row] = {
+    (10, 49): (100.0, 100.3, 99.9, 100.2, 1_000.0, 100.1),
+    (10, 50): (100.2, 100.2, 97.0, 97.2, 1_000.0, 98.0),  # D = -0.0299: not yet
+    (10, 51): (97.2, 97.3, 96.5, 96.6, 1_000.0, 96.9),  # D = -0.0359: triggered
+    (10, 55): (96.6, 96.6, 96.0, 96.2, 1_000.0, 96.1),  # L = 96.0
+    (11, 15): (96.3, 96.9, 96.25, 96.8, 1_000.0, 96.7),  # 20 min quiet, > AVWAP 96.43
+    (11, 17): (96.8, 97.0, 96.7, 96.9, 1_000.0, 96.85),
+    (11, 40): (97.5, 98.3, 97.4, 98.2, 1_000.0, 98.0),  # >= TGT 98.1
+    (11, 42): (98.2, 98.4, 98.1, 98.3, 1_000.0, 98.25),
+}
+IN_SPY: dict[tuple[int, int], Row] = {(11, 42): (201.0, 201.4, 200.9, 201.0, 1e5, 201.3)}
+
+
+def base_story(day: date = MON, *extra: tuple[datetime, str], parent: bool = False) -> TStory:
+    """The downgrade public at 07:00 on ``day``, plus ``extra`` items."""
+    return tstory(A, day, (et(day, 7, 0), "analyst_downgrade"), *extra, parent=parent)
+
+
+def base_bars(
+    *,
+    target: bool = True,
+    rows: Mapping[tuple[int, int], Row] | None = None,
+    skip: Sequence[tuple[int, int]] = (),
+    last: tuple[int, int] | None = None,
+) -> BarArrays:
+    """MON's base path (with or without the target bar), ``rows`` overriding minutes."""
+    levels = BASE_LEVELS + (TARGET_LEVELS if target else [])
+    merged = BASE_ROWS | (TARGET_ROWS if target else {}) | dict(rows or {})
+    return bars(MON, levels, merged, skip=skip, last=last)
+
+
 # ── running ──
 
 
@@ -390,12 +465,23 @@ def bounce_market(
 
 
 __all__ = [
+    "BASE_LEVELS",
+    "BASE_ROWS",
     "COST",
     "EPS",
+    "IN_LEVELS",
+    "IN_ROWS",
+    "IN_SPY",
     "NEWS_LAG",
+    "SPY_ROWS",
+    "TARGET_LEVELS",
+    "TARGET_ROWS",
+    "A",
     "TItem",
     "TStory",
     "bars",
+    "base_bars",
+    "base_story",
     "bounce_market",
     "eligibility",
     "pre_event",
