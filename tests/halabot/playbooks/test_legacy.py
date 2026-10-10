@@ -366,6 +366,15 @@ def test_r1_needs_its_run_its_trades_and_h_to_be_one_set() -> None:
     assert out.identical and out.kept == ("a",) and out.set_aside == {"b": ("bad_bars",)}
 
 
+def test_r1_fails_when_no_headline_is_kept() -> None:
+    """Nothing compared is no pass: an empty H, or every id dropped by both sides."""
+    empty = r1_dropped([], _summary([]), [], set())
+    assert empty.identical and empty.within_cap and empty.kept == () and not empty.passed
+    ids = ["a", "b"]
+    both = r1_dropped(ids, _summary(ids, dropped=dict.fromkeys(ids, "units_missing")), [], set(ids))
+    assert both.identical and both.within_cap and both.kept == () and not both.passed
+
+
 def test_r1_lists_every_unit_of_h_not_done() -> None:
     """Each headline's stock and SPY on its day, sessions only; R1 runs when none is missing."""
     good_friday = date(2016, 3, 25)
