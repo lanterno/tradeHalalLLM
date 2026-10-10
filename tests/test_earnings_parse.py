@@ -492,6 +492,8 @@ def test_a_guided_figure_is_never_a_fragment_nor_the_guidance_it_replaces(
          0.90, 0.90, 1.05),
         ("Acme Raises FY EPS Guidance (From $1.00 To $1.10) Vs $1.05 Est", "raises",
          1.10, 1.10, 1.05),
+        ("Acme Updates FY EPS Guidance (From $1.00 To ~$0.90) Vs $1.05 Est", "updates",
+         0.90, 0.90, 1.05),
         # Guidance kept as it was: "from" introduces its range when no "to" follows.
         ("PPL Reaffirms FY2017 EPS Guidance from $1.92-2.12 vs $2.16 Est", "reaffirms",
          1.92, 2.12, 2.16),
@@ -545,6 +547,14 @@ def test_a_glued_parenthesis_never_flips_a_figure_s_sign() -> None:
         ("Acme Sees FY Sales Down 5% From $1.2B vs $1.1B Est", "sees"),
         ("Acme Sees FY Revenue Up From $1.2B vs $1.3B Est", "sees"),
         ("Acme Reaffirms FY Revenue Growth Of 10% From $1.00B vs $1.15B Est", "reaffirms"),
+        # Constructed: before any figure, a figure in a parenthetical stating the
+        # guidance replaced is the old one unless a "To" introduces it (a false
+        # +23.8% raise, whatever words open it).
+        ("Acme Updates FY EPS Guidance (Prior Outlook Had Called For $1.30) Vs $1.05 Est",
+         "updates"),
+        ("Acme Lowers FY EPS Guidance (From Its Earlier $1.10) Vs $1.05 Est", "lowers"),
+        ("Acme Lowers FY EPS Guidance (Previously Expected EPS In The Range $1.10-$1.20) Vs "
+         "$1.05 Est", "lowers"),
     ],
 )  # fmt: skip
 def test_guidance_without_a_reliable_figure_keeps_its_action(headline: str, action: str) -> None:
@@ -896,6 +906,7 @@ def test_parser_sha_pins_every_pattern() -> None:
         "_CLOSING_FLAG",
         "_OLD_PAREN",
         "_TO",
+        "_TO_END",
     ):
         assert src[name] == getattr(ep, name).pattern
     # The family label, not EXTRACTOR, which derives from the pin.
