@@ -127,7 +127,7 @@ from halal_trader.core.heartbeat import DAILY_JOBS, RESEARCH
 from halal_trader.data import minutes
 from halal_trader.data.minutes import session_bounds
 from halal_trader.events.context import MAX_RANK, MIN_PREV_CLOSE, TOP_N
-from halal_trader.events.stories import BUILDER_VERSION, NEWS_LAG
+from halal_trader.events.stories import BUILDER_VERSION, NEWS_LAG, StoriesNotReady, require_built
 from halal_trader.events.study import BENCHMARK, Observation, entry_point
 from halal_trader.events.taxonomy import FILING_KINDS, TYPES
 from halal_trader.market_hours import (
@@ -876,20 +876,23 @@ async def h1_plan(
 
     ``gate_sue`` needs the train and validation parts (Σ_c drops the events
     that meet them), so asking for it selects those too, counts included.
+    Refuses (:class:`PlanError`) while a session the parts read stories of
+    lies in no complete build from today's inputs (``stories.require_built``).
     """
     if parts is not None and (unknown := sorted(set(parts) - set(PARTS))):
         raise PlanError(f"unknown part(s): {', '.join(unknown)}")
     wanted = [p for p in PARTS if parts is None or p in parts]
+    read = [w for w in WINDOWS if w in wanted or "gate_sue" in wanted]
+    for lo, hi in [WINDOWS[w] for w in read] + ([G1_RANGE] if "gate_g1" in wanted else []):
+        try:
+            await require_built(engine, lo, hi)
+        except StoriesNotReady as exc:
+            raise PlanError(f"plan H reads stories no complete build covers: {exc}") from exc
     c = counts if counts is not None else Counter()
     ranks = LiquidityRanks(engine)
     out: dict[str, frozenset[Unit]] = {}
     observations: list[Observation] | None = None
-    windows = await h1_windows(
-        engine,
-        windows=[w for w in WINDOWS if w in wanted or "gate_sue" in wanted],
-        ranks=ranks,
-        counts=c,
-    )
+    windows = await h1_windows(engine, windows=read, ranks=ranks, counts=c)
     for part in wanted:
         if part == "spy":
             out[part] = spy_units()

@@ -19,8 +19,9 @@ config hash, a ``verdict`` row or a ``stage-a`` row recording
 pins in force (``stories.pins``) must be the ones that registration
 recorded: the atlas describes the stories H1 ran on, so a changed pin is
 :class:`AtlasLocked` too, naming the pins (rebuild the stories as
-registered, or register a new trial). A range without any persisted story
-is ``stories.StoriesNotReady`` (build them first), not an empty atlas.
+registered, or register a new trial). A range no complete build from
+today's inputs covers (``stories.require_built``), or without any persisted
+story, is ``stories.StoriesNotReady`` (build them first), not an empty atlas.
 Minute bars are read through the simulator's loader under that registration
 (``WindowUnlock``), window ``train``, ending :data:`DATA_END`: no minute or
 daily bar after 2021-12-31 is read. The last session is :data:`ATLAS_END`,
@@ -1396,9 +1397,11 @@ async def run_atlas(
     Refuses (``ValueError``, before anything is read) a range outside
     [:data:`ATLAS_START`, :data:`ATLAS_END`] or an ``end`` that is not a
     session; (:class:`AtlasLocked`) before H1's verdict or when the story pins
-    are not the registration's; (``StoriesNotReady``) a range without a
-    persisted story. Symbols go in batches of ``batch_symbols``: stories
-    rebuilt, paths measured, then the machine's lanes run for ID and MD3.
+    are not the registration's; (``StoriesNotReady``) a range no complete
+    build from today's inputs covers (``stories.require_built``), or one
+    without a persisted story. Symbols go in batches of ``batch_symbols``:
+    stories rebuilt, paths measured, then the machine's lanes run for ID and
+    MD3.
     """
     check_range(start, end)
     reg = await h1_closed(engine)
@@ -1410,6 +1413,7 @@ async def run_atlas(
             f"{', '.join(changed)}; the atlas describes the stories H1 ran on "
             "(rebuild them as registered, or register a new trial)"
         )
+    await builder.require_built(engine, start, end)
     unlock = WindowUnlock(prereg_id=reg.id, config_hash=reg.config_hash)
     counts: Counter[str] = Counter()
     chosen = await candidates(engine, start, end, counts)
