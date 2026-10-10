@@ -22,7 +22,7 @@ without moving a verdict is no reason to re-screen). That covers
 
 ``rescreen_renamed`` re-screens exactly those rows with
 ``runner.run_screen``, the date's other stored rows sizing the veto
-(``index_veto.Peer``) as the full run did. It is resumable: a row
+(``runner.stored_peers``) as the full run did. It is resumable: a row
 re-screened to its new outcome is no longer affected.
 """
 
@@ -42,13 +42,12 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from halal_trader.compliance.aaoifi import ScreenResult, Verdict
 from halal_trader.compliance.index_veto import (
     IndexView,
-    Peer,
     apply_veto,
     held_as,
     require_board,
     views_at,
 )
-from halal_trader.compliance.runner import company_map, company_of, run_screen
+from halal_trader.compliance.runner import company_map, company_of, run_screen, stored_peers
 from halal_trader.compliance.sec import Company, SecClient
 from halal_trader.core.num import to_float
 from halal_trader.events.renames import ticker_history
@@ -220,13 +219,7 @@ async def rescreen_renamed(
     out: list[tuple[Affected, str | None]] = []
     for as_of, rows in sorted(by_date.items()):
         symbols = {a.symbol for a in rows}
-        stored = await stored_rows(engine, as_of)
-        titles = _titles(companies, stored)
-        peers = {
-            r.symbol: Peer(r.market_cap, titles.get(r.symbol, ""))
-            for r in stored
-            if r.symbol not in symbols
-        }
+        peers = await stored_peers(engine, companies, as_of, symbols)
         results = await run_screen(sec, engine, sorted(symbols), as_of, peers=peers)
         now = {r.symbol: describe(outcome(r.verdict, r.reasons)) for r in results}
         out.extend((a, now.get(a.symbol)) for a in rows)

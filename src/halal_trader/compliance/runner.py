@@ -103,7 +103,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import TYPE_CHECKING
@@ -114,6 +114,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from halal_trader.compliance.aaoifi import Fundamentals, ScreenResult, screen
 from halal_trader.compliance.sec import Company, Fact, SecClient, SecUnavailable
 from halal_trader.compliance.successors import lineage
+from halal_trader.core.num import to_float
 from halal_trader.data.store import last_closes
 
 if TYPE_CHECKING:
@@ -721,6 +722,35 @@ async def gather(
             f"({', '.join(failed[:5])}, ...)"
         )
     return out, meta, titles, audit
+
+
+async def stored_peers(
+    engine: AsyncEngine, companies: Mapping[str, Company], as_of: date, symbols: Collection[str]
+) -> dict[str, Peer]:
+    """The date's stored names other than ``symbols``, as ``run_screen``'s ``peers``.
+
+    What a re-screen of ``symbols`` alone passes so the index veto sizes each
+    range as the date's full run did: every other name on file for the date
+    (``halal_screen_current``), with its stored market cap and SEC company name
+    (``companies``, a ``company_map``).
+    """
+    from halal_trader.compliance.index_veto import Peer
+
+    async with engine.connect() as conn:
+        rows = (
+            await conn.execute(
+                text(
+                    "SELECT symbol, metrics->>'market_cap' AS cap FROM halal_screen_current "
+                    "WHERE as_of = :d ORDER BY symbol"
+                ),
+                {"d": as_of},
+            )
+        ).all()
+    return {
+        r.symbol: Peer(to_float(r.cap), c.title if (c := company_of(companies, r.symbol)) else "")
+        for r in rows
+        if r.symbol not in symbols
+    }
 
 
 async def run_screen(
