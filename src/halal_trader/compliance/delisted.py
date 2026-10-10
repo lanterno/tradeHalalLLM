@@ -262,8 +262,12 @@ async def map_unmapped(
 
 
 async def rescreen_mapped(sec: SecClient, engine: AsyncEngine) -> dict[date, int]:
-    """Re-screen every stored quarter for the newly mapped tickers screened as unmapped."""
-    from halal_trader.compliance.runner import run_screen
+    """Re-screen every stored quarter for the newly mapped tickers screened as unmapped.
+
+    The date's other stored rows size the index veto (``runner.stored_peers``):
+    a few names alone price too few held ones and would never be vetoed.
+    """
+    from halal_trader.compliance.runner import company_map, run_screen, stored_peers
 
     async with engine.connect() as conn:
         rows = await conn.execute(
@@ -275,9 +279,11 @@ async def rescreen_mapped(sec: SecClient, engine: AsyncEngine) -> dict[date, int
             {"u": UNMAPPED},
         )
         todo = [(r.as_of, list(r.symbols)) for r in rows]
+    companies = await company_map(sec, engine) if todo else {}
     out: dict[date, int] = {}
     for as_of, symbols in todo:
-        results = await run_screen(sec, engine, symbols, as_of)
+        peers = await stored_peers(engine, companies, as_of, symbols)
+        results = await run_screen(sec, engine, symbols, as_of, peers=peers)
         out[as_of] = sum(1 for r in results if r.verdict == "halal")
         logger.info("rescreen %s: %d mapped, %d halal", as_of, len(symbols), out[as_of])
     return out
