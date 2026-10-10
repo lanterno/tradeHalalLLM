@@ -377,15 +377,18 @@ DILUTION: Final = re.compile(
 # Guidance", "Cuts Square Target Due To ... 2020 Guidance", "Lowers Target,
 # Maintains Overweight After Guidance"); "At The Lower End Of Guidance" is
 # one, and so are a company's targets listed with its guidance, the list
-# running straight into it ("Lowers Profit Targets And Outlook", "Lowers
-# Long-Term Targets, Outlook").
+# running straight into it, the guidance's period named or not ("Lowers Profit
+# Targets And Outlook", "Lowers Long-Term Targets, Outlook", "Lowers Profit
+# Targets And FY Guidance", "Lowers Margin Targets, Full-Year Outlook").
 GUIDANCE_CUT: Final = re.compile(
     r"\b(?:Cuts?|Lowers?(?![- ]End\b)|"
     r"(?<!Raises )(?<!Raised )(?<!Raise )(?<!Increases )(?<!Raises The )(?<!Raised The )"
     r"Lower(?=[- ]End\b)|"
     r"Lowered|Slashes|Reduces|Trims|Withdraws|Withdrew|Suspends|Pulls|Pulled)\b"
     r"(?:(?!\bPrice Targets?\b|"
-    r"\bTargets?\b(?!\s*(?:,|&|And\b)\s*(?:Its\s+|The\s+)?(?:Guidance|Outlook|Forecast)\b)|"
+    r"\bTargets?\b(?!\s*(?:,|&|And\b)\s*(?:Its\s+|The\s+)?"
+    r"(?:(?:FY|Fiscal|Full[- ]Year|Annual|Long[- ]Term|(?:FY)?(?:20)?\d\d)\s+){0,2}"
+    r"(?:Guidance|Outlook|Forecast)\b)|"
     r"\bPT\b|"
     r"\bCap(?:ital )?Ex|\bOpEx\b|Capital Spending|\bSpending\b|"
     r"Cash Burn|\bCosts?\b|\bExpenses?\b|Tax Rate).){0,50}"
