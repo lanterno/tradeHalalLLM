@@ -43,6 +43,14 @@ reaction session; each batch is one ``minutes.read_windows`` call (and one
 ``corporate_actions`` call), and the next batch loads while the current one
 is simulated. At start the loader asserts that ``market_hours`` sessions
 over the window equal SPY's raw daily-bar sessions.
+
+**Known dependency (the spare session).** An exit that finds no market on
+the deadline session fills on the next session (``no_market``) only when
+that session's units are loaded and done. Plan H (``events/units.py``)
+fetches the path sessions S .. S+n-1 and not S+n, so until ``units.py``
+adds the spare session, such exits fall through to ``unresolved``, which
+counts against the T6 limit (0.5%). That fix belongs to ``units.py``, not
+here: the loader already uses the spare whenever it is done.
 """
 
 from __future__ import annotations

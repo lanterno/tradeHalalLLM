@@ -23,7 +23,9 @@ trade; the trade is always kept.
 **Costs** (``one_way_bps``): ``study.cost_bps(rank)`` per side, or 1.5x,
 2x, or the "surcharge" reporting model (half-spread doubled in the first 15
 minutes after the session's first bar or 5 minutes after a gap, plus a
-square-root impact).
+square-root impact). The impact's σ is ``TradeFacts.sigma``, the 60-session
+abnormal σ of ``context.PreEvent``, not a 20-session σ: the only σ the
+playbook has (a stated deviation from spec §D.6; reporting mode only).
 
 **Fill models** (:class:`FillModel`, ``SimConfig.fill``). Everything above is
 the D.5 market rule, :data:`MARKET_FILL`, the only model a trial uses. The
@@ -120,7 +122,11 @@ def one_way_bps(
     adv20_usd: float = math.nan,
     notional: float = 10_000.0,
 ) -> float:
-    """One side's cost in bps under ``mode`` (``base_bps`` is ``study.cost_bps(rank)``)."""
+    """One side's cost in bps under ``mode`` (``base_bps`` is ``study.cost_bps(rank)``).
+
+    ``sigma`` in the "surcharge" impact is the trade's 60-session abnormal σ
+    (``TradeFacts.sigma``), standing in for the spec's σ20.
+    """
     if mode == "study":
         return base_bps
     if mode == "study_x1.5":
