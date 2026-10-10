@@ -46,10 +46,17 @@ another set of the same size, another run's trades, a missing trade). Then:
      300: the study needs one after its decision);
    * ``bars_cut`` (``RunSummary.bar_drop_ids``): the sanity rule cut 1 to
      5 of the stock's bars on S, so the entry or the last bar can differ;
-   * ``spy_bars_cut`` (``RunSummary.spy_drop_ids``): it cut any of SPY's
-     bars on S. The whole day is set aside, wherever the cut bar lies
-     relative to the decision: conservative, and its own reason so its
-     cost in coverage shows per headline.
+   * ``spy_bars_cut`` (``RunSummary.spy_drop_from_start_ids``): it cut a
+     SPY bar on S at or after the headline's decision, so SPY's entry (the
+     first bar at or after the decision) or its exit (the last bar) can
+     differ. A headline deciding after every cut bar of S is compared: a
+     bar before the decision is neither its entry nor, when a later bar
+     exists, its exit (and when none does, both sides drop it). The
+     simulator tests the cut against the story's start, ``max(decision,
+     open)``; the loader reads only regular-session bars, all at or after
+     the open, so that is the same test. Its own reason, so its cost in
+     coverage shows per headline. (The whole SPY day would cost about 0.5%
+     of H on a median day: half the cap.)
 
    A headline with several reasons lists them all. The set-aside is
    capped, pre-stated: more than :data:`R1_SET_ASIDE_CAP` (1%) of H set
@@ -337,7 +344,7 @@ class HoldFactory:
 # and ``units_missing`` / ``spy_missing`` are data skips that R1 compares.
 R1_SET_ASIDE: Final = ("adjust_defect", "bad_bars", "no_daily", "spy_thin")
 BARS_CUT: Final = "bars_cut"  # the sanity rule cut 1 to 5 of the stock's bars on S
-SPY_BARS_CUT: Final = "spy_bars_cut"  # it cut SPY's bars on S: the whole day, conservatively
+SPY_BARS_CUT: Final = "spy_bars_cut"  # it cut a SPY bar on S at or after the decision
 R1_SET_ASIDE_CAP: Final = 0.01  # pre-stated: more than 1% of the headlines set aside fails R1
 IMPLAUSIBLE: Final = "implausible"  # a trade outside the study's _PLAUSIBLE exit/entry ratio
 
@@ -351,7 +358,7 @@ def r1_set_aside(summary: RunSummary) -> dict[str, tuple[str, ...]]:
             out.setdefault(sid, []).append(reason)
     for sid in summary.bar_drop_ids:
         out.setdefault(sid, []).append(BARS_CUT)
-    for sid in summary.spy_drop_ids:
+    for sid in summary.spy_drop_from_start_ids:
         out.setdefault(sid, []).append(SPY_BARS_CUT)
     return {sid: tuple(out[sid]) for sid in sorted(out)}
 

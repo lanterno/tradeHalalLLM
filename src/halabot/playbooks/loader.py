@@ -60,7 +60,8 @@ A loaded path keeps the count of bars the rule dropped from its sessions
 (``PathData.dropped``) and, separately, from its spare session
 (``spare_dropped``, which never counts toward ``bad_bars``: the spare is not
 a path session). SPY's sessions are cut by the same rule when they load, and
-:attr:`MinuteBarLoader.spy_dropped` lists the sessions that lost bars. The
+:attr:`MinuteBarLoader.spy_dropped` maps each session that lost bars to the
+cut bars' timestamps (so a reader can tell which decisions they precede). The
 counts (``dropped_bars``, ``spare_dropped_bars``, ``spy_dropped_bars``) are
 in :attr:`MinuteBarLoader.counts`.
 
@@ -481,7 +482,8 @@ class MinuteBarLoader:
         self._spy = SpyData()
         self._done: set[str] | None = None
         self.counts: Counter[str] = Counter()  # skips by reason, dropped bars
-        self.spy_dropped: dict[date, int] = {}  # SPY sessions the sanity rule dropped bars from
+        # SPY sessions the sanity rule cut bars from -> the cut bars' ts (epoch seconds, sorted)
+        self.spy_dropped: dict[date, tuple[int, ...]] = {}
 
     async def prepare(self) -> None:
         """Verify the unlock, check the calendar and read the done units (once)."""
@@ -585,8 +587,9 @@ class MinuteBarLoader:
             if symbol == SPY and day not in self._spy.days:
                 kept, n = sane(arrays)
                 self.counts["spy_dropped_bars"] += n
-                if n:
-                    self.spy_dropped[day] = n
+                if n:  # ts is unique per (symbol, minute): the rows not kept are the cut ones
+                    cut = arrays.ts[~np.isin(arrays.ts, kept.ts)]
+                    self.spy_dropped[day] = tuple(int(t) for t in cut)
                 self._spy.days[day] = kept
 
         for p in plans:

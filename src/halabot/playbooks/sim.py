@@ -1269,8 +1269,12 @@ class RunSummary:
     * ``spy_drop_ids``: stories with a path session on which the rule cut
       any of SPY's bars (``spy_drop_days``: every SPY session the run loaded
       that lost bars, ISO date -> bars cut). The whole session counts,
-      wherever the cut bar lies, which is conservative; the list is kept
-      apart from ``bar_drop_ids``, and a story can be in both;
+      wherever the cut bar lies, which is conservative (a playbook may read
+      SPY's bars before its start); the list is kept apart from
+      ``bar_drop_ids``, and a story can be in both;
+    * ``spy_drop_from_start_ids``: those of ``spy_drop_ids`` that started at
+      or before a cut SPY bar of their path (a cut bar with ``ts >= start``).
+      The reactor gate R1 sets aside only these (``legacy.py`` says why);
     * ``spare_drop_ids``: stories whose spare session (``PathData.spare``,
       read only by a ``no_market`` exit) lost bars to the rule;
     * ``expected``, ``expected_sha`` and ``dropped``: under
@@ -1295,6 +1299,7 @@ class RunSummary:
     skip_ids: dict[str, tuple[str, ...]]  # reason -> sorted story ids
     bar_drop_ids: tuple[str, ...]  # sorted
     spy_drop_ids: tuple[str, ...] = ()  # sorted
+    spy_drop_from_start_ids: tuple[str, ...] = ()  # sorted, a subset of spy_drop_ids
     spy_drop_days: dict[str, int] = field(default_factory=dict)
     spare_drop_ids: tuple[str, ...] = ()  # sorted
     expected: int = 0
@@ -1315,6 +1320,7 @@ class RunSummary:
             "skip_ids": {k: list(v) for k, v in sorted(self.skip_ids.items())},
             "bar_drop_ids": list(self.bar_drop_ids),
             "spy_drop_ids": list(self.spy_drop_ids),
+            "spy_drop_from_start_ids": list(self.spy_drop_from_start_ids),
             "spy_drop_days": dict(sorted(self.spy_drop_days.items())),
             "spare_drop_ids": list(self.spare_drop_ids),
             "expected": self.expected,
@@ -1575,9 +1581,10 @@ async def run(
     run keeps no module state, so several runs may share an event loop.
 
     The summary lists the skipped story ids by reason and the stories whose
-    bars, SPY's bars or spare-session bars the sanity rule cut, each list
-    apart (:class:`RunSummary`); the reactor gate R1 sets some of them aside
-    before it compares dropped sets (``legacy.r1_set_aside``).
+    bars, SPY's bars (the whole session, and from the start on) or
+    spare-session bars the sanity rule cut, each list apart
+    (:class:`RunSummary`); the reactor gate R1 sets some of them aside before
+    it compares dropped sets (``legacy.r1_set_aside``).
     """
     fill = fill_model(cfg)
     if fill.gate_only and unlock.gate is None:
@@ -1613,6 +1620,7 @@ async def run(
     skip_ids: dict[str, list[str]] = {}
     bar_drop_ids: list[str] = []
     spy_drop_ids: list[str] = []
+    spy_drop_from_start_ids: list[str] = []
     spare_drop_ids: list[str] = []
     dropped: dict[str, str] = dict(absent)
     if expected is not None:
@@ -1654,8 +1662,12 @@ async def run(
                     continue
                 if x.dropped:
                     bar_drop_ids.append(x.story_id)
-                if any(s.day in loader.spy_dropped for s in x.sessions):
+                cut = [t for s in x.sessions for t in loader.spy_dropped.get(s.day, ())]
+                if cut:
                     spy_drop_ids.append(x.story_id)
+                    start = start_time(shared.by_id[x.story_id])
+                    if start is None or max(cut) * US >= to_us(start):
+                        spy_drop_from_start_ids.append(x.story_id)
                 if x.spare_dropped:
                     spare_drop_ids.append(x.story_id)
             ids_by_symbol: dict[str, list[str]] = {}
@@ -1735,7 +1747,8 @@ async def run(
         skip_ids={k: tuple(sorted(v)) for k, v in skip_ids.items()},
         bar_drop_ids=tuple(sorted(bar_drop_ids)),
         spy_drop_ids=tuple(sorted(spy_drop_ids)),
-        spy_drop_days={d.isoformat(): n for d, n in sorted(loader.spy_dropped.items())},
+        spy_drop_from_start_ids=tuple(sorted(spy_drop_from_start_ids)),
+        spy_drop_days={d.isoformat(): len(ts) for d, ts in sorted(loader.spy_dropped.items())},
         spare_drop_ids=tuple(sorted(spare_drop_ids)),
         expected=len(expected) if expected is not None else 0,
         expected_sha=id_set_sha(expected) if expected is not None else "",
