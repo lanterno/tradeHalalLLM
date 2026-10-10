@@ -449,11 +449,12 @@ def _matchers_of(rows: list[AliasRow]) -> dict[str, AliasMatcher]:
     }
 
 
-def test_rows_combine_the_four_sources() -> None:
+def test_rows_combine_the_five_sources() -> None:
     rows = alias_rows(
         ["META", "F", "ZZZZ"],
         {"META": ["Meta Platforms, Inc. Class A Common Stock"], "F": ["Ford Motor Company"]},
         {"META": {"Facebook"}, "ZZZZ": {"Zed Corp"}},
+        {"META": {"Facebook"}},
     )
     assert rows == sorted(
         [
@@ -467,6 +468,7 @@ def test_rows_combine_the_four_sources() -> None:
             ),
             AliasRow("META", "META", "ticker"),
             AliasRow("META", "FB", "ticker"),  # the old ticker
+            AliasRow("META", "Facebook", "former"),  # FB's own pool
             AliasRow("ZZZZ", "Zed Corp", "learned"),  # learned without any name
             AliasRow("ZZZZ", "ZZZZ", "ticker"),
         ]
