@@ -1116,15 +1116,22 @@ def test_the_atlas_aborts_on_a_structural_type_its_story_gains_after_the_decisio
 
 @pytest.mark.parametrize(
     ("later", "reason"),
-    [(None, "time_stop"), ("restatement", "abort"), ("analyst_pt_cut", "abort")],
+    [
+        (None, "time_stop"),
+        ("restatement", "abort"),  # a structural type the card lacked
+        ("dilution", "time_stop"),  # its type again
+        ("analyst_pt_cut", "time_stop"),  # not structural
+        ("law_firm", "time_stop"),  # types nothing
+        ("noise", "time_stop"),
+    ],
 )
-def test_the_atlas_aborts_on_another_storys_structural_item_after_the_decision(
+def test_the_atlas_aborts_on_a_structural_type_another_story_gains_after_the_decision(
     later: str | None, reason: str
 ) -> None:
     """The atlas has no vetoes: TUE's dilution usable at 14:35 neither stops MON's entry
     (14:46:05) nor aborts it, being known at the decision. A later item of that story, usable at
-    14:50, aborts: every item of another story counts once that story is structural, not only
-    its first (its items reach MON's playbook only to abort it, spec §D.10)."""
+    14:50, aborts only when it adds a structural type the card lacked (a restatement), the check
+    the story's own items take; nothing else does, so the trade runs to its 15:55 time stop."""
     items = [(et(MON, 14, 25), "dilution")]
     if later is not None:
         items.append((et(MON, 14, 40), later))
@@ -1132,8 +1139,10 @@ def test_the_atlas_aborts_on_another_storys_structural_item_after_the_decision(
     t = out.trade
     assert t is not None and t.entry_decided_at == et(MON, 14, 46, 5)
     assert t.exit_reason == reason
-    if later is not None:
+    if reason == "abort":
         assert (t.exit_decided_at, t.exit_bar_ts) == (et(MON, 14, 50), et(MON, 14, 51))
+    else:
+        assert t.exit_decided_at == et(MON, 15, 55)
 
 
 @pytest.mark.parametrize("full_hold", [False, True])
