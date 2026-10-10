@@ -277,21 +277,7 @@ PARTICIPATION_MAX: Final = 0.10
 # What the context computes differently from spec §C: the deviations section of
 # events/context.py's docstring, item for item, whitespace normalised (a test holds
 # the two equal, so the PREREG cites what the context says it does).
-CONTEXT_DEVIATIONS: Final = (
-    "**The news time is required.** ``eligibility(symbol, session, *, at_news, "
-    'universe="primary")``; the spec\'s signature has no ``at_news``. σ is judged at that '
-    "time, on the window :meth:`PitContext.pre_event` uses, and a time outside (S−2's close, "
-    "S's close) is refused by both.",
-    "**BROAD admits an unmapped name with no ``ticker_ciks`` row** (see Screen above); the "
-    "spec's ``status != 'fund'`` would drop it as NULL.",
-    "**History is loaded from 380 days before the first session**, not 100: daily bars over "
-    "[start − 380 d, end + 7 d], because the 252-session levels need a year of bars (380 days "
-    "hold at least 257 sessions in 2017-2027). With each name's first raw bar day "
-    "(Descriptives), no answer depends on where a load starts.",
-    "``stories_before`` is not built yet (contracts.md); ``sessions`` and ``daily`` are added "
-    "for the simulator. ``adj``, ``daily`` and ``facts_before`` raise outside the loaded "
-    "range rather than answer None or nothing.",
-)
+CONTEXT_DEVIATIONS: Final = pit.deviations()  # context.py's docstring is the one copy
 
 CRITERION: Final = (
     "H1 passes iff some cell (NSN_CORE, ID|MD3) that Stage A finds eligible (validation >= 200 "

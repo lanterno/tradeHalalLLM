@@ -119,6 +119,15 @@ from halal_trader.signals.indicators import atr
 
 logger = logging.getLogger(__name__)
 
+
+def deviations() -> tuple[str, ...]:
+    """The bullets of this module's "Deviations ... for the pre-registration to cite"
+    section, whitespace-collapsed: the one copy the news engine's H1 registration pins."""
+    doc = __doc__ or ""
+    section = doc[doc.index("pre-registration to cite:") :]
+    return tuple(" ".join(bullet.split()) for bullet in re.split(r"\n\s*\* ", section)[1:])
+
+
 Reason = Literal[
     "ok",
     "no_screen",
