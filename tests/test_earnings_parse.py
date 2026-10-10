@@ -410,6 +410,9 @@ def test_a_guidance_basis_is_read_before_its_metric() -> None:
         "AMD Sees Q1 2025 Revenue $7.1B +/- $300M Vs $6.995B Est.",
         "Applied Materials Sees Q2 EPS $2.30+/- $0.18 Vs $2.30 Est.",
         "Sees Q1 EPS $(1.07) ± $0.07 Vs $(0.99) Est.",
+        # Glued: GUIDE_V4's figure starts at the tolerance's own "-" (-$300M).
+        "Lam Research Expects Q4 Revenue Of $3.8B +/-$300M (Est $3.772B); Adj EPS Of $7.50 "
+        "+/- $0.75 (Est $7.33)",
     ],
 )
 def test_a_tolerance_is_never_read_as_the_guided_level(headline: str) -> None:
