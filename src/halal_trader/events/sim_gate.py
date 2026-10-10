@@ -45,6 +45,11 @@ admits exactly the pinned set).
   ``g1-determinism``.
 * ``g1-synthetic``: the same on 1,000 synthetic paths (:func:`synthetic_world`).
 * ``g1-determinism``: 1 and 6 workers give the same sha256 over the records.
+  The G1 stories run through ``sim.run`` itself (:func:`run_determinism`):
+  serial against a process pool (spawn on macOS, fork on Linux) with small
+  batches, in both cells, MD3 on the stories whose 3-session path fits by
+  2016-09-30; the synthetic paths, which have no stored bars, through
+  ``sim.run``'s partition in this process (:func:`determinism`).
 
 **G2, the reactor replication** (``reactor``: :func:`run_reactor`; the bars
 are in the holdout, 2025-12..2026-10, read as the gate's pinned set only):
@@ -94,8 +99,12 @@ Decisions the spec leaves open, stated for the pre-registration:
 * G1 runs both cells (ID and MD3), five T per story per cell, drawn uniformly
   over [S's open - 30 min, the close of the story's last path session], and
   noises the official prices of the sessions from the probed story's S on.
-  The determinism check partitions symbols as ``sim.run`` does
-  (``sim.simulate_many``), in this process.
+  The determinism check runs the G1 stories through ``sim.run`` serially in
+  one batch and in a pool of 6 workers with :data:`DETERMINISM_BATCH` paths
+  a batch; MD3 leaves out the stories whose 3-session path is cut at
+  2016-09-30 (they only carry their news), counted ``left_out``. The
+  synthetic paths, with no stored bars, are partitioned as ``sim.run`` does
+  in this process (``sim.simulate_many``).
 * R1 and R2 run through ``sim.run`` on the explicit set; R2 uses a gate-only
   copy of the D.5 market rule (:class:`GateMarketFill`) so that, like the
   study, it admits every headline (no screen, no entry window), and
@@ -118,6 +127,7 @@ from __future__ import annotations
 
 import logging
 import math
+import uuid
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
@@ -157,7 +167,14 @@ from halabot.playbooks.loader import (
 from halabot.playbooks.lookahead import Probe, check_symbol, fill_bar_violations
 from halabot.playbooks.playbook import TRIGGERED, Ctx
 from halabot.playbooks.records import MemorySink, TradeRecord, outcomes_sha256
-from halabot.playbooks.sim import RunSummary, run, simulate_many, simulate_symbol
+from halabot.playbooks.sim import (
+    Parallel,
+    RunSummary,
+    pool_method,
+    run,
+    simulate_many,
+    simulate_symbol,
+)
 from halabot.playbooks.types import (
     BarSeries,
     Cancel,
@@ -225,6 +242,8 @@ G1_SYNTHETIC: Final = 1_000
 G1_MIN_STORIES: Final = units.G1_STORIES  # 500: fewer, and the real G1 gates are refused
 G1_T_BEFORE_OPEN: Final = timedelta(minutes=30)
 DETERMINISM_WORKERS: Final = 6
+DETERMINISM_BATCH: Final = 25  # the pool run's batch_paths: many batches, state carried
+DETERMINISM_RUN_ID: Final = str(uuid.UUID(int=SEED))  # both runs' (records carry it)
 MISMATCHES_SHOWN: Final = 20
 
 # ── G2 ──
@@ -275,7 +294,11 @@ CRITERIA: Final[dict[str, str]] = {
         "the same look-ahead invariance on 1,000 synthetic paths, with an entry, a trade and an "
         "exit per cell"
     ),
-    "g1-determinism": "1 and 6 workers give the same sha256 over the sorted records, each cell",
+    "g1-determinism": (
+        "1 and 6 workers give the same sha256 over the sorted records, each cell: the G1 "
+        "stories through sim.run (a process pool, small batches; MD3 on the stories whose "
+        "3-session path fits by 2016-09-30), the synthetic paths partitioned in-process"
+    ),
     "r0": (
         "intraday.run on the pinned set, no fetch: score >= 0.4 same day n = 7,922, mean -0.30% "
         "(2 dp), t -12.1 (1 dp); controls -0.28%; score <= -0.4 -0.40%; 30,614 headlines, "
@@ -801,7 +824,9 @@ def lookahead(
 def determinism(
     world: LookaheadWorld, *, workers: int = DETERMINISM_WORKERS, cfg: SimConfig | None = None
 ) -> tuple[bool, dict[str, Any]]:
-    """1 and ``workers`` workers give the same sha256 over the records, in every cell."""
+    """1 and ``workers`` workers give the same sha256 over the records, in every cell, with
+    ``sim.run``'s partition in this process (``sim.simulate_many``): the synthetic world,
+    which has no stored bar for ``sim.run`` to load."""
     cfg = cfg or SimConfig()
     shas: dict[str, Any] = {}
     passed = True
@@ -824,6 +849,119 @@ def determinism(
         passed = passed and one == many
         shas[f"hold{hold}"] = {"workers_1": one, f"workers_{workers}": many}
     return passed, {"workers": workers, "sha256": shas}
+
+
+def cell_stories(world: LookaheadWorld, hold: int) -> tuple[list[G1Story], int]:
+    """``world``'s stories for ``sim.run`` in the cell of ``hold``, and how many gate stories
+    only carry their items there.
+
+    ``sim.run`` asks the loader for ``hold`` sessions of every started story,
+    and the loader refuses (``WindowLocked``, the whole run) a path past
+    2016-09-30: a gate story whose path is cut shorter (S in 2016-09-28..30
+    under MD3) runs only in :func:`lookahead`, which loads each story's own
+    length; here it brings its news to the symbol's live playbooks and never
+    starts.
+    """
+    out: list[G1Story] = []
+    left = 0
+    for st in world.stories:
+        if st.mode is not None and world.holds[hold][st.story_id] < hold:
+            out.append(G1Story(st.story, None))
+            left += 1
+        else:
+            out.append(st)
+    return out, left
+
+
+async def _g1_run(
+    engine: AsyncEngine,
+    stories: Sequence[G1Story],
+    factory: G1Factory,
+    ctx: ContextView,
+    cfg: SimConfig,
+    unlock: WindowUnlock,
+    workers: int,
+    batch_paths: int,
+    parallel: Parallel,
+) -> tuple[str, RunSummary]:
+    """One ``sim.run`` of a G1 cell into a ``MemorySink``: the records' sha256 and the
+    summary."""
+    sink = MemorySink(run_id=DETERMINISM_RUN_ID)
+    summary = await run(
+        engine,
+        stories,
+        factory,
+        context=ctx,
+        window=Window.GATE,
+        window_end=units.G1_RANGE[1],
+        cfg=cfg,
+        unlock=unlock,
+        sink=sink,
+        workers=workers,
+        keep_transitions=True,
+        batch_paths=batch_paths,
+        parallel=parallel,
+    )
+    return outcomes_sha256(sink.outcomes), summary
+
+
+async def run_determinism(
+    engine: AsyncEngine,
+    world: LookaheadWorld,
+    unit_set: frozenset[Unit],
+    sha: str,
+    *,
+    workers: int = DETERMINISM_WORKERS,
+    batch_paths: int = DETERMINISM_BATCH,
+    parallel: Parallel = True,
+    cfg: SimConfig | None = None,
+) -> tuple[bool, dict[str, Any]]:
+    """``g1-determinism`` on the G1 stories: ``sim.run`` itself, 1 worker against ``workers``.
+
+    Each cell runs the world through ``sim.run`` (``Window.GATE``, the
+    ``g1`` unlock of the pinned set, a ``MemorySink``) twice: once serial
+    in a single batch, once with ``workers`` workers in a process
+    pool (``parallel``: True picks the platform's safe method, spawn on
+    macOS and fork on Linux) and ``batch_paths`` paths a batch, so each
+    symbol's state carries across many batches and crosses processes. Both
+    sinks share one run id, so the records' sha256 (``outcomes_sha256``,
+    transitions and intents kept) must be equal, and the cell must have
+    outcomes. MD3 runs the stories whose 3-session path fits by 2016-09-30
+    (:func:`cell_stories`).
+    """
+    cfg = cfg or SimConfig()
+    unlock = WindowUnlock(gate="g1", units=unit_set, units_sha=sha)
+    shas: dict[str, Any] = {}
+    cells: dict[str, Any] = {}
+    passed = True
+    for hold in sorted(world.holds):
+        stories, left = cell_stories(world, hold)
+        factory = world.factory(hold)
+        whole = max(len(stories), 1)  # the serial run in one batch
+        one, serial = await _g1_run(
+            engine, stories, factory, world.ctx, cfg, unlock, 1, whole, False
+        )
+        many, _ = await _g1_run(
+            engine, stories, factory, world.ctx, cfg, unlock, workers, batch_paths, parallel
+        )
+        ok = one == many and serial.outcomes > 0
+        passed = passed and ok
+        shas[f"hold{hold}"] = {"workers_1": one, f"workers_{workers}": many}
+        cells[f"hold{hold}"] = {
+            "passed": ok,
+            "stories": len(stories),
+            "started": serial.started,
+            "outcomes": serial.outcomes,
+            "trades": serial.trades,
+            "left_out": left,
+        }
+    return passed, {
+        "workers": workers,
+        "pool": pool_method(parallel, workers) or "serial",
+        "batch_paths": batch_paths,
+        "sha256": shas,
+        "cells": cells,
+    }
 
 
 # ── G1: a synthetic market ────────────────────────────────────
@@ -1220,7 +1358,9 @@ async def run_lookahead(
     ok, metrics = lookahead(world)
     metrics["selection"] = {"stories": len(chosen), "nsn": sum(g.nsn for g in chosen)}
     await done(GateResult("g1-lookahead", ok, metrics, pinned, window))
-    ok_real, real = determinism(world, workers=workers)
+    ok_real, real = await run_determinism(
+        engine, world, unit_set, sha, workers=workers, batch_paths=DETERMINISM_BATCH
+    )
     ok_synth, fake = determinism(synth, workers=workers)
     await done(
         GateResult(
@@ -2526,6 +2666,7 @@ __all__ = [
     "daily_spreads",
     "decile_spread",
     "decomposition",
+    "cell_stories",
     "determinism",
     "explicit_set",
     "g1_rebuild",
@@ -2549,6 +2690,7 @@ __all__ = [
     "reference_table",
     "require_done",
     "run_gates",
+    "run_determinism",
     "run_lookahead",
     "run_reactor",
     "run_sue",
