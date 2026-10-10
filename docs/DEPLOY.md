@@ -197,10 +197,35 @@ it may hold real money.
 | Task | Command |
 |---|---|
 | Deploy new code | `git pull && just build && just up` outside market hours; watch the next cycle |
+| Deploy a parser change | the same, then straight away `docker exec trader-stocks halal-trader events extract --drop-superseded` (see below) |
 | Stop new entries now | `docker exec trader-stocks halal-trader halt --reason "..."` |
 | Status of every service | `just docker-status` |
 | A shell in the database | `just docker-psql` |
 | Restore the latest off-site backup | see below |
+
+### After a parser change
+
+The earnings facts are stored under the label of the parser that read
+them, `benzinga-earnings-v4+<PARSER_SHA>`, and every reader (the story
+build, the event signals and context, the tech expert, h1) selects only
+the running parser's label. A deploy that changes
+`src/halal_trader/events/earnings_parse.py` changes that label, so from
+the moment the new image runs those readers see no earnings facts until
+every stored headline is read again. The evening run would do it only
+after the next close. So straight after the deploy, still outside market
+hours, as the `halabot` user (in `tmux`: it reads every stored headline
+again):
+
+```bash
+docker exec trader-stocks halal-trader events extract --drop-superseded
+```
+
+It stores the new parser's facts, then deletes every other v4 label's.
+Run it only in the fleet's container, never from a dev checkout: from any
+other parser, `--drop-superseded` deletes the facts the bot reads (and
+`books run` keeps them unless given the same flag, for that reason). When
+unsure whether the parser changed, run it anyway: with no change it reads
+only the headlines not yet read, and deletes only facts no reader selects.
 
 ### Restore from off-site
 
