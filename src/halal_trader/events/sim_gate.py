@@ -1421,6 +1421,9 @@ def r2_result(
         "excluded": {
             "set_aside": len(strong & aside),
             "no_trade": len(strong - aside - {t.story_id for t in trades}),
+            "implausible_or_no_spy": len(
+                {t.story_id for t in trades} & (strong - aside) - set(real)
+            ),
         },
     }
     passed = False
