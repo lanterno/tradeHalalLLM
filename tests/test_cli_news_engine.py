@@ -61,7 +61,7 @@ def test_the_backfill_command_paces_the_client_at_the_rate(
     result = CliRunner().invoke(cli, ["events", "renames", "backfill", "--rate", "6000000"])
     assert result.exit_code == 0, result.output
     assert "renamed-ticker news: 4 new event(s)" in result.output
-    assert made == [{"min_interval_s": 60.0 / 6_000_000}]
+    assert made == [{"min_interval_s": 60.0 / 6_000_000}]  # the one pacer: the client's
     assert len(market.calls) == 5  # the probe, then four months
 
 
@@ -70,7 +70,7 @@ def test_the_backfill_command_stops_when_alpaca_serves_no_retired_ticker(
     database_url: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _client(monkeypatch, NewsMarket(empty=True))
-    result = CliRunner().invoke(cli, ["events", "renames", "backfill", "--rate", "6000000"])
+    result = CliRunner().invoke(cli, ["events", "renames", "backfill"])
     assert result.exit_code == 1
     assert "no FB article for 2019-01" in result.output
     assert "Traceback" not in result.output

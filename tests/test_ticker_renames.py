@@ -281,7 +281,7 @@ async def test_backfill_fetches_each_old_month_and_files_it_under_the_current_sy
     engine: AsyncEngine,
 ) -> None:
     market = NewsMarket()
-    stored = await backfill_renamed_news(engine, market, rate_per_min=600_000)
+    stored = await backfill_renamed_news(engine, market)
     assert stored == 4
     assert market.calls == [
         _PROBE_CALL,  # first: does Alpaca serve a retired ticker at all?
@@ -300,7 +300,7 @@ async def test_backfill_fetches_each_old_month_and_files_it_under_the_current_sy
     assert await _units(engine) == _UNITS
     assert await missing_units(engine) == []
     again = NewsMarket()
-    assert await backfill_renamed_news(engine, again, rate_per_min=600_000) == 0
+    assert await backfill_renamed_news(engine, again) == 0
     assert again.calls == []  # every unit is done, so no probe either
 
 
@@ -310,7 +310,7 @@ async def test_nothing_is_fetched_or_marked_when_the_probe_month_comes_back_empt
 ) -> None:
     market = NewsMarket(empty=True)
     with pytest.raises(RenamedNewsError, match="no FB article for 2019-01"):
-        await backfill_renamed_news(engine, market, rate_per_min=600_000)
+        await backfill_renamed_news(engine, market)
     assert market.calls == [_PROBE_CALL]
     assert await _units(engine) == {}
     assert len(await missing_units(engine)) == 4
@@ -319,13 +319,13 @@ async def test_nothing_is_fetched_or_marked_when_the_probe_month_comes_back_empt
 @pytest.mark.usefixtures("small_map")
 async def test_a_month_not_over_yet_is_fetched_but_not_marked_done(engine: AsyncEngine) -> None:
     market = NewsMarket()
-    await backfill_renamed_news(engine, market, rate_per_min=600_000, now=ny(date(2016, 3, 11), 20))
+    await backfill_renamed_news(engine, market, now=ny(date(2016, 3, 11), 20))
     assert len(market.calls) == 5
     assert "OLDB:2016-03-01:2016-03-11" not in await _units(engine)
     assert await missing_units(engine, now=ny(date(2016, 3, 11), 20)) == []  # not over: not due
     assert await missing_units(engine) == ["OLDB:2016-03-01:2016-03-11"]
     again = NewsMarket()
-    await backfill_renamed_news(engine, again, rate_per_min=600_000, now=ny(date(2016, 3, 12), 1))
+    await backfill_renamed_news(engine, again, now=ny(date(2016, 3, 12), 1))
     assert [(c[0], c[1]) for c in again.calls] == [
         _PROBE_CALL[:2],
         (["OLDB"], ny(date(2016, 3, 1), 0)),
@@ -337,7 +337,7 @@ async def test_a_month_not_over_yet_is_fetched_but_not_marked_done(engine: Async
 async def test_a_window_that_changes_is_fetched_again_where_it_changed(
     engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    await backfill_renamed_news(engine, NewsMarket(), rate_per_min=600_000)
+    await backfill_renamed_news(engine, NewsMarket())
     monkeypatch.setattr(
         renames,
         "TICKER_RENAMES",
@@ -345,7 +345,7 @@ async def test_a_window_that_changes_is_fetched_again_where_it_changed(
     )
     assert await missing_units(engine) == ["OLDB:2016-03-01:2016-03-28"]  # Good Friday between
     market = NewsMarket()
-    await backfill_renamed_news(engine, market, rate_per_min=600_000)
+    await backfill_renamed_news(engine, market)
     assert market.calls == [
         _PROBE_CALL,
         (["OLDB"], ny(date(2016, 3, 1), 0), ny(date(2016, 3, 29), 0) - _SECOND, 500),
