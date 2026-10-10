@@ -32,6 +32,8 @@ data/reactor_state.json
 # data — regenerate with `halal-trader quant calibrate`)
 data/analytics/
 data/bar_cache/
+# Research outputs regenerated from the database (`halal-trader events atlas`)
+data/research/
 
 # Logs
 *.log

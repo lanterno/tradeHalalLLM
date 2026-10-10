@@ -581,3 +581,43 @@ def exit_test_cmd() -> None:
             console.print(
                 f"  {b.label:20} {b.horizon:9} n={b.n:<5} mean {b.mean:+.2%}  t {b.t:+.1f}"
             )
+
+
+@events.command("atlas")
+@click.option("--start", type=click.DateTime(["%Y-%m-%d"]), default="2016-10-03")
+@click.option("--end", type=click.DateTime(["%Y-%m-%d"]), default="2021-12-23")
+@click.option(
+    "--workers", default=1, show_default=True, help="Simulator workers (serial on macOS)."
+)
+def atlas_cmd(start: Any, end: Any, workers: int) -> None:
+    """The path atlas: price paths by story type on train (descriptive; after H1's verdict).
+
+    Writes data/research/news_atlas-stories-v1.json and prints the tables.
+    """
+    from halal_trader.events.atlas import AtlasLocked, check_range, tables
+
+    try:
+        check_range(start.date(), end.date())
+    except ValueError as e:
+        fail(str(e))
+
+    async def _run(engine: Any, settings: Any) -> tuple[Any, Any]:
+        from halal_trader.events.atlas import output_path, run_atlas, write_atlas
+
+        result = await run_atlas(engine, start=start.date(), end=end.date(), workers=workers)
+        return result, write_atlas(result, output_path(settings))
+
+    try:
+        result, path = run_db(_run)
+    except AtlasLocked as e:
+        fail(str(e))
+    for line in tables(result.cells):
+        console.print(line, markup=False, highlight=False)
+    counts = result.meta.get("counts", {})
+    console.print(
+        f"{len(result.rows)} stories, {counts.get('measured', 0)} measured; "
+        f"{counts.get('persisted_mismatch', 0)} differ from their news_stories row",
+        markup=False,
+        highlight=False,
+    )
+    console.print(f"written to {path}", markup=False, highlight=False)
