@@ -40,8 +40,11 @@ session and the h=5 and h=20 exit sessions).
 it is a done unit of the minute backfill (``minutes.done_units``; zero bars
 allowed). Then, per path, in order:
 
-* ``spy_missing``: a SPY session with fewer than 300 bars (150 on an early
-  close) or no A-factor;
+* ``spy_missing``: a SPY session with no bar, or no A-factor;
+* ``spy_thin``: a SPY session with bars, but fewer than 300 (150 on an early
+  close). Both are data skips (``types.DATA_SKIPS``); ``spy_thin`` is its own
+  reason because a study that needs only one SPY bar after its decision
+  computes those headlines (the reactor study, R1 in ``legacy.py``);
 * ``halted_all_day``: no bar on S and no daily bar on S (not a data skip);
 * ``units_missing``: a path session with no bar while a daily bar exists;
 * ``no_daily``: no A-factor for S, or for a path session that has bars;
@@ -576,8 +579,10 @@ class MinuteBarLoader:
         for d in p.days:
             spy = self._spy.days.get(d)
             need = SPY_MIN_BARS_EARLY if d in EARLY_CLOSE_DATES else SPY_MIN_BARS
-            if spy is None or len(spy) < need or context.adj(SPY, d) is None:
+            if spy is None or len(spy) == 0 or context.adj(SPY, d) is None:
                 return PathSkip(sid, "spy_missing")
+            if len(spy) < need:
+                return PathSkip(sid, "spy_thin")
         kept: list[BarArrays] = []
         dropped = 0
         for d in p.days:

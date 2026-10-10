@@ -264,10 +264,20 @@ class SpyData:
 
 
 SkipReason = Literal[
-    "units_missing", "spy_missing", "adjust_defect", "bad_bars", "halted_all_day", "no_daily"
+    "units_missing",
+    "spy_missing",
+    "spy_thin",
+    "adjust_defect",
+    "bad_bars",
+    "halted_all_day",
+    "no_daily",
 ]
+# The data skips (spec §D.9): the loader could not trust the stored data. Stage A's
+# data-skip limit counts these. ``spy_thin`` (a done SPY session with bars, but fewer
+# than 300, or 150 on an early close) is split from the spec's ``spy_missing``. The
+# coverage skips (``halted_all_day``, ``no_daily``) are not data errors.
 DATA_SKIPS: frozenset[str] = frozenset(
-    {"units_missing", "spy_missing", "adjust_defect", "bad_bars"}
+    {"units_missing", "spy_missing", "spy_thin", "adjust_defect", "bad_bars"}
 )
 
 
