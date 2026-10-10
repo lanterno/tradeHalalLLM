@@ -10,9 +10,12 @@ the simulator's inputs (the contract at the top of ``playbook.py``).
 that made the story NSN, ``start_case`` the story's:
 
 * "in" (news inside S's session): P0 is the close of the last bar of S with
-  ``ts + 60 s <= at_news`` (``prev_close_s`` if none), SPY0 SPY's close at
-  the same rule (``spy_prev_close_s`` if none), and the anchor is the first
-  bar with ``ts >= floor_minute(at_news)``;
+  ``ts + 60 s <= at_news``, SPY0 SPY's close at the same rule
+  (``spy_prev_close_s`` if none), and the anchor is the first bar with
+  ``ts >= floor_minute(at_news)``. When the stock has no such bar, P0 is
+  ``prev_close_s`` and SPY0 ``spy_prev_close_s`` whatever SPY printed: D
+  then measures both from the previous closes, never the stock's overnight
+  move against SPY's intraday one;
 * "out": P0 = ``prev_close_s``, SPY0 = ``spy_prev_close_s``, the anchor is
   S's first bar.
 
@@ -410,12 +413,19 @@ class OverreactionBounce:
     # ── watching ──
 
     def _references(self, ctx: Ctx, bars: BarSeries, anchor_i: int) -> None:
-        """P0 and SPY0 of an "in" story: the last closes of S with ``ts + 60 s <= at_news``."""
+        """P0 and SPY0 of an "in" story: the last closes of S with ``ts + 60 s <= at_news``.
+
+        Without such a bar of the stock both are the previous closes, so the
+        two legs of D share one baseline.
+        """
         pre = self._pre
         assert pre is not None
         limit = (self._at_news_us - 60 * US) // US  # ts + 60 s <= at_news  <=>  ts <= limit
         j = int(np.searchsorted(bars.ts[:anchor_i], limit, side="right")) - 1
-        self._p0 = float(bars.c[j]) if j >= 0 and int(bars.k[j]) == 0 else pre.prev_close_s
+        if j < 0 or int(bars.k[j]) != 0:
+            self._p0, self._spy0 = pre.prev_close_s, pre.spy_prev_close_s
+            return
+        self._p0 = float(bars.c[j])
         spy = ctx.market.bars(SPY)
         j = int(np.searchsorted(spy.ts, limit, side="right")) - 1
         self._spy0 = float(spy.c[j]) if j >= 0 and int(spy.k[j]) == 0 else pre.spy_prev_close_s
