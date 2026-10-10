@@ -26,6 +26,7 @@ from halal_trader.events.earnings_parse import (
     EarningsFacts,
     parse_headline,
 )
+from halal_trader.events.history import write_times
 from halal_trader.events.stories import (
     RawItem,
     StoriesNotReady,
@@ -39,6 +40,7 @@ from halal_trader.events.stories import (
     missing_facts,
     persist,
     story_row,
+    untimed_filings,
 )
 from tests._renames import mark_renamed_news_done
 from tests._stories import (
@@ -61,6 +63,7 @@ from tests._stories import (
     seed_week,
     store,
     stored_rows,
+    time_filings,
 )
 from tests.test_event_context import NEXT, PREV, S, _world, et
 
@@ -182,6 +185,9 @@ async def test_a_build_waits_for_the_renamed_news_the_aliases_and_the_facts(
     assert await built_ranges(engine) == []  # a forced build is never marked complete
     await earnings_parse.extract_all(engine)
     assert await missing_facts(engine, start=date(2016, 1, 1), end=FRI) == (0, None)
+    with pytest.raises(StoriesNotReady, match="1 8-K event.*not at their EDGAR header's time"):
+        await build_range(engine, start=MON, end=FRI)
+    await time_filings(engine)
     assert await build_range(engine, start=MON, end=FRI) > 0
     assert await built_ranges(engine) == [(MON, FRI)]
     with pytest.raises(ValueError):
@@ -210,9 +216,63 @@ async def test_only_the_news_a_build_reads_must_be_parsed(ready: AsyncEngine) ->
         ],
         facts=False,
     )
+    await time_filings(ready)
     assert await build_range(ready, start=MON, end=FRI) == 7
     with pytest.raises(StoriesNotReady, match="1 news event"):
         await build_range(ready, start=MON, end=later)
+
+
+async def _event_id(engine: AsyncEngine, source_id: str, symbol: str) -> int:
+    async with engine.connect() as conn:
+        n = await conn.scalar(
+            text("SELECT id FROM events WHERE source_id = :i AND symbol = :s"),
+            {"i": source_id, "s": symbol},
+        )
+    return int(n)
+
+
+async def test_a_build_waits_for_its_8ks_header_times(ready: AsyncEngine) -> None:
+    history_from = date(2016, 1, 1)
+    # seed_week's 8-K is settled; MSFT's 10-Q is no story item, so it is never asked.
+    assert await untimed_filings(ready, start=history_from, end=FRI) == (0, None)
+    later = date(2024, 5, 20)
+    await store(
+        ready,
+        [
+            filing_row("acc-5", "AAPL", ny(TUE, 17, 45), ["8.01"]),  # the JSON's late time
+            filing_row("acc-6", "AAPL", ny(WED, 9), ["5.02"], kind="8-k/a"),
+            filing_row("acc-7", "AAPL", ny(later, 9), ["8.01"]),  # after the range: not read
+        ],
+    )
+    first = await _event_id(ready, "acc-5", "AAPL")
+    refused = (
+        r"2 8-K event\(s\) published 2016-01-01\.\.2024-05-10 are not at their EDGAR header's "
+        rf"time yet \(first: event {first}\); run `halal-trader events filings fix-times "
+        r"--start 2016-01-01 --end 2024-05-10` first"
+    )
+    with pytest.raises(StoriesNotReady, match=refused):
+        await build_range(ready, start=MON, end=FRI)
+    assert await untimed_filings(ready, start=history_from, end=FRI) == (2, first)
+    assert await built_ranges(ready) == []
+    # The header says 11:00; EDGAR has no header for the amendment: both are settled.
+    await write_times(ready, {"acc-5": (ny(TUE, 11), 6 * 3600 + 45 * 60)}, ["acc-6"])
+    assert await untimed_filings(ready, start=history_from, end=FRI) == (0, None)
+    assert await build_range(ready, start=MON, end=FRI) > 0
+    assert await built_ranges(ready) == [(MON, FRI)]
+    with pytest.raises(StoriesNotReady, match="1 8-K event"):
+        await build_range(ready, start=MON, end=later)
+    # A row stored under a second symbol after its filing was read keeps the
+    # JSON's time: unsettled until a pass gives it the header's.
+    await store(ready, [filing_row("acc-5", "MSFT", ny(TUE, 17, 45), ["8.01"])])
+    copy = await _event_id(ready, "acc-5", "MSFT")
+    assert await untimed_filings(ready, start=history_from, end=FRI) == (1, copy)
+    with pytest.raises(StoriesNotReady, match=rf"1 8-K event.*first: event {copy}\)"):
+        await build_range(ready, start=MON, end=FRI)
+    assert await build_range(ready, start=MON, end=FRI, force=True) > 0  # forced: not asked
+    await write_times(ready, {"acc-5": (ny(TUE, 11), 0)})
+    assert await untimed_filings(ready, start=history_from, end=FRI) == (0, None)
+    assert await build_range(ready, start=MON, end=FRI) > 0
+    assert await built_ranges(ready) == [(MON, FRI)]
 
 
 async def test_a_built_range_round_trips_through_the_table(ready: AsyncEngine) -> None:

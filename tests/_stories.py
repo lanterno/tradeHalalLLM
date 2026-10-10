@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from halal_trader.events import earnings_parse, stories
 from halal_trader.events.aliases import BUILDER_VERSION
 from halal_trader.events.earnings_parse import parse_headline
-from halal_trader.events.history import mark_units
+from halal_trader.events.history import mark_units, write_times
 from halal_trader.events.store import EventRecord, EventRecorder
 from halal_trader.market_hours import MARKET_TZ
 from tests._renames import mark_renamed_news_done
@@ -79,6 +79,20 @@ async def store(
     return ids
 
 
+async def time_filings(engine: AsyncEngine) -> None:
+    """Every stored 8-K and 8-K/A read from its EDGAR header, which says the time
+    it is stored at (as ``events filings fix-times`` leaves a filing that was right)."""
+    async with engine.connect() as conn:
+        rows = await conn.execute(
+            text(
+                "SELECT source_id, min(published_at) AS at FROM events "
+                "WHERE kind IN ('8-k', '8-k/a') GROUP BY source_id"
+            )
+        )
+        fixes = {str(r.source_id): (r.at, 0) for r in rows}
+    await write_times(engine, fixes)
+
+
 async def mark_built(engine: AsyncEngine, start: date, end: date, items: int = 0) -> None:
     """Record [start, end] as completely built from the current inputs (stories
     persisted outside build_range)."""
@@ -129,10 +143,12 @@ ALIAS_ROWS = [
 
 
 async def seed_week(engine: AsyncEngine) -> None:
-    """The week's events, aliases stored, every renamed-news month fetched (needs small_map)."""
+    """The week's events, aliases stored, every renamed-news month fetched (needs
+    small_map), the 8-K read from its header."""
     await store(engine, WEEK)
     await add_aliases(engine, ALIAS_ROWS)
     await mark_renamed_news_done(engine)
+    await time_filings(engine)
 
 
 @dataclass
