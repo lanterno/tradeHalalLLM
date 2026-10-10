@@ -2,7 +2,9 @@
 
 register -> stage-a -> train -> validation -> verdict -> sensitivities and
 implementability. Each step refuses until the one before it is on the
-ledger; the work is ``halal_trader.events.h1``. Attached to ``events`` in
+ledger, and runs past a rerun, an unfinished run, or code or data changed
+since they were pinned only with ``--amend <reason>`` (an amendment row);
+the work is ``halal_trader.events.h1``. Attached to ``events`` in
 ``cli/__init__.py``.
 """
 
@@ -18,6 +20,15 @@ from halal_trader.logging import console
 
 _WORKERS = click.option(
     "--workers", default=6, show_default=True, help="Simulator workers (serial on macOS)."
+)
+_AMEND = click.option(
+    "--amend",
+    default=None,
+    metavar="REASON",
+    help=(
+        "Run past what only an amendment may (a rerun, an unfinished run's rows, changed "
+        "code or data); recorded first as an amendment with this reason."
+    ),
 )
 
 
@@ -93,14 +104,15 @@ def register_cmd(dry_run: bool, no_scan: bool) -> None:
 
 @h1.command("stage-a")
 @_WORKERS
-def stage_a_cmd(workers: int) -> None:
+@_AMEND
+def stage_a_cmd(workers: int, amend: str | None) -> None:
     """Count entries in both windows without any exit or return; decide eligible cells."""
     from halal_trader.events.h1 import H1Locked, StoriesStale
 
     async def _run(engine: Any, settings: Any) -> Any:
         from halal_trader.events.h1 import stage_a
 
-        return await stage_a(engine, workers=workers)
+        return await stage_a(engine, workers=workers, amend=amend)
 
     try:
         result = run_db(_run)
@@ -160,11 +172,6 @@ def _window(window: Literal["train", "validation"], workers: int, amend: str | N
     _print_window(results)
 
 
-_AMEND = click.option(
-    "--amend", default=None, help="Rerun a window that has run; the amendment's reason."
-)
-
-
 @h1.command("train")
 @_WORKERS
 @_AMEND
@@ -182,14 +189,15 @@ def validation_cmd(workers: int, amend: str | None) -> None:
 
 
 @h1.command("verdict")
-def verdict_cmd() -> None:
+@_AMEND
+def verdict_cmd(amend: str | None) -> None:
     """Record H1's verdict: pass, fail or inconclusive."""
     from halal_trader.events.h1 import H1Locked
 
     async def _run(engine: Any, settings: Any) -> str:
         from halal_trader.events.h1 import verdict
 
-        return await verdict(engine)
+        return await verdict(engine, amend=amend)
 
     try:
         decision = run_db(_run)
@@ -200,14 +208,15 @@ def verdict_cmd() -> None:
 
 @h1.command("sensitivities")
 @_WORKERS
-def sensitivities_cmd(workers: int) -> None:
+@_AMEND
+def sensitivities_cmd(workers: int, amend: str | None) -> None:
     """Every sensitivity (spec §G.12), recorded and never counted as a trial."""
     from halal_trader.events.h1 import H1Locked, StoriesStale
 
     async def _run(engine: Any, settings: Any) -> Any:
         from halal_trader.events.h1 import sensitivities
 
-        return await sensitivities(engine, workers=workers)
+        return await sensitivities(engine, workers=workers, amend=amend)
 
     try:
         results = run_db(_run)
@@ -234,14 +243,15 @@ def sensitivities_cmd(workers: int) -> None:
 
 @h1.command("implementability")
 @_WORKERS
-def implementability_cmd(workers: int) -> None:
+@_AMEND
+def implementability_cmd(workers: int, amend: str | None) -> None:
     """The cells that passed H1 on the delayed SIP feed (a counted trial, spec §G.13)."""
     from halal_trader.events.h1 import H1Locked, StoriesStale
 
     async def _run(engine: Any, settings: Any) -> Any:
         from halal_trader.events.h1 import implementability
 
-        return await implementability(engine, workers=workers)
+        return await implementability(engine, workers=workers, amend=amend)
 
     try:
         results = run_db(_run)

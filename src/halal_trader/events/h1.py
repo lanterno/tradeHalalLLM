@@ -21,13 +21,29 @@ is on the ledger (``quant_trials``):
 2. :func:`stage_a` counts entries without computing an exit or a return
    (``stop_at="entry"``, ``assume_full_hold=True``) in both windows and
    decides which cells are eligible; data skips above 2% of the eligible NSN
-   stories block everything after it until the data is fixed.
+   stories block everything after it until the data is fixed. It freezes
+   each window's data (:func:`data_digest`).
 3. :func:`run_window` ``"train"`` runs the eligible cells, ``"validation"``
    the train passers only; each cell is one trial
    (``research.record_backtest``, one config hash across both windows).
 4. :func:`verdict` records pass, fail or inconclusive (``kind="verdict"``).
 5. :func:`implementability` (the delayed feed, a counted trial) and
-   :func:`sensitivities` (never trials) come after the verdict.
+   :func:`sensitivities` (never trials) come after the verdict, on the
+   window rows it cites.
+
+**Code and data are pinned** (spec §G.14: a simulator or loader fix is a
+logged amendment, with old and new results both reported). Every step after
+the registration compares the checkout (HEAD, a modified tree, and the
+sha of each of :data:`PINNED_MODULES`) with the registration's, and every
+step after Stage A compares the window's data with Stage A's digest: the
+candidates with their ``nsn_at``, ``at_news`` and eligibility reason, the
+minute units their paths request, and which of those are done. A
+difference, a window that has run, or trial rows an unfinished run left
+behind, lets the step run only with an amendment (``--amend <reason>``): a
+``kind="amendment"`` row, written before the step runs, with what it found;
+recorded code or data is what later steps compare with. Each run row
+(``hb_playbook_run.code_sha``) names the HEAD actually running, ``-dirty``
+when the tree is modified.
 
 **PREREG** is built at run time (:func:`prereg`): the literal of
 :func:`build_prereg`, with every pin ``stories.pins`` reports (the
@@ -80,7 +96,16 @@ counted). None of them but the backtests carries ``active_sr_period``.
 * D3 judges a quarter on the names PIT-halal and rank < 1000 at its first
   session; "admitted news" is a news event among a story's items.
 * A ``window`` summary row is added (the verdict reads it), and an
-  ``amendment`` row precedes any re-run of a window.
+  ``amendment`` row precedes any re-run of a window, any step on changed
+  code or data, and a window or implementability run after an unfinished
+  one.
+* With no train passer the verdict is decided on train alone (validation is
+  not owed, and an older validation row, from before train was amended, is
+  reported as ignored), so an amended train can always be decided. A verdict
+  is recorded once per state of the ledger: again only after a newer Stage
+  A, window or amendment row. It reports the window rows it does not cite
+  (the results amendments replaced), every amendment and every earlier
+  verdict.
 * News-lag sensitivities keep the 600 s grouping (reaction sessions,
   parents) and move only when each item becomes usable.
 * "Unresolved trades at -100%" sets those trades' net and beta-adjusted
@@ -99,6 +124,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import json
 import logging
 import math
 import random
@@ -461,6 +487,8 @@ class Registration:
     hash: str
     prereg: dict[str, Any]
     commit: str | None
+    code: dict[str, Any] = field(default_factory=dict)  # C0's data: commit, tags, dirty
+    files: dict[str, Any] = field(default_factory=dict)  # file_shas() at registration
 
 
 async def _rows(
@@ -492,6 +520,14 @@ async def _latest_window(engine: AsyncEngine, reg: Registration, window: str) ->
         if r.metrics.get("window_role") == window
     ]
     return rows[-1] if rows else None
+
+
+async def _row(engine: AsyncEngine, reg: Registration, kind: str, row_id: int) -> LedgerRow:
+    """The ledger row ``row_id``, which must be the trial's ``kind`` row."""
+    rows = [r for r in await _rows(engine, kind=kind, config_h=reg.hash) if r.id == row_id]
+    if not rows:
+        raise H1Locked(f"quant_trials {row_id} is not a {kind} row of this registration")
+    return rows[0]
 
 
 async def _record(
@@ -551,8 +587,9 @@ async def registration(engine: AsyncEngine) -> Registration:
     h = config_hash(pre)
     rows = await _rows(engine, kind="preregistration", config_h=h)
     if rows:
-        code = rows[0].metrics.get("code") or {}
-        return Registration(rows[0].id, h, pre, code.get("commit"))
+        code = dict(rows[0].metrics.get("code") or {})
+        files = dict(rows[0].metrics.get("files") or {})
+        return Registration(rows[0].id, h, pre, code.get("commit"), code, files)
     async with engine.connect() as conn:
         other = (
             await conn.execute(
@@ -1607,7 +1644,9 @@ async def _simulate(
     universe: Universe = "primary",
     workers: int = 6,
     parallel: Parallel = None,
+    code_sha: str | None = None,
 ) -> tuple[RunSummary, list[StoryOutcome], RunInputs]:
+    """Run ``cell`` on ``data``; ``code_sha`` is the checkout actually running (``CodeNow.sha``)."""
     inputs = run_inputs(data, cell, universe=universe)
     factory = BounceFactory(inputs.context, cell.params())
     sink = _Collect(
@@ -1623,7 +1662,7 @@ async def _simulate(
                 "cost": cfg.cost,
             },
             prereg_trial_id=reg.id,
-            code_sha=reg.commit,
+            code_sha=code_sha,
         )
     )
     summary = await simulate(
@@ -1657,6 +1696,267 @@ async def _bootstrap(engine: AsyncEngine) -> None:
     from halabot.platform.db import bootstrap_schema
 
     await bootstrap_schema(engine)
+
+
+# ── amendments: the code and the data each step runs on ───────
+#
+# The registration pins the code (its git state and file_shas) and Stage A
+# freezes the data (a digest per window). Every later step compares what is in
+# force now with the latest pinned state, and runs past a difference, a rerun
+# or an unfinished earlier run only with an amendment: a ``kind="amendment"``
+# row with its reason and what it found, written before the step runs. An
+# amendment that records new code or data becomes the state the next steps
+# compare with.
+
+
+@dataclass(frozen=True, slots=True)
+class CodeNow:
+    """The checkout a step runs from: git's state and the pinned modules' shas."""
+
+    state: CodeState
+    files: dict[str, str | None]
+
+    @property
+    def sha(self) -> str | None:
+        """What ``hb_playbook_run.code_sha`` records: HEAD, ``-dirty`` when modified."""
+        if self.state.commit is None:
+            return None
+        return self.state.commit + ("" if self.state.dirty is False else "-dirty")
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "commit": self.state.commit,
+            "tags": list(self.state.tags),
+            "dirty": self.state.dirty,
+        }
+
+
+def current_code() -> CodeNow:
+    return CodeNow(code_state(), file_shas())
+
+
+def code_drift(
+    before_code: Mapping[str, Any], before_files: Mapping[str, Any], now: CodeNow
+) -> dict[str, Any]:
+    """What differs from the pinned code (empty: nothing), pure.
+
+    ``files``: each pinned module whose sha changed, ``[before, now]``;
+    ``commit``: another HEAD; ``dirty``: the tree's modified state changed,
+    or cannot be read (``None``), ``[before, now]``. The registration's tree
+    is clean, so a modified tree needs one amendment; the same modified tree
+    with the same pinned files then runs on.
+    """
+    out: dict[str, Any] = {}
+    files = {
+        m: [before_files.get(m), now.files.get(m)]
+        for m in sorted(set(before_files) | set(now.files))
+        if before_files.get(m) != now.files.get(m)
+    }
+    if files:
+        out["files"] = files
+    if now.state.commit != before_code.get("commit"):
+        out["commit"] = [before_code.get("commit"), now.state.commit]
+    if now.state.dirty is None or now.state.dirty != before_code.get("dirty"):
+        out["dirty"] = [before_code.get("dirty"), now.state.dirty]
+    return out
+
+
+def _sha(value: Any) -> str:
+    return hashlib.sha256(json.dumps(clean(value), sort_keys=True).encode()).hexdigest()[:16]
+
+
+def data_digest(data: WindowData, done: Collection[str]) -> dict[str, Any]:
+    """What Stage A freezes of a window's data (spec §G.9: "data is frozen here").
+
+    The candidates (NSN by the cutoff, S in the window) with their ``nsn_at``,
+    ``at_news`` and PRIMARY eligibility reason; the minute units their paths
+    request in either cell (the eligible stories' path sessions and the
+    spare, the symbol's and SPY's); and which of those units are done. A
+    rebuilt story, a re-run screen or a unit fetched since changes it.
+    """
+    rows: list[list[str | None]] = []
+    units: set[tuple[str, date]] = set()
+    for s in data.stories:
+        if s.story_id not in data.candidates:
+            continue
+        nsn = s.nsn_at(Session.of(s.session).entry_cutoff)
+        at = s.at_news()
+        _, elig = data.judge(s, "primary")
+        rows.append(
+            [
+                s.story_id,
+                nsn.isoformat() if nsn else None,
+                at.isoformat() if at else None,
+                elig.reason,
+            ]
+        )
+        if not elig.eligible:
+            continue
+        for cell in CELLS:
+            if s.session > last_session(data.window, cell):
+                continue
+            days = path_days(s.session, cell.hold)
+            spare = next_trading_day(days[-1])
+            for d in [*days, *([spare] if spare <= data.end else [])]:
+                units |= {(s.symbol, d), (SPY, d)}
+    lines = sorted(minutes.unit(sym, d) for sym, d in units)
+    done_lines = [u for u in lines if u in done]
+    rows.sort(key=lambda r: str(r[0]))
+    return {
+        "candidates": len(rows),
+        "candidates_sha": _sha(rows),
+        "units": len(lines),
+        "units_sha": _sha(lines),
+        "done": len(done_lines),
+        "done_sha": _sha(done_lines),
+    }
+
+
+def data_drift(before: Mapping[str, Any] | None, now: Mapping[str, Any]) -> dict[str, Any]:
+    """Each digest field that differs, ``[before, now]`` (all of them without a baseline)."""
+    old = before or {}
+    return {k: [old.get(k), v] for k, v in now.items() if old.get(k) != v}
+
+
+_FOUND: Final[dict[str, str]] = {
+    "replaces": "{window} has run (quant_trials {value}); a rerun is an amendment",
+    "partial": "{n} backtest row(s) of an unfinished run are on the ledger (quant_trials {value})",
+    "code_diff": "the code differs from the code pinned for this trial ({value})",
+    "data_diff": "the data differs from the data Stage A froze ({value})",
+}
+
+
+@dataclass(slots=True)
+class Amendment:
+    """What a step found that only an amendment may run past (spec §G.14)."""
+
+    step: str
+    reason: str | None
+    window_role: str | None = None
+    found: dict[str, Any] = field(default_factory=dict)
+    written: list[int] = field(default_factory=list)
+
+    def need(self, key: str, value: Any, **record: Any) -> None:
+        """Note ``key`` (a :data:`_FOUND` key) and what the row must also carry."""
+        self.found[key] = value
+        self.found.update(record)
+
+    def require(self) -> None:
+        """:class:`H1Locked` when something was found and no reason was given."""
+        why = [
+            _FOUND[k].format(window=self.window_role or self.step, value=_brief(v), n=_count(v))
+            for k, v in self.found.items()
+            if k in _FOUND
+        ]
+        if why and not self.reason:
+            raise H1Locked(
+                f"{self.step}: " + "; ".join(why) + ": give the amendment's reason (--amend)"
+            )
+
+    async def write(self, engine: AsyncEngine, reg: Registration) -> int | None:
+        """Record what was found (refusing without a reason); nothing when nothing was."""
+        self.require()
+        if not self.found:
+            return None
+        metrics: dict[str, Any] = {"step": self.step, "reason": self.reason, **self.found}
+        if self.window_role is not None:
+            metrics["window_role"] = self.window_role
+        row = await _record(
+            engine,
+            kind="amendment",
+            config=reg.prereg,
+            window=self.window_role or self.step,
+            metrics=metrics,
+        )
+        self.written.append(row)
+        self.found = {}
+        return row
+
+
+def _count(value: Any) -> int:
+    return len(value) if isinstance(value, list | tuple | dict) else 1
+
+
+def _brief(value: Any) -> str:
+    if isinstance(value, Mapping):
+        return ", ".join(str(k) for k in value)
+    if isinstance(value, list | tuple):
+        shown = ", ".join(str(v) for v in value[:5])
+        return shown + (", ..." if len(value) > 5 else "")
+    return str(value)
+
+
+async def _amendments(engine: AsyncEngine, reg: Registration) -> list[LedgerRow]:
+    return await _rows(engine, kind="amendment", config_h=reg.hash)
+
+
+async def check_code_now(
+    engine: AsyncEngine, reg: Registration, amendment: Amendment, now: CodeNow
+) -> None:
+    """Note in ``amendment`` any difference from the pinned code (spec §G.14).
+
+    The pinned code is the registration's, or the latest amendment's that
+    recorded new code.
+    """
+    code, files = reg.code, reg.files
+    for row in reversed(await _amendments(engine, reg)):
+        if "files" in row.metrics:
+            code, files = dict(row.metrics.get("code") or {}), dict(row.metrics["files"])
+            break
+    if drift := code_drift(code, files, now):
+        amendment.need("code_diff", drift, code=now.as_dict(), files=now.files)
+
+
+async def check_data_now(
+    engine: AsyncEngine,
+    reg: Registration,
+    stage: LedgerRow,
+    amendment: Amendment,
+    data: WindowData,
+) -> dict[str, Any]:
+    """Note in ``amendment`` any difference from the data Stage A froze; returns the digest.
+
+    The frozen data is Stage A's digest of the window, or the latest
+    amendment's that recorded a new one.
+    """
+    now = data_digest(data, await minutes.done_units(engine))
+    pinned: Mapping[str, Any] | None = (stage.metrics.get("data") or {}).get(data.window)
+    for row in reversed(await _amendments(engine, reg)):
+        if row.id > stage.id and data.window in (row.metrics.get("data") or {}):
+            pinned = row.metrics["data"][data.window]
+            break
+    if drift := data_drift(pinned, now):
+        merged = {**amendment.found.get("data", {}), data.window: now}
+        diffs = {**amendment.found.get("data_diff", {}), data.window: drift}
+        amendment.need("data_diff", diffs, data=merged)
+    return now
+
+
+async def _unfinished(
+    engine: AsyncEngine,
+    reg: Registration,
+    *,
+    feed: str,
+    windows: Collection[str],
+    after: int,
+) -> list[int]:
+    """Trial rows of ``feed`` in ``windows`` newer than ``after``: an unfinished run's."""
+    hashes = [config_hash(trial_config(c, reg.hash, feed=feed)) for c in CELLS]
+    async with engine.connect() as conn:
+        rows = await conn.execute(
+            text(
+                "SELECT id FROM quant_trials WHERE kind = 'backtest' AND name = ANY(:n) "
+                "AND config_hash = ANY(:h) AND metrics->>'window_role' = ANY(:w) AND id > :a "
+                "ORDER BY id"
+            ),
+            {
+                "n": [PREFIX + c.strategy for c in CELLS],
+                "h": hashes,
+                "w": list(windows),
+                "a": after,
+            },
+        )
+        return [int(r.id) for r in rows]
 
 
 # ── Stage A (spec §G.9) ───────────────────────────────────────
@@ -1817,11 +2117,19 @@ async def _stage_row(engine: AsyncEngine, reg: Registration) -> LedgerRow:
     return row
 
 
-async def stage_a(engine: AsyncEngine, *, workers: int = 6, parallel: Parallel = None) -> StageA:
+async def stage_a(
+    engine: AsyncEngine,
+    *,
+    workers: int = 6,
+    parallel: Parallel = None,
+    amend: str | None = None,
+) -> StageA:
     """Count both cells in both windows to their entries; record ``kind="stage-a"``.
 
     Refuses once a Stage A has passed its data budget (the data is frozen
-    there) or once any window has results.
+    there) or once any window has results, and on code that differs from
+    the pinned code unless ``amend`` gives the amendment's reason. The row
+    holds each window's :func:`data_digest`, which every later step checks.
     """
     reg = await registration(engine)
     prior = await _latest(engine, kind="stage-a", config_h=reg.hash)
@@ -1829,8 +2137,13 @@ async def stage_a(engine: AsyncEngine, *, workers: int = 6, parallel: Parallel =
         raise H1Locked(f"Stage A passed its data budget (quant_trials {prior.id}): data is frozen")
     if await _rows(engine, kind="window", config_h=reg.hash):
         raise H1Locked("returns exist already: Stage A cannot run again")
+    now = current_code()
+    amendment = Amendment("stage-a", amend)
+    await check_code_now(engine, reg, amendment, now)
+    await amendment.write(engine, reg)
     await _bootstrap(engine)
     counts: dict[tuple[WindowName, str], CellCounts] = {}
+    digests: dict[str, dict[str, Any]] = {}
     for window in WINDOWS:
         data = await load_window(engine, window)
         for cell in CELLS:
@@ -1845,6 +2158,7 @@ async def stage_a(engine: AsyncEngine, *, workers: int = 6, parallel: Parallel =
                 assume_full_hold=True,
                 workers=workers,
                 parallel=parallel,
+                code_sha=now.sha,
             )
             counts[(window, cell.key)] = count_outcomes(
                 outcomes,
@@ -1854,6 +2168,7 @@ async def stage_a(engine: AsyncEngine, *, workers: int = 6, parallel: Parallel =
                 reasons=inputs.reasons,
                 years=YEARS[window],
             )
+        digests[window] = data_digest(data, await minutes.done_units(engine))
         del data
     budget_ok = all(c.skip_share <= SKIP_MAX for c in counts.values())
     eligible = tuple(
@@ -1875,6 +2190,9 @@ async def stage_a(engine: AsyncEngine, *, workers: int = 6, parallel: Parallel =
             "budget_ok": budget_ok,
             "eligible": [c.key for c in eligible],
             "cells": {f"{w}:{k}": c.as_dict() for (w, k), c in counts.items()},
+            "data": digests,
+            "code": now.as_dict(),
+            "code_sha": now.sha,
         },
         verdict=verdict_,
         criterion=(
@@ -2223,13 +2541,22 @@ async def _run_cells(
     cfg: SimConfig,
     workers: int,
     parallel: Parallel,
+    code_sha: str | None,
 ) -> dict[Cell, WindowStats]:
     """Simulate, judge (Holm across ``cells``) and record each cell's trial."""
     raw: dict[Cell, WindowStats] = {}
     kept: dict[Cell, tuple[list[TradeRecord], dict[str, tuple[Leg, ...]]]] = {}
     for cell in cells:
         summary, outcomes, _ = await _simulate(
-            engine, reg, data, cell, role=role, cfg=cfg, workers=workers, parallel=parallel
+            engine,
+            reg,
+            data,
+            cell,
+            role=role,
+            cfg=cfg,
+            workers=workers,
+            parallel=parallel,
+            code_sha=code_sha,
         )
         trades, legs = _trades(outcomes)
         kept[cell] = (trades, legs)
@@ -2265,12 +2592,16 @@ async def run_window(
     """Run ``window`` on the cells it is owed and record each one (spec §G.10, §G.14).
 
     Train runs Stage A's eligible cells; validation the train passers.
-    ``cells``, when given, must be exactly those. A window that has run
-    already runs again only with ``amend`` (the reason), which writes a
-    ``kind="amendment"`` row first; the earlier results stay on record.
+    ``cells``, when given, must be exactly those. The window runs only with
+    ``amend`` (the reason, written first as a ``kind="amendment"`` row; the
+    earlier results stay on record) when it has run already, when an
+    unfinished run left trial rows on the ledger, when the code differs from
+    the pinned code, or when the window's data differs from what Stage A
+    froze (:func:`data_digest`).
     """
     cfg = cfg if cfg is not None else SimConfig()
     reg = await registration(engine)
+    stage = await _stage_row(engine, reg)
     owed = await _window_cells(engine, reg, window)
     if cells is not None and set(cells) != set(owed):
         raise ValueError(
@@ -2278,24 +2609,33 @@ async def run_window(
         )
     if not owed:
         raise H1Locked(f"no cell runs on {window}")
+    now = current_code()
+    amendment = Amendment(window, amend, window_role=window)
     previous = await _latest_window(engine, reg, window)
     if previous is not None:
-        if not amend:
-            raise H1Locked(
-                f"{window} has run (quant_trials {previous.id}); a rerun is an amendment: "
-                "give its reason"
-            )
-        await _record(
-            engine,
-            kind="amendment",
-            config=reg.prereg,
-            window=window,
-            metrics={"window_role": window, "reason": amend, "replaces": previous.id},
-        )
+        amendment.need("replaces", previous.id)
+    covered = [
+        r.id for r in await _amendments(engine, reg) if r.metrics.get("window_role") == window
+    ]
+    after = max([previous.id if previous is not None else 0, *covered])
+    if partial := await _unfinished(engine, reg, feed=cfg.feed.name, windows=[window], after=after):
+        amendment.need("partial", partial)
+    await check_code_now(engine, reg, amendment, now)
+    amendment.require()  # before the expensive load
     await _bootstrap(engine)
     data = await load_window(engine, window)
+    digest = await check_data_now(engine, reg, stage, amendment, data)
+    await amendment.write(engine, reg)
     results = await _run_cells(
-        engine, reg, data, owed, role=window, cfg=cfg, workers=workers, parallel=parallel
+        engine,
+        reg,
+        data,
+        owed,
+        role=window,
+        cfg=cfg,
+        workers=workers,
+        parallel=parallel,
+        code_sha=now.sha,
     )
     await _record(
         engine,
@@ -2307,6 +2647,10 @@ async def run_window(
             "feed": cfg.feed.name,
             "prereg_id": reg.id,
             "loaded": dict(data.counts),
+            "data": digest,
+            "code": now.as_dict(),
+            "code_sha": now.sha,
+            "amendments": amendment.written,
             "cells": {c.key: ws.as_dict() for c, ws in results.items()},
         },
     )
@@ -2322,14 +2666,35 @@ def _statuses(row: LedgerRow | None) -> dict[str, str]:
     return {k: str(c.get("status")) for k, c in (row.metrics.get("cells") or {}).items()}
 
 
-async def verdict(engine: AsyncEngine) -> Status:
-    """Record H1's verdict (``kind="verdict"``, ``config=PREREG``) and return it."""
+def _amendment_summary(row: LedgerRow) -> dict[str, Any]:
+    keys = ("step", "reason", "window_role", "replaces", "partial", "code_diff", "data_diff")
+    return {"id": row.id, **{k: row.metrics[k] for k in keys if k in row.metrics}}
+
+
+async def verdict(engine: AsyncEngine, *, amend: str | None = None) -> Status:
+    """Record H1's verdict (``kind="verdict"``, ``config=PREREG``) and return it.
+
+    Train's latest row decides with validation's latest, which must be
+    newer than train's when train has passers. With no train passer the
+    verdict is decided on train alone: validation never runs then, and an
+    older validation row (from before train was amended) is reported as
+    ignored. The verdict is recorded once per state of the ledger: again
+    only after a newer Stage A, window or amendment row (the holdout opens
+    on the latest verdict only, ``loader.WindowGuard``). Every window row
+    the verdict does not cite (the results an amendment replaced), every
+    amendment and every earlier verdict are reported in its metrics.
+    """
     reg = await registration(engine)
     stage = await _stage_row(engine, reg)
+    now = current_code()
+    amendment = Amendment("verdict", amend)
+    await check_code_now(engine, reg, amendment, now)
+    amendment.require()
     eligible = _stage_eligible(stage)
     train = await _latest_window(engine, reg, "train")
     validation = await _latest_window(engine, reg, "validation")
-    metrics: dict[str, Any] = {"prereg_id": reg.id, "stage_a": stage.id}
+    cited: LedgerRow | None = None  # the validation row the verdict reads
+    metrics: dict[str, Any] = {"prereg_id": reg.id, "stage_a": stage.id, "code": now.as_dict()}
     if not eligible:
         decision: Status = "fail"
         metrics["reason"] = "insufficient events"
@@ -2337,23 +2702,40 @@ async def verdict(engine: AsyncEngine) -> Status:
         if train is None:
             raise H1Locked("train has not run")
         passers = [k for k, s in _statuses(train).items() if s == "pass"]
-        if passers and validation is None:
-            raise H1Locked("validation has not run on the train passers")
-        if validation is not None and validation.id < train.id:
-            raise H1Locked("train was amended after validation: rerun validation")
-        decision = decide(_statuses(train), _statuses(validation))
+        if passers:
+            if validation is None:
+                raise H1Locked("validation has not run on the train passers")
+            if validation.id < train.id:
+                raise H1Locked("train was amended after validation: rerun validation")
+            cited = validation
+        elif validation is not None:
+            metrics["validation_ignored"] = validation.id  # no passer: validation is not owed
+        decision = decide(_statuses(train), _statuses(cited))
         metrics.update(
             train=train.metrics.get("cells"),
-            validation=validation.metrics.get("cells") if validation is not None else None,
+            validation=cited.metrics.get("cells") if cited is not None else None,
             train_row=train.id,
-            validation_row=validation.id if validation is not None else None,
+            validation_row=cited.id if cited is not None else None,
         )
-    newest = max(r.id for r in (stage, train, validation) if r is not None)
+    amendments = await _amendments(engine, reg)
+    newest = max(r.id for r in (stage, train, validation, *amendments) if r is not None)
     before = await _latest(engine, kind="verdict", config_h=reg.hash)
-    if before is not None and before.id > newest:
+    if before is not None and before.id > newest and not amendment.found:
         raise H1Locked(f"the verdict is recorded already (quant_trials {before.id})")
-    amendments = await _rows(engine, kind="amendment", config_h=reg.hash)
-    metrics["amendments"] = [r.id for r in amendments]
+    await amendment.write(engine, reg)
+    amendments = await _amendments(engine, reg)
+    windows = await _rows(engine, kind="window", config_h=reg.hash)
+    used = {train.id if train is not None else None, cited.id if cited is not None else None}
+    metrics["replaced"] = [
+        {"row": r.id, "window_role": r.metrics.get("window_role"), "cells": r.metrics.get("cells")}
+        for r in windows
+        if r.id not in used
+    ]
+    metrics["amendments"] = [_amendment_summary(r) for r in amendments]
+    metrics["previous_verdicts"] = [
+        {"id": r.id, "verdict": r.verdict}
+        for r in await _rows(engine, kind="verdict", config_h=reg.hash)
+    ]
     await _record(
         engine,
         kind="verdict",
@@ -2371,6 +2753,27 @@ async def _after_verdict(engine: AsyncEngine, reg: Registration) -> LedgerRow:
     if row is None:
         raise H1Locked("the verdict comes first: `halal-trader events h1 verdict`")
     return row
+
+
+async def _cited(
+    engine: AsyncEngine, reg: Registration, final: LedgerRow
+) -> tuple[LedgerRow | None, LedgerRow | None]:
+    """The train and validation rows ``final`` (the latest verdict) decided on.
+
+    :class:`H1Locked` when a window ran after the verdict: it no longer
+    describes the ledger, so it is recorded again first.
+    """
+    newer = [r for r in await _rows(engine, kind="window", config_h=reg.hash) if r.id > final.id]
+    if newer:
+        raise H1Locked(
+            f"{newer[-1].metrics.get('window_role')} ran after the verdict "
+            f"(quant_trials {newer[-1].id}): record the verdict again first"
+        )
+    rows: list[LedgerRow | None] = []
+    for key in ("train_row", "validation_row"):
+        row_id = final.metrics.get(key)
+        rows.append(await _row(engine, reg, "window", int(row_id)) if row_id is not None else None)
+    return rows[0], rows[1]
 
 
 # ── sensitivities (spec §G.12) ────────────────────────────────
@@ -2432,15 +2835,34 @@ def subset_sensitivities(
 
 
 async def sensitivities(
-    engine: AsyncEngine, *, workers: int = 6, parallel: Parallel = None
+    engine: AsyncEngine,
+    *,
+    workers: int = 6,
+    parallel: Parallel = None,
+    amend: str | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Every sensitivity on train (eligible cells) and validation (train passers).
 
     Each is a ``kind="sensitivity"`` row under ``research.news.h1.sens.<name>``
-    with ``config={"prereg", "cell", "sensitivity"}`` and no Sharpe.
+    with ``config={"prereg", "cell", "sensitivity"}`` and no Sharpe. The
+    train passers are those of the train row the latest verdict cites.
+    Changed code or data needs ``amend``, as for a window.
     """
     reg = await registration(engine)
-    await _after_verdict(engine, reg)
+    final = await _after_verdict(engine, reg)
+    train_row, _ = await _cited(engine, reg, final)
+    stage = await _stage_row(engine, reg)
+    passed = _statuses(train_row)
+    owed: dict[WindowName, tuple[Cell, ...]] = {
+        "train": _stage_eligible(stage),
+        "validation": tuple(c for c in CELLS if passed.get(c.key) == "pass"),
+    }
+    if not any(owed.values()):
+        return {}
+    now = current_code()
+    amendment = Amendment("sensitivities", amend)
+    await check_code_now(engine, reg, amendment, now)
+    amendment.require()
     await _bootstrap(engine)
     out: dict[str, dict[str, Any]] = defaultdict(dict)
 
@@ -2456,19 +2878,16 @@ async def sensitivities(
                 "sensitivity": name,
             },
             window=window,
-            metrics={"window_role": window, **numbers},
+            metrics={"window_role": window, "code_sha": now.sha, **numbers},
         )
 
-    passed = _statuses(await _latest_window(engine, reg, "train"))
-    owed: dict[WindowName, tuple[Cell, ...]] = {
-        "train": _stage_eligible(await _stage_row(engine, reg)),
-        "validation": tuple(c for c in CELLS if passed.get(c.key) == "pass"),
-    }
     for window in WINDOWS:
         cells = owed[window]
         if not cells:
             continue
         data = await load_window(engine, window)
+        await check_data_now(engine, reg, stage, amendment, data)
+        await amendment.write(engine, reg)
         for cell in cells:
             role = f"sens:{window}"
             _, outcomes, _ = await _simulate(
@@ -2480,6 +2899,7 @@ async def sensitivities(
                 cfg=SimConfig(),
                 workers=workers,
                 parallel=parallel,
+                code_sha=now.sha,
             )
             trades, legs = _trades(outcomes)
             for name, numbers in subset_sensitivities(
@@ -2502,6 +2922,7 @@ async def sensitivities(
                     universe=universe,
                     workers=workers,
                     parallel=parallel,
+                    code_sha=now.sha,
                 )
                 trades, legs = _trades(outcomes)
                 await keep(
@@ -2520,6 +2941,7 @@ async def sensitivities(
                     cfg=SimConfig(),
                     workers=workers,
                     parallel=parallel,
+                    code_sha=now.sha,
                 )
                 trades, legs = _trades(outcomes)
                 await keep(
@@ -2533,14 +2955,21 @@ async def sensitivities(
 
 
 async def implementability(
-    engine: AsyncEngine, *, workers: int = 6, parallel: Parallel = None
+    engine: AsyncEngine,
+    *,
+    workers: int = 6,
+    parallel: Parallel = None,
+    amend: str | None = None,
 ) -> dict[WindowName, dict[Cell, WindowStats]]:
     """The cells that passed H1, on the delayed feed, both windows, by the same rule.
 
     A counted trial per cell (``trial_config(..., feed="sip-delayed")``);
     validation runs this trial's train passers. A ``kind="implementability"``
     row (config: the registration's hash and the feed) records the outcome.
-    Nothing runs when no cell passed H1.
+    The cells are those that pass both window rows the latest verdict cites;
+    nothing runs when none did. An unfinished earlier run (delayed-feed
+    trial rows and no outcome row), changed code or changed data needs
+    ``amend``, as for a window.
     """
     reg = await registration(engine)
     final = await _after_verdict(engine, reg)
@@ -2556,8 +2985,7 @@ async def implementability(
         )
     if done:
         raise H1Locked("the implementability trial has run already")
-    train_row = await _latest_window(engine, reg, "train")
-    validation_row = await _latest_window(engine, reg, "validation")
+    train_row, validation_row = await _cited(engine, reg, final)
     t_status, v_status = _statuses(train_row), _statuses(validation_row)
     cells = tuple(
         c for c in CELLS if t_status.get(c.key) == "pass" and v_status.get(c.key) == "pass"
@@ -2565,6 +2993,18 @@ async def implementability(
     if not cells:
         logger.info("h1 implementability: no cell passed H1 (verdict %s)", final.verdict)
         return {}
+    stage = await _stage_row(engine, reg)
+    now = current_code()
+    amendment = Amendment("implementability", amend)
+    covered = [
+        r.id for r in await _amendments(engine, reg) if r.metrics.get("step") == "implementability"
+    ]
+    if partial := await _unfinished(
+        engine, reg, feed=feed, windows=WINDOWS, after=max([0, *covered])
+    ):
+        amendment.need("partial", partial)
+    await check_code_now(engine, reg, amendment, now)
+    amendment.require()
     await _bootstrap(engine)
     cfg = SimConfig(feed=SIP_DELAYED)
     results: dict[WindowName, dict[Cell, WindowStats]] = {}
@@ -2573,6 +3013,8 @@ async def implementability(
         if not owed:
             break
         data = await load_window(engine, window)
+        await check_data_now(engine, reg, stage, amendment, data)
+        await amendment.write(engine, reg)
         results[window] = await _run_cells(
             engine,
             reg,
@@ -2582,6 +3024,7 @@ async def implementability(
             cfg=cfg,
             workers=workers,
             parallel=parallel,
+            code_sha=now.sha,
         )
         owed = tuple(c for c, ws in results[window].items() if ws.passed)
         del data
@@ -2596,6 +3039,10 @@ async def implementability(
         window=_windows_text(),
         metrics={
             "prereg_id": reg.id,
+            "verdict_row": final.id,
+            "code": now.as_dict(),
+            "code_sha": now.sha,
+            "amendments": amendment.written,
             "cells": {
                 f"{w}:{c.key}": ws.as_dict() for w, by in results.items() for c, ws in by.items()
             },
@@ -2618,10 +3065,12 @@ __all__ = [
     "REQUIRED_GATES",
     "SENSITIVITIES",
     "TAG",
+    "Amendment",
     "Carrier",
     "Cell",
     "CellCounts",
     "Check",
+    "CodeNow",
     "CodeState",
     "CountRule",
     "H1Locked",
@@ -2637,10 +3086,16 @@ __all__ = [
     "build_prereg",
     "cell_eligible",
     "check_code",
+    "check_code_now",
+    "check_data_now",
     "check_edits_d7",
     "clean",
+    "code_drift",
     "code_state",
     "count_outcomes",
+    "current_code",
+    "data_digest",
+    "data_drift",
     "decide",
     "existing_registration",
     "file_shas",
