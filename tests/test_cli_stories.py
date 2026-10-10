@@ -14,7 +14,16 @@ from halal_trader.cli import cli
 from halal_trader.events import stories
 from halal_trader.events.stories import build_range
 from tests._renames import mark_renamed_news_done
-from tests._stories import FRI, MON, WEEK, fake_context, seed_week, store
+from tests._stories import (
+    ALIAS_ROWS,
+    FRI,
+    MON,
+    WEEK,
+    add_aliases,
+    fake_context,
+    seed_week,
+    store,
+)
 
 WEEK_ARGS = ["--start", "2024-05-06", "--end", "2024-05-10"]
 
@@ -84,3 +93,17 @@ def test_the_counts_command_prints_each_universe(
     assert nsn.split()[-4:] == ["1", "0", "1", "1"]  # 2024, train, validation, total
     assert lines[-2] == "eligibility (every story): ok 5, rank 2"
     assert lines[-1] == "eligibility (NSN_CORE stories): ok 1, rank 1"
+
+
+@pytest.mark.usefixtures("small_map")
+def test_the_build_command_refuses_unparsed_news(database_url: str) -> None:
+    async def seed(engine: AsyncEngine) -> None:
+        await store(engine, WEEK, facts=False)
+        await add_aliases(engine, ALIAS_ROWS)
+        await mark_renamed_news_done(engine)
+
+    _run(database_url, seed)
+    result = CliRunner().invoke(cli, ["events", "stories", "build", *WEEK_ARGS])
+    assert result.exit_code == 1
+    assert "9 news event(s)" in result.output and "events extract" in result.output
+    assert "(or pass --force)" in result.output

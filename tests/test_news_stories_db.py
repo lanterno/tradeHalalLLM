@@ -8,6 +8,7 @@ with every month of their news marked fetched where a build needs it.
 from __future__ import annotations
 
 import json
+import re
 from collections import Counter
 from datetime import UTC, date, datetime
 from typing import Any
@@ -16,8 +17,14 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from halal_trader.events import earnings_parse
 from halal_trader.events.aliases import AliasMatcher, load_aliases
-from halal_trader.events.earnings_parse import EXTRACTOR, EXTRACTOR_V3, parse_headline
+from halal_trader.events.earnings_parse import (
+    EXTRACTOR,
+    EXTRACTOR_V3,
+    EarningsFacts,
+    parse_headline,
+)
 from halal_trader.events.stories import (
     RawItem,
     StoriesNotReady,
@@ -25,6 +32,7 @@ from halal_trader.events.stories import (
     build_range,
     count_stories,
     load_items,
+    missing_facts,
     persist,
     story_row,
 )
@@ -82,14 +90,14 @@ async def test_items_come_with_their_v4_facts_and_filing_items(engine: AsyncEngi
         news_row(4, "AAPL", ny(MON, 23, 59), "Apple Unveils iPad"),  # the day before
         news_row(5, "AAPL", ny(WED, 0, 0), "Apple Unveils Vision"),  # the day after
     ]
-    ids = await store(engine, rows)
-    async with engine.begin() as conn:  # other extractors' rows and 'none' are not read
+    ids = await store(engine, rows)  # 'none' rows for the headlines without facts
+    async with engine.begin() as conn:  # other extractors' rows are not read
         await conn.execute(
             text(
                 "INSERT INTO event_facts (event_id, extractor, kind, fields) VALUES "
-                "(:e, :v3, 'result', '{\"eps\": 9}'), (:e2, :x, 'none', '{}')"
+                "(:e, :v3, 'result', '{\"eps\": 9}')"
             ),
-            {"e": ids["alpaca:1"], "e2": ids["alpaca:2"], "v3": EXTRACTOR_V3, "x": EXTRACTOR},
+            {"e": ids["alpaca:1"], "v3": EXTRACTOR_V3},
         )
     items = await collect(engine, start=TUE, end=TUE, symbols=["AAPL"])
     assert [i.source_id for i in items] == ["alpaca:1", "alpaca:2", "alpaca:3", "acc-1", "acc-2"]
@@ -100,6 +108,25 @@ async def test_items_come_with_their_v4_facts_and_filing_items(engine: AsyncEngi
     assert live.n_symbols is None
     assert (f1.kind, f1.items_8k, f1.headline, f1.facts) == ("8-k", ("2.02", "9.01"), "", ())
     assert (f2.kind, f2.items_8k) == ("8-k/a", ("5.02",))
+
+
+async def test_items_come_with_the_facts_of_the_extractor_current_when_read(
+    engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ids = await store(engine, [news_row(1, "AAPL", ny(TUE, 8), MISS)])
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO event_facts (event_id, extractor, kind, fields) "
+                "VALUES (:e, 'benzinga-earnings-next', 'result', '{\"eps\": 9}')"
+            ),
+            {"e": ids["alpaca:1"]},
+        )
+    monkeypatch.setattr(earnings_parse, "EXTRACTOR", "benzinga-earnings-next")
+    (item,) = await collect(engine, start=TUE, end=TUE, symbols=["AAPL"])
+    assert item.facts == (EarningsFacts("result", {"eps": 9}),)
+    (pinned,) = await collect(engine, start=TUE, end=TUE, symbols=["AAPL"], extractor=EXTRACTOR)
+    assert pinned.facts == tuple(parse_headline(MISS))
 
 
 @pytest.mark.usefixtures("small_map")
@@ -131,20 +158,53 @@ async def test_news_rows_that_are_not_their_symbols_own_are_dropped(engine: Asyn
 # ── building a range ──────────────────────────────────────────
 
 
-async def test_a_build_waits_for_the_renamed_news_and_the_aliases(
+async def test_a_build_waits_for_the_renamed_news_the_aliases_and_the_facts(
     engine: AsyncEngine, small_map: None
 ) -> None:
-    await store(engine, WEEK)
+    ids = await store(engine, WEEK, facts=False)
     with pytest.raises(StoriesNotReady, match="renamed-ticker news"):
         await build_range(engine, start=MON, end=FRI)
     await mark_renamed_news_done(engine)
     with pytest.raises(StoriesNotReady, match="no story aliases"):
         await build_range(engine, start=MON, end=FRI)
-    assert await build_range(engine, start=MON, end=FRI, force=True) > 0
     await add_aliases(engine, ALIAS_ROWS)
+    with pytest.raises(StoriesNotReady, match=f"9 news event.*no {re.escape(EXTRACTOR)} facts row"):
+        await build_range(engine, start=MON, end=FRI)
+    first = min(i for s, i in ids.items() if s.startswith("alpaca:"))
+    assert await missing_facts(engine, start=date(2016, 1, 1), end=FRI) == (9, first)
+    assert await build_range(engine, start=MON, end=FRI, force=True) > 0
+    await earnings_parse.extract_all(engine)
+    assert await missing_facts(engine, start=date(2016, 1, 1), end=FRI) == (0, None)
     assert await build_range(engine, start=MON, end=FRI) > 0
     with pytest.raises(ValueError):
         await build_range(engine, start=FRI, end=MON)
+
+
+async def test_the_facts_a_build_waits_for_are_the_current_extractors(
+    ready: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert await build_range(ready, start=MON, end=FRI) == 7
+    monkeypatch.setattr(earnings_parse, "EXTRACTOR", "benzinga-earnings-next")
+    with pytest.raises(StoriesNotReady, match="no benzinga-earnings-next facts row"):
+        await build_range(ready, start=MON, end=FRI)
+    await earnings_parse.extract_all(ready)  # parses under the current name
+    assert await build_range(ready, start=MON, end=FRI) == 7
+
+
+async def test_only_the_news_a_build_reads_must_be_parsed(ready: AsyncEngine) -> None:
+    # Unparsed news after the range's end, and an unparsed filing, hold nothing up.
+    later = date(2024, 5, 20)
+    await store(
+        ready,
+        [
+            news_row(50, "AAPL", ny(later, 8), DOWNGRADE),
+            filing_row("acc-9", "AAPL", ny(TUE, 8), []),
+        ],
+        facts=False,
+    )
+    assert await build_range(ready, start=MON, end=FRI) == 7
+    with pytest.raises(StoriesNotReady, match="1 news event"):
+        await build_range(ready, start=MON, end=later)
 
 
 async def test_a_built_range_round_trips_through_the_table(ready: AsyncEngine) -> None:

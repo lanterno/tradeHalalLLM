@@ -11,9 +11,9 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from halal_trader.events import stories
+from halal_trader.events import earnings_parse, stories
 from halal_trader.events.aliases import BUILDER_VERSION
-from halal_trader.events.earnings_parse import EXTRACTOR, parse_headline
+from halal_trader.events.earnings_parse import parse_headline
 from halal_trader.events.store import EventRecord, EventRecorder
 from halal_trader.market_hours import MARKET_TZ
 from tests._renames import mark_renamed_news_done
@@ -50,7 +50,8 @@ def filing_row(
 async def store(
     engine: AsyncEngine, rows: list[EventRecord], *, facts: bool = True
 ) -> dict[str, int]:
-    """Store the rows (and the v4 facts of their headlines); source_id -> event id."""
+    """Store the rows and, as ``extract_all`` would, the current extractor's facts
+    of each news headline (a ``none`` row for one without); source_id -> event id."""
     await EventRecorder(engine, raise_errors=True).record(rows)
     async with engine.begin() as conn:
         ids = {
@@ -58,20 +59,22 @@ async def store(
             for r in await conn.execute(text("SELECT source_id, id FROM events"))
         }
         if facts:
+            x = earnings_parse.EXTRACTOR
             for r in rows:
-                parsed = parse_headline(r.payload.get("headline") or "") if r.kind == "news" else []
+                if r.kind != "news":
+                    continue
+                e = ids[r.source_id]
+                parsed = parse_headline(r.payload.get("headline") or "")
                 values = [
-                    {"e": ids[r.source_id], "x": EXTRACTOR, "k": f.kind, "f": json.dumps(f.fields)}
-                    for f in parsed
-                ]
-                if values:
-                    await conn.execute(
-                        text(
-                            "INSERT INTO event_facts (event_id, extractor, kind, fields) "
-                            "VALUES (:e, :x, :k, CAST(:f AS JSONB))"
-                        ),
-                        values,
-                    )
+                    {"e": e, "x": x, "k": f.kind, "f": json.dumps(f.fields)} for f in parsed
+                ] or [{"e": e, "x": x, "k": "none", "f": "{}"}]
+                await conn.execute(
+                    text(
+                        "INSERT INTO event_facts (event_id, extractor, kind, fields) "
+                        "VALUES (:e, :x, :k, CAST(:f AS JSONB))"
+                    ),
+                    values,
+                )
     return ids
 
 

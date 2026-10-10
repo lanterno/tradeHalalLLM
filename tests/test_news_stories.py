@@ -15,7 +15,7 @@ import pytest
 
 from halabot.playbooks.interfaces import StoryView
 from halal_trader.data.minutes import session_bounds
-from halal_trader.events import renames, stories
+from halal_trader.events import earnings_parse, renames, stories
 from halal_trader.events.aliases import BUILDER_VERSION, AliasMatcher
 from halal_trader.events.earnings_parse import PARSER_SHA, parse_headline
 from halal_trader.events.stories import (
@@ -759,3 +759,6 @@ async def test_pins_gather_every_sha(monkeypatch: pytest.MonkeyPatch) -> None:
         "parser_sha": PARSER_SHA,
         "headline_patterns_sha": stories.HEADLINE_PATTERNS_SHA,
     }
+    # The parser's pin is read when asked, as the extractor is.
+    monkeypatch.setattr(earnings_parse, "PARSER_SHA", "parser123456")
+    assert (await stories.pins(object()))["parser_sha"] == "parser123456"  # type: ignore[arg-type]
