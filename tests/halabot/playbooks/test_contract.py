@@ -258,6 +258,7 @@ def test_visible_bars_have_nothing_behind_them() -> None:
                 behind = all(
                     a.base is not None
                     and len(a.base) == len(source)
+                    and not a.base.flags.writeable  # no write through the buffer either
                     and not np.any(a.base[n:])  # zeros: no bar after the visible ones
                     and np.array_equal(a.base[:n], s[:n])
                     for a, s in zip(arrays, source.columns())
@@ -312,3 +313,20 @@ def test_visible_bars_copy_each_bar_once() -> None:
     assert len(vis.head(len(source))) == len(source)
     with pytest.raises(ValueError, match="read-only"):
         later.c[0] = 1.0
+
+
+def test_a_kept_head_cannot_be_changed_through_its_buffer() -> None:
+    """Writing through a view's .base would change every later head of the path."""
+    source = BarSeries.build([session_bars(MON)], [1.0], 5)
+    vis = VisibleBars(source)
+    first = vis.head(5)
+    for a in first.columns():
+        assert a.base is not None and not a.base.flags.writeable
+        with pytest.raises(ValueError, match="read-only"):
+            a.base[3] = -1
+        with pytest.raises(ValueError, match="read-only"):
+            a.base[10] = -1  # a slot the next head will fill
+    later = vis.head(20)  # the buffer is filled again in place, and read-only after it
+    assert later.c.base is first.c.base and not later.c.base.flags.writeable
+    assert all(np.array_equal(a, s[:20]) for a, s in zip(later.columns(), source.columns()))
+    assert all(np.array_equal(a, s[:5]) for a, s in zip(first.columns(), source.columns()))
