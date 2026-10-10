@@ -10,6 +10,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from halal_trader.data.alpaca_market import Asset
+from halal_trader.events import renames
 from halal_trader.events.aliases import (
     BUILDER_VERSION,
     AliasMatcher,
@@ -232,14 +233,15 @@ def test_a_matcher_with_nothing_to_match_passes_every_headline() -> None:
     assert not AliasMatcher("AAPL", (), ("AAPL",)).empty
 
 
-def test_an_unknown_symbol_gets_its_tickers_old_ones_included() -> None:
+def test_an_unknown_symbol_gets_only_its_own_ticker() -> None:
     known = {"AAPL": AliasMatcher("AAPL", ("Apple",), ("AAPL",))}
     assert matcher_for("AAPL", known) is known["AAPL"]
     caly = matcher_for("CALY", known)
     assert caly.aliases == ()
-    assert set(caly.tickers) == {"CALY", "MODG", "ELY"}
-    assert caly.matches("MODG shares fall")
-    assert not caly.matches("Callaway shares fall")
+    # old tickers come from the stored set, never from TICKER_RENAMES as it is now
+    assert caly.tickers == ("CALY",)
+    assert caly.matches("CALY shares fall")
+    assert not caly.matches("MODG shares fall")
 
 
 def test_tickers_are_the_symbol_and_its_old_ones() -> None:
@@ -360,6 +362,37 @@ async def test_a_rebuild_replaces_the_rows_and_the_hash_follows_them(engine: Asy
     await build_aliases(engine, _Market([_asset("NEWCO", "Newco Widgets Inc")]))
     assert await alias_sha(engine) == sha  # NEWCO carries no news: not stored
     await build_aliases(engine, _Market([_asset("AAPL", "Apple Computer")]))
+    assert await alias_sha(engine) != sha
+
+
+async def test_editing_the_renames_changes_nothing_until_the_next_build(
+    engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await _seed(engine)
+    await build_aliases(engine, _Market([]))
+    sha = await alias_sha(engine)
+    before = await load_aliases(engine)
+
+    monkeypatch.setattr(
+        renames,
+        "TICKER_RENAMES",
+        {
+            **renames.TICKER_RENAMES,
+            "APPL": ("AAPL", date(2019, 1, 2)),
+            "NEWT": ("NEWCO", date(2019, 1, 2)),
+        },
+    )
+    after = await load_aliases(engine)
+    assert after == before
+    assert not after["AAPL"].matches("APPL shares rise")
+    assert matcher_for("NEWCO", after).tickers == ("NEWCO",)
+    assert await alias_sha(engine) == sha
+
+    await build_aliases(engine, _Market([]))
+    rebuilt = await load_aliases(engine)
+    assert rebuilt["AAPL"].tickers == ("AAPL", "APPL")
+    assert rebuilt["AAPL"].matches("APPL shares rise")
+    assert rebuilt["NEWCO"].matches("NEWT shares rise")
     assert await alias_sha(engine) != sha
 
 
