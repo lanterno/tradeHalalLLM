@@ -1,7 +1,7 @@
 """The bounce on random markets: look-ahead invariance, determinism, and the full driver.
 
 **Look-ahead** (spec §E.1), with the simulator's own harness
-(``test_lookahead``): for each story, at random times T inside its path
+(``halabot.playbooks.lookahead``): for each story, at random times T inside its path
 and at every moment it decided something (trigger, arming, entry, exit),
 every bar visible after T is scaled by U(0.5, 1.5) (o/h/l/c/vw by one
 factor, volume by another), every item usable after T is deleted, and the
@@ -32,6 +32,13 @@ from halabot.playbooks.bounce import BounceFactory, BounceParams
 from halabot.playbooks.clock import SIP_DELAYED, SIP_RT, FeedProfile
 from halabot.playbooks.interfaces import StoryView
 from halabot.playbooks.loader import Window, WindowUnlock
+from halabot.playbooks.lookahead import (
+    NoisyContext,
+    fill_bars_known_by,
+    perturb,
+    upto,
+    visible_cut,
+)
 from halabot.playbooks.records import MemorySink, StoryOutcome, outcomes_sha256
 from halabot.playbooks.sim import run, simulate_many, simulate_symbol
 from halabot.playbooks.types import PathData, SimConfig, SpyData
@@ -58,13 +65,6 @@ from tests.halabot.playbooks._bounce import (
 )
 from tests.halabot.playbooks._seed import seed_calendar, seed_market
 from tests.halabot.playbooks._support import MON, THU, TUE, WED, Context, Story, et, path
-from tests.halabot.playbooks.test_lookahead import (
-    _fill_bars_known_by,
-    _NoisyContext,
-    _perturb,
-    _upto,
-    _visible_cut,
-)
 
 SYMBOLS = 16
 RUN_ID = "00000000-0000-0000-0000-0000000000b2"
@@ -111,21 +111,21 @@ def _invariant(
         times |= {t - SECOND for t in st.news_times()}
     checked = 0
     for T in sorted(times):
-        cut = _visible_cut(T, cfg.feed)
-        keep = _fill_bars_known_by(base, T)
+        cut = visible_cut(T, cfg.feed)
+        keep = fill_bars_known_by(base, T)
         moved = {
-            sid: replace(p, bars=tuple(_perturb(b, cut, keep, rng) for b in p.bars))
+            sid: replace(p, bars=tuple(perturb(b, cut, keep, rng) for b in p.bars))
             for sid, p in paths.items()
             if p.symbol == symbol
         }
-        spy_moved = SpyData({d: _perturb(b, cut, set(), rng) for d, b in spy.days.items()})
+        spy_moved = SpyData({d: perturb(b, cut, set(), rng) for d, b in spy.days.items()})
         again = simulate_symbol(
             symbol,
             [s.before(T) for s in stories],  # type: ignore[attr-defined]
             fac,
             moved,
             spy_moved,
-            _NoisyContext(ctx, rng),
+            NoisyContext(ctx, rng),
             cfg,
             keep_transitions=True,
         )
@@ -134,7 +134,7 @@ def _invariant(
         by_id = {o.story_id: o for o in again}
         for o in base:
             if o.story_id in started:
-                assert _upto(o, T) == _upto(by_id[o.story_id], T), (o.story_id, T)
+                assert upto(o, T) == upto(by_id[o.story_id], T), (o.story_id, T)
                 checked += 1
     return checked, base
 
