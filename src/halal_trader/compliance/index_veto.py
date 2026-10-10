@@ -24,6 +24,15 @@ exclusion stands here as well.
   "salesforce.com Inc", "TJX Cos Inc/The"); without that, SPUS's 2021
   holdings of Cisco, Salesforce, Lowe's, TJX and Estee Lauder read as
   exclusions.
+* **Renamed companies** are screened under today's ticker, which a holding
+  from before the change does not carry, and their SEC name has usually
+  changed too: SPUS held Meta as FB and HLAL held Corpay as FLT, and both
+  read as exclusions. A view also holds a company under an old ticker
+  (``events.renames.TICKER_RENAMES``) when its holdings are dated within
+  the days that ticker named the company (``renames.news_window``: up to
+  the last session under it, plus the grace sessions, never past its
+  handover). A reused ticker therefore never counts for its former owner
+  after the switch: IR in a 2020 holding is Gardner Denver, not Trane.
 """
 
 from __future__ import annotations
@@ -38,6 +47,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from halal_trader.compliance.aaoifi import ScreenResult, mixed_activity
+from halal_trader.events.renames import ticker_history
 
 MAX_AGE = timedelta(days=200)
 SIZE_PERCENTILE = 20.0
@@ -59,6 +69,34 @@ class IndexView:
     filed: date
     tickers: frozenset[str]
     names: frozenset[str]
+    # The day the holdings are as of (N-PORT's period end). Without it an
+    # old ticker cannot be dated, and none counts.
+    period_end: date | None = None
+
+
+def held_as(view: IndexView, symbol: str) -> str | None:
+    """The old ticker the view holds ``symbol``'s company under, if any.
+
+    One of the company's former tickers is among the view's, and the
+    holdings are dated within the days it named the company.
+    """
+    if view.period_end is None:
+        return None
+    history = ticker_history()
+    for old in history.olds.get(symbol, ()):
+        _, first, last = history.windows[old]
+        if old in view.tickers and first <= view.period_end <= last:
+            return old
+    return None
+
+
+def held(view: IndexView, symbol: str, title: str) -> bool:
+    """Whether the view holds the company trading as ``symbol``, SEC name ``title``:
+    by ticker, by an old ticker of its own day (``held_as``), or by name."""
+    if symbol in view.tickers or held_as(view, symbol) is not None:
+        return True
+    key = name_key(title)
+    return bool(key) and key in view.names
 
 
 async def views_at(engine: AsyncEngine, as_of: date) -> list[IndexView]:
@@ -78,24 +116,27 @@ async def views_at(engine: AsyncEngine, as_of: date) -> list[IndexView]:
         }
         rows = await conn.execute(
             text(
-                "SELECT h.etf, h.filed, h.ticker, h.name, h.cusip FROM etf_holdings h "
+                "SELECT h.etf, h.filed, h.period_end, h.ticker, h.name, h.cusip "
+                "FROM etf_holdings h "
                 "JOIN (SELECT etf, max(filed) AS filed FROM etf_holdings "
                 "WHERE filed <= :d AND filed > :oldest GROUP BY etf) l "
                 "ON l.etf = h.etf AND l.filed = h.filed"
             ),
             {"d": as_of, "oldest": as_of - MAX_AGE},
         )
-        grouped: dict[tuple[str, date], tuple[set[str], set[str]]] = {}
+        grouped: dict[tuple[str, date], tuple[set[str], set[str], set[date]]] = {}
         for r in rows:
-            tickers, names = grouped.setdefault((r.etf, r.filed), (set(), set()))
+            tickers, names, periods = grouped.setdefault((r.etf, r.filed), (set(), set(), set()))
             ticker = r.ticker or known.get(r.cusip)
             if ticker:
                 tickers.add(str(ticker).upper())
             if key := name_key(str(r.name)):
                 names.add(key)
+            periods.add(r.period_end)
+    # One filing reports one period (true of every stored filing on 2026-10-11).
     return [
-        IndexView(etf, filed, frozenset(t), frozenset(n))
-        for (etf, filed), (t, n) in sorted(grouped.items())
+        IndexView(etf, filed, frozenset(t), frozenset(n), max(p))
+        for (etf, filed), (t, n, p) in sorted(grouped.items())
     ]
 
 
@@ -106,17 +147,18 @@ def apply_veto(
     out = list(results)
     caps = {r.symbol: r.metrics.get("market_cap") for r in results}
     for view in views:
-
-        def held(symbol: str, view: IndexView = view) -> bool:
-            return symbol in view.tickers or name_key(titles.get(symbol, "")) in view.names
-
-        priced = [c for s, c in caps.items() if c and held(s)]
+        priced = [c for s, c in caps.items() if c and held(view, s, titles.get(s, ""))]
         if len(priced) < MIN_PRICED:
             continue
         floor = float(np.percentile(priced, SIZE_PERCENTILE))
         for i, r in enumerate(out):
             cap = caps.get(r.symbol)
-            if r.verdict != "halal" or not cap or cap < floor or held(r.symbol):
+            if (
+                r.verdict != "halal"
+                or not cap
+                or cap < floor
+                or held(view, r.symbol, titles.get(r.symbol, ""))
+            ):
                 continue
             reason = (
                 f"excluded by {view.etf}'s Shariah index (holdings filed {view.filed}) "
@@ -141,14 +183,15 @@ def require_board(
     no index holdings on file for the date, every such pass is doubtful.
     """
 
-    def held(symbol: str) -> bool:
-        key = name_key(titles.get(symbol, ""))
-        return any(symbol in v.tickers or (key and key in v.names) for v in views)
-
     out = []
     for r in results:
         activity = mixed_activity(sics.get(r.symbol))
-        if r.verdict == "halal" and activity is not None and not held(r.symbol):
+        title = titles.get(r.symbol, "")
+        if (
+            r.verdict == "halal"
+            and activity is not None
+            and not any(held(v, r.symbol, title) for v in views)
+        ):
             reason = (
                 f"business activity unverified: {activity}; impermissible revenue is not "
                 "in SEC data and no Shariah index (SPUS, HLAL) holds the company"
