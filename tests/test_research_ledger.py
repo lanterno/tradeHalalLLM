@@ -65,6 +65,38 @@ async def test_more_trials_raise_the_hurdle(engine):
 
 
 @pytest.mark.asyncio
+async def test_a_run_names_the_benchmark_it_was_judged_by(engine):
+    """The window and criterion say SPUS by default, and the label when one is given."""
+    from sqlalchemy import text
+
+    from halal_trader.research.ledger import BENCHMARK, CRITERION
+
+    returns, bench = _series(5, 0.0005)
+    default = await record_backtest(
+        engine, strategy="t", config={"v": 1}, days=DAYS, returns=returns, benchmark=bench
+    )
+    labelled = await record_backtest(
+        engine,
+        strategy="t",
+        config={"v": 2},
+        days=DAYS,
+        returns=returns,
+        benchmark=bench,
+        benchmark_label="SPY (exposure-matched)",
+    )
+    assert default is not None and labelled is not None
+    async with engine.connect() as conn:
+        rows = {
+            r.id: (r.window, r.criterion)
+            for r in await conn.execute(text('SELECT id, "window", criterion FROM quant_trials'))
+        }
+    assert rows[default.trial_id] == (f"{DAYS[0]}..{DAYS[-1]} vs {BENCHMARK}", CRITERION)
+    window, criterion = rows[labelled.trial_id]
+    assert window == f"{DAYS[0]}..{DAYS[-1]} vs SPY (exposure-matched)"
+    assert "vs SPY (exposure-matched)" in criterion and BENCHMARK not in criterion
+
+
+@pytest.mark.asyncio
 async def test_degenerate_active_series_is_not_recorded(engine):
     flat = np.full(N, 0.001)
     out = await record_backtest(
