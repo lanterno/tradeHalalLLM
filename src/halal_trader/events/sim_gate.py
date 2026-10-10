@@ -50,9 +50,13 @@ are in the holdout, 2025-12..2026-10, read as the gate's pinned set only):
   95% CI clustered by New York date; the clustered t and a per-headline
   decomposition (entry rule, exit rule) are reported.
 
-**G3, the SUE replication** (``sue``: :func:`run_sue`):
+**G3, the SUE replication** (``sue``: :func:`run_sue`). Σ_c is
+``units.sue_complement`` given H1's own units, the ``train`` and
+``validation`` parts (``units.h1_windows``): an event whose entry or exit
+session meets them is dropped (counted ``h1_overlap``), so the gate never
+reads H1's universe (spec §E.3); Σ_s is ``units.sue_sample`` of it.
 
-* ``s0``: ``events study sue --start 2016 --end 2019 --by bucket``, recomputed
+* ``s0``:``events study sue --start 2016 --end 2019 --by bucket``, recomputed
   (the 8-K times are being corrected from EDGAR headers, so the values it
   computes become the reference) with its deltas against the numbers the
   plan recorded (IC +0.04..0.09 at 5-20 d, mid-cap 20 d D10-D1 +1.98%); then
@@ -265,8 +269,9 @@ CRITERIA: Final[dict[str, str]] = {
         "inside the legacy 95% CI clustered by New York date"
     ),
     "s0": (
-        "events study sue 2016-2019 by bucket recomputed (the reference) and Σ_c daily-mode "
-        "D10-D1 and IC at 5 and 20 days with 95% date-cluster bootstrap CIs (B = 2,000)"
+        "events study sue 2016-2019 by bucket recomputed (the reference) and Σ_c (less the "
+        "events meeting H1's train and validation units) daily-mode D10-D1 and IC at 5 and "
+        "20 days with 95% date-cluster bootstrap CIs (B = 2,000)"
     ),
     "s1": (
         "DailyBarSource through the simulator equals study.evaluate on Σ_c within 1e-10 at "
@@ -2153,14 +2158,21 @@ async def run_sue(
 ) -> GateRun:
     """G3: ``s0``, ``s1``, ``s1-calib``, ``s2`` and ``s3`` (module docstring).
 
-    S0 and S1 read daily bars only and always run. ``s1-calib`` is refused
+    Σ_c needs H1's train and validation parts first (``units.h1_windows``,
+    as plan H selects them). S0 and S1 read daily bars only and always run. ``s1-calib`` is refused
     while a calibration unit is not done; S2 and S3 while a ``gate_sue`` unit
     is not done; S2 also needs this run's ``s1-calib`` to have passed (its
     p99_cal is S2's bound).
     """
     observations = await units.load_sue_observations(engine)
+    windows = await units.h1_windows(engine)
     counts: Counter[str] = Counter()
-    complement = await units.sue_complement(engine, observations=observations, counts=counts)
+    complement = await units.sue_complement(
+        engine,
+        h1_units=windows["train"] | windows["validation"],
+        observations=observations,
+        counts=counts,
+    )
     obs_c = observations_of(complement)
     out = GateRun()
 
