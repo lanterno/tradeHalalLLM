@@ -1237,6 +1237,10 @@ class RunSummary:
     ``no_daily``) are listed too: a study run on the same stored rows drops
     or computes those headlines on its own terms, and the gate reports any
     it kept.
+
+    ``spare_drop_ids`` lists the stories whose spare session
+    (``PathData.spare``, read only by a ``no_market`` exit) lost bars to
+    the sanity rule.
     """
 
     run_id: str
@@ -1250,6 +1254,7 @@ class RunSummary:
     loader: dict[str, int]
     skip_ids: dict[str, tuple[str, ...]]  # reason -> sorted story ids
     bar_drop_ids: tuple[str, ...]  # sorted; a path loaded with bars cut by the sanity rule
+    spare_drop_ids: tuple[str, ...] = ()  # sorted
 
     def data_filtered(self) -> frozenset[str]:
         """The stories this run's data rules treated unlike a study reading every row:
@@ -1270,6 +1275,7 @@ class RunSummary:
             "loader": dict(sorted(self.loader.items())),
             "skip_ids": {k: list(v) for k, v in sorted(self.skip_ids.items())},
             "bar_drop_ids": list(self.bar_drop_ids),
+            "spare_drop_ids": list(self.spare_drop_ids),
         }
 
 
@@ -1513,6 +1519,7 @@ async def run(
     skips: Counter[str] = Counter()
     skip_ids: dict[str, list[str]] = {}
     bar_drop_ids: list[str] = []
+    spare_drop_ids: list[str] = []
     n_out = entries = trades = n_batches = 0
     loop = asyncio.get_running_loop()
     try:
@@ -1549,6 +1556,9 @@ async def run(
                 for x in batch
                 if isinstance(x, PathData)
                 and (x.dropped or any(s.day in loader.spy_dropped for s in x.sessions))
+            ]
+            spare_drop_ids += [
+                x.story_id for x in batch if isinstance(x, PathData) and x.spare_dropped
             ]
             ids_by_symbol: dict[str, list[str]] = {}
             for sid in sorted(items, key=lambda i: _story_key(shared.by_id[i])):
@@ -1624,6 +1634,7 @@ async def run(
         loader=dict(loader.counts),
         skip_ids={k: tuple(sorted(v)) for k, v in skip_ids.items()},
         bar_drop_ids=tuple(sorted(bar_drop_ids)),
+        spare_drop_ids=tuple(sorted(spare_drop_ids)),
     )
     await sink.finish(summary.as_dict())
     logger.info(

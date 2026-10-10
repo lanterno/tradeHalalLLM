@@ -52,7 +52,15 @@ allowed). Then, per path, in order:
   adjusted series, or an adjustment it cannot read as a split, for the
   symbol or SPY between the first sigma session and the last path session;
 * ``bad_bars``: more than 5 bars dropped by the sanity rule (a non-positive
-  price, ``h < max(o, c)`` or ``l > min(o, c)``).
+  price, ``h < max(o, c)`` or ``l > min(o, c)``) on the path sessions.
+
+A loaded path keeps the count of bars the rule dropped from its sessions
+(``PathData.dropped``) and, separately, from its spare session
+(``spare_dropped``, which never counts toward ``bad_bars``: the spare is not
+a path session). SPY's sessions are cut by the same rule when they load, and
+:attr:`MinuteBarLoader.spy_dropped` lists the sessions that lost bars. The
+counts (``dropped_bars``, ``spare_dropped_bars``, ``spy_dropped_bars``) are
+in :attr:`MinuteBarLoader.counts`.
 
 **Loading.** Requests are cut into month-local batches of 250 paths, by
 reaction session; each batch is one ``minutes.read_windows`` call (and one
@@ -566,6 +574,7 @@ class MinuteBarLoader:
             else:
                 self.counts["paths"] += 1
                 self.counts["dropped_bars"] += item.dropped
+                self.counts["spare_dropped_bars"] += item.spare_dropped
         return result
 
     def _path(
@@ -603,8 +612,9 @@ class MinuteBarLoader:
         if dropped > MAX_DROPPED:
             return PathSkip(sid, "bad_bars")
         spare = spare_bars = None
+        spare_dropped = 0
         if p.spare is not None:
-            spare_bars, n = sane(bars.get((symbol, p.spare), BarArrays.empty()))
+            spare_bars, spare_dropped = sane(bars.get((symbol, p.spare), BarArrays.empty()))
             spare = Session.of(p.spare)
         return PathData(
             story_id=sid,
@@ -614,6 +624,7 @@ class MinuteBarLoader:
             spare=spare,
             spare_bars=spare_bars,
             dropped=dropped,
+            spare_dropped=spare_dropped,
         )
 
     async def _defects(self, plans: Sequence[_Plan]) -> set[str]:

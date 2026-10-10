@@ -296,7 +296,8 @@ class PathData:
     bars: tuple[BarArrays, ...]
     spare: Session | None = None
     spare_bars: BarArrays | None = None
-    dropped: int = 0  # rows dropped by the bar sanity rule
+    dropped: int = 0  # rows of the path sessions dropped by the bar sanity rule
+    spare_dropped: int = 0  # rows of the spare session dropped by it (not in ``dropped``)
 
 
 @dataclass(frozen=True, slots=True)
