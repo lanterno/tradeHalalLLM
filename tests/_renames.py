@@ -8,6 +8,8 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from halal_trader.data.alpaca_market import Asset, NewsArticle
+from halal_trader.events.history import mark_units
+from halal_trader.events.renames import TASK, missing_units
 from halal_trader.events.store import EventRecord, EventRecorder
 from halal_trader.market_hours import MARKET_TZ
 
@@ -95,3 +97,8 @@ async def seed_candidates_data(engine: AsyncEngine) -> None:
             (6, "META", ny(date(2021, 6, 30))),
         ],
     )
+
+
+async def mark_renamed_news_done(engine: AsyncEngine) -> None:
+    """Every month of the renamed tickers' news recorded as fetched."""
+    await mark_units(engine, TASK, dict.fromkeys(await missing_units(engine), 0))

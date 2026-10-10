@@ -26,7 +26,9 @@ from halal_trader.events.aliases import (
     slot_of,
     tickers_of,
 )
+from halal_trader.events.renames import RenamedNewsError
 from halal_trader.events.store import EventRecord, EventRecorder
+from tests._renames import mark_renamed_news_done
 
 # ── source (a): names ─────────────────────────────────────────
 
@@ -289,7 +291,9 @@ def _asset(symbol: str, name: str) -> Asset:
     return Asset(symbol, name, "NASDAQ", False, False, "inactive")
 
 
-async def _seed(engine: AsyncEngine) -> None:
+async def _seed(engine: AsyncEngine, *, renamed_news: bool = True) -> None:
+    if renamed_news:
+        await mark_renamed_news_done(engine)
     async with engine.begin() as conn:
         await conn.execute(
             text(
@@ -365,6 +369,32 @@ async def test_a_rebuild_replaces_the_rows_and_the_hash_follows_them(engine: Asy
     assert await alias_sha(engine) != sha
 
 
+async def _stored_rows(engine: AsyncEngine) -> int:
+    async with engine.connect() as conn:
+        return int((await conn.execute(text("SELECT count(*) FROM story_aliases"))).scalar_one())
+
+
+async def test_a_build_refuses_while_renamed_ticker_news_is_missing(engine: AsyncEngine) -> None:
+    await _seed(engine, renamed_news=False)
+    with pytest.raises(
+        RenamedNewsError, match=r"not fetched yet \(first: AAXN:2017-04-06:2017-04-30"
+    ):
+        await build_aliases(engine, _Market([]))
+    assert await _stored_rows(engine) == 0
+
+    await mark_renamed_news_done(engine)
+    async with engine.begin() as conn:
+        await conn.execute(
+            text("DELETE FROM backfill_progress WHERE task = :t AND unit = :u"),
+            {"t": renames.TASK, "u": "FB:2019-01-01:2019-01-31"},
+        )
+    with pytest.raises(RenamedNewsError, match=r"^1 month\(s\) .*FB:2019-01-01:2019-01-31"):
+        await build_aliases(engine, _Market([]))
+    assert await _stored_rows(engine) == 0
+
+    assert await build_aliases(engine, _Market([]), force=True) > 0  # forced, it builds
+
+
 async def test_editing_the_renames_changes_nothing_until_the_next_build(
     engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -388,6 +418,7 @@ async def test_editing_the_renames_changes_nothing_until_the_next_build(
     assert matcher_for("NEWCO", after).tickers == ("NEWCO",)
     assert await alias_sha(engine) == sha
 
+    await mark_renamed_news_done(engine)  # the new tickers' months
     await build_aliases(engine, _Market([]))
     rebuilt = await load_aliases(engine)
     assert rebuilt["AAPL"].tickers == ("AAPL", "APPL")

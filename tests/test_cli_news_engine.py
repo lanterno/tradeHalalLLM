@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from halal_trader.cli import cli
 from halal_trader.data.alpaca_market import AlpacaMarketData
-from tests._renames import NewsMarket, seed_candidates_data
+from tests._renames import NewsMarket, mark_renamed_news_done, seed_candidates_data
 
 
 def _run(database_url: str, work: Callable[[AsyncEngine], Awaitable[Any]]) -> Any:
@@ -76,22 +76,36 @@ def test_the_backfill_command_stops_when_alpaca_serves_no_retired_ticker(
     assert "Traceback" not in result.output
 
 
-def test_the_alias_build_command_stores_and_pins_the_set(
+def test_the_alias_build_command_waits_for_the_renamed_news_and_pins_the_set(
     database_url: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(
-        AlpacaMarketData, "from_settings", classmethod(lambda cls, settings, **kw: NewsMarket())
-    )
-    result = CliRunner().invoke(cli, ["events", "aliases", "build"])
-    assert result.exit_code == 0, result.output
+    _client(monkeypatch, NewsMarket())
 
     async def stored(engine: AsyncEngine) -> int:
         async with engine.connect() as conn:
             return int((await conn.execute(text("SELECT count(*) FROM story_aliases"))).scalar())
 
+    refused = CliRunner().invoke(cli, ["events", "aliases", "build"])
+    assert refused.exit_code == 1
+    assert "renamed-ticker news not fetched yet" in refused.output
+    assert "--force" in refused.output
+    assert _run(database_url, stored) == 0
+
+    _run(database_url, mark_renamed_news_done)
+    result = CliRunner().invoke(cli, ["events", "aliases", "build"])
+    assert result.exit_code == 0, result.output
     rows = _run(database_url, stored)
     assert rows > 0  # the renamed tickers' current symbols, at least
     assert f"{rows} alias row(s) stored; alias_sha " in result.output
+
+
+def test_the_alias_build_command_can_be_forced(
+    database_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _client(monkeypatch, NewsMarket())
+    result = CliRunner().invoke(cli, ["events", "aliases", "build", "--force"])
+    assert result.exit_code == 0, result.output
+    assert "alias row(s) stored" in result.output
 
 
 def test_the_new_groups_are_on_the_events_command() -> None:
