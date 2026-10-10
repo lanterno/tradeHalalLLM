@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date
 
 from sqlalchemy import text
@@ -152,3 +153,26 @@ async def test_views_carry_the_period_their_holdings_are_as_of(engine: AsyncEngi
     assert held(views["SPUS"], "META", TITLES["META"])
     assert held(views["HLAL"], "CPAY", TITLES["CPAY"])
     assert not held(views["HLAL"], "META", TITLES["META"])
+
+
+async def test_a_filing_of_several_periods_counts_no_old_ticker(engine: AsyncEngine) -> None:
+    # One HLAL filing lists IAC at 2020-05-31 (the old IAC, now Match Group) and
+    # Apple at 2020-08-31. People Inc. (PPLI) took IAC on 2020-07-01: dated by
+    # the latest period, the old IAC's holding would count for it.
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO etf_holdings (etf, filed, period_end, ticker, name, cusip, "
+                "weight_pct) VALUES ('HLAL', '2020-09-28', :p, :t, :n, :c, 1.0)"
+            ),
+            [
+                {"p": date(2020, 5, 31), "t": "IAC", "n": "IAC/InterActiveCorp", "c": "1"},
+                {"p": date(2020, 8, 31), "t": "AAPL", "n": "Apple Inc", "c": "2"},
+            ],
+        )
+    (hlal,) = await views_at(engine, date(2020, 9, 30))
+    assert hlal.period_end is None
+    assert held_as(hlal, "PPLI") is None
+    assert held(hlal, "AAPL", "")  # today's tickers and names still count
+    assert held(hlal, "XX", "Apple Inc.")
+    assert held_as(replace(hlal, period_end=date(2020, 8, 31)), "PPLI") == "IAC"
