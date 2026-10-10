@@ -110,6 +110,7 @@ Each step adds to a counter in the run log.
      - **(a) Names.** `market_assets.name` plus Alpaca `inactive_assets()` names, cleaned with `SUFFIX` (from the design panel's prototype).
        - Aliases are the cleaned full name, plus the first word if it has ≥ 4 letters (or ≥ 3 in capitals) and is not in `GENERIC`.
        - Plus the first two words if together they are ≥ 6 characters and neither is a single letter.
+       - Dotted initials (two or more single letters, each with its dot) count both ways: spaced, as the cleaning leaves them ("J B Hunt"), and collapsed into one word before the cleaning ("JB Hunt", which the first-two-words rule then keeps). Headlines write both: "J.B. Hunt" reads "JB Hunt" once dots go, "A. O. Smith" reads "A O Smith".
      - **(b) Learned slots.** Benzinga's own company slot, learned from single-symbol articles published 2016-01-01..2026-10-09 through `ANALYST_SLOT`, `EARN_CO` and `GUIDE_CO`.
        - A slot is kept if it occurs ≥ 3 times and makes up ≥ 10% of the symbol's slots. Its first word is also kept, under the same first-word rule.
      - **(c) `ALIAS_OVERRIDES`:**
@@ -121,7 +122,13 @@ Each step adds to a counter in the run log.
        - TSLA: Tesla
        - NVDA: Nvidia
        - AMD: AMD, Advanced Micro
+       - Added 2026-10-11 from the names the headlines use that no source gives, found where a 2016-2024 PIT-halal rank < 1000 name's single-symbol articles passed the entity check less than half the time in a year, or least often overall: BDX: BD; BMY: Bristol Myers; CART: Instacart; DAL: Delta; GWW: Grainger; JNJ: J&J, Janssen; LLY: Lilly; LPX: Louisiana Pacific, LP Building Solutions; PG: P&G; PRLB: Protolabs; SDGR: Schrödinger; SMCI: Supermicro; SMG: ScottsMiracle-Gro.
      - **(d) Tickers.** The ticker itself and every old ticker in `TICKER_RENAMES`, matched case-sensitively, optionally with a leading `$`. Only tickers of 2+ characters are used.
+     - **(e) Former names** (source `former`), for each current symbol of `TICKER_RENAMES`, per old ticker:
+       - The learned rule of (b) over the slots of the old ticker's own articles: single-symbol articles tagging only the old ticker, on a day of its `news_window`, stored under the current symbol and its own (`renames.owner`). Each old ticker is a pool of its own, so the new name's longer history cannot hold the old name under 10% ("Priceline Group" was 4% of BKNG's slots).
+       - The old ticker's asset names (a), only when the cleaned name matches ≥ 3 of those slots: Alpaca lists an old ticker under its holder today, if at all (PCLN is a Pictet ETF, Q is Qnity, IR is Gardner Denver's Ingersoll Rand).
+       - `FORMER_NAME_OVERRIDES`: AGNT: eXp World, eXp Realty; BKNG: Priceline; IQV: Quintiles, QuintilesIMS, Quintiles IMS; KDP: Dr Pepper Snapple, Dr Pepper; KNX: Knight Transportation; NNN: National Retail; NXH: Overstock; TPR: Coach; TT: Ingersoll-Rand. KNX and NNN kept their tickers.
+       - Names are not dated. TT's former "Ingersoll Rand" has been Gardner Denver's (IR) since 2020; it is checked only against articles tagging TT, and no stored TT article after the switch passes by it.
      - Sources (b) and (d) apply to **every** symbol, including ones without a `market_assets` row.
    - The pattern is `(?<![A-Za-z])(?:alias|…|(?-i:\$?TICKER))(?![a-z])` with `re.I`, longest alias first.
 4. **Time.**
