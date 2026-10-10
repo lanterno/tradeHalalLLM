@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import sys
 from datetime import date
 
@@ -22,6 +23,7 @@ from halabot.playbooks.loader import (
 from halabot.playbooks.records import MemorySink, PgOutcomeSink, outcomes_sha256
 from halabot.playbooks.sim import pool_method, run
 from halabot.playbooks.types import SimConfig
+from halal_trader.core import events
 from tests.halabot.playbooks._seed import mark_done, seed_bars, seed_calendar, seed_market
 from tests.halabot.playbooks._support import (
     FACTS,
@@ -165,6 +167,23 @@ async def test_a_gate_only_fill_model_needs_a_gate_unlock(engine: AsyncEngine) -
     assert (t.entry_px, t.spy_entry_px) == (50.9, 200.4)  # VWAPs, unclamped
     assert t.exit_bar_ts == et(MON, 15, 59) and (t.exit_px, t.spy_exit_px) == (51.3, 202.2)
     assert t.flags == ("last_close",) and t.exit_reason == "time_stop"
+
+
+async def test_a_run_logs_its_start_batches_and_end(
+    engine: AsyncEngine, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The structured events come from core/events.py, under one run_id."""
+    market = random_market(25, 6, sessions=1)
+    await seed_calendar(engine, date(2016, 1, 4), END)
+    await seed_market(engine, market)
+    with caplog.at_level(logging.INFO, logger=sim.__name__):
+        sink, summary = await _go(engine, market, batch=2)
+    records = [r for r in caplog.records if str(getattr(r, "event", "")).startswith("playbooks.")]
+    names = [r.event for r in records]  # type: ignore[attr-defined]
+    assert names[0] == events.SIM_RUN_START and names[-1] == events.SIM_RUN_DONE
+    assert names.count(events.SIM_RUN_BATCH) == len(names) - 2 >= 2
+    assert {r.run_id for r in records} == {summary.run_id}  # type: ignore[attr-defined]
+    assert records[-1].trades == summary.trades  # type: ignore[attr-defined]
 
 
 def test_pool_method_defaults_to_serial_on_macos(monkeypatch: pytest.MonkeyPatch) -> None:
