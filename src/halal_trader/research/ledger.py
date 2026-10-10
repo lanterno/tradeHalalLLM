@@ -8,7 +8,8 @@ every other one, whatever strategy it came from. A run is recorded in
 of those active returns:
 
 * the trial count is the number of distinct configurations ever recorded
-  (re-running one configuration on newer data is not a new trial);
+  with a Sharpe (re-running one configuration on newer data is not a new
+  trial, and a later row of it without a Sharpe does not drop it);
 * the Sharpe variance across trials is the larger of the variance across
   their recorded Sharpes and this run's own estimator variance, so a
   handful of near-identical trials cannot shrink the deflation to nothing.
@@ -73,21 +74,23 @@ class Assessment:
 
 
 async def _trial_sharpes(engine: AsyncEngine) -> dict[str, float]:
-    """config_hash -> per-period active Sharpe of its latest recorded run."""
+    """config_hash -> per-period active Sharpe of its latest run that has one.
+
+    A later row of the same configuration without a Sharpe (a degenerate
+    run, a summary row) neither hides the trial nor replaces its Sharpe.
+    """
     async with engine.connect() as conn:
         rows = await conn.execute(
             text(
-                "SELECT DISTINCT ON (config_hash) config_hash, metrics "
+                "SELECT DISTINCT ON (config_hash) config_hash, "
+                "CAST(metrics->>'active_sr_period' AS float8) AS sr "
                 "FROM quant_trials WHERE name LIKE :p "
+                "AND metrics->>'active_sr_period' IS NOT NULL "
                 "ORDER BY config_hash, id DESC"
             ),
             {"p": PREFIX + "%"},
         )
-        return {
-            r.config_hash: float(r.metrics["active_sr_period"])
-            for r in rows
-            if r.metrics and r.metrics.get("active_sr_period") is not None
-        }
+        return {r.config_hash: float(r.sr) for r in rows}
 
 
 async def record_backtest(
