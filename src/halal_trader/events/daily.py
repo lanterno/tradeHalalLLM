@@ -8,8 +8,9 @@ the only evidence a strategy cannot have been fitted to -- has no gaps:
   never change), each new one stamped from its EDGAR header;
 * EPS facts again for companies that filed a 10-Q or 10-K in the last week;
 * any insider-transaction quarter SEC has published since the last run;
-* earnings facts from the new headlines, and LLM scores for new
-  company headlines (research budget pool; stops at its cap).
+* earnings facts from the new headlines (every headline again after a
+  parser change, then the superseded parser's facts are deleted), and LLM
+  scores for new company headlines (research budget pool; stops at its cap).
 
 Each step reports its own error; none blocks the others.
 """
@@ -189,9 +190,13 @@ async def refresh_events(engine: AsyncEngine, settings: Any, *, today: date) -> 
             )
 
         async def facts() -> int:
-            from halal_trader.events.earnings_parse import extract_all
+            from halal_trader.events.earnings_parse import drop_superseded, extract_all
 
-            return await extract_all(engine)
+            # Every event is read under the deployed parser's label before an
+            # older label's facts go: the readers never see a gap.
+            stored = await extract_all(engine)
+            await drop_superseded(engine)
+            return stored
 
         async def scores() -> int:
             from halal_trader.core.llm import create_classifier_llm, spend

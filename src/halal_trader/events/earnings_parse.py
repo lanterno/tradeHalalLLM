@@ -651,9 +651,11 @@ async def extract_all(engine: Any, *, batch: int = 5000) -> int:
     facts stored.
 
     An event with no earnings statement is marked with a ``none`` fact so it
-    is not re-read, and so the parse rate can be measured. Once every event is
-    read, the facts of every older v4 label are deleted (:func:`drop_superseded`);
-    v3's stay.
+    is not re-read, and so the parse rate can be measured. It only adds rows:
+    the facts of other labels stay, so a process running another parser (a dev
+    checkout, a rollback) never takes the fleet's facts away. Deleting them is
+    :func:`drop_superseded`'s, which the evening refresh and ``events extract
+    --drop-superseded`` call after this returns.
     """
     from sqlalchemy import text
 
@@ -672,7 +674,6 @@ async def extract_all(engine: Any, *, batch: int = 5000) -> int:
                 )
             ).all()
         if not rows:
-            await drop_superseded(engine, batch=batch)
             return stored
         after = rows[-1].id
         facts = []
@@ -695,7 +696,11 @@ async def extract_all(engine: Any, *, batch: int = 5000) -> int:
 async def drop_superseded(engine: Any, *, batch: int = 5000) -> int:
     """Delete the facts of every v4 label but ``EXTRACTOR``, ``batch`` rows a
     transaction; returns rows deleted. The bare ``benzinga-earnings-v4`` of the
-    parsers that stored no pin counts as superseded; v3's rows stay."""
+    parsers that stored no pin counts as superseded; v3's rows stay.
+
+    Run it only once :func:`extract_all` has read every event under
+    ``EXTRACTOR``, and only from the parser the fleet runs: from any other,
+    it deletes the facts the bot's readers select."""
     from sqlalchemy import text
 
     dropped, after = 0, 0

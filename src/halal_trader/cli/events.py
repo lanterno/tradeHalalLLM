@@ -323,15 +323,32 @@ def stories_counts_cmd(start: Any, end: Any) -> None:
 
 
 @events.command("extract")
-def extract_cmd() -> None:
-    """Read earnings results and guidance vs consensus out of stored headlines."""
+@click.option(
+    "--drop-superseded",
+    is_flag=True,
+    help=(
+        "Then delete the facts every other v4 parser stored. Only from the parser the "
+        "fleet runs: from any other, this deletes the facts the bot reads."
+    ),
+)
+def extract_cmd(drop_superseded: bool) -> None:
+    """Read earnings results and guidance vs consensus out of stored headlines.
 
-    async def _run(engine: Any, settings: Any) -> int:
-        from halal_trader.events.earnings_parse import extract_all
+    Adds this parser's facts and keeps every other label's; the evening refresh
+    deletes the superseded ones."""
 
-        return await extract_all(engine)
+    async def _run(engine: Any, settings: Any) -> tuple[int, int | None]:
+        from halal_trader.events import earnings_parse
 
-    console.print(f"{run_db(_run)} earnings fact(s) extracted")
+        stored = await earnings_parse.extract_all(engine)
+        if not drop_superseded:
+            return stored, None
+        return stored, await earnings_parse.drop_superseded(engine)
+
+    stored, dropped = run_db(_run)
+    console.print(f"{stored} earnings fact(s) extracted")
+    if dropped is not None:
+        console.print(f"{dropped} superseded fact row(s) deleted")
 
 
 @events.command("quality")
