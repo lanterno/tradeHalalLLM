@@ -498,7 +498,12 @@ def test_metric_verdict(fields: dict[str, object], metric: str, verdict: int | N
         ("Atmos Energy Reports Q4 Adj. EPS $0.34 vs. $0.34 Est.", (0, None, "earnings_inline")),
         (
             "TripAdvisor Reports Q4 EPS $0.16 vs. Est. $0.31, Rev. $316M vs. Est. $326M",
-            (-1, None, "earnings_miss"),
+            (-1, -1, "earnings_miss"),
+        ),
+        # Estimate first for both: the EPS beats, the sales miss (-0.5%).
+        (
+            "21st Century Fox Reports Q2 EPS $0.53 vs. Est. $0.49, Rev. $7.68B vs. Est. $7.72B",
+            (1, -1, "earnings_miss"),
         ),
         # A mixed print is a miss.
         (

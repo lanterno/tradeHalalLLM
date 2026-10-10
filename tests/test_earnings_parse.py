@@ -258,7 +258,10 @@ def test_the_estimate_stated_before_its_number() -> None:
     assert r.kind == "result" and f["period"] == "Q4" and f["basis"] == "gaap"
     assert f["eps"] == 0.16 and f["eps_estimate"] == 0.31 and f["eps_verdict"] == "vs"
     assert f["eps_surprise"] == pytest.approx((0.16 - 0.31) / 0.31)
-    assert "sales" not in f  # "Rev. $X vs. Est. $Y" has no template
+    # The sales, estimate first too (SALES_EST_FIRST).
+    assert f["sales"] == pytest.approx(316e6) and f["sales_estimate"] == pytest.approx(326e6)
+    assert f["sales_surprise"] == pytest.approx((316 - 326) / 326)
+    assert f["sales_verdict"] == "vs"
 
 
 def test_the_estimate_first_with_a_capital_vs() -> None:
@@ -266,6 +269,28 @@ def test_the_estimate_first_with_a_capital_vs() -> None:
         "Crown Holdings Reports Q1 EPS $0.57 Vs Est $0.63, Sales $1.89B Vs Est $2.03B"
     )
     assert r.fields["eps"] == 0.57 and r.fields["eps_estimate"] == 0.63
+    assert r.fields["sales"] == pytest.approx(1.89e9)
+    assert r.fields["sales_estimate"] == pytest.approx(2.03e9)
+
+
+@pytest.mark.parametrize(
+    ("headline", "sales", "estimate"),
+    [
+        # A mixed 2016-17 print: the EPS beats, the sales miss.
+        ("21st Century Fox Reports Q2 EPS $0.53 vs. Est. $0.49, Rev. $7.68B vs. Est. $7.72B",
+         7.68e9, 7.72e9),
+        ("Amazon Reports Q2 EPS $1.78 Vs Est $1.11, Revs $30.4B Vs Est $29.54B", 30.4e9, 29.54e9),
+        ("Arrowhead Pharmaceuticals Reports Q3 EPS $(0.32) vs. Est. $(0.37), "
+         "Rev. $39.58k  vs. Est. $60K", 39.58e3, 60e3),
+    ],
+)  # fmt: skip
+def test_the_sales_after_an_estimate_first_eps(
+    headline: str, sales: float, estimate: float
+) -> None:
+    (r,) = parse_headline(headline)
+    assert r.fields["sales"] == pytest.approx(sales)
+    assert r.fields["sales_estimate"] == pytest.approx(estimate)
+    assert r.fields["sales_surprise"] == pytest.approx((sales - estimate) / estimate)
 
 
 @pytest.mark.parametrize(
@@ -391,6 +416,189 @@ def test_a_tolerance_is_never_read_as_the_guided_level(headline: str) -> None:
 
 
 @pytest.mark.parametrize(
+    ("headline", "action", "low", "high", "estimate"),
+    [
+        # GUIDE_V4 alone reads the "-$1.85" glued to the old range: -98%.
+        ("ESCO Technologies Raises Preliminary Q2 Adj EPS Guidance from $1.75-$1.85 to $1.91 "
+         "vs $1.77 Est", "raises", 1.91, 1.91, 1.77),
+        ("Whirlpool Narrows FY2025 GAAP EPS Guidance from $5.00-$7.00 to $6.00 vs $5.32 Est; "
+         "Affirms FY2025 Sales Guidance of $15.800B vs $15.491B Est", "narrows", 6.00, 6.00, 5.32),
+        # ... the "1" of "Q1": +18%, where the guide is 14% below consensus.
+        ("HP Expects Adj EPS Of $0.70 - $0.76 For Q1 (Est $0.85); $3.45 - $3.75 For FY25 "
+         "(Est $3.60)", "expects", 0.70, 0.76, 0.85),
+        # ... the range being replaced, which sits right before "vs".
+        ("3M Raises FY24 Adj EPS Guidance To $7.00-$7.30 From $6.80-$7.30 vs. $7.17 Est",
+         "raises", 7.00, 7.30, 7.17),
+        ("ATI Lowers 2024 Guidance: Now Sees Adj. EPS Of $2.24-$2.30 (Prior $2.40-$2.60) Vs. "
+         "$2.45 Est.", "lowers", 2.24, 2.30, 2.45),
+        # "From X To Y" is the old guidance and the new, not a range.
+        ("Axcelis Cuts Q2 Prelim. Sales Guidance From $80M To $75M vs $82.93M",
+         "cuts", 75e6, 75e6, 82.93e6),
+        ("Amneal Pharmaceuticals Raises FY19 Adj. EPS Guidance From ~$0.31 To $0.52-$0.62 vs "
+         "$0.53 Est.", "raises", 0.52, 0.62, 0.53),
+        # "By $0.05" is the change, not the guidance.
+        ("Centene Raises FY22 Adj. EPS Guidance By $0.05 To $5.60-$5.75 vs $5.59 Est.",
+         "raises", 5.60, 5.75, 5.59),
+        # "Will Range From" introduces the guidance itself.
+        ("Knight-Swift Transportation Expects Q4 Adjusted EPS Will Range From $0.32-$0.36 Vs "
+         "$0.34 Est.", "expects", 0.32, 0.36, 0.34),
+    ],
+)  # fmt: skip
+def test_a_guided_figure_is_never_a_fragment_nor_the_guidance_it_replaces(
+    headline: str, action: str, low: float, high: float, estimate: float
+) -> None:
+    g = parse_headline(headline)[0]
+    f = g.fields
+    assert g.kind == "guidance" and f["action"] == action
+    assert f["low"] == pytest.approx(low) and f["high"] == pytest.approx(high)
+    mid = (low + high) / 2
+    assert f["estimate"] == pytest.approx(estimate)
+    assert f["surprise"] == pytest.approx((mid - estimate) / estimate)
+
+
+@pytest.mark.parametrize(
+    ("headline", "action"),
+    [
+        # Only the guidance being replaced is stated: the action stands alone.
+        ("10x Genomics Lowers FY24 Sales Guidance From $640M-$660M Vs. $663.06M Estimate",
+         "lowers"),
+        # The "26" of "FY26" is all GUIDE_V4 found.
+        ("Autoliv Expects 0% Organic Sales Growth For FY26 Vs $11.18B Estimate. FY25 Sales Was "
+         "$10.82B", "expects"),
+    ],
+)  # fmt: skip
+def test_guidance_without_a_reliable_figure_keeps_its_action(headline: str, action: str) -> None:
+    (g,) = parse_headline(headline)
+    assert g.kind == "guidance" and g.fields["action"] == action
+    assert g.fields["low"] is None and g.fields["mid"] is None
+    assert g.fields["surprise"] is None and g.fields["estimate"] is not None
+
+
+@pytest.mark.parametrize(
+    ("headline", "low", "high"),
+    [
+        ("Plug Power Sees Q2 Sales $37-$41M vs $34.7M Est.", 37e6, 41e6),
+        ("BioMarin Sees FY18 Sales $1.47-$1.53B vs $1.48B Est.", 1.47e9, 1.53e9),
+    ],
+)
+def test_a_range_states_its_unit_once(headline: str, low: float, high: float) -> None:
+    g = parse_headline(headline)[0]
+    assert g.fields["low"] == pytest.approx(low) and g.fields["high"] == pytest.approx(high)
+    assert g.fields["surprise"] is not None and "not_comparable" not in g.fields
+
+
+@pytest.mark.parametrize(
+    ("headline", "kind", "metric"),
+    [
+        # A suffix on one side only.
+        ("Agilent Technologies Sees FY25 Adj. EPS $5.54-$5.61 Vs $5.66B Est.", "guidance", None),
+        ("Merit Medical Reports Q2 EPS $0.26 vs. Est. $151.1M vs. Est. $147.76M", "result", "eps"),
+        # The year read as the EPS: 2024 against $149.45M.
+        ("Appian Preliminary Revenue Of $149.8M For Q1 2024 Vs $149.45M Est.; Cloud Subscription "
+         "Revenue Expected To Be $86.6M", "result", "eps"),
+        # Both suffixed, a thousand times apart.
+        ("Takeda Pharmaceutical Earlier Reported Q1 Sales $8.60B Beat $7.49M Estimate",
+         "result", "sales"),
+        # The word is computed from the same broken figures ("Miss" whenever the actual
+        # drops its unit), so it decides nothing either.
+        ("Air Products & Chemicals Q2 2024 Adj EPS $2.85 Beats $2.69 Estimate, Sales $2.930 Miss "
+         "$3.047B Estimate", "result", "sales"),
+    ],
+)  # fmt: skip
+def test_a_figure_in_other_units_than_its_estimate_has_no_surprise(
+    headline: str, kind: str, metric: str | None
+) -> None:
+    (fact,) = parse_headline(headline)
+    f = fact.fields
+    assert fact.kind == kind and f["not_comparable"] is True
+    if metric is None:
+        assert f["surprise"] is None
+    else:
+        assert f[f"{metric}_surprise"] is None and f[f"{metric}_not_comparable"] is True
+
+
+def test_units_across_a_suffix_boundary_still_compare() -> None:
+    (r,) = parse_headline(
+        "Abercrombie & Fitch Q1 Adj EPS $2.14 Beats $1.73 Estimate, "
+        "Sales $1.02B Beat $963.26M Estimate"
+    )
+    assert r.fields["sales_surprise"] == pytest.approx((1.02e9 - 963.26e6) / 963.26e6)
+    assert "not_comparable" not in r.fields
+    # Only the statement in other units loses its surprise.
+    (r,) = parse_headline(
+        "Air Products & Chemicals Q2 2024 Adj EPS $2.85 Beats $2.69 Estimate, "
+        "Sales $2.930 Miss $3.047B Estimate"
+    )
+    assert r.fields["eps_surprise"] == pytest.approx((2.85 - 2.69) / 2.69)
+    assert "eps_not_comparable" not in r.fields
+
+
+@pytest.mark.parametrize(
+    "headline",
+    [
+        "Celgene Sees Q4 Adj EPS $1.18 Vs Est $1.30, Sees FY 2016 Adj EPS $5.50-$5.70 VS Est "
+        "$5.68 & Sales $10.5-$11B Vs Est $11.13B",
+        "Humana Sees FY16 EPS $8.85 vs. Est. $8.73",
+        "Globus Medical Sees FY17 EPS $1.27, Inline",
+    ],
+)
+def test_a_forecast_is_never_read_as_a_result(headline: str) -> None:
+    assert parse_headline(headline) == []
+
+
+def test_a_preannouncement_is_guidance() -> None:
+    (g,) = parse_headline("Ashland Sees Prelim. Q1 Adj. EPS $0.97 vs $1.10 Est.")
+    assert g.kind == "guidance" and g.fields["action"] == "sees"
+    assert g.fields["surprise"] == pytest.approx((0.97 - 1.10) / 1.10)
+
+
+def test_a_sales_figure_after_a_forecast_verb_is_not_the_results() -> None:
+    # Constructed: the forecast verb is too far from its metric for GUIDE_V4.
+    (r,) = parse_headline(
+        "Acme Q3 EPS $1.00 Beats $0.90 Estimate, Also Sees The Fourth Quarter Benefiting From "
+        "Strong Demand, Sales $5B vs $5.2B Est"
+    )
+    assert r.kind == "result" and "sales" not in r.fields
+    (r,) = parse_headline(
+        "Acme Q3 EPS $1.00 Beats $0.90 Estimate, Says The Fourth Quarter Will Be Seasonal As "
+        "Usual, Sales $5B vs $5.2B Est"
+    )
+    assert r.fields["sales_estimate"] == pytest.approx(5.2e9)
+
+
+@pytest.mark.parametrize(
+    ("headline", "eps", "sales"),
+    [
+        # "May Not Compare" without "To", closing the segment: every statement.
+        ("CMS Energy Reports Q4 GAAP EPS $(0.01) vs $0.51 Est., Sales $1.78B vs $1.77B Est., "
+         "May Not Compare", True, True),
+        ("Sanchez Energy Q2 EPS $0.31 vs $(0.14) Est., Sales $175.70M vs $182.24M Est., "
+         "May Not Compare", True, True),
+        # Within the EPS statement's clause (before the next metric): the EPS only.
+        ("Tableau Reports Q3 non-GAAP EPS $0.16 vs $0.07 Est, May Not Compare, Revenue $206.1M "
+         "vs $213.78M Est", True, False),
+        ("AerCap Holdings Q1 EPS $1.72 Beats $1.57 Estimate, May Not Compare, Sales $1.22B Miss "
+         "$1.23B Estimate", True, False),
+    ],
+)  # fmt: skip
+def test_may_not_compare_with_or_without_to(headline: str, eps: bool, sales: bool) -> None:
+    (r,) = parse_headline(headline)
+    f = r.fields
+    assert f["not_comparable"] is True
+    for metric, flagged in (("eps", eps), ("sales", sales)):
+        assert f.get(f"{metric}_not_comparable", False) is flagged
+        assert (f[f"{metric}_surprise"] is None) is flagged
+
+
+def test_a_guide_closed_by_may_not_compare_has_no_surprise() -> None:
+    (g,) = parse_headline(
+        "Becton Dickinson Sees FY EPS $6.23 to $6.30 vs $8.41 est, May Not Compare"
+    )
+    assert g.fields["not_comparable"] is True and g.fields["surprise"] is None
+    assert g.fields["mid"] == pytest.approx(6.265)
+
+
+@pytest.mark.parametrize(
     "headline",
     [
         "Ulta Sees Q1 Rev. $1.016B-$1.033B vs. Est. $1.01B, EPS $1.25-$1.30 vs. Est. $1.22",
@@ -493,13 +701,24 @@ def test_parser_sha_pins_every_pattern() -> None:
         "_GUIDE_RANGE",
         "SALES_ONLY",
         "RESULT_EST_FIRST",
+        "SALES_EST_FIRST",
         "GUIDE_V4",
         "NOT_COMPARABLE",
         "GUIDE_UNPARSED",
+        "_BASIS_WORD",
+        "_TOLERANCE_GAP",
+        "_FIGURE",
+        "_OLD",
+        "_FROM",
+        "_FORWARD",
+        "_SUFFIXED",
+        "_METRIC_WORD",
+        "_CLOSING_FLAG",
     ):
         assert src[name] == getattr(ep, name).pattern
     assert src["EXTRACTOR"] == ep.EXTRACTOR
     assert src["PARSE_ORDER"] == ",".join(ep.PARSE_ORDER)
+    assert src["UNIT_RATIO"] == repr(ep.UNIT_RATIO)
     want = hashlib.sha256(json.dumps(src, sort_keys=True).encode()).hexdigest()[:12]
     assert ep.PARSER_SHA == want and len(want) == 12
 
