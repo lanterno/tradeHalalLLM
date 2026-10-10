@@ -8,15 +8,24 @@ it, every comparison strict:
   used: its freshness rule is for live orders, and history's screens are
   quarterly. BROAD (a sensitivity) also admits rows whose one reason is a
   Shariah index's exclusion, and unmapped rows (no CIK) of names that are not
-  funds (``ticker_ciks.status = 'fund'``).
+  funds. A fund is a name whose ``ticker_ciks`` row says ``status = 'fund'``;
+  a name with no ``ticker_ciks`` row at all counts as not a fund, and is
+  admitted (the spec's SQL ``status != 'fund'`` would drop it as NULL; the
+  live database has no such name).
 * **Liquidity.** The 0-based index in ``universe_at(S, top_n=3000)``, which
   ranks on the months before S's month; eligible below 1000.
 * **Share class.** Among the names admitted at S (screen and rank) that share
-  the screen row's CIK, only the most liquid is kept.
+  the screen row's CIK, only the most liquid is kept. The winner is chosen
+  before any bar is read: when it then fails daily bars, price or σ, the
+  other classes stay out as ``share_class`` rather than step up.
 * **Price.** ``prev_close_s >= 5``: the previous session's raw close in
   session-S units, ``close_raw(S−1) · A(S−1)/A(S)`` with
   ``A(d) = close_all(d)/close_raw(d)``. The ratio holds exactly the corporate
-  actions effective at S's open, which are announced beforehand.
+  actions effective at S's open, which are announced beforehand. Computing
+  A(S) needs S's own daily bars (raw and all), so a name with no bar on S
+  (halted all day) is ``no_daily`` before the simulator could call it
+  ``halted_all_day``: S-dated information, stated (2016-10 to 2024-12 had
+  one symbol-session with a bar on S−1, none on S, and later bars).
 * **Volatility.** σ and β come from the 60 sessions whose close is strictly
   before the news (``at_news``, always required): pre-open news uses S−1
   back, news after the close of N uses N back, news late in N's session N−1
@@ -139,7 +148,11 @@ class PreEvent:
 
 @dataclass(frozen=True, slots=True)
 class DailyPoint:
-    """One session's raw daily bar and its adjustment factor A."""
+    """One session's raw daily bar and its adjustment factor A.
+
+    The simulator reads ``open`` and ``close`` (its official prices) through
+    ``halabot.playbooks.interfaces.DailyPointLike``.
+    """
 
     day: date
     open: float
@@ -279,7 +292,8 @@ class PitContext:
         The first failing rule names the reason, in the order screen, CIK,
         rank, share class, daily bars, price, σ. σ is judged at ``at_news``
         (C.1), the window :meth:`pre_event` uses, so a story is never counted
-        eligible on one σ window and traded on another.
+        eligible on one σ window and traded on another. ``no_daily`` also
+        covers a name with no bar on S itself (see the module docstring).
         """
         j = self._session(session)
         series = self._loaded(symbol)
@@ -325,7 +339,8 @@ class PitContext:
 
     def pre_event(self, symbol: str, session: date, at_news: datetime) -> PreEvent | None:
         """``symbol``'s pre-news state for a story at ``session`` whose news came at
-        ``at_news``; None without the previous close and A-ratios, or without σ."""
+        ``at_news``; None without the previous close and A-ratios (bars on S−1
+        and S), or without σ."""
         j = self._session(session)
         series = self._loaded(symbol)
         k = self._news_index(j, at_news)
@@ -367,13 +382,19 @@ class PitContext:
         )
 
     def adj(self, symbol: str, day: date) -> float | None:
-        """A(day) = close_all / close_raw; None without both bars on ``day``."""
+        """A(day) = close_all / close_raw; None without both bars on ``day``.
+
+        A day outside the loaded daily bars, [start − 380 d, end + 7 d], is a
+        ``ValueError``, not None: nothing was read there, so None would claim
+        a missing bar that may exist. Every day in :attr:`sessions` is inside.
+        """
         j = self._day(day)
         series = self._loaded(symbol)
         return series.adj(j) if series is not None and j is not None else None
 
     def daily(self, symbol: str, day: date) -> DailyPoint | None:
-        """``symbol``'s raw daily bar on ``day`` with its A; None without both bars."""
+        """``symbol``'s raw daily bar on ``day`` with its A; None without both
+        bars. Outside the loaded daily bars it raises, as :meth:`adj` does."""
         j = self._day(day)
         series = self._loaded(symbol)
         if series is None or j is None:
@@ -437,7 +458,12 @@ class PitContext:
         return self._screen_dates[i - 1] if i else None
 
     def _refused(self, symbol: str, row: ScreenRow | None, universe: Universe) -> Reason | None:
-        """Why the screen keeps ``symbol`` out of ``universe``, or None when it admits it."""
+        """Why the screen keeps ``symbol`` out of ``universe``, or None when it admits it.
+
+        A row without a CIK is ``unmapped`` unless ``ticker_ciks`` marks the
+        name a fund; a name with no ``ticker_ciks`` row counts as not a fund,
+        so BROAD admits it.
+        """
         if row is None:
             return "not_halal"
         if row.verdict == "halal" and row.cik is not None:
@@ -521,7 +547,12 @@ def _through(p: int, n: int) -> slice:
 
 
 def _prev_close_s(series: _Series, j: int) -> float | None:
-    """close_raw(S−1) · A(S−1)/A(S), or None without those bars."""
+    """close_raw(S−1) · A(S−1)/A(S), or None without those bars.
+
+    A(S) reads S's own raw and all-adjusted closes. Only their ratio (the
+    corporate actions effective at S's open) enters the value, but a name
+    with no bar on S has none: ``no_daily``.
+    """
     if j < 1:
         return None
     a_s, a_p = series.adj(j), series.adj(j - 1)
