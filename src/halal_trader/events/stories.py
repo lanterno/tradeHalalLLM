@@ -66,8 +66,12 @@ news event it reads parsed by the current earnings extractor
 (``earnings_parse.EXTRACTOR``, read when the build runs). A build replaces
 its range one symbol batch at a time, each batch in one transaction, and
 records the range complete in ``backfill_progress`` (task :data:`TASK`,
-unit :func:`build_unit`) only once every batch is written; counts refuse a
-range no complete build covers.
+unit :func:`build_unit`) only once every batch is written. The mark names
+the inputs the build read (:func:`inputs_sha`: every pin, the stored
+aliases' among them, and the extractor); counts refuse a range no complete
+build from today's inputs covers, so a range built before the aliases, a
+pin or the extractor changed is rebuilt before it is counted. A change to
+the builder's rules that no pin sees must bump ``BUILDER_VERSION``.
 
 The builder's own constants are pinned by :data:`STORIES_SHA`;
 :func:`pins` gathers it with the other pins of the pre-registration.
@@ -157,6 +161,7 @@ __all__ = [
     "federal_holidays",
     "filing_public_at",
     "has_analyst_slot",
+    "inputs_sha",
     "jaccard",
     "load_items",
     "missing_facts",
@@ -231,7 +236,7 @@ _LEAD_DAYS: Final = 10
 BATCH_SYMBOLS: Final = 100
 _INSERT_CHUNK: Final = 500
 # A complete build of [start, end] is one backfill_progress row (task TASK,
-# unit build_unit(start, end)), written after its last batch.
+# unit build_unit(start, end, inputs_sha)), written after its last batch.
 TASK: Final = "stories"
 
 # The research windows `events stories counts` splits by (spec §G.5).
@@ -1014,34 +1019,48 @@ _DELETE_RANGE: Final = (
 )
 
 
-def build_unit(start: date, end: date) -> str:
-    """The ``backfill_progress`` unit (task :data:`TASK`) of a complete build of [start, end]."""
-    return f"{BUILDER_VERSION}:{start.isoformat()}:{end.isoformat()}"
+def build_unit(start: date, end: date, inputs: str) -> str:
+    """The ``backfill_progress`` unit (task :data:`TASK`) of a complete build of
+    [start, end] from the inputs hashed ``inputs`` (:func:`inputs_sha`)."""
+    return f"{BUILDER_VERSION}:{start.isoformat()}:{end.isoformat()}:{inputs}"
 
 
-def _range_of(unit: str) -> tuple[date, date] | None:
-    """[start, end] of this builder version's unit; None for another version's."""
+@dataclass(frozen=True, slots=True)
+class _Mark:
+    """A complete build's mark: [start, end] built from the inputs hashed ``inputs``."""
+
+    unit: str
+    start: date
+    end: date
+    inputs: str  # '' for a mark that recorded no inputs: it matches none
+
+
+def _mark_of(unit: str) -> _Mark | None:
+    """This builder version's unit as a mark; None for another version's."""
     prefix = f"{BUILDER_VERSION}:"
     if not unit.startswith(prefix):
         return None
-    lo, _, hi = unit.removeprefix(prefix).partition(":")
+    lo, _, rest = unit.removeprefix(prefix).partition(":")
+    hi, _, inputs = rest.partition(":")
     try:
-        return date.fromisoformat(lo), date.fromisoformat(hi)
+        return _Mark(unit, date.fromisoformat(lo), date.fromisoformat(hi), inputs)
     except ValueError:
         return None
 
 
-async def _ranges(conn: AsyncConnection) -> list[tuple[date, date]]:
+async def _marks(conn: AsyncConnection) -> list[_Mark]:
     rows = await conn.execute(
         text("SELECT unit FROM backfill_progress WHERE task = :t ORDER BY unit"), {"t": TASK}
     )
-    return [r for u in rows if (r := _range_of(str(u.unit))) is not None]
+    return [m for u in rows if (m := _mark_of(str(u.unit))) is not None]
 
 
 async def built_ranges(engine: AsyncEngine) -> list[tuple[date, date]]:
-    """The ranges [start, end] this builder version has completely built."""
+    """The ranges [start, end] this builder version has completely built from the
+    current inputs (:func:`inputs_sha`): the ones :func:`count_stories` accepts."""
+    current = await inputs_sha(engine)
     async with engine.connect() as conn:
-        return await _ranges(conn)
+        return [(m.start, m.end) for m in await _marks(conn) if m.inputs == current]
 
 
 def uncovered_sessions(
@@ -1061,21 +1080,22 @@ async def _unmark(engine: AsyncEngine, start: date, end: date) -> None:
     """Withdraw the complete marks over [start, end] before it is rebuilt.
 
     A mark reaching past the range keeps its parts outside it (with their
-    stories counted), so rebuilding a month leaves the rest of a complete
-    build complete; a build that stops before its own mark leaves [start,
-    end] unmarked.
+    stories counted, and the inputs they were built from), so rebuilding a
+    month leaves the rest of a complete build complete -- or, when the inputs
+    have changed since, still refused by the counts; a build that stops
+    before its own mark leaves [start, end] unmarked.
     """
     async with engine.begin() as conn:
         keep: dict[str, int] = {}
-        for a, b in await _ranges(conn):
-            if b < start or a > end:
+        for m in await _marks(conn):
+            if m.end < start or m.start > end:
                 continue
             await conn.execute(
                 text("DELETE FROM backfill_progress WHERE task = :t AND unit = :u"),
-                {"t": TASK, "u": build_unit(a, b)},
+                {"t": TASK, "u": m.unit},
             )
-            parts = [(a, start - timedelta(days=1))] if a < start else []
-            parts += [(end + timedelta(days=1), b)] if b > end else []
+            parts = [(m.start, start - timedelta(days=1))] if m.start < start else []
+            parts += [(end + timedelta(days=1), m.end)] if m.end > end else []
             for lo, hi in parts:
                 n = await conn.scalar(
                     text(
@@ -1084,7 +1104,7 @@ async def _unmark(engine: AsyncEngine, start: date, end: date) -> None:
                     ),
                     {"v": BUILDER_VERSION, "a": lo, "b": hi},
                 )
-                keep[build_unit(lo, hi)] = int(n or 0)
+                keep[build_unit(lo, hi, m.inputs)] = int(n or 0)
         await mark_units(engine, TASK, keep, conn=conn)
 
 
@@ -1140,6 +1160,9 @@ async def build_range(
                 "run `halal-trader events extract` first"
             )
     c = counters if counters is not None else Counter()
+    # Hashed before the aliases are read: if they change in between, the mark
+    # names the older inputs and the counts refuse the range (never the reverse).
+    inputs = await inputs_sha(engine)
     aliases = await load_aliases(engine)
     symbols = await _symbols(engine, lead, end)
     await _unmark(engine, start, end)
@@ -1158,7 +1181,7 @@ async def build_range(
     async with engine.begin() as conn:
         await conn.execute(text(_DELETE_RANGE + " AND symbol <> ALL(:s)"), span | {"s": symbols})
         if not force:
-            await mark_units(engine, TASK, {build_unit(start, end): written}, conn=conn)
+            await mark_units(engine, TASK, {build_unit(start, end, inputs): written}, conn=conn)
     if force:
         logger.warning(
             "stories %s..%s: a forced build, left unmarked (counts refuse it)", start, end
@@ -1236,16 +1259,31 @@ async def count_stories(
     at a time, each year's context loaded for that year's symbols only.
 
     Refuses (:class:`StoriesNotReady`) when a session in [start, end] lies in
-    no completely built range (:func:`built_ranges`): a build that stopped
-    part-way, or none at all, would be counted as if it held every story.
+    no range completely built from the current inputs (:func:`built_ranges`):
+    a build that stopped part-way, or none at all, would be counted as if it
+    held every story, and one built from other aliases, pins or extractor
+    (:func:`inputs_sha`) as if it were today's.
     """
     from halabot.playbooks.types import Session
 
-    gaps = uncovered_sessions(await built_ranges(engine), start=start, end=end)
+    current = await inputs_sha(engine)
+    async with engine.connect() as conn:
+        marks = await _marks(conn)
+    gaps = uncovered_sessions(
+        [(m.start, m.end) for m in marks if m.inputs == current], start=start, end=end
+    )
     if gaps:
+        stale = [d for d in gaps if any(m.start <= d <= m.end for m in marks)]
+        other = (
+            f"; {len(stale)} of them built from other inputs (first: {stale[0]}), "
+            "since changed: aliases, pins or extractor"
+            if stale
+            else ""
+        )
         raise StoriesNotReady(
             f"{len(gaps)} session(s) in {start}..{end} have no complete {BUILDER_VERSION} "
-            f"build (first: {gaps[0]}); run `halal-trader events stories build` over them"
+            f"build from the current inputs {current} (first: {gaps[0]}){other}; "
+            "run `halal-trader events stories build` over them"
         )
     counts = StoryCounts()
     for year in range(start.year, end.year + 1):
@@ -1390,3 +1428,16 @@ async def pins(engine: AsyncEngine) -> dict[str, str]:
         "parser_sha": earnings_parse.PARSER_SHA,
         "headline_patterns_sha": HEADLINE_PATTERNS_SHA,
     }
+
+
+async def inputs_sha(engine: AsyncEngine) -> str:
+    """A short hash of what a build's stories depend on: every pin (:func:`pins`:
+    the builder's constants, the stored aliases, the renames, the taxonomy, the
+    parser, the headline patterns) and the extractor whose facts it reads
+    (``earnings_parse.EXTRACTOR``, read now).
+
+    A complete build's mark records it (:func:`build_unit`), and
+    :func:`count_stories` accepts only the marks recording today's. A change to
+    the builder's rules that no pin sees bumps ``BUILDER_VERSION``.
+    """
+    return _sha(await pins(engine) | {"extractor": earnings_parse.EXTRACTOR})
