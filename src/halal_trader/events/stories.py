@@ -25,6 +25,18 @@ persists ``news_stories`` rows.
    next business day). Every item is usable :data:`NEWS_LAG` later
    (``available_at``).
 
+*Known limit: analyst commentary.* ``taxonomy.classify_item`` reads the
+whole headline for its negative types (``NEGATIVE_ORDER``: guidance cut,
+short report, fraud probe, ...) before its analyst step, so an admitted
+analyst note that quotes the analyst's commentary ("UPDATE: <Firm> Maintains
+Overweight On Apple, ... 'While Apple pulled guidance'", "<Firm> Maintains
+Buy On TransDigm Following Recent Short Reports") takes that negative type
+instead of an analyst one: about 70 structural items over 2016-2024. Such
+an item never brings a story into the family. It can only keep one out (a
+veto; a structural close makes the next sessions' stories followers) or,
+usable after an entry, abort the trade (the bounce playbook's X3). The fix
+belongs to the taxonomy, where it changes ``TAXONOMY_SHA``.
+
 Before admission, :func:`load_items` drops every news row that is not its
 symbol's own (``renames.owner``: a ticker another company held that day, or
 an old ticker's row whose copy the renamed-news backfill stored under the
