@@ -25,7 +25,10 @@ it, every comparison strict:
   or no later than S−2's close, cannot belong to a story reacting in S
   (every story item comes after S−1's close less 90 minutes): refused.
 * **Descriptives** (ATR, dollar volume, momentum, levels) use sessions up to
-  S−1, and are NaN where their bars are missing; they gate nothing.
+  S−1, and are NaN where their bars are missing; they gate nothing. The 20-
+  and 252-session levels are NaN unless the calendar holds that many
+  sessions through S−1 and the name has a bar on or before the window's
+  first session: a level never silently covers fewer sessions.
   **Facts** are the earnings facts published strictly before ``at``.
 
 Loading reads each source once per run: the screens in one query, the
@@ -542,9 +545,18 @@ def _atr_pct(series: _Series, p: int) -> float:
 
 
 def _levels(series: _Series, p: int, n: int, a_s: float) -> tuple[float, float]:
-    """Highest high and lowest low of the ``n`` sessions through ``p``, in S units."""
-    window = _through(p, n)
+    """Highest high and lowest low of the ``n`` sessions through ``p``, in S units.
+
+    NaN when those ``n`` sessions do not all exist for the name: the calendar
+    holds fewer than ``n`` through ``p`` (daily bars start on 2016-01-04), or
+    the name has no bar on or before the window's first session (listed, or
+    loaded, later). Missing bars inside the window (halts) are skipped.
+    """
+    first = p - n + 1
     d = series.data
+    if first < 0 or not np.isfinite(d[_RC, : first + 1]).any():
+        return math.nan, math.nan
+    window = slice(first, p + 1)
     with np.errstate(divide="ignore", invalid="ignore"):
         a = d[_AC, window] / d[_RC, window]
         highs = d[_RH, window] * a / a_s
