@@ -5,10 +5,14 @@ from __future__ import annotations
 from datetime import datetime
 from enum import StrEnum, auto
 
+import numpy as np
+import pytest
+
 from halabot.playbooks.playbook import TRIGGERED, Ctx, Factory
 from halabot.playbooks.sim import PitStory, simulate_symbol
 from halabot.playbooks.types import (
     BarIn,
+    BarSeries,
     FillIn,
     Finish,
     Input,
@@ -17,6 +21,7 @@ from halabot.playbooks.types import (
     SimConfig,
     Submit,
     Transition,
+    VisibleBars,
 )
 from halal_trader.market_hours import next_trading_day
 from tests.halabot.playbooks._support import (
@@ -235,35 +240,75 @@ def test_a_skipped_or_blocked_story_never_builds_a_playbook() -> None:
 # ── what a playbook can reach ──
 
 
-def test_visible_bars_are_copies_with_nothing_behind_them() -> None:
+def test_visible_bars_have_nothing_behind_them() -> None:
+    """Every bars() a playbook gets is read-only, and its .base ends at the visible bars."""
     st = story("AAA", MON, downgrade(MON))
-    checks: list[tuple[int, int, bool, bool]] = []
+    days = [MON, TUE, WED]
+    source = BarSeries.build([session_bars(d) for d in days], [1.0, 1.0, 1.0], 5)
+    checks: list[tuple[int, int, bool, bool, bool]] = []
+    kept: list[tuple[int, BarSeries]] = []
 
     class Look(Toy):
         def on(self, ev: Input, ctx: Ctx) -> list[Intent]:
-            if isinstance(ev, BarIn):
+            if isinstance(ev, BarIn) and ev.symbol == "AAA":
                 bars = ctx.market.bars(ev.symbol)
                 again = ctx.market.bars(ev.symbol)
-                arrays = (bars.ts, bars.o, bars.h, bars.l, bars.c, bars.v, bars.vw)
-                arrays += (bars.visible_at, bars.k, bars.scale)
+                n = len(bars)
+                arrays = bars.columns()
+                behind = all(
+                    a.base is not None
+                    and len(a.base) == len(source)
+                    and not np.any(a.base[n:])  # zeros: no bar after the visible ones
+                    and np.array_equal(a.base[:n], s[:n])
+                    for a, s in zip(arrays, source.columns())
+                )
                 checks.append(
                     (
                         ev.i,
-                        len(bars),
-                        all(a.base is None and not a.flags.writeable for a in arrays),
-                        again is bars,  # one copy per symbol and n
+                        n,
+                        not any(a.flags.writeable for a in arrays),
+                        behind,
+                        again is bars,  # one head per symbol and n
                     )
                 )
+                if ev.i % 97 == 0:
+                    kept.append((n, bars))
             return super().on(ev, ctx)
 
     simulate_symbol(
         "AAA",
         [st],
-        lambda s: Look(s, target=1.0),
-        _paths(st, sessions=1),
-        spy_data([MON]),
+        lambda s: Look(s, sessions=3, target=1.0),
+        _paths(st, sessions=3),
+        spy_data(days),
         Context(),
         SimConfig(),
     )
-    assert len(checks) > 300
-    assert all(n == i + 1 and copied and cached for i, n, copied, cached in checks)
+    assert len(checks) > 1000  # three sessions, read on every bar
+    assert all(n == i + 1 and ro and behind and cached for i, n, ro, behind, cached in checks)
+    for n, bars in kept:  # a head kept by the playbook never changes as later bars arrive
+        assert len(bars) == n
+        assert all(np.array_equal(a, s[:n]) for a, s in zip(bars.columns(), source.columns()))
+
+
+def test_visible_bars_copy_each_bar_once() -> None:
+    """VisibleBars fills its buffer as n grows: the work is the new bars, not the head."""
+    source = BarSeries.build([session_bars(MON), session_bars(TUE)], [1.0, 0.5], 5)
+    vis = VisibleBars(source)
+    assert len(vis.head(0)) == 0 and len(vis) == 0
+    first = vis.head(3)
+    assert len(vis) == 3 and vis.head(3) is first
+    buf = first.c.base
+    assert buf is not None and not np.any(buf[3:])
+    later = vis.head(400)  # into the second session
+    assert later.c.base is buf  # the same buffer, filled further: nothing is copied again
+    assert float(later.scale[399]) == 0.5 and int(later.k[399]) == 1
+    assert np.array_equal(first.c, source.c[:3]) and not np.any(buf[400:])
+    assert np.array_equal(later.visible_at, source.visible_at[:400])
+    with pytest.raises(ValueError, match="only grow"):
+        vis.head(399)  # a clock that went back would expose bars through .base
+    with pytest.raises(ValueError, match="path of"):
+        vis.head(len(source) + 1)
+    assert len(vis.head(len(source))) == len(source)
+    with pytest.raises(ValueError, match="read-only"):
+        later.c[0] = 1.0
