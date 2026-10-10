@@ -246,7 +246,12 @@ def test_the_renames_pin_changes_with_every_table_owner_reads(
     moved = TICKER_RENAMES | {"FB": ("META", date(2022, 6, 9))}
     monkeypatch.setattr(renames, "TICKER_RENAMES", moved)
     dated = renames.renames_sha()
-    assert len({base, grace, held, dated}) == 4
+    # NEWS_FROM opens the window of an old ticker with no earlier one (FB's).
+    first = renames.window("FB")[0]
+    monkeypatch.setattr(renames, "NEWS_FROM", date(2017, 1, 3))
+    assert renames.window("FB")[0] != first
+    started = renames.renames_sha()
+    assert len({base, grace, held, dated, started}) == 5
 
 
 # ── seeding ───────────────────────────────────────────────────
