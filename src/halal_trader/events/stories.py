@@ -37,9 +37,10 @@ session's effective close, else the next session (:func:`reaction_session`).
 **Inside a story** (spec §A.4): an item whose headline shingles have a
 Jaccard of at least :data:`DUP_JACCARD` with an earlier item's is a
 duplicate (``dup_of`` its first copy). A "CORRECTION"/"CORRECTED" wire
-supersedes the earlier items sharing a fact key (kind, period, basis,
-metric) or a Jaccard of at least :data:`CORRECTION_JACCARD`: from its own
-``available_at`` on, their facts no longer count.
+that is substantive (not noise, a law-firm alert or a mover) supersedes the
+earlier items sharing a fact key (kind, period, basis, metric) or a Jaccard
+of at least :data:`CORRECTION_JACCARD`: from its own ``available_at`` on,
+their facts no longer count.
 
 **Time-indexed labels.** A story never knows an item before the item's
 ``available_at``: :meth:`Story.card_at` is ``taxonomy.resolve`` over the
@@ -52,12 +53,12 @@ price-target or other note, a mover, unparsed guidance), or when its first
 substantive item re-runs a parent item (Jaccard at least
 :data:`REPOST_JACCARD`). The reactive rule turns false as soon as a
 non-reactive item arrives. :meth:`Story.nsn_at` re-reads the card at every
-substantive item until its cutoff.
+item until its cutoff.
 
 Noise, law-firm and mover items (``taxonomy.NOISE_TYPES``) stay in the story
-for display: they never trigger it (no ``detect_at``, no ``nsn_at`` check
-at their time), and a story of nothing else is persisted as ``noise_only``
-and is nobody's parent.
+for display: they never trigger it (no ``detect_at``; they supersede
+nothing, so no card turns NSN at their arrival), and a story of nothing
+else is persisted as ``noise_only`` and is nobody's parent.
 
 **Inputs a build checks** (:func:`build_range`, unless forced): every month
 of the renamed tickers' news fetched, the story aliases stored, and every
@@ -362,30 +363,31 @@ class Story:
         return card
 
     def nsn_at(self, cutoff: datetime) -> datetime | None:
-        """The first substantive item's ``available_at <= cutoff`` at which the card
-        is ``NSN_CORE``; None when it never is by ``cutoff``.
+        """The first item ``available_at <= cutoff`` at which the card is
+        ``NSN_CORE``; None when it never is by ``cutoff``.
 
-        The card is re-read at each such item, so a story that turns NSN late
-        (a downgrade after reactive notes) is detected then. Noise, law-firm
-        and mover items never trigger: none of them can turn a card NSN.
+        The card is re-read at every item, so a story that turns NSN late (a
+        downgrade after reactive notes) is detected then. A noise, law-firm or
+        mover item supersedes nothing and is no type the family reads, so the
+        card never turns NSN at one; it is re-read there all the same.
         """
         for item in self.items:
             if item.available_at > cutoff:
                 break
-            if item.itype in NOISE_TYPES:
-                continue
             if self.card_at(item.available_at).family == FAMILY:
                 return item.available_at
         return None
 
     def _trigger(self) -> StoryItem | None:
-        """The item at whose arrival the story first turned NSN."""
+        """The item at whose arrival the story first turned NSN: of the items
+        arriving at that moment, the first substantive one (any, if none is)."""
         if not self.items:
             return None
         t = self.nsn_at(self._times[-1])
         if t is None:
             return None
-        return next(i for i in self.items if i.available_at == t and i.itype not in NOISE_TYPES)
+        arrived = [i for i in self.items if i.available_at == t]
+        return next((i for i in arrived if i.itype not in NOISE_TYPES), arrived[0])
 
     def at_news(self) -> datetime | None:
         """``at`` (public time) of the item that first made the story NSN_CORE."""
@@ -687,7 +689,12 @@ def admit(
 
 
 def _link(items: Sequence[StoryItem]) -> list[StoryItem]:
-    """Duplicates and corrections inside one story (items in story order)."""
+    """Duplicates and corrections inside one story (items in story order).
+
+    Only a substantive correction supersedes: a noise, law-firm or mover wire
+    headed "CORRECTION:" is never what the story reads its facts from, so it
+    cannot take them away either.
+    """
     out: list[StoryItem] = []
     for item in items:
         dup_of: int | None = None
@@ -696,7 +703,11 @@ def _link(items: Sequence[StoryItem]) -> list[StoryItem]:
                 dup_of = prev.dup_of if prev.dup_of is not None else prev.event_id
                 break
         supersedes: tuple[int, ...] = ()
-        if item.raw.kind == "news" and CORRECTION.search(item.raw.headline):
+        if (
+            item.raw.kind == "news"
+            and item.itype not in NOISE_TYPES
+            and CORRECTION.search(item.raw.headline)
+        ):
             keys = fact_keys(item.facts)
             supersedes = tuple(
                 prev.event_id
