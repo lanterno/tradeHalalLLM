@@ -8,7 +8,9 @@ the world's own series, not read back from the context.
 
 from __future__ import annotations
 
+import json
 import math
+from collections.abc import Collection
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 
@@ -96,6 +98,9 @@ SYMBOLS = sorted({r[0] for r in SCREEN_ROWS})
 
 def et(day: date, hh: int, mm: int = 0) -> datetime:
     return datetime.combine(day, time(hh, mm), MARKET_TZ)
+
+
+PRE_OPEN = et(S, 8)  # pre-open news on S: sigma through S-1
 
 
 def _i(day: date) -> int:
@@ -210,13 +215,62 @@ async def _world(engine: AsyncEngine) -> World:
 
 
 def _json(reasons: list[str]) -> str:
-    import json
-
     return json.dumps(reasons)
 
 
 async def _load(engine: AsyncEngine, symbols: list[str] | None = None) -> PitContext:
     return await PitContext.load(engine, symbols=symbols or SYMBOLS, start=START, end=END)
+
+
+async def _clone(
+    engine: AsyncEngine,
+    source: str,
+    name: str,
+    *,
+    cik: int | None,
+    verdict: str = "halal",
+    sic: str = SOFTWARE,
+    reasons: list[str] | None = None,
+) -> None:
+    """A new name trading as ``source`` did, less than every name in LIQUIDITY,
+    with a row on SCREEN. No ticker_ciks row is written for it."""
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO daily_bars (symbol, day, adjustment, open, high, low, close, volume, "
+                "fetched_at) SELECT :n, day, adjustment, open, high, low, close, volume, now() "
+                "FROM daily_bars WHERE symbol = :s"
+            ),
+            {"n": name, "s": source},
+        )
+        await conn.execute(
+            text(
+                "INSERT INTO monthly_bars (symbol, month, close, volume, vwap) "
+                "SELECT :n, month, close, volume * 0.01, vwap FROM monthly_bars WHERE symbol = :s"
+            ),
+            {"n": name, "s": source},
+        )
+        await conn.execute(
+            text(
+                "INSERT INTO halal_screen_results (as_of, symbol, cik, sic_description, verdict, "
+                "reasons, metrics, method, screened_at) "
+                "VALUES (:a, :s, :k, :d, :v, CAST(:r AS JSONB), '{}', 'v12', now())"
+            ),
+            {"a": SCREEN, "s": name, "k": cik, "d": sic, "v": verdict, "r": _json(reasons or [])},
+        )
+
+
+async def _drop(
+    engine: AsyncEngine, symbol: str, days: Collection[date], *, adjustment: str | None = None
+) -> None:
+    """Delete ``symbol``'s daily bars on ``days`` (one adjustment, or both)."""
+    sql = "DELETE FROM daily_bars WHERE symbol = :s AND day = ANY(:d)"
+    params: dict[str, object] = {"s": symbol, "d": list(days)}
+    if adjustment is not None:
+        sql += " AND adjustment = :a"
+        params["a"] = adjustment
+    async with engine.begin() as conn:
+        await conn.execute(text(sql), params)
 
 
 def _expected_sigma_beta(world: World, symbol: str, last: date) -> tuple[float, int, float]:
@@ -240,7 +294,7 @@ async def test_eligibility_names_the_first_rule_a_name_fails(engine: AsyncEngine
     await _world(engine)
     ctx = await _load(engine)
 
-    reasons = {s: ctx.eligibility(s, S).reason for s in SYMBOLS}
+    reasons = {s: ctx.eligibility(s, S, at_news=PRE_OPEN).reason for s in SYMBOLS}
 
     assert reasons == {
         "AAA": "ok",
@@ -264,23 +318,23 @@ async def test_broad_adds_index_veto_only_and_unmapped_names(engine: AsyncEngine
     await _world(engine)
     ctx = await _load(engine)
 
-    broad = {s: ctx.eligibility(s, S, universe="broad").reason for s in SYMBOLS}
+    broad = {s: ctx.eligibility(s, S, at_news=PRE_OPEN, universe="broad").reason for s in SYMBOLS}
 
     assert broad["VET"] == "ok"
     assert broad["UNM"] == "ok"
     assert broad["VET2"] == "not_halal"  # the veto was not its only reason
     assert broad["FND"] == "not_halal"
     assert broad["AAA"] == "ok" and broad["AAB"] == "share_class"
-    assert ctx.eligibility("VET", S, universe="broad").universe == "broad"
+    assert ctx.eligibility("VET", S, at_news=PRE_OPEN, universe="broad").universe == "broad"
 
 
 async def test_eligibility_reports_what_was_known(engine: AsyncEngine) -> None:
     await _world(engine)
     ctx = await _load(engine)
 
-    aaa = ctx.eligibility("AAA", S)
-    split = ctx.eligibility("SPLIT", S)
-    noh = ctx.eligibility("NOH", S)
+    aaa = ctx.eligibility("AAA", S, at_news=PRE_OPEN)
+    split = ctx.eligibility("SPLIT", S, at_news=PRE_OPEN)
+    noh = ctx.eligibility("NOH", S, at_news=PRE_OPEN)
 
     assert aaa.eligible
     assert (aaa.screen_as_of, aaa.verdict, aaa.cik) == (SCREEN, "halal", 100)
@@ -288,19 +342,22 @@ async def test_eligibility_reports_what_was_known(engine: AsyncEngine) -> None:
     assert (aaa.liquidity_rank, aaa.cost_bps) == (0, 7.0)
     assert (split.liquidity_rank, split.tech) == (9, True)
     assert not noh.eligible and not noh.tech and noh.liquidity_rank == 5
-    thin = ctx.eligibility("THIN", S)
+    thin = ctx.eligibility("THIN", S, at_news=PRE_OPEN)
     assert (thin.liquidity_rank, thin.cost_bps) == (None, 30.0)
 
 
 async def test_a_screen_counts_only_after_its_date(engine: AsyncEngine) -> None:
     await _world(engine)
     ctx = await _load(engine)
+    dec1, mar11 = date(2023, 12, 1), date(2024, 3, 11)
 
-    assert ctx.eligibility("AAA", SCREEN).reason == "no_screen"  # dated that day: not yet
-    assert ctx.eligibility("AAA", date(2023, 12, 1)).reason == "no_screen"
-    assert ctx.eligibility("AAA", date(2024, 3, 11)).reason == "ok"
-    assert ctx.eligibility("AAA", S).reason == "ok"  # the screen dated S is not known at S
-    assert ctx.eligibility("AAA", NEXT).reason == "not_halal"
+    # Dated that day: not yet known.
+    assert ctx.eligibility("AAA", SCREEN, at_news=et(SCREEN, 8)).reason == "no_screen"
+    assert ctx.eligibility("AAA", dec1, at_news=et(dec1, 8)).reason == "no_screen"
+    assert ctx.eligibility("AAA", mar11, at_news=et(mar11, 8)).reason == "ok"
+    # The screen dated S is not known at S.
+    assert ctx.eligibility("AAA", S, at_news=PRE_OPEN).reason == "ok"
+    assert ctx.eligibility("AAA", NEXT, at_news=et(NEXT, 8)).reason == "not_halal"
     assert ctx.screen_verdict("AAA", SCREEN) == "no_screen"
     assert ctx.screen_verdict("AAA", S) == "halal"
     assert ctx.screen_verdict("AAA", NEXT) == "not_halal"
@@ -320,7 +377,7 @@ async def test_a_rank_past_999_is_out(engine: AsyncEngine) -> None:
         )
     ctx = await _load(engine)
 
-    aaa = ctx.eligibility("AAA", S)
+    aaa = ctx.eligibility("AAA", S, at_news=PRE_OPEN)
 
     assert (aaa.reason, aaa.liquidity_rank, aaa.cost_bps) == ("rank", 1000, 30.0)
 
@@ -333,6 +390,44 @@ async def test_sigma_can_be_judged_at_the_news(engine: AsyncEngine) -> None:
     assert ctx.eligibility("HALT", S, at_news=et(PREV, 15)).reason == "no_sigma"
     assert ctx.eligibility("AAA", S, at_news=et(PREV, 15)).reason == "ok"
     assert ctx.pre_event("HALT", S, et(S, 8)) is None
+
+
+async def test_eligibility_and_pre_event_judge_sigma_on_one_window(engine: AsyncEngine) -> None:
+    await _world(engine)
+    i = _i(PREV)  # S's index less one
+    # EDGE misses S-2's bar (the returns on S-2 and S-1) and 18 bars further back
+    # (19 returns). The window of late news on S-1 (returns S-61..S-2) keeps 40
+    # valid; the pre-open window (S-60..S-1) keeps 39.
+    await _clone(engine, "UNM", "EDGE", cik=990)
+    await _drop(engine, "EDGE", {PREV2, *SESSIONS[i - 39 : i - 21]})
+    ctx = await _load(engine, [*SYMBOLS, "EDGE"])
+    late = et(PREV, 15)
+
+    assert ctx.eligibility("EDGE", S, at_news=late).reason == "ok"
+    pe = ctx.pre_event("EDGE", S, late)
+    assert pe is not None and pe.sigma_n == 40
+    assert ctx.eligibility("EDGE", S, at_news=PRE_OPEN).reason == "no_sigma"
+    assert ctx.pre_event("EDGE", S, PRE_OPEN) is None
+    with pytest.raises(TypeError):
+        ctx.eligibility("EDGE", S)  # type: ignore[call-arg]  # no default window
+
+
+async def test_news_from_before_the_previous_session_is_refused(engine: AsyncEngine) -> None:
+    await _world(engine)
+    ctx = await _load(engine)
+
+    # Late in S-2's session, or at its close: nothing closed in between, so the
+    # news cannot belong to a story reacting in S. Refused before any rule is read.
+    for at in (et(PREV2, 15), et(PREV2, 16)):
+        with pytest.raises(ValueError, match="too early"):
+            ctx.pre_event("AAA", S, at)
+        with pytest.raises(ValueError, match="too early"):
+            ctx.eligibility("NOH", S, at_news=at)
+    with pytest.raises(ValueError, match="too early"):
+        ctx.pre_event("GAP", S, et(PREV2, 15))  # even without the bars to answer
+    # A minute after S-2's close, S-1 is still to close: one session back is allowed.
+    assert ctx.pre_event("AAA", S, et(PREV2, 16, 1)) is not None
+    assert ctx.pre_event("AAA", S, et(PREV, 8)) is not None
 
 
 # ── pre-event state ──────────────────────────────────────────────
@@ -463,7 +558,9 @@ async def test_bars_from_the_session_on_change_nothing(engine: AsyncEngine) -> N
     before = await _load(engine)
     pre = {s: before.pre_event(s, S, et(S, 8)) for s in names}
     elig = {
-        (s, u): before.eligibility(s, S, universe=u) for s in SYMBOLS for u in ("primary", "broad")
+        (s, u): before.eligibility(s, S, at_news=PRE_OPEN, universe=u)
+        for s in SYMBOLS
+        for u in ("primary", "broad")
     }
 
     # A power of two scales raw and adjusted prices exactly, so A(S) keeps every bit.
@@ -472,7 +569,9 @@ async def test_bars_from_the_session_on_change_nothing(engine: AsyncEngine) -> N
 
     assert {s: after.pre_event(s, S, et(S, 8)) for s in names} == pre
     assert {
-        (s, u): after.eligibility(s, S, universe=u) for s in SYMBOLS for u in ("primary", "broad")
+        (s, u): after.eligibility(s, S, at_news=PRE_OPEN, universe=u)
+        for s in SYMBOLS
+        for u in ("primary", "broad")
     } == elig
 
     # The control: the evening before is information, and moves the answer.
@@ -569,11 +668,11 @@ async def test_questions_beyond_what_was_loaded_are_errors(engine: AsyncEngine) 
     ctx = await _load(engine, ["AAA"])
 
     with pytest.raises(ValueError, match="not loaded"):
-        ctx.eligibility("SPLIT", S)
+        ctx.eligibility("SPLIT", S, at_news=PRE_OPEN)
     with pytest.raises(ValueError, match="outside the loaded sessions"):
         ctx.pre_event("AAA", date(2024, 4, 2), et(date(2024, 4, 2), 8))
     with pytest.raises(ValueError, match="not a session"):
-        ctx.eligibility("AAA", date(2024, 3, 16))
+        ctx.eligibility("AAA", date(2024, 3, 16), at_news=PRE_OPEN)
     with pytest.raises(ValueError, match="outside the loaded daily bars"):
         ctx.daily("AAA", date(2022, 1, 3))
     with pytest.raises(ValueError, match="timezone"):
@@ -595,7 +694,9 @@ async def test_loading_in_small_batches_gives_the_same_answers(
     batched = await _load(engine)
 
     for symbol in SYMBOLS:
-        assert batched.eligibility(symbol, S) == whole.eligibility(symbol, S)
+        assert batched.eligibility(symbol, S, at_news=PRE_OPEN) == whole.eligibility(
+            symbol, S, at_news=PRE_OPEN
+        )
         assert batched.pre_event(symbol, S, et(S, 8)) == whole.pre_event(symbol, S, et(S, 8))
 
 
