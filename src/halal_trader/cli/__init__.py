@@ -17,6 +17,7 @@ from halal_trader.cli import dashboard as dashboard_cmd
 from halal_trader.cli import data as data_cmd
 from halal_trader.cli import db as db_cmd
 from halal_trader.cli import events as events_cmd
+from halal_trader.cli import events_h1 as events_h1_cmd
 from halal_trader.cli import halal as halal_cmd
 from halal_trader.cli import halt as halt_cmd
 from halal_trader.cli import insights as insights_cmd
@@ -68,6 +69,7 @@ cli.add_command(research_cmd.research)
 
 # ── Event store (S2: news and filings, scored and labelled) ──────
 cli.add_command(events_cmd.events)
+events_cmd.events.add_command(events_h1_cmd.h1)  # `events h1`: the pre-registered H1 trial
 
 # ── The strict-halal core portfolio's own account ─────────────────
 cli.add_command(core_cmd.core)
