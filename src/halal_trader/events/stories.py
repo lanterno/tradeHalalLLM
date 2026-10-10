@@ -12,11 +12,13 @@ persists ``news_stories`` rows.
    dropped. A live row has no ``payload.symbols``: it counts as one and is
    flagged ``nsym_unknown``.
 3. *Entity.* News is kept only when its headline names the company
-   (``aliases.AliasMatcher``). An analyst headline (``ANALYST_ACTION``) is
-   read clause by clause (:func:`analyst_clause`): the clause whose slot
-   names the company, with the slot-less clauses after it, is what the
-   taxonomy classifies; one with no such clause is dropped, including a
-   headline that has the verb and no slot at all.
+   (``aliases.AliasMatcher``). An analyst headline (``ANALYST_ACTION``) with
+   a company slot in some clause (``ANALYST_SLOT``) is read clause by clause
+   (:func:`analyst_clause`): the clause whose slot names the company, with
+   the slot-less clauses after it, is what the taxonomy classifies; one with
+   no such clause is dropped. An analyst headline with no slot at all ("Vetr
+   Issues Downgrade To Hold On Costco", "FactSet Cuts FY23 Revenue Guidance,
+   Reiterates Adj EPS") is checked and classified whole, as any other news.
 4. *Time.* News is public at ``published_at``; an 8-K at
    :func:`filing_public_at` of its acceptance (EDGAR disseminates a filing
    accepted after 17:30 ET, or on a day EDGAR is closed, at 06:00 ET of its
@@ -140,6 +142,7 @@ __all__ = [
     "fact_keys",
     "federal_holidays",
     "filing_public_at",
+    "has_analyst_slot",
     "jaccard",
     "load_items",
     "next_edgar_business_day",
@@ -569,6 +572,17 @@ def _slot(clause: str) -> str | None:
     return next((g for g in m.groups() if g), None)
 
 
+def _slots(headline: str) -> tuple[list[tuple[int, int]], list[str | None]]:
+    spans = _clauses(headline)
+    return spans, [_slot(headline[a:b]) for a, b in spans]
+
+
+def has_analyst_slot(headline: str) -> bool:
+    """Whether some clause of ``headline`` names a company in an ``ANALYST_SLOT``
+    slot: then, and only then, the clause rule decides the entity check."""
+    return any(slot is not None for slot in _slots(headline)[1])
+
+
 def analyst_clause(headline: str, matcher: AliasMatcher) -> str | None:
     """The clause group of an analyst headline that is about ``matcher``'s company.
 
@@ -579,8 +593,7 @@ def analyst_clause(headline: str, matcher: AliasMatcher) -> str | None:
     None when no clause names it. "X Downgrades Intel, Upgrades AMD" is a
     downgrade for Intel and an upgrade for AMD.
     """
-    spans = _clauses(headline)
-    slots = [_slot(headline[a:b]) for a, b in spans]
+    spans, slots = _slots(headline)
     for i, slot in enumerate(slots):
         if slot is None or not matcher.matches(slot):
             continue
@@ -633,14 +646,18 @@ def admit(
             counters["roundup"] += 1
             return None
         matcher = matcher_for(raw.symbol, aliases)
-        if ANALYST_ACTION.search(raw.headline):
+        analyst = ANALYST_ACTION.search(raw.headline) is not None
+        if analyst and has_analyst_slot(raw.headline):
             clause = analyst_clause(raw.headline, matcher)
             if clause is None:
                 counters["entity_analyst"] += 1
                 return None
-        elif not matcher.matches(raw.headline):
-            counters["entity"] += 1
-            return None
+        else:
+            if analyst:
+                counters["analyst_no_slot"] += 1  # checked and classified whole
+            if not matcher.matches(raw.headline):
+                counters["entity"] += 1
+                return None
         entity_ok = None if matcher.empty else True
         at = raw.published_at.astimezone(UTC)
     else:
