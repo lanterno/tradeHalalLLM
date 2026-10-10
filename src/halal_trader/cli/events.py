@@ -196,7 +196,10 @@ def stories_group() -> None:
 @click.option(
     "--force",
     is_flag=True,
-    help="Build even though renamed-ticker news is missing or no alias is stored.",
+    help=(
+        "Build even though renamed-ticker news is missing, no alias is stored, "
+        "or news is not parsed by the current earnings extractor."
+    ),
 )
 def stories_build_cmd(start: Any, end: Any, force: bool) -> None:
     """Build every story with its reaction session in [start, end] (replaces those rows)."""

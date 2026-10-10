@@ -59,6 +59,11 @@ for display: they never trigger it (no ``detect_at``, no ``nsn_at`` check
 at their time), and a story of nothing else is persisted as ``noise_only``
 and is nobody's parent.
 
+**Inputs a build checks** (:func:`build_range`, unless forced): every month
+of the renamed tickers' news fetched, the story aliases stored, and every
+news event it reads parsed by the current earnings extractor
+(``earnings_parse.EXTRACTOR``, read when the build runs).
+
 The builder's own constants are pinned by :data:`STORIES_SHA`;
 :func:`pins` gathers it with the other pins of the pre-registration.
 """
@@ -83,7 +88,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from halal_trader.data.minutes import session_bounds
 from halal_trader.db.models import NewsStory
-from halal_trader.events import headline_patterns, renames
+from halal_trader.events import earnings_parse, headline_patterns, renames
 from halal_trader.events.aliases import (
     BUILDER_VERSION,
     AliasMatcher,
@@ -91,7 +96,7 @@ from halal_trader.events.aliases import (
     load_aliases,
     matcher_for,
 )
-from halal_trader.events.earnings_parse import EXTRACTOR, PARSER_SHA, EarningsFacts
+from halal_trader.events.earnings_parse import EarningsFacts
 from halal_trader.events.headline_patterns import (
     ANALYST_ACTION,
     ANALYST_SLOT,
@@ -145,6 +150,7 @@ __all__ = [
     "has_analyst_slot",
     "jaccard",
     "load_items",
+    "missing_facts",
     "next_edgar_business_day",
     "persist",
     "pins",
@@ -225,7 +231,8 @@ UNIVERSES: Final[tuple[Universe, ...]] = ("all", "primary", "tech")
 
 
 class StoriesNotReady(RuntimeError):
-    """The inputs a build pins are incomplete (renamed-ticker news, story aliases)."""
+    """A build's inputs are incomplete (renamed-ticker news, story aliases, the
+    current extractor's facts)."""
 
 
 # ── types (spec §A.1) ──────────────────────────────────────────
@@ -853,11 +860,12 @@ async def load_items(
     start: date,
     end: date,
     symbols: Collection[str],
-    extractor: str = EXTRACTOR,
+    extractor: str | None = None,
     counters: Counter[str] | None = None,
 ) -> AsyncIterator[RawItem]:
     """Stream the news, 8-K and 8-K/A rows of ``symbols`` published on New York
-    days [start, end], by symbol then time, with their ``extractor`` facts.
+    days [start, end], by symbol then time, with their ``extractor`` facts
+    (default: ``earnings_parse.EXTRACTOR`` as it is when called).
 
     A news row that is not its symbol's own (``renames.owner``) is dropped and
     counted (``owner``); filings are kept as they are.
@@ -866,7 +874,7 @@ async def load_items(
     c = counters if counters is not None else Counter()
     params = {
         "s": sorted(symbols),
-        "x": extractor,
+        "x": extractor if extractor is not None else earnings_parse.EXTRACTOR,
         "lo": trading_day_start_utc(start),
         "hi": trading_day_end_utc(end),
     }
@@ -929,6 +937,34 @@ async def _has_aliases(engine: AsyncEngine) -> bool:
     return bool(n)
 
 
+async def missing_facts(engine: AsyncEngine, *, start: date, end: date) -> tuple[int, int | None]:
+    """News events published on New York days [start, end] that the current
+    extractor (``earnings_parse.EXTRACTOR``, read now) has not parsed: (how
+    many, the lowest event id).
+
+    ``extract_all`` writes a ``none`` row for a headline with no earnings
+    statement, so a parsed event always has a row; one without was never
+    read, and its facts would be silently missing from the stories.
+    """
+    async with engine.connect() as conn:
+        row = (
+            await conn.execute(
+                text(
+                    "SELECT count(*) AS n, min(e.id) AS first FROM events e "
+                    "WHERE e.kind = 'news' AND e.published_at >= :lo AND e.published_at < :hi "
+                    "AND NOT EXISTS (SELECT 1 FROM event_facts f "
+                    "WHERE f.event_id = e.id AND f.extractor = :x)"
+                ),
+                {
+                    "x": earnings_parse.EXTRACTOR,
+                    "lo": trading_day_start_utc(start),
+                    "hi": trading_day_end_utc(end),
+                },
+            )
+        ).one()
+    return int(row.n), (int(row.first) if row.first is not None else None)
+
+
 async def _per_symbol(raws: AsyncIterator[RawItem]) -> AsyncIterator[list[RawItem]]:
     """Consecutive items of one symbol (the stream is ordered by symbol)."""
     batch: list[RawItem] = []
@@ -952,16 +988,20 @@ async def build_range(
     """Build every story with S in [start, end] and replace this version's rows there.
 
     Refuses (:class:`StoriesNotReady`) while a month of the renamed tickers'
-    news is missing (``owner`` relies on it) or no story alias is stored,
-    unless ``force``. Items are read from :data:`HISTORY_FROM` (or a few days
-    before ``start``, if earlier) so each story's parent comes from the same
-    history however the build is split; symbols go in batches of
+    news is missing (``owner`` relies on it), no story alias is stored, or a
+    news event the build reads has no row of the current extractor
+    (:func:`missing_facts` over every day items are read from), unless
+    ``force``. Items are read from :data:`HISTORY_FROM` (or a few days before
+    ``start``, if earlier) so each story's parent comes from the same history
+    however the build is split; symbols go in batches of
     :data:`BATCH_SYMBOLS`, one symbol at a time, sessions in order. Returns
     the stories written; ``counters`` collects the admission counts over
     every row read.
     """
     if end < start:
         raise ValueError(f"end {end} is before start {start}")
+    lead = start - timedelta(days=_LEAD_DAYS)
+    lo = min(HISTORY_FROM, lead)
     if not force:
         missing = await renames.missing_units(engine)
         if missing:
@@ -974,10 +1014,15 @@ async def build_range(
                 f"no story aliases stored for {BUILDER_VERSION}; "
                 "run `halal-trader events aliases build` first"
             )
+        unparsed, first = await missing_facts(engine, start=lo, end=end)
+        if unparsed:
+            raise StoriesNotReady(
+                f"{unparsed} news event(s) published {lo}..{end} have no "
+                f"{earnings_parse.EXTRACTOR} facts row (first: event {first}); "
+                "run `halal-trader events extract` first"
+            )
     c = counters if counters is not None else Counter()
     aliases = await load_aliases(engine)
-    lead = start - timedelta(days=_LEAD_DAYS)
-    lo = min(HISTORY_FROM, lead)
     symbols = await _symbols(engine, lead, end)
     async with engine.begin() as conn:
         await conn.execute(
@@ -1210,6 +1255,6 @@ async def pins(engine: AsyncEngine) -> dict[str, str]:
         "alias_sha": await alias_sha(engine),
         "renames_sha": renames.renames_sha(),
         "taxonomy_sha": TAXONOMY_SHA,
-        "parser_sha": PARSER_SHA,
+        "parser_sha": earnings_parse.PARSER_SHA,
         "headline_patterns_sha": HEADLINE_PATTERNS_SHA,
     }
