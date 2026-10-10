@@ -16,6 +16,11 @@ Every ticker's outcome is stored (``ticker_ciks``), so what stays unmapped
 is counted rather than hidden: ``fund`` (an ETF or fund, never a company),
 ``no_name`` (Alpaca has no name for it), ``ambiguous``, ``no_match``.
 
+Some delisted tickers name no company (Alpaca keeps no name for them) or
+match several filers; ``HAND_CIKS`` maps those that matter by hand, each to
+the filer that held the ticker over 2016-2024, checked against SEC's filer
+names on 2026-10-10. A hand CIK is used only if it is an XBRL filer.
+
 A mapped CIK is the company that last held the ticker. If a different
 company held it earlier, that company's quarters have no facts under the
 mapped CIK and still screen ``doubtful``: the screen fails closed.
@@ -40,6 +45,72 @@ from halal_trader.data.alpaca_market import Asset
 logger = logging.getLogger(__name__)
 
 FIRST_XBRL_YEAR = 2009
+
+# Ticker -> CIK for liquid delisted names the name match cannot resolve
+# (no Alpaca name, or several filers under one name). Mostly 2016-2019
+# acquisitions: leaving them out drops companies that did not survive.
+HAND_CIKS: dict[str, int] = {
+    "AABA": 1011006,  # Altaba (formerly Yahoo)
+    "AGN": 1578845,  # Allergan plc
+    "ANDV": 50104,  # Andeavor
+    "ARRS": 1645494,  # ARRIS International plc
+    "AZPN": 929940,  # Aspen Technology (before the 2022 Emerson deal)
+    "BMS": 11199,  # Bemis
+    "BPL": 805022,  # Buckeye Partners
+    "CADE": 1614184,  # Cadence Bancorporation
+    "CAVM": 1175609,  # Cavium
+    "CLNS": 1679688,  # Colony NorthStar / Colony Capital
+    "CONE": 1553023,  # CyrusOne
+    "DATA": 1303652,  # Tableau Software
+    "DNB": 1115222,  # Dun & Bradstreet (taken private 2019)
+    "DVMT": 1571996,  # Dell Technologies class V
+    "DWDP": 1666700,  # DowDuPont
+    "ECYT": 1235007,  # Endocyte
+    "EEP": 880285,  # Enbridge Energy Partners
+    "ELLI": 1122388,  # Ellie Mae
+    "ESL": 33619,  # Esterline Technologies
+    "ESRX": 1532063,  # Express Scripts Holding
+    "EVHC": 1678531,  # Envision Healthcare (after the 2016 AmSurg merger)
+    "FDC": 883980,  # First Data
+    "FNSR": 1094739,  # Finisar
+    "GGP": 1496048,  # GGP
+    "GHDX": 1131324,  # Genomic Health
+    "HDS": 1573097,  # HD Supply Holdings
+    "IDTI": 703361,  # Integrated Device Technology
+    "ILG": 1434620,  # ILG
+    "IMPV": 1364962,  # Imperva
+    "ISBC": 1594012,  # Investors Bancorp
+    "KLXI": 1617898,  # KLX
+    "LOXO": 1581720,  # Loxo Oncology
+    "MBFI": 1139812,  # MB Financial
+    "MBT": 1115837,  # Mobile TeleSystems
+    "MDSO": 1453814,  # Medidata Solutions
+    "MGP": 1656936,  # MGM Growth Properties
+    "MYL": 1623613,  # Mylan N.V.
+    "OAK": 1403528,  # Oaktree Capital Group
+    "OPHT": 1410939,  # Ophthotech
+    "PF": 1564822,  # Pinnacle Foods
+    "PNK": 1656239,  # Pinnacle Entertainment (after the 2016 spin-off)
+    "RDC": 85408,  # Rowan Companies
+    "REN": 1469510,  # Resolute Energy
+    "RHT": 1087423,  # Red Hat
+    "SCG": 754737,  # SCANA
+    "SFLY": 1125920,  # Shutterfly
+    "SHPG": 936402,  # Shire
+    "STAY": 1581164,  # Extended Stay America
+    "STL": 1070154,  # Sterling Bancorp
+    "TCF": 814184,  # TCF Financial (before the 2019 Chemical merger)
+    "TRCO": 726513,  # Tribune Media
+    "TSRO": 1491576,  # Tesaro
+    "TSS": 721683,  # Total System Services
+    "TVPT": 1424755,  # Travelport Worldwide
+    "VIAB": 1339947,  # Viacom
+    "VSM": 1660690,  # Versum Materials
+    "VVC": 1096385,  # Vectren
+    "WMGI": 1492658,  # Wright Medical Group N.V.
+    "WP": 1533932,  # Worldpay
+    "ZAYO": 1608249,  # Zayo Group Holdings
+}
 
 _SUFFIXES = re.compile(
     r"\b(common|ordinary|stock|shares?|class [a-c]|series [a-c]|new|the|inc|incorporated|"
@@ -94,6 +165,10 @@ def match_symbols(
     out: list[Match] = []
     for symbol in sorted(set(symbols)):
         name = asset_names.get(symbol, "").strip()
+        hand = HAND_CIKS.get(symbol)
+        if hand is not None and hand in filers:
+            out.append(Match(symbol, "mapped", hand, name or None, filers[hand]))
+            continue
         key = normalize(name)
         ciks = by_name.get(key, set()) if key else set()
         if len(ciks) == 1:
