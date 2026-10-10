@@ -157,8 +157,10 @@ async def test_units_are_pinned_checked_done_and_read_behind_the_guard(
     assert sha == planned
     assert await pin_units(engine, "calib", "gate_calib", unit_set) == sha  # a no-op
     assert await gate_pins(engine, "calib") == {sha}
-    with pytest.raises(WindowLocked, match="already pinned"):
+    other = units.UnitPlan({"gate_calib": frozenset({("BBB", day)})}).sha("gate_calib")
+    with pytest.raises(GateRefused, match=f"pinned to {sha}, but .* hashes to {other}"):
         await pin_units(engine, "calib", "gate_calib", {("BBB", day)})
+    assert await gate_pins(engine, "calib") == {sha}
     bars, cut = await read_gate_bars(engine, "calib", unit_set, sha, date(2016, 9, 30))
     assert cut == 1 and len(bars[("AAA", day)]) == 389 and len(bars[("SPY", later)]) == 390
     async with engine.connect() as conn:
@@ -260,6 +262,29 @@ async def test_the_reactor_gates_refuse_while_a_unit_is_not_done(
     out = await run_reactor(reactor_world)
     assert out.results == [] and set(out.refused) == {"r0", "r1", "r2"}
     assert "1 of 15 units are not done" in out.refused["r1"]
+    assert await gate_rows(reactor_world) == []
+    assert await gate_pins(reactor_world, "reactor") == set()  # a refused run pins nothing
+
+
+async def test_the_reactor_gates_refuse_a_set_other_than_the_pinned_one(
+    reactor_world: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The selection changes after the pin: a refusal naming both hashes, not a crash."""
+    first = await run_reactor(reactor_world, write=False)
+    assert not first.refused
+    (pinned,) = await gate_pins(reactor_world, "reactor")
+    fewer = [h for h in reactor_headlines() if h.symbol != "DDD"]
+
+    async def chosen(engine: AsyncEngine) -> list[Headline]:
+        return list(fewer)
+
+    monkeypatch.setattr(units, "reactor_headlines", chosen)
+    changed = units.UnitPlan({"gate_reactor": units.reactor_units(fewer)}).sha("gate_reactor")
+    out = await run_reactor(reactor_world)
+    assert out.results == [] and set(out.refused) == {"r0", "r1", "r2"}
+    both = f"pinned to {pinned}, but this run's gate_reactor set hashes to {changed}"
+    assert both in out.refused["r1"]
+    assert await gate_pins(reactor_world, "reactor") == {pinned}
     assert await gate_rows(reactor_world) == []
 
 
@@ -454,6 +479,7 @@ async def test_the_sue_gates_refuse_the_minute_gates_while_units_are_not_done(
     assert [r.gate for r in out.results] == ["s0", "s1"]
     assert set(out.refused) == {"s1-calib", "s2", "s3"}
     assert [r.config["gate"] for r in await gate_rows(sue_world)] == ["s0", "s1"]
+    assert await gate_pins(sue_world, "calib") == set() == await gate_pins(sue_world, "sue")
 
 
 async def test_s2_is_refused_when_the_calibration_fails(
@@ -559,6 +585,7 @@ async def test_g1_refuses_its_real_gates_while_a_unit_is_not_done(g1_world: Asyn
     assert [r.gate for r in out.results] == ["g1-synthetic"]
     assert set(out.refused) == {"g1-lookahead", "g1-determinism"}
     assert [r.config["gate"] for r in await gate_rows(g1_world)] == ["g1-synthetic"]
+    assert await gate_pins(g1_world, "g1") == set()
 
 
 async def test_g1_refuses_stories_that_no_longer_rebuild_as_selected(
@@ -573,6 +600,7 @@ async def test_g1_refuses_stories_that_no_longer_rebuild_as_selected(
     monkeypatch.setattr(units, "g1_stories", chosen)
     out = await run_lookahead(g1_world, workers=2, synthetic_paths=20)
     assert "differ when rebuilt" in out.refused["g1-lookahead"]
+    assert await gate_pins(g1_world, "g1") == set()  # refused before the pin
 
 
 async def test_all_runs_every_group_even_when_one_is_refused(
