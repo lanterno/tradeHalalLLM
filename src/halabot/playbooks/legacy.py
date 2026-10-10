@@ -86,8 +86,9 @@ another set of the same size, another run's trades, a missing trade). Then:
 
    **So the R1 gate first asserts that every unit of H is done: 100%, not
    D4's 99%** (each headline's (symbol, S) and SPY's S, on every session of
-   H; :func:`r1_units_not_done` must be empty), and does not run
-   otherwise. R0 needs it as well: its market stub raises on any fetch,
+   H: ``units.reactor_units``, every one a done unit by the gate runner's
+   check, ``sim_gate.require_done``), and does not run otherwise. R0 needs
+   it as well: its market stub raises on any fetch,
    and ``intraday.minute_series`` backfills a unit with no stored bar,
    which fetches it unless it is done. The other two cases are not set
    aside: each fails R1 in ``sim_only`` until it is explained.
@@ -158,11 +159,11 @@ from halabot.playbooks.types import (
     Transition,
     WorkingOrder,
 )
-from halal_trader.data.minutes import BarArrays, unit
+from halal_trader.data.minutes import BarArrays
 from halal_trader.events import study
 from halal_trader.events.intraday import _PLAUSIBLE as STUDY_PLAUSIBLE  # read, not copied
 from halal_trader.events.intraday import LATENCY
-from halal_trader.market_hours import MARKET_TZ, is_trading_day
+from halal_trader.market_hours import MARKET_TZ
 
 SPY: Final = "SPY"
 CLOSE_ENTRY_AFTER_OPEN: Final = timedelta(seconds=1)  # past the 09:30 pseudo-bar's start
@@ -380,26 +381,6 @@ def r1_set_aside(summary: RunSummary) -> dict[str, tuple[str, ...]]:
     for sid in summary.spy_drop_from_start_ids:
         out.setdefault(sid, []).append(SPY_BARS_CUT)
     return {sid: tuple(out[sid]) for sid in sorted(out)}
-
-
-def r1_units_not_done(
-    headlines: Mapping[str, tuple[str, date]], done: Collection[str]
-) -> tuple[str, ...]:
-    """The minute units R1 reads that are not done (``SYMBOL:YYYY-MM-DD``), sorted.
-
-    ``headlines`` is H (id -> (symbol, New York day)) and ``done`` the
-    backfill's done units (``minutes.done_units``). R1 reads each headline's
-    (symbol, day) and SPY's day, on trading days only (on another day both
-    sides drop the headline without reading a bar). The R1 gate runs only
-    when this is empty (module docstring, step 3).
-    """
-    units = {
-        unit(name, day)
-        for symbol, day in headlines.values()
-        if is_trading_day(day)
-        for name in (symbol, SPY)
-    }
-    return tuple(u for u in sorted(units) if u not in done)
 
 
 def reactor_plausible(trade: TradeRecord) -> bool:
@@ -677,7 +658,6 @@ __all__ = [
     "daily_config",
     "r1_dropped",
     "r1_set_aside",
-    "r1_units_not_done",
     "reactor_config",
     "reactor_plausible",
     "reactor_story",
