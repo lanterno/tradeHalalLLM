@@ -21,7 +21,8 @@ insider data sets carry a filing *date* only, so a Form 4 is stamped
 A filing's timestamp from the submissions JSON is hours late for about a
 third of filings (``compliance/sec.py``). :func:`correct_filing_times`
 rewrites the stored ones from each filing's EDGAR header, resumably
-(task ``filing-times``).
+(task ``filing-times``), and the evening refresh stamps new filings from
+their header before storing them.
 """
 
 from __future__ import annotations
@@ -33,7 +34,7 @@ import logging
 import zipfile
 from collections import Counter
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Any, Final
 
@@ -263,6 +264,37 @@ def filing_priority(kind: str, items: Iterable[str]) -> int:
 def time_delta(stored: datetime, accepted: datetime) -> int:
     """Seconds the stored time is after the header's acceptance (positive: late)."""
     return round((stored - accepted).total_seconds())
+
+
+def header_stamped(record: EventRecord, accepted: datetime | None) -> EventRecord:
+    """A filing record stamped at its header's acceptance time; without one, kept
+    at the submissions JSON's time with ``time_source: json`` saying so."""
+    if accepted is None:
+        return replace(record, payload={**record.payload, "time_source": "json"})
+    return replace(
+        record,
+        published_at=accepted,
+        seen_at=accepted,
+        payload={**record.payload, "time_source": "header"},
+    )
+
+
+async def unstored_filings(
+    engine: AsyncEngine, records: Sequence[EventRecord]
+) -> list[EventRecord]:
+    """The filing records the store has no row for yet (same accession and symbol)."""
+    if not records:
+        return []
+    async with engine.connect() as conn:
+        rows = await conn.execute(
+            text(
+                "SELECT source_id, symbol FROM events "
+                "WHERE source = 'sec' AND source_id = ANY(:ids)"
+            ),
+            {"ids": sorted({r.source_id for r in records})},
+        )
+        have = {(r.source_id, r.symbol) for r in rows}
+    return [r for r in records if (r.source_id, r.symbol) not in have]
 
 
 async def company_ciks(engine: AsyncEngine) -> dict[str, list[int]]:
