@@ -30,7 +30,9 @@ nothing returns no facts, never a guess. Year-over-year comparisons
   K/M/B suffix and the other none ("EPS $5.54-$5.61 Vs $5.66B Est."), or
   one is more than :data:`UNIT_RATIO` times the other ("Q1 2024 Vs $149.45M
   Est.", the year read as the EPS), unless it is an EPS whose smaller side
-  is under :data:`EPS_RATIO_FLOOR` ("EPS $(0.68) Misses $0.01 Estimate").
+  is under :data:`EPS_RATIO_FLOOR` ("EPS $(0.68) Misses $0.01 Estimate") and
+  larger side under :data:`EPS_RATIO_CAP` ("Q1 2024 Vs $(0.03) Est." does
+  not compare).
 
 **Guidance figures.** ``GUIDE_V4``'s lazy gap can stop on the wrong number:
 a fragment glued to the token before it (the "1" of "Q1", the "-$1.85" of
@@ -209,8 +211,11 @@ _SUFFIXED = re.compile(r"[KMB]\)?$", re.I)
 # is in other units: Benzinga dropped or added a suffix.
 UNIT_RATIO: Final = 50.0
 # ... except an EPS whose smaller side is under this many dollars: a loss of
-# $(0.01) against $(0.60) is a real comparison, not a dropped suffix.
+# $(0.01) against $(0.60) is a real comparison, not a dropped suffix ...
 EPS_RATIO_FLOOR: Final = 0.10
+# ... while its larger side is under this many: "Q1 2024 Vs $(0.03) Est." is
+# the year read as the EPS (MicroStrategy's $32.52 against $(0.07) compares).
+EPS_RATIO_CAP: Final = 100.0
 # The metric a statement names: a statement's clause runs to the next one.
 _METRIC_WORD = re.compile(r"\b(?:EPS|Sales|Revenues?|Revs?)\b", re.I)
 # A "May Not Compare" closing its segment qualifies every statement in it.
@@ -272,13 +277,15 @@ def _same_units(
     """Whether a figure (stated as ``figures``) and its estimate are in the same
     units: all carry a K/M/B suffix or none does, and neither is more than
     :data:`UNIT_RATIO` times the other (a zero compares with anything, and so
-    does an EPS whose smaller side is under :data:`EPS_RATIO_FLOOR`)."""
+    does an EPS whose smaller side is under :data:`EPS_RATIO_FLOOR` and larger
+    side under :data:`EPS_RATIO_CAP`)."""
     stated = [t.strip() for t in (*figures, estimate) if t]
     if len({_SUFFIXED.search(t) is not None for t in stated}) > 1:
         return False
     if not value or not est:
         return True
-    if per_share and min(abs(value), abs(est)) < EPS_RATIO_FLOOR:
+    sides = abs(value), abs(est)
+    if per_share and min(sides) < EPS_RATIO_FLOOR and max(sides) < EPS_RATIO_CAP:
         return True
     return 1 / UNIT_RATIO <= abs(value / est) <= UNIT_RATIO
 
@@ -577,6 +584,7 @@ def sources() -> dict[str, str]:
         "PARSE_ORDER": ",".join(PARSE_ORDER),
         "UNIT_RATIO": repr(UNIT_RATIO),
         "EPS_RATIO_FLOOR": repr(EPS_RATIO_FLOOR),
+        "EPS_RATIO_CAP": repr(EPS_RATIO_CAP),
         "OLD_WINDOW": repr(OLD_WINDOW),
         "KEEP_ACTIONS": ",".join(sorted(KEEP_ACTIONS)),
         "SCALE": json.dumps(SCALE, sort_keys=True),
