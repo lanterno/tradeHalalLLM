@@ -215,8 +215,12 @@ KEEP_ACTIONS: Final = frozenset({"sees", "affirms", "reaffirms", "maintains", "r
 _GUIDANCE_FROM = re.compile(r"\bGuidance\s+From\s*:?\s*\(?\s*~?\s*$", re.I)
 _TO = re.compile(r"\bto\b", re.I)
 # The "To" a figure in an old parenthetical follows: the new guidance it
-# states ("(From $1.00 To $0.90)"); any other figure there is the old one.
-_TO_END = re.compile(r"\bTo\s*~?\s*$", re.I)
+# states ("(From $1.00 To $0.90)", "(From $1.10 Down To $0.95)"); any other
+# figure there is the old one. That "To" follows the old figure (a figure's
+# last digit, its closing parenthesis or its suffix): after a word it
+# introduces the old figure ("(Prior Up To $1.30)", "(Previously Raised To
+# $1.30)").
+_TO_END = re.compile(r"[\d)][KMB]?\s+(?:(?:Down|Up)\s+)?To\s*~?\s*$", re.I)
 # A parenthetical stating the guidance replaced: after the guided figure, no
 # figure in it is the guidance ("Sees Adj. EPS To $9.00 (From $8.80 To $8.90)
 # Vs $8.87 Est."); before any, it may state the old and the new ("Updates FY
@@ -447,7 +451,8 @@ def _guided_figure(segment: str, g: re.Match[str]) -> tuple[str | None, str | No
     that is not glued to the token before it and not introduced as the
     guidance being replaced, by the words before it (after the metric) or a
     parenthetical: once a figure qualified, every figure in one; before, every
-    figure in one but those a "To" introduces. Of "From $80M To $75M" the "To"
+    figure in one but those a "To" after the old figure introduces
+    (:data:`_TO_END`). Of "From $80M To $75M" the "To"
     figure counts, in a parenthetical too. Guidance kept as it was
     (:data:`KEEP_ACTIONS`) may state its range with a "Guidance from" that no
     "to" follows, as its first figure.
