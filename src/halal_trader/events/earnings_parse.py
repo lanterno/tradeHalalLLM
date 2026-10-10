@@ -15,17 +15,48 @@ research, where the price is known.
 
 Only what the headline states is extracted. A headline that matches
 nothing returns no facts, never a guess. Year-over-year comparisons
-("Up From $0.02 YoY") are not estimates and carry no surprise, and neither
-does a statement Benzinga flags as not comparable ("May Not Compare To"):
-the fact's ``not_comparable`` field is set and that statement's surprise is
-None. The flag belongs to the statement whose own text carries it, so in
-"EPS $(1.49) Beats $(1.52) Estimate, Sales $517.00K May Not Compare To
-$3.54M Estimate" the EPS beat keeps its surprise.
+("Up From $0.02 YoY") are not estimates and carry no surprise.
+
+**Not comparable.** A statement has no surprise, and its fact is flagged
+``not_comparable`` (per metric on a result: ``eps_not_comparable``,
+``sales_not_comparable``), when
+
+* Benzinga says so ("May Not Compare", with or without "To") in the
+  statement's own clause, which runs from the statement to the next metric
+  it names; a flag closing the segment covers every statement in it. In
+  "EPS $(1.49) Beats $(1.52) Estimate, Sales $517.00K May Not Compare To
+  $3.54M Estimate" the EPS beat keeps its surprise;
+* the figure and its estimate are not in the same units: one carries a
+  K/M/B suffix and the other none ("EPS $5.54-$5.61 Vs $5.66B Est."), or
+  one is more than :data:`UNIT_RATIO` times the other ("Q1 2024 Vs $149.45M
+  Est.", the year read as the EPS).
+
+**Guidance figures.** ``GUIDE_V4``'s lazy gap can stop on the wrong number:
+a fragment glued to the token before it (the "1" of "Q1", the "-$1.85" of
+"$1.75-$1.85"), or the guidance being replaced ("To $7.00-$7.30 From
+$6.80-$7.30 vs. $7.17 Est", "(Prior $8.00) Vs."). Its figure is re-read as
+the last dollar figure between its metric and its estimate that is neither
+glued nor introduced by From/Prior/Previous/Was ("From $80M To $75M" gives
+the $75M). When none qualifies the fact keeps its action with no figure and
+no surprise, so "Lowers" and "Cuts" still count as guidance down. A range
+states its unit once: "$643-$684M" is $643M to $684M.
 
 A headline is read segment by segment (split on ``;``). The first template
 of ``PARSE_ORDER`` that matches a segment reads it, so one segment gives at
 most one fact; a result fact also carries the sales figure stated after the
-EPS in the same segment.
+EPS in the same segment ("Sales $X Beat $Y Estimate", or the estimate first:
+"Rev. $X vs. Est. $Y"). Results carry no forward-looking verb: a result
+template never reads a statement that "Sees", "Expects", "Guides",
+"Forecasts" or "Projects" precedes ("Celgene Sees Q4 Adj EPS $1.18 Vs Est
+$1.30" is single-figure guidance no template reads).
+
+Against v3 (every distinct earnings-like headline to 2026-10): v4 reads 15
+headlines v3 read as results as guidance instead, pre-announcements such as
+"Ashland Sees Prelim. Q1 Adj. EPS $0.97 vs $1.10 Est.", which ``GUIDE_V4``
+reads before the result templates (and whose sales, stated after, a
+guidance fact does not carry); 3 v3 "results" are forecasts it no longer
+reads ("Globus Medical Sees FY17 EPS $1.27, Inline"); and it corrects v3's
+own figures where the unit was stated once or the estimate did not compare.
 """
 
 from __future__ import annotations
@@ -89,8 +120,12 @@ GUIDE_V4: Final = re.compile(
     rf"(?:vs\.?|Versus(?:\s+Consensus\s+Of)?|\(Est\.?)\s+(?P<est>{_NUM})",
     re.I,
 )
+# The sales after an estimate-first EPS: "..., Rev. $316M vs. Est. $326M".
+SALES_EST_FIRST: Final = re.compile(
+    rf"\b(?:Sales|Revenues?|Revs?\.?)\s+(?P<sales>{_NUM})\s+vs\.?\s+Est\.?\s+(?P<ref>{_NUM})", re.I
+)
 # Benzinga's flag that the figure is not on the estimate's basis: no surprise.
-NOT_COMPARABLE: Final = re.compile(r"May Not Compare To", re.I)
+NOT_COMPARABLE: Final = re.compile(r"May Not Compare", re.I)
 # Guidance against consensus that no template reads: an earnings item whose
 # guidance is unknown (the taxonomy's ``guidance_unparsed``), never a fact.
 GUIDE_UNPARSED: Final = re.compile(
@@ -119,6 +154,36 @@ _BASIS_WORD = re.compile(r"\b(?:Non-GAAP|GAAP|Adjusted|Adj|Ajd|Core|Operating)\b
 # read is dropped and the later templates are tried; a segment none of them
 # reads stays unread (GUIDE_UNPARSED: guidance unknown).
 _TOLERANCE_GAP = re.compile(r"\+/-|±")
+# A guided figure GUIDE_V4's read is re-read from: a dollar amount not glued
+# to the token before it nor stating a change ("By $0.05 To $5.60-$5.75"),
+# alone or as a range ("$0.70 - $0.76", "$1.23 to $1.27"). A "to" never joins
+# a figure to the start of another range, and a lone figure is not the start
+# of a range it cannot complete ("$6.70-0$7.50").
+_FIGURE = re.compile(
+    r"(?<![\w.,$-])(?<!By )(?<!Up )(?<!Down )"
+    r"(?P<low>\(?-?\$\(?-?[\d,]*\.?\d+\)?[KMB]?)(?![\w.%$])"
+    rf"(?:(?P<join>\s?-\s?|\s+to\s+)(?P<high>{_NUM})(?![\w.%$])(?!\s?-\s?\(?-?\$?\d)|(?!\s?-))",
+    re.I,
+)
+# The words that introduce the guidance a figure replaces ("From $6.80-$7.30",
+# "(Prior View: $8.00)"); "Will Range From" introduces the guidance itself.
+_OLD = re.compile(
+    r"\b(?:(?<!Range )From|Prior(?:\s+View)?|Previous(?:ly)?|Was)\s*:?\s*\(?\s*~?\s*$", re.I
+)
+_FROM = re.compile(r"\bFrom\s*:?\s*\(?\s*~?\s*$", re.I)
+# The verbs of a forecast: a result template never reads a statement they precede.
+_FORWARD = re.compile(r"\b(?:Sees|Expects|Guides|Forecasts|Projects)\b", re.I)
+# A figure stated in thousands, millions or billions.
+_SUFFIXED = re.compile(r"[KMB]\)?$", re.I)
+# A figure more than this many times its estimate (or less than its 1/50th)
+# is in other units: Benzinga dropped or added a suffix.
+UNIT_RATIO: Final = 50.0
+# The metric a statement names: a statement's clause runs to the next one.
+_METRIC_WORD = re.compile(r"\b(?:EPS|Sales|Revenues?|Revs?)\b", re.I)
+# A "May Not Compare" closing its segment qualifies every statement in it.
+_CLOSING_FLAG = re.compile(
+    r"May Not Compare(?:\s+(?:To|With)\s+(?:Estimates?|Est\.?))?[\s.,:]*$", re.I
+)
 
 
 def money(text: str) -> float | None:
@@ -157,30 +222,84 @@ class EarningsFacts:
     fields: dict[str, object] = field(default_factory=dict)
 
 
-def _comparable(
-    fields: dict[str, object], segment: str, m: re.Match[str], surprise: str
-) -> dict[str, object]:
-    """``fields``, or with ``surprise`` None and ``not_comparable`` set when the
-    statement ``m`` read says its figure may not compare to the estimate."""
-    if NOT_COMPARABLE.search(segment, m.start(), m.end()) is None:
-        return fields
-    return fields | {surprise: None, "not_comparable": True}
+def _same_units(
+    figures: Sequence[str | None], estimate: str, value: float | None, est: float | None
+) -> bool:
+    """Whether a figure (stated as ``figures``) and its estimate are in the same
+    units: all carry a K/M/B suffix or none does, and neither is more than
+    :data:`UNIT_RATIO` times the other (a zero compares with anything)."""
+    stated = [t.strip() for t in (*figures, estimate) if t]
+    if len({_SUFFIXED.search(t) is not None for t in stated}) > 1:
+        return False
+    if value and est:
+        return 1 / UNIT_RATIO <= abs(value / est) <= UNIT_RATIO
+    return True
+
+
+def _flagged(segment: str, start: int, end: int) -> bool:
+    """Whether Benzinga flags the statement at ``segment[start:end]`` as not
+    comparable: in its clause, which runs to the next metric it names, or at
+    the close of the segment."""
+    if _CLOSING_FLAG.search(segment):
+        return True
+    following = _METRIC_WORD.search(segment, end)
+    clause_end = following.start() if following else len(segment)
+    return NOT_COMPARABLE.search(segment, start, clause_end) is not None
+
+
+def _not_comparable(fields: dict[str, object], metric: str | None) -> dict[str, object]:
+    """``fields`` with the statement's surprise removed and the flags set
+    (``metric`` None: a guidance fact's one statement)."""
+    if metric is None:
+        return fields | {"surprise": None, "not_comparable": True}
+    return fields | {
+        f"{metric}_surprise": None,
+        f"{metric}_not_comparable": True,
+        "not_comparable": True,
+    }
+
+
+def _comparison(
+    segment: str,
+    m: re.Match[str],
+    figures: Sequence[str | None],
+    estimate: str,
+    value: float | None,
+    est: float | None,
+) -> bool:
+    """Whether the statement ``m`` read compares its figure with its estimate."""
+    return not _flagged(segment, m.start(), m.end()) and _same_units(figures, estimate, value, est)
+
+
+def _sales_after(segment: str, after: int) -> tuple[re.Match[str], str, bool] | None:
+    """The sales statement after position ``after`` (match, verdict, estimated),
+    unless a forecast verb comes first: "..., Sees Q4 Sales $X vs $Y Est" is guidance."""
+    if (s := _SALES.search(segment, after)) is not None:
+        verdict, estimated = s["verdict"].lower(), s["ref_kind"].lower().startswith("est")
+    elif (s := SALES_EST_FIRST.search(segment, after)) is not None:
+        verdict, estimated = "vs", True
+    else:
+        return None
+    if _FORWARD.search(segment, after, s.start()) is not None:
+        return None
+    return s, verdict, estimated
 
 
 def _with_sales(fields: dict[str, object], segment: str, after: int) -> dict[str, object]:
     """``fields`` plus the sales figure stated after position ``after``, if any."""
-    s = _SALES.search(segment, after)
-    if s is None:
+    if (found := _sales_after(segment, after)) is None:
         return fields
+    s, verdict, estimated = found
     sales, ref = money(s["sales"]), money(s["ref"])
-    estimated = s["ref_kind"].lower().startswith("est")
-    stated: dict[str, object] = {
+    stated: dict[str, object] = fields | {
         "sales": sales,
         "sales_estimate": ref if estimated else None,
         "sales_surprise": _surprise(sales, ref) if estimated else None,
-        "sales_verdict": s["verdict"].lower(),
+        "sales_verdict": verdict,
     }
-    return _comparable(fields | stated, segment, s, "sales_surprise")
+    if estimated and not _comparison(segment, s, (s["sales"],), s["ref"], sales, ref):
+        stated = _not_comparable(stated, "sales")
+    return stated
 
 
 def _eps_result(m: re.Match[str], segment: str, *, verdict: str, estimated: bool) -> EarningsFacts:
@@ -193,8 +312,35 @@ def _eps_result(m: re.Match[str], segment: str, *, verdict: str, estimated: bool
         "eps_surprise": _surprise(eps, ref) if estimated else None,
         "eps_verdict": verdict,
     }
-    fields = _comparable(fields, segment, m, "eps_surprise")
+    if estimated and not _comparison(segment, m, (m["eps"],), m["ref"], eps, ref):
+        fields = _not_comparable(fields, "eps")
     return EarningsFacts("result", _with_sales(fields, segment, m.end()))
+
+
+def _guided_figure(segment: str, g: re.Match[str]) -> tuple[str | None, str | None]:
+    """The figure a ``GUIDE_V4`` read guides to, as (low, high) texts, high None
+    for a single figure; (None, None) when no figure qualifies.
+
+    It is the last dollar figure between the read's metric and its estimate
+    that is not glued to the token before it and not introduced as the
+    guidance being replaced; of "From $80M To $75M" the "To" figure counts.
+    """
+    end = g.end("high") if g["high"] else g.end("low")
+    found: tuple[str | None, str | None] = (None, None)
+    pos = g.end("metric")
+    while (f := _FIGURE.search(segment, pos, end)) is not None:
+        before = max(0, f.start() - 30)
+        if _OLD.search(segment, before, f.start()) is None:
+            found, pos = (f["low"], f["high"]), f.end()
+        elif (
+            f["high"]
+            and f["join"].strip().lower() == "to"
+            and _FROM.search(segment, before, f.start())
+        ):
+            pos = f.start("high")  # "From ~$0.31 To $0.52-$0.62": read on from the "To"
+        else:
+            pos = f.end()
+    return found
 
 
 def _guidance(
@@ -204,8 +350,15 @@ def _guidance(
     *,
     basis: str,
     previous: str | None,
+    figure: tuple[str | None, str | None],
 ) -> EarningsFacts:
-    low, high, est = money(g["low"]), money(g["high"] or g["low"]), money(g["est"])
+    low_text, high_text = figure
+    unit = _SUFFIXED.search(high_text.strip()) if high_text else None
+    if low_text and unit and _SUFFIXED.search(low_text.strip()) is None:
+        low_text += unit[0].rstrip(")")  # "$643-$684M": a range states its unit once
+    low = money(low_text) if low_text else None
+    high = money(high_text or low_text) if low_text else None
+    est = money(g["est"])
     mid = (low + high) / 2 if low is not None and high is not None else None
     period: str | None = g["period"]
     if period is None:  # "Sees Sales $X vs $Y Est" after a period-bearing segment
@@ -225,30 +378,44 @@ def _guidance(
         "previous": previous,
         "qualifier": (qualifier or "").lower() or None,
     }
-    return EarningsFacts("guidance", _comparable(fields, segment, g, "surprise"))
+    if not _comparison(segment, g, (low_text, high_text), g["est"], mid, est):
+        fields = _not_comparable(fields, None)
+    return EarningsFacts("guidance", fields)
+
+
+def _result_read(rx: re.Pattern[str], segment: str) -> re.Match[str] | None:
+    """``rx``'s read of ``segment``, unless a forecast verb precedes it."""
+    m = rx.search(segment)
+    if m is None or _FORWARD.search(segment, 0, m.start()) is not None:
+        return None
+    return m
 
 
 def _segment_fact(segment: str, prior: Sequence[EarningsFacts]) -> EarningsFacts | None:
     """The fact the first template of ``PARSE_ORDER`` reads from ``segment``, if any.
 
     Guidance comes first: "Sees Q4 Adj EPS $0.20 vs $0.26 Est" is a forecast,
-    though its tail reads like a result. Results carry no action verb.
+    though its tail reads like a result. Results carry no forecast verb.
     """
     if (g := _GUIDE_RANGE.search(segment)) is not None:
-        return _guidance(g, segment, prior, basis=_basis(g["basis"]), previous=g["old"])
+        figure = (g["low"], g["high"])
+        return _guidance(
+            g, segment, prior, basis=_basis(g["basis"]), previous=g["old"], figure=figure
+        )
     g = GUIDE_V4.search(segment)
     if g is not None and _TOLERANCE_GAP.search(segment, g.end("metric"), g.start("low")):
         g = None
     if g is not None:
         word = _BASIS_WORD.search(segment, g.end("action"), g.start("metric"))
         basis = _basis(word[0] if word else None)
-        return _guidance(g, segment, prior, basis=basis, previous=None)
-    if (m := _RESULT.search(segment)) is not None:
+        figure = _guided_figure(segment, g)
+        return _guidance(g, segment, prior, basis=basis, previous=None, figure=figure)
+    if (m := _result_read(_RESULT, segment)) is not None:
         estimated = m["ref_kind"].lower().startswith("est")
         return _eps_result(m, segment, verdict=m["verdict"].lower(), estimated=estimated)
-    if (m := RESULT_EST_FIRST.search(segment)) is not None:
+    if (m := _result_read(RESULT_EST_FIRST, segment)) is not None:
         return _eps_result(m, segment, verdict="vs", estimated=True)
-    if (m := _INLINE.search(segment)) is not None:
+    if (m := _result_read(_INLINE, segment)) is not None:
         eps = money(m["eps"])
         fields: dict[str, object] = {
             "period": _period(m["period"]),
@@ -258,9 +425,10 @@ def _segment_fact(segment: str, prior: Sequence[EarningsFacts]) -> EarningsFacts
             "eps_surprise": 0.0,
             "eps_verdict": "inline",
         }
-        fields = _comparable(fields, segment, m, "eps_surprise")
+        if _flagged(segment, m.start(), m.end()):
+            fields = _not_comparable(fields, "eps")
         return EarningsFacts("result", _with_sales(fields, segment, m.end()))
-    if (m := SALES_ONLY.search(segment)) is not None:
+    if (m := _result_read(SALES_ONLY, segment)) is not None:
         sales, ref = money(m["sales"]), money(m["ref"])
         stated = segment[m.end("period") : m.start("sales")]
         fields = {
@@ -271,7 +439,9 @@ def _segment_fact(segment: str, prior: Sequence[EarningsFacts]) -> EarningsFacts
             "sales_surprise": _surprise(sales, ref),
             "sales_verdict": m["verdict"].lower(),
         }
-        return EarningsFacts("result", _comparable(fields, segment, m, "sales_surprise"))
+        if not _comparison(segment, m, (m["sales"],), m["ref"], sales, ref):
+            fields = _not_comparable(fields, "sales")
+        return EarningsFacts("result", fields)
     return None
 
 
@@ -288,10 +458,11 @@ def parse_headline(headline: str) -> list[EarningsFacts]:
 # "Ajd. EPS"), found validating the parser on the full history.
 # v3: a year after the quarter ("Q4 2023 Adj EPS"), "Adj $0.65 Beats", "Revenue
 # ... Misses" -- the commonest 2023-2026 misses.
-# v4: sales-only results, "EPS $X vs. Est. $Y", guidance in other verbs
-# ("Expects", "Narrows", "Versus Consensus Of", "(Est $Y)"), "May Not Compare
-# To" figures without a surprise, and the sales stated after an inline EPS.
-# The news engine reads v4; v3 rows stay in event_facts.
+# v4: sales-only results, "EPS $X vs. Est. $Y" (and its "Rev. $X vs. Est. $Y"),
+# guidance in other verbs ("Expects", "Narrows", "Versus Consensus Of", "(Est
+# $Y)") with its figure re-read, "May Not Compare" and unit mismatches without
+# a surprise, no result read after a forecast verb, and the sales stated after
+# an inline EPS. The news engine reads v4; v3 rows stay in event_facts.
 EXTRACTOR_V3: Final = "benzinga-earnings-v3"
 EXTRACTOR: Final = "benzinga-earnings-v4"
 
@@ -305,14 +476,23 @@ def sources() -> dict[str, str]:
         "_GUIDE_RANGE": _GUIDE_RANGE,
         "SALES_ONLY": SALES_ONLY,
         "RESULT_EST_FIRST": RESULT_EST_FIRST,
+        "SALES_EST_FIRST": SALES_EST_FIRST,
         "GUIDE_V4": GUIDE_V4,
         "NOT_COMPARABLE": NOT_COMPARABLE,
         "GUIDE_UNPARSED": GUIDE_UNPARSED,
         "_BASIS_WORD": _BASIS_WORD,
         "_TOLERANCE_GAP": _TOLERANCE_GAP,
+        "_FIGURE": _FIGURE,
+        "_OLD": _OLD,
+        "_FROM": _FROM,
+        "_FORWARD": _FORWARD,
+        "_SUFFIXED": _SUFFIXED,
+        "_METRIC_WORD": _METRIC_WORD,
+        "_CLOSING_FLAG": _CLOSING_FLAG,
     }
     return {name: rx.pattern for name, rx in patterns.items()} | {
         "PARSE_ORDER": ",".join(PARSE_ORDER),
+        "UNIT_RATIO": repr(UNIT_RATIO),
         "EXTRACTOR": EXTRACTOR,
     }
 
