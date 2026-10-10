@@ -104,6 +104,22 @@ async def test_the_facts_step_reads_every_event_then_drops_the_superseded_facts(
     assert "deleted 1 superseded fact row(s)" in caplog.text
 
 
+async def test_a_run_keeping_superseded_facts_reads_every_event_and_deletes_none(
+    engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = _stub_steps(monkeypatch)
+    await _seed_superseded(engine)
+    with daily.keeping_superseded():
+        run = await daily.refresh_events(engine, settings, today=date(2026, 10, 2))
+
+    assert run.counts["facts"] == 1
+    # This parser's facts are added; every other label's stay (a hand run).
+    assert await _labels(engine) == {ep.EXTRACTOR_V3: 1, ep.EXTRACTOR_V4: 1, ep.EXTRACTOR: 1}
+    # Outside the block the evening run drops them again.
+    await daily.refresh_events(engine, settings, today=date(2026, 10, 2))
+    assert await _labels(engine) == {ep.EXTRACTOR_V3: 1, ep.EXTRACTOR: 1}
+
+
 async def test_a_failed_extraction_deletes_no_facts(
     engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
 ) -> None:
