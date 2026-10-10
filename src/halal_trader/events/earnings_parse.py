@@ -21,11 +21,14 @@ nothing returns no facts, never a guess. Year-over-year comparisons
 ``not_comparable`` (per metric on a result: ``eps_not_comparable``,
 ``sales_not_comparable``), when
 
-* Benzinga says so ("May Not Compare", with or without "To") in the
-  statement's own clause, which runs from the statement to the next metric
-  it names; a flag closing the segment covers every statement in it. In
-  "EPS $(1.49) Beats $(1.52) Estimate, Sales $517.00K May Not Compare To
-  $3.54M Estimate" the EPS beat keeps its surprise;
+* Benzinga says so ("May Not Compare", "Does Not Compare", "May Not Be
+  Comparable", "Not Comparable", with or without "To") in the statement's
+  own clause, which runs from the statement to the next metric it names; a
+  flag closing the segment covers every statement in it, and a segment that
+  only flags (no metric, no dollar figure: "...; Estimates May Not Compare",
+  "...; BZ NOTE: Forecast Likely Does Not Compare As ...") every statement
+  in the headline. In "EPS $(1.49) Beats $(1.52) Estimate, Sales $517.00K
+  May Not Compare To $3.54M Estimate" the EPS beat keeps its surprise;
 * the figure and its estimate are not in the same units: one carries a
   K/M/B suffix and the other none ("EPS $5.54-$5.61 Vs $5.66B Est."), or
   one is more than :data:`UNIT_RATIO` times the other ("Q1 2024 Vs $149.45M
@@ -134,14 +137,19 @@ SALES_EST_FIRST: Final = re.compile(
     rf"\b(?:Sales|Revenues?|Revs?\.?)\s+(?P<sales>{_NUM})\s+vs\.?\s+Est\.?\s+(?P<ref>{_NUM})", re.I
 )
 # Benzinga's flag that the figure is not on the estimate's basis: no surprise.
-NOT_COMPARABLE: Final = re.compile(r"May Not Compare", re.I)
+# "May Not Compare" (2016-26), "Does/Do Not Compare" (2016-21), "May Not Be
+# Comparable", "May Not Be Compared" and "Not Comparable" (2019-26).
+NOT_COMPARABLE: Final = re.compile(
+    r"\b(?:(?:May|Does|Do)\s+Not\s+(?:Be\s+)?Compar(?:e|ed|able)|Not\s+(?:Be\s+)?Comparable)\b",
+    re.I,
+)
 # Guidance against consensus that no template reads: an earnings item whose
 # guidance is unknown (the taxonomy's ``guidance_unparsed``), never a fact.
 GUIDE_UNPARSED: Final = re.compile(
     r"\b(?:Sees|Expects|Guides|Forecasts|Projects|Narrows|Revises|Updates|Issues|Initiates|"
     r"Reaffirms|Affirms|Reiterates|Maintains)\b.{0,60}"
     r"\b(?:EPS|Sales|Revenues?|Guidance|Outlook)\b.{0,80}"
-    r"(?:\bEst|Estimate|Consensus|May Not Compare)",
+    rf"(?:\bEst|Estimate|Consensus|{NOT_COMPARABLE.pattern})",
     re.I,
 )
 
@@ -218,9 +226,9 @@ EPS_RATIO_FLOOR: Final = 0.10
 EPS_RATIO_CAP: Final = 100.0
 # The metric a statement names: a statement's clause runs to the next one.
 _METRIC_WORD = re.compile(r"\b(?:EPS|Sales|Revenues?|Revs?)\b", re.I)
-# A "May Not Compare" closing its segment qualifies every statement in it.
+# A flag closing its segment qualifies every statement in it.
 _CLOSING_FLAG = re.compile(
-    r"May Not Compare(?:\s+(?:To|With)\s+(?:Estimates?|Est\.?))?[\s.,:]*$", re.I
+    rf"(?:{NOT_COMPARABLE.pattern})(?:\s+(?:To|With)\s+(?:Estimates?|Est\.?))?[\s.,:]*$", re.I
 )
 # A figure's K/M/B suffix.
 SCALE: Final[dict[str, float]] = {"K": 1e3, "M": 1e6, "B": 1e9}
@@ -299,6 +307,27 @@ def _flagged(segment: str, start: int, end: int) -> bool:
     following = _METRIC_WORD.search(segment, end)
     clause_end = following.start() if following else len(segment)
     return NOT_COMPARABLE.search(segment, start, clause_end) is not None
+
+
+def _flags_headline(segment: str) -> bool:
+    """Whether ``segment`` only flags its headline as not comparable: it says
+    so, and names no metric and no dollar figure ("Estimates May Not Compare")."""
+    return (
+        NOT_COMPARABLE.search(segment) is not None
+        and _METRIC_WORD.search(segment) is None
+        and "$" not in segment
+    )
+
+
+def _flag_all(fact: EarningsFacts) -> EarningsFacts:
+    """``fact`` with every statement in it flagged as not comparable."""
+    if fact.kind == "guidance":
+        return EarningsFacts(fact.kind, _not_comparable(fact.fields, None))
+    fields = fact.fields
+    for metric in ("eps", "sales"):
+        if f"{metric}_verdict" in fields:
+            fields = _not_comparable(fields, metric)
+    return EarningsFacts(fact.kind, fields)
 
 
 def _not_comparable(fields: dict[str, object], metric: str | None) -> dict[str, object]:
@@ -532,12 +561,19 @@ def _segment_fact(segment: str, prior: Sequence[EarningsFacts]) -> EarningsFacts
 
 
 def parse_headline(headline: str) -> list[EarningsFacts]:
-    """Every result or guidance statement in one headline (segments split on ';')."""
+    """Every result or guidance statement in one headline (segments split on ';').
+
+    A segment that only flags the headline (:func:`_flags_headline`) flags
+    every statement read from it as not comparable.
+    """
     out: list[EarningsFacts] = []
+    flagged = False
     for segment in headline.split(SEGMENT_SEP):
         if (fact := _segment_fact(segment, out)) is not None:
             out.append(fact)
-    return out
+        else:
+            flagged |= _flags_headline(segment)
+    return [_flag_all(f) for f in out] if flagged else out
 
 
 # v2: the 2016-2019 formats ("EPS $1.27 vs $1.12 Est.", "EPS $0.22, Inline",
