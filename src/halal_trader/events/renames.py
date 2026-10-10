@@ -137,7 +137,8 @@ class RenamedNewsError(RuntimeError):
 
 def renames_sha() -> str:
     """A short hash of the tables ``owner`` and the backfill read, for the
-    pre-registration: ``TICKER_RENAMES``, ``HELD_SINCE`` and ``GRACE_SESSIONS``.
+    pre-registration: ``TICKER_RENAMES``, ``HELD_SINCE``, ``GRACE_SESSIONS``
+    and ``NEWS_FROM`` (where ``window`` starts an old ticker with no earlier one).
 
     ``alias_sha`` pins the stored names; this pins which news rows reach the
     stories, so a date edited after registration shows as a new pin.
@@ -151,6 +152,7 @@ def renames_sha() -> str:
             for (ticker, company), first in HELD_SINCE.items()
         },
         "GRACE_SESSIONS": GRACE_SESSIONS,
+        "NEWS_FROM": NEWS_FROM.isoformat(),
     }
     return hashlib.sha256(json.dumps(blob, sort_keys=True).encode()).hexdigest()[:12]
 
