@@ -64,3 +64,6 @@ SIM_RUN_DONE: Final[str] = "playbooks.sim.run.done"
 # ── News research (events/: descriptive and pre-registered runs, never trades) ──
 # The atlas's rebuilt stories that differ from their news_stories rows (one per run).
 ATLAS_STORIES_MISMATCH: Final[str] = "events.atlas.stories_mismatch"
+# A Phase 0 gate's run, written to the ledger (events/sim_gate.py), or its refusal.
+SIM_GATE_RUN: Final[str] = "research.sim_gate.run"
+SIM_GATE_REFUSED: Final[str] = "research.sim_gate.refused"
