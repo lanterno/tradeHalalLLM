@@ -57,7 +57,7 @@ from halal_trader.events.sim_gate import (
 from halal_trader.events.stories import build_range
 from halal_trader.events.study import Observation
 from halal_trader.market_hours import MARKET_TZ, is_trading_day, next_trading_day
-from tests._stories import add_aliases, news_row, store
+from tests._stories import add_aliases, mark_built, news_row, store
 from tests.halabot.playbooks._seed import mark_done, seed_bars, seed_calendar, seed_daily
 from tests.halabot.playbooks._support import epoch, session_bars
 from tests.halabot.playbooks._synth import random_session
@@ -426,6 +426,7 @@ async def sue_world(engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch) -> Asy
                 rows,
             )
     await liquidity(engine, S_SYMBOLS, date(2015, 1, 1), date(2016, 12, 1))
+    await mark_built(engine, units.TRAIN[0], units.VALIDATION[1])
     # Minute bars agreeing with the daily bars on every unit the gates read.
     complement = await sigma_c(engine, obs)
     assert len(complement) == len(obs)  # no story, so no H1 unit: every event is in Σ_c
@@ -582,6 +583,7 @@ async def g1_world(engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch) -> Asyn
         ],
     )
     await build_range(engine, start=date(2016, 1, 4), end=date(2016, 9, 30), force=True)
+    await mark_built(engine, *units.G1_RANGE)
     done: set[tuple[str, date]] = set()
     for s in G1_DAYS:
         for k, d in enumerate(units.path(s, units.PATH_SESSIONS, units.G1_RANGE[1])):
@@ -646,6 +648,7 @@ async def test_g1_s_md3_determinism_runs_the_stories_whose_path_fits(
     late = date(2016, 9, 29)
     await store(engine, [news_row(10, "AAA", ny(late, 8), "Morgan Stanley Downgrades Acme")])
     await build_range(engine, start=date(2016, 1, 4), end=date(2016, 9, 30), force=True)
+    await mark_built(engine, *units.G1_RANGE)
     done = []
     for d in units.path(late, units.PATH_SESSIONS, units.G1_RANGE[1]):
         await seed_bars(engine, "AAA", session_bars(d, price=97.6, volume=10_000.0))
