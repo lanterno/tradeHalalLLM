@@ -77,8 +77,9 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import Any, Final
 
 _NUM = r"\(?-?\$?\(?-?[\d,]*\.?\d+\)?[KMB]?"
@@ -234,7 +235,7 @@ _CLOSING_FLAG = re.compile(
     rf"(?:{NOT_COMPARABLE.pattern})(?:\s+(?:To|With)\s+(?:Estimates?|Est\.?))?[\s.,:]*$", re.I
 )
 # A figure's K/M/B suffix.
-SCALE: Final[dict[str, float]] = {"K": 1e3, "M": 1e6, "B": 1e9}
+SCALE: Final[Mapping[str, float]] = MappingProxyType({"K": 1e3, "M": 1e6, "B": 1e9})
 # A surprise is relative to the estimate's magnitude, but never to less than this.
 SURPRISE_FLOOR: Final = 0.01
 # What a headline's statements are split on.
@@ -629,7 +630,7 @@ def sources() -> dict[str, str]:
         "EPS_RATIO_CAP": repr(EPS_RATIO_CAP),
         "OLD_WINDOW": repr(OLD_WINDOW),
         "KEEP_ACTIONS": ",".join(sorted(KEEP_ACTIONS)),
-        "SCALE": json.dumps(SCALE, sort_keys=True),
+        "SCALE": json.dumps(dict(SCALE), sort_keys=True),
         "SURPRISE_FLOOR": repr(SURPRISE_FLOOR),
         "SEGMENT_SEP": SEGMENT_SEP,
         "EXTRACTOR_V4": EXTRACTOR_V4,
