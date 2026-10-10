@@ -24,12 +24,15 @@ Prices follow the company, news follows the ticker: a news row under a ticker
 another company held on its day is that company's. ``owner`` says, for a news
 row, which of today's symbols it belongs to (see there for the rule); the
 alias learner and the story builder keep a row only where it is its own
-symbol's.
+symbol's. ``renames_sha`` pins the tables ``owner`` reads in the news
+engine's pre-registration.
 """
 
 from __future__ import annotations
 
 import dataclasses
+import hashlib
+import json
 import logging
 from collections.abc import Collection, Iterable
 from dataclasses import dataclass
@@ -130,6 +133,26 @@ HELD_SINCE: Final[dict[tuple[str, str], date]] = {
 
 class RenamedNewsError(RuntimeError):
     """The renamed tickers' news is not (or cannot be) complete."""
+
+
+def renames_sha() -> str:
+    """A short hash of the tables ``owner`` and the backfill read, for the
+    pre-registration: ``TICKER_RENAMES``, ``HELD_SINCE`` and ``GRACE_SESSIONS``.
+
+    ``alias_sha`` pins the stored names; this pins which news rows reach the
+    stories, so a date edited after registration shows as a new pin.
+    """
+    blob = {
+        "TICKER_RENAMES": {
+            old: [current, last.isoformat()] for old, (current, last) in TICKER_RENAMES.items()
+        },
+        "HELD_SINCE": {
+            f"{ticker}|{company}": first.isoformat()
+            for (ticker, company), first in HELD_SINCE.items()
+        },
+        "GRACE_SESSIONS": GRACE_SESSIONS,
+    }
+    return hashlib.sha256(json.dumps(blob, sort_keys=True).encode()).hexdigest()[:12]
 
 
 def old_tickers(symbol: str) -> tuple[str, ...]:
