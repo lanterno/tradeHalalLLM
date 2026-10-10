@@ -613,6 +613,8 @@ def test_units_across_a_suffix_boundary_still_compare() -> None:
         ("Phillips 66 Q3 Adj. EPS $(0.01) Beats $(0.79) Estimate", -0.01, -0.79),
         ("Coinbase Glb Q4 EPS $1.04 Beats $(0.01) Estimate, Sales $953.79M Beat $822.36M "
          "Estimate", 1.04, -0.01),
+        # A large EPS under the cap still compares.
+        ("MicroStrategy Q2 Adj. EPS $32.52 Beats $(0.07) Estimate", 32.52, -0.07),
     ],
 )  # fmt: skip
 def test_an_eps_near_zero_compares_whatever_the_ratio(
@@ -634,6 +636,9 @@ def test_an_eps_near_zero_compares_whatever_the_ratio(
         "Bidu Q1 EPS $1,89 Beats $1.66 Est; Revenue $4.29B Beats $4.22B Est",
         "ILG Reports Q3 EPS 40.25 vs $0.26 Est, Rev $418M vs $387M Est",
         "Bloom Energy Q4 EPS $(12) Misses $(0.18) Estimate, Sales $213.6M Beat $206.95M Estimate",
+        # Constructed: the year read as the EPS, against an estimate near zero.
+        "Acme Q1 2024 Vs $(0.03) Est.",
+        "Acme Reports Q1 EPS $2,024 vs $0.05 Est.",
     ],
 )
 def test_a_garbled_eps_still_does_not_compare(headline: str) -> None:
@@ -833,6 +838,7 @@ def test_parser_sha_pins_every_pattern() -> None:
     # The constants that shape a read, beside the patterns.
     assert src["UNIT_RATIO"] == repr(ep.UNIT_RATIO) == "50.0"
     assert src["EPS_RATIO_FLOOR"] == repr(ep.EPS_RATIO_FLOOR) == "0.1"
+    assert src["EPS_RATIO_CAP"] == repr(ep.EPS_RATIO_CAP) == "100.0"
     assert src["OLD_WINDOW"] == repr(ep.OLD_WINDOW) == "40"
     assert src["KEEP_ACTIONS"] == "affirms,maintains,reaffirms,reiterates,sees"
     assert json.loads(src["SCALE"]) == ep.SCALE == {"K": 1e3, "M": 1e6, "B": 1e9}
