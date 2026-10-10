@@ -337,7 +337,9 @@ def extract_cmd(drop_superseded: bool) -> None:
     """Read earnings results and guidance vs consensus out of stored headlines.
 
     Adds this parser's facts and keeps every other label's; the evening refresh
-    deletes the superseded ones."""
+    deletes the superseded ones. After a parser deploy, run it with
+    --drop-superseded in the fleet's container straight away, outside market
+    hours: until it runs, the readers see no facts (docs/DEPLOY.md)."""
 
     async def _run(engine: Any, settings: Any) -> tuple[int, int | None]:
         from halal_trader.events import earnings_parse
