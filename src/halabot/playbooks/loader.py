@@ -19,6 +19,15 @@
   with :func:`register_gate_units` before it runs. SPY is admitted on the
   days of those units.
 
+**One pin per gate.** :func:`register_gate_units` refuses a set whose sha
+differs from a pin the gate already has (re-registering the same set is a
+no-op), and refuses a set that does not hash to ``expected_sha`` when the
+caller passes one (the plan's ``UnitPlan.sha("gate_<id>")``, so a gate's set
+is the one plan H fetched). :meth:`WindowGuard.verify` opens a gate only when
+the ledger holds exactly one pin for it, equal to ``unlock.units_sha``: two
+registrations racing with different sets leave two pins, and then neither
+opens (fail closed).
+
 The sue range ends at :func:`sue_last_exit`, the last h=20 exit session of an
 observation published by 2019-12-31 (spec §H: ``gate_sue`` holds the entry
 session and the h=5 and h=20 exit sessions).
@@ -196,32 +205,50 @@ def check_gate_units(gate: str, units: Iterable[tuple[str, date]]) -> frozenset[
     return out
 
 
-async def _gate_pinned(engine: AsyncEngine, gate: str, sha: str) -> bool:
+async def gate_pins(engine: AsyncEngine, gate: str) -> set[str]:
+    """Every unit-set sha the ledger pins for ``gate`` (one at most, by registration)."""
     async with engine.connect() as conn:
-        found = await conn.scalar(
+        rows = await conn.execute(
             text(
-                "SELECT count(*) FROM quant_trials WHERE kind = :k AND name = :n "
-                "AND config->>'gate' = :g AND config->>'units_sha' = :sha"
+                "SELECT DISTINCT config->>'units_sha' AS sha FROM quant_trials "
+                "WHERE kind = :k AND name = :n AND config->>'gate' = :g"
             ),
-            {"k": GATE_UNITS_KIND, "n": GATE_UNITS_NAME, "g": gate, "sha": sha},
+            {"k": GATE_UNITS_KIND, "n": GATE_UNITS_NAME, "g": gate},
         )
-    return bool(found)
+        return {str(r.sha) for r in rows}
 
 
 async def register_gate_units(
-    engine: AsyncEngine, gate: Gate, units: Iterable[tuple[str, date]]
+    engine: AsyncEngine,
+    gate: Gate,
+    units: Iterable[tuple[str, date]],
+    *,
+    expected_sha: str | None = None,
 ) -> str:
     """Pin ``gate``'s unit set in the ledger before the gate runs; returns its sha256.
 
     Writes one ``quant_trials`` row (``kind='gate-units'``, no Sharpe, so it
     is never counted as a trial) unless the same pin exists. Refuses
-    (:class:`WindowLocked`) a unit outside the gate's dates.
+    (:class:`WindowLocked`) a unit outside the gate's dates, a set that
+    does not hash to ``expected_sha`` when one is given (the units plan
+    passes ``UnitPlan.sha("gate_<id>")``), and a set other than the one
+    the gate is already pinned to: one pin per gate.
     """
     from halal_trader.db.repos.quant_trials import QuantTrialRepoImpl
 
     unit_set = check_gate_units(gate, units)
     sha = unit_set_sha(unit_set)
-    if not await _gate_pinned(engine, gate, sha):
+    if expected_sha is not None and sha != expected_sha:
+        raise WindowLocked(
+            f"gate {gate!r}: the unit set hashes to {sha[:12]}, "
+            f"not the expected {expected_sha[:12]}"
+        )
+    pins = await gate_pins(engine, gate)
+    if others := sorted(pins - {sha}):
+        raise WindowLocked(
+            f"gate {gate!r} is already pinned to {others[0][:12]}; one pin per gate, not {sha[:12]}"
+        )
+    if sha not in pins:
         lo, hi = GATE_RANGES[gate]
         await QuantTrialRepoImpl(engine).record_trial(
             name=GATE_UNITS_NAME,
@@ -262,10 +289,15 @@ class WindowGuard:
             raise WindowLocked("an unlock needs the preregistered config_hash")
         if u.gate is not None:
             assert u.units_sha is not None  # checked at construction
-            if not await _gate_pinned(engine, u.gate, u.units_sha):
+            pins = await gate_pins(engine, u.gate)
+            if u.units_sha not in pins:
                 raise WindowLocked(
                     f"gate {u.gate!r}: unit set {u.units_sha[:12]} is not pinned in the ledger "
                     f"(register_gate_units)"
+                )
+            if len(pins) > 1:
+                raise WindowLocked(
+                    f"gate {u.gate!r} has {len(pins)} pinned unit sets; one pin per gate"
                 )
             self._gate_ok = True
         async with engine.connect() as conn:
@@ -635,6 +667,7 @@ __all__ = [
     "batches_of",
     "check_calendar",
     "check_gate_units",
+    "gate_pins",
     "register_gate_units",
     "sane",
     "sue_last_exit",
