@@ -58,14 +58,18 @@ async def first_in_session(
     """The first scored in-session headline of each (symbol, New York day).
 
     ``scored_before`` pins the set to the scores that existed then, so a
-    result can be reproduced after later scoring runs add headlines.
+    result can be reproduced after later scoring runs add headlines. Rows are
+    read in a fixed order (time, then event id) and the result is sorted by
+    time then symbol, so headlines sharing a timestamp come back the same way
+    on every read and :func:`selection`'s seeded sample is the same sample.
     """
     async with engine.connect() as conn:
         rows = await conn.execute(
             text(
                 "SELECT e.symbol, e.published_at, s.score FROM event_scores s "
                 "JOIN events e ON e.id = s.event_id WHERE s.scorer LIKE :p AND e.kind = 'news' "
-                "AND (CAST(:before AS timestamptz) IS NULL OR s.scored_at < :before)"
+                "AND (CAST(:before AS timestamptz) IS NULL OR s.scored_at < :before) "
+                "ORDER BY e.published_at, e.id, s.scorer"
             ),
             {"p": scorer_prefix + "%", "before": scored_before},
         )
@@ -77,7 +81,7 @@ async def first_in_session(
             key = (r.symbol, local.date())
             if key not in first or r.published_at < first[key].published_at:
                 first[key] = Headline(r.symbol, r.published_at, float(r.score))
-    return sorted(first.values(), key=lambda h: h.published_at)
+    return sorted(first.values(), key=lambda h: (h.published_at, h.symbol))
 
 
 def selection(headlines: list[Headline], seed: int = 11) -> list[Headline]:
