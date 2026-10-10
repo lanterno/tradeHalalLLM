@@ -34,10 +34,11 @@ day published between that close and 16:00 gets ``entry_point``'s
 "close" of a session already shut: :attr:`DailyEntry.lookahead` marks it,
 for S1 to exclude and count.
 
-Both models admit a buy without the halal screen or the entry window
-(R1's headlines and S1's complement universe are not H1's universe, and a
-replication takes the study's trades as they were). Nothing here places an
-order.
+Both models admit a buy without the halal screen or the entry window, and
+a held position is never sold by the pre-open compliance check (R1's
+headlines and S1's complement universe are not H1's universe, and a
+replication takes the study's trades as they were): every exit is the
+model's, recorded as ``time_stop``. Nothing here places an order.
 """
 
 from __future__ import annotations

@@ -44,7 +44,10 @@ deadline session.
 
 **Fill models.** The exchange fills by ``SimConfig.fill`` (the D.5 market
 rule unless a gate-only model from ``legacy.py`` is given; :func:`run`
-accepts those only under a gate unlock).
+accepts those only under a gate unlock). A gate-only model replicates a
+legacy study, which held through its exit whatever the screen said: under
+one the simulator skips the screen at entry, the flatten and the pre-open
+compliance exit, so the exit is the model's own (``time_stop``).
 
 **Determinism.** Symbols are independent, so they are split over workers by
 ``crc32(symbol) % workers`` and the records are identical for any worker
@@ -711,7 +714,7 @@ class _StoryRun:
     def _session(self, k: int, kind: SessionKind) -> None:
         s = self.sessions[k]
         now = from_us(self.now_us)
-        if kind == "pre_open" and k >= 1 and self.qty > 0:
+        if kind == "pre_open" and k >= 1 and self.qty > 0 and not self.fill.gate_only:
             verdict = self.ctx.screen_verdict(self.symbol, s.day)
             if verdict != "halal":
                 self._cancel_buys("compliance", inline=True)
