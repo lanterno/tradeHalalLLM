@@ -223,9 +223,16 @@ def test_newer_formats(headline: str, period: str, eps: float, estimate: float) 
 
 
 def test_v4_is_the_current_extractor_and_v3_stays_named() -> None:
-    from halal_trader.events.earnings_parse import EXTRACTOR, EXTRACTOR_V3
+    from halal_trader.events.earnings_parse import (
+        EXTRACTOR,
+        EXTRACTOR_V3,
+        EXTRACTOR_V4,
+        PARSER_SHA,
+    )
 
-    assert EXTRACTOR == "benzinga-earnings-v4"
+    # The stored label names the parser that read the facts.
+    assert EXTRACTOR == f"benzinga-earnings-v4+{PARSER_SHA}"
+    assert EXTRACTOR_V4 == "benzinga-earnings-v4"
     assert EXTRACTOR_V3 == "benzinga-earnings-v3"
 
 
@@ -814,7 +821,8 @@ def test_parser_sha_pins_every_pattern() -> None:
         "_TO",
     ):
         assert src[name] == getattr(ep, name).pattern
-    assert src["EXTRACTOR"] == ep.EXTRACTOR
+    # The family label, not EXTRACTOR, which derives from the pin.
+    assert src["EXTRACTOR_V4"] == ep.EXTRACTOR_V4 and "EXTRACTOR" not in src
     assert src["PARSE_ORDER"] == ",".join(ep.PARSE_ORDER)
     # The constants that shape a read, beside the patterns.
     assert src["UNIT_RATIO"] == repr(ep.UNIT_RATIO) == "50.0"
@@ -867,3 +875,57 @@ async def test_v4_extraction_reads_events_v3_already_read(engine) -> None:
         ).all()
     assert [(r.extractor, r.kind) for r in rows] == [(EXTRACTOR_V3, "none"), (EXTRACTOR, "result")]
     assert rows[1].fields["sales_verdict"] == "beat"
+
+
+async def test_a_parser_change_re_extracts_and_drops_the_superseded_label(
+    engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from datetime import UTC, datetime
+
+    from sqlalchemy import text
+
+    from halal_trader.events import earnings_parse as ep
+    from halal_trader.events.store import EventRecord, EventRecorder
+
+    t = datetime(2021, 1, 7, 21, tzinfo=UTC)
+    heads = (
+        "Micron Technology Q1 Sales $5.77B Beat $5.73B Estimate",
+        "Micron Technology Announces New Memory",
+        "Micron Technology Sees Q2 Sales $5.7B-$6.1B vs $5.8B Est",
+    )
+    await EventRecorder(engine).record(
+        [
+            EventRecord("alpaca", str(i), "news", "MU", t, t, {"headline": h})
+            for i, h in enumerate(heads)
+        ]
+    )
+    async with engine.begin() as conn:  # what v3 and a pin-less v4 parser stored
+        for label in (ep.EXTRACTOR_V3, ep.EXTRACTOR_V4):
+            await conn.execute(
+                text(
+                    "INSERT INTO event_facts (event_id, extractor, kind, fields) "
+                    "SELECT id, :x, 'none', '{}'::jsonb FROM events"
+                ),
+                {"x": label},
+            )
+
+    async def labels() -> dict[str, int]:
+        async with engine.connect() as conn:
+            rows = await conn.execute(
+                text("SELECT extractor, count(*) AS n FROM event_facts GROUP BY 1")
+            )
+            return {r.extractor: r.n for r in rows}
+
+    # One event a batch: the pages and the deletes run several rounds.
+    assert await ep.extract_all(engine, batch=1) == 2
+    current = ep.EXTRACTOR
+    assert await labels() == {ep.EXTRACTOR_V3: 3, current: 3}
+    assert await ep.extract_all(engine, batch=1) == 0  # every event is read
+
+    # A parser change is a new pin, so a new label: every event is read again
+    # and the superseded label's rows go; v3's stay.
+    changed = f"{ep.EXTRACTOR_V4}+{'0' * 12}"
+    monkeypatch.setattr(ep, "EXTRACTOR", changed)
+    assert await ep.extract_all(engine, batch=1) == 2
+    assert await labels() == {ep.EXTRACTOR_V3: 3, changed: 3}
+    assert await ep.drop_superseded(engine) == 0
