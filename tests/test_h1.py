@@ -112,8 +112,7 @@ def test_the_prereg_holds_every_pin_and_the_code_constants() -> None:
     assert pre["pins"] == PINS
     assert pre["taxonomy"]["extractor"] == EXTRACTOR
     assert pre["builder"]["news_lag_s"] == int(NEWS_LAG.total_seconds())
-    playbook = dict(BounceParams().as_config())
-    playbook.pop("hold_sessions")
+    playbook = BounceParams().as_config()  # the cells carry the hold
     assert {k: pre["playbook"][k] for k in playbook} == playbook
     assert "hold_sessions" not in pre["playbook"]
     assert pre["playbook"]["name"] == bounce.NAME
