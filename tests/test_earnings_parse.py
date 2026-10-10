@@ -532,6 +532,11 @@ def test_a_glued_parenthesis_never_flips_a_figure_s_sign() -> None:
         # The "26" of "FY26" is all GUIDE_V4 found.
         ("Autoliv Expects 0% Organic Sales Growth For FY26 Vs $11.18B Estimate. FY25 Sales Was "
          "$10.82B", "expects"),
+        # Constructed: a "from" not after "Guidance" states the base of a change,
+        # never kept guidance's range (a false raise, a false cut).
+        ("Acme Sees FY Sales Down 5% From $1.2B vs $1.1B Est", "sees"),
+        ("Acme Sees FY Revenue Up From $1.2B vs $1.3B Est", "sees"),
+        ("Acme Reaffirms FY Revenue Growth Of 10% From $1.00B vs $1.15B Est", "reaffirms"),
     ],
 )  # fmt: skip
 def test_guidance_without_a_reliable_figure_keeps_its_action(headline: str, action: str) -> None:
@@ -813,6 +818,7 @@ def test_parser_sha_pins_every_pattern() -> None:
         "_FIGURE",
         "_OLD",
         "_FROM",
+        "_GUIDANCE_FROM",
         "_FORWARD",
         "_SUFFIXED",
         "_METRIC_WORD",
