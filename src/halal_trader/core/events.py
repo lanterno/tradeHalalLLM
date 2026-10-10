@@ -54,3 +54,9 @@ JOB_CATCH_UP: Final[str] = "scheduler.catch_up"
 
 # ── Tracing ─────────────────────────────────────────────────────
 TRACE_SPAN: Final[str] = "trace.span"
+
+# ── Research simulator (halabot/playbooks: research runs, never trades) ──
+# A sim.run: its start, each batch of outcomes written, and its summary.
+SIM_RUN_START: Final[str] = "playbooks.sim.run.start"
+SIM_RUN_BATCH: Final[str] = "playbooks.sim.run.batch"
+SIM_RUN_DONE: Final[str] = "playbooks.sim.run.done"

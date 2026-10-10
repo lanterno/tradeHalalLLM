@@ -70,7 +70,7 @@ from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime
-from typing import Any, Final, Literal
+from typing import Any, Literal
 
 import numpy as np
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -123,14 +123,10 @@ from halabot.playbooks.types import (
     Transition,
     WorkingOrder,
 )
+from halal_trader.core import events
 from halal_trader.data.minutes import BarArrays
 
 logger = logging.getLogger(__name__)
-
-# Structured progress events (``extra={"event": ...}``, the core/events.py pattern).
-SIM_RUN_START: Final[str] = "playbooks.sim.run.start"
-SIM_RUN_BATCH: Final[str] = "playbooks.sim.run.batch"
-SIM_RUN_DONE: Final[str] = "playbooks.sim.run.done"
 
 StopAt = Literal["entry", "end"]
 Parallel = bool | Literal["fork", "spawn"] | None
@@ -1429,7 +1425,7 @@ async def run(
         len(stories),
         len(requests),
         extra={
-            "event": SIM_RUN_START,
+            "event": events.SIM_RUN_START,
             "run_id": run_id,
             "window": str(window),
             "stories": len(stories),
@@ -1508,7 +1504,7 @@ async def run(
                 n_batches,
                 n_out,
                 extra={
-                    "event": SIM_RUN_BATCH,
+                    "event": events.SIM_RUN_BATCH,
                     "run_id": run_id,
                     "batch": n_batches,
                     "outcomes": n_out,
@@ -1536,7 +1532,7 @@ async def run(
         n_out,
         trades,
         extra={
-            "event": SIM_RUN_DONE,
+            "event": events.SIM_RUN_DONE,
             "run_id": run_id,
             "outcomes": n_out,
             "entries": entries,
@@ -1547,9 +1543,6 @@ async def run(
 
 
 __all__ = [
-    "SIM_RUN_BATCH",
-    "SIM_RUN_DONE",
-    "SIM_RUN_START",
     "MakePlaybook",
     "Parallel",
     "PitStory",
