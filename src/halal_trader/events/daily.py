@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import text
@@ -72,14 +72,17 @@ async def refresh_filings(
     """Store the covered companies' recent filings that are new to the store.
 
     Each new filing is stamped at its EDGAR header's acceptance time before
-    it is stored (the submissions JSON's is hours late for a third of them)
-    and its unit marked in ``filing-times``: one request per filing, at most
-    ``header_budget`` per run, each company's structural and earnings 8-Ks
-    first. Past the budget, or when the header is missing or EDGAR stops
-    answering, a filing keeps the JSON's time, marked ``time_source: json``.
-    With ``today``, what is left of the budget corrects the stored filings of
-    the last ``CATCH_UP`` that no pass has checked: those, and what another
-    path stored with the JSON's time.
+    it is stored (the submissions JSON's is hours late for a third of them):
+    one request per filing, at most ``header_budget`` per run, each company's
+    structural and earnings 8-Ks first. The header's time then goes to every
+    row of the filing, under the other symbols it was stored under before
+    too, and its unit is marked in ``filing-times``. A filing stored before
+    under another symbol and stamped from its header takes that time with
+    no request. Past the budget, or when the header is missing or EDGAR
+    stops answering, a filing keeps the JSON's time, marked
+    ``time_source: json``. With ``today``, what is left of the budget
+    corrects the stored filings of the last ``CATCH_UP`` that no pass has
+    checked: those, and what another path stored with the JSON's time.
     """
     import httpx
 
@@ -101,22 +104,24 @@ async def refresh_filings(
             engine, history.filing_records(subs["filings"]["recent"], symbol)
         )
         fresh.sort(key=lambda r: history.filing_priority(r.kind, r.payload.get("items") or []))
+        known = await history.header_times(engine, [r.source_id for r in fresh])
         stamped: list[EventRecord] = []
-        deltas: dict[str, int] = {}
+        fixes: dict[str, tuple[datetime, int]] = {}
         for record in fresh:
-            accepted = None
-            if budget > 0:
+            accepted = known.get(record.source_id)
+            if accepted is None and budget > 0:
                 budget -= 1
                 try:
                     accepted = await sec.acceptance(cik, record.source_id)
                 except edgar_failed as exc:
                     logger.warning("filing headers unavailable, using the JSON times: %r", exc)
                     budget = 0
-            if accepted is not None:
-                deltas[record.source_id] = history.time_delta(record.published_at, accepted)
+                if accepted is not None:
+                    delta = history.time_delta(record.published_at, accepted)
+                    fixes[record.source_id] = (accepted, delta)
             stamped.append(history.header_stamped(record, accepted))
         written += await recorder.record(stamped)
-        await history.mark_units(engine, history.TIMES_TASK, deltas)
+        await history.write_times(engine, fixes)
     if today is not None and budget > 0:
         try:
             await history.correct_filing_times(

@@ -422,10 +422,14 @@ async def _retime(conn: AsyncConnection, times: dict[str, datetime]) -> None:
         )
 
 
-async def _write_times(
-    engine: AsyncEngine, fixes: dict[str, tuple[datetime, int]], missing: list[str]
+async def write_times(
+    engine: AsyncEngine,
+    fixes: dict[str, tuple[datetime, int]],
+    missing: Sequence[str] = (),
 ) -> None:
-    """Stamp each accession's rows at its header time and mark the units done, in one
+    """Stamp every row of each accession in ``fixes`` (header time, stored minus
+    header in seconds) at that time, under every symbol it is stored under, and
+    mark the units done, with ``missing`` in ``filing-times-missing``; in one
     transaction: a unit is done only with its rows written."""
     async with engine.begin() as conn:
         await _retime(conn, {acc: t for acc, (t, _) in fixes.items()})
@@ -516,7 +520,7 @@ async def correct_filing_times(
         nonlocal fixes, missing
         batch, gone = fixes, missing
         fixes, missing = {}, []
-        await _write_times(engine, batch, gone)
+        await write_times(engine, batch, gone)
 
     async def worker() -> None:
         nonlocal read
