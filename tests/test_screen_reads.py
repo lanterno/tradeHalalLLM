@@ -61,6 +61,40 @@ async def test_screen_rows_filter_by_verdict_and_symbol(engine: AsyncEngine) -> 
     )
 
 
+async def test_all_screens_reads_every_screen_in_one_pass(engine: AsyncEngine) -> None:
+    older, newer = TODAY - timedelta(days=7), TODAY
+    await _screen(engine, newer, {"TSM": "doubtful", "AAPL": "halal"})
+    await _screen(engine, older, {"NVDA": "halal"})
+    # A newer method's verdict on NVDA for the older date: that one is current.
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO halal_screen_results (as_of, symbol, cik, sic_description, "
+                "verdict, reasons, metrics, method, screened_at) VALUES (:a, 'NVDA', NULL, "
+                "'Semiconductors', 'not_halal', CAST(:r AS JSONB), '{\"price\": 120.5}', 'v12', :t)"
+            ),
+            {"a": older, "r": json.dumps(["debt / market cap 0.41"]), "t": datetime.now(UTC)},
+        )
+
+    screens = await strict.all_screens(engine)
+
+    assert list(screens) == [older, newer]
+    assert [r.symbol for r in screens[newer]] == ["AAPL", "TSM"]
+    assert screens[newer] == await strict.screen_rows(engine, newer)  # one row reader
+    assert screens[older] == [
+        strict.ScreenRow(
+            "NVDA",
+            "not_halal",
+            None,
+            "Semiconductors",
+            120.5,
+            None,
+            None,
+            ("debt / market cap 0.41",),
+        )
+    ]
+
+
 async def test_both_strategies_apply_one_order_boundary_rule(engine: AsyncEngine) -> None:
     await _screen(engine, TODAY - timedelta(days=1), {"AAPL": "halal", "NVDA": "not_halal"})
 

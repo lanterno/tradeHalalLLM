@@ -123,3 +123,46 @@ async def test_the_unmapped_share_counts_companies_not_funds(engine: AsyncEngine
     sched = await pit_schedule(engine, start=date(2026, 1, 1), end=date(2026, 2, 1), top_n=10)
 
     assert sched.unmapped == {2026: 1 / 2}  # GONE of {A, GONE}; the fund is no company
+
+
+async def test_an_eligible_firm_carries_what_its_screen_recorded(engine: AsyncEngine) -> None:
+    from halal_trader.research.pit import Firm, pit_schedule
+
+    year = month_starts(date(2025, 1, 1), date(2026, 2, 1))
+    for sym in ("A", "B", "C", "D"):
+        await _months(engine, sym, year, 100.0, 1e6)
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO halal_screen_results (as_of, symbol, cik, sic_description, verdict, "
+                "reasons, metrics, method, screened_at) VALUES ('2025-12-31', :s, :k, :d, "
+                ":v, '[]', CAST(:m AS JSONB), 'test', now())"
+            ),
+            [
+                {
+                    "s": "A",
+                    "k": 7,
+                    "d": "SEMIS",
+                    "v": "halal",
+                    "m": '{"price": 12.5, "shares_outstanding": 4e6}',
+                },
+                {
+                    "s": "B",
+                    "k": 8,
+                    "d": "SOFT",
+                    "v": "halal",
+                    "m": '{"price": 3.0, "shares_outstanding": null}',
+                },
+                {"s": "C", "k": None, "d": "", "v": "halal", "m": "{}"},
+                {"s": "D", "k": 9, "d": "BANK", "v": "not_halal", "m": '{"price": 1.0}'},
+            ],
+        )
+
+    sched = await pit_schedule(engine, start=date(2026, 1, 1), end=date(2026, 1, 1), top_n=10)
+
+    screened = date(2025, 12, 31)
+    assert sched.firms_from[date(2026, 1, 1)] == {
+        "A": Firm(7, 12.5 * 4e6, screened, "SEMIS"),
+        "B": Firm(8, None, screened, "SOFT"),  # no share count: no cap
+        "C": Firm(None, None, screened, ""),
+    }
