@@ -392,23 +392,161 @@ def test_noise_comes_before_earnings_facts() -> None:
     assert news_type(h) == "noise"
 
 
-def test_earnings_facts_come_before_the_guidance_cut_words() -> None:
-    h = (
-        "Itron Cuts FY18 Guidance: Adj. EPS From $2.75-$2.90 To $2.40-$2.50 vs $2.81 Estimate, "
-        "Sales From $2.425B-$2.475B To $2.37B-$2.39B vs $2.44B Est."
+@pytest.mark.parametrize(
+    ("headline", "eps", "sales"),
+    [
+        ("SLM Q1 EPS $0.870 Misses $0.880 Estimate; Withdraws FY20 Guidance", -1, None),
+        ("Masco Q3 EPS $0.65 Misses $0.70 Estimate, Sales $2.101B Miss $2.17B Estimate; "
+         "Cuts Guidance", -1, -1),
+        ("Itron Q2 EPS $0.28 Misses $0.48 Estimate, Sales $489.00M Miss $535.91M Estimate; "
+         "Cuts Guidance", -1, -1),
+        # In the same segment as the result.
+        ("Oshkosh Q2 Adj. EPS $0.41 Misses $0.90 Estimate, Sales $2.07B Miss $2.22B Estimate, "
+         "Lowers FY22 Guidance", -1, -1),
+        ("Brunswick Reports Q3 Adj. EPS $0.91 vs $0.99 Est., Sales $1.14B vs $1.16B Est.; "
+         "Cuts Outlook", -1, -1),
+        ("Black Hills Late Thursday Q4 Adj. EPS $0.98 vs $1.05 Est., Sales $455.3M vs $478.08M "
+         "Est.; Co. Cut FY18 Adj. EPS Guidance From $3.35-$3.55 to $3.30-$3.50 vs $3.41 Est.",
+         -1, -1),
+        ("Oshkosh Q1 Adj. EPS $0.24 Beats $0.16 Estimate, Sales $1.95B Beat $1.88B Estimate; "
+         "Cuts Guidance", 1, 1),
+    ],
+)  # fmt: skip
+def test_a_cut_stated_with_the_results_is_a_guidance_cut(
+    headline: str, eps: int | None, sales: int | None
+) -> None:
+    item = news(1, 0, headline)
+    assert item.itype == "guidance_cut" and item.facts  # the numbers still count
+    card = resolve([item], LATER, follower=False)
+    assert card.type == "guidance_cut" and card.family is None and card.structural
+    assert card.earnings is not None
+    assert (card.earnings.eps, card.earnings.sales, card.earnings.guide) == (eps, sales, "down")
+
+
+def test_raising_the_lower_end_is_not_a_cut() -> None:
+    altria = (
+        "Altria Group Q3 Adj. EPS $1.22 Misses $1.26 Estimate, Sales Net Of Excise Taxes $5.53B, "
+        "Net Sales $6.786B; Raises Lower End Of FY21 Guidance"
     )
-    assert tx.GUIDANCE_CUT.search(h) is not None
-    assert news_type(h) == "earnings_fact"
+    assert news_type(altria) == "earnings_fact"
+    card = resolve([news(1, 0, altria)], LATER, follower=False)
+    assert card.type == "earnings_miss" and card.family == "NSN_CORE"
+    assert news_type("3M Narrows, Raises Lower End Of FY17 Guidance") == "guidance_raise"
+    united = (
+        "United Rental Raises Lower-End Of Its FY20 Sales Guidance From $8.05B-$8.45B To "
+        "$8.35B-$8.45B Vs $8.36B Estimates"
+    )
+    assert news_type(united) == "earnings_fact"
+    teleflex = (
+        "Teleflex Raises The Lower End Of FY24 Adj EPS Guidance From $13.55 - $13.95 To "
+        "$13.60 - $13.95 Vs. $13.73 Est."
+    )
+    assert news_type(teleflex) == "earnings_fact"
+    # Guiding to the lower end is still one.
+    assert (
+        news_type(
+            "Citigroup CFO Mark Mason Says Revenue Expected To Be On Lower End Of Guidance, "
+            "Around $78B"
+        )
+        == "guidance_cut"
+    )
 
 
-def test_unread_guidance_comes_before_the_guidance_cut_words() -> None:
-    # Spec order: GUIDE_UNPARSED (5) before the negative regexes (6).
+@pytest.mark.parametrize(
+    ("headline", "itype"),
+    [
+        ("Meta Lowers 2023 Capex Guidance Range From $30B-$33B To $27B-$30B", "other"),
+        ("Cimarex Energy Cuts FY20 Capex Guidance By 55-60% From Previously-Issued "
+         "$1.25B-$1.35B", "other"),
+        ("MSCI Lowers FY22 Operating Expense Guidance From $1.045B-$1.085 To $1.03B-$1.06B",
+         "other"),
+        # A cost cut next to a real one.
+        ("CVS Health Q2 Profit Falls But Beats Estimate, Initiates Restructuring To Cut Costs, "
+         "Lowers Annual Outlook", "guidance_cut"),
+        ("Lamar Advertising Company Withdraws 2020 Guidance, Cuts Capex Outlook From $130M To "
+         "$58M; Says Evaluating Dividend Plans", "guidance_cut"),
+    ],
+)  # fmt: skip
+def test_lowering_what_the_company_spends_is_not_a_guidance_cut(headline: str, itype: str) -> None:
+    assert news_type(headline) == itype
+
+
+def test_an_explicit_cut_comes_before_unread_guidance() -> None:
     h = (
         "Core & Main Lowered 2024 Outlook: Now Expects Net Sales Of $7.3B-$7.4B (Prior "
         "$7.5B-$7.6B) Vs. $7.53B Consensus; Adjusted EBITDA Of $900M-$930M (Prior $935M-$975M)"
     )
-    assert parse_headline(h) == [] and tx.GUIDANCE_CUT.search(h) is not None
-    assert news_type(h) == "guidance_unparsed"
+    assert parse_headline(h) == [] and tx.GUIDE_UNPARSED.search(h) is not None
+    assert news_type(h) == "guidance_cut"
+    card = resolve([news(1, 0, h)], LATER, follower=False)
+    assert card.type == "guidance_cut" and card.structural
+    # Guidance against consensus without a cut stays unparsed.
+    assert (
+        news_type(
+            "Ulta Sees Q1 Rev. $1.016B-$1.033B vs. Est. $1.01B, EPS $1.25-$1.30 vs. Est. $1.22"
+        )
+        == "guidance_unparsed"
+    )
+    # Another structural negative keeps its place before the cut (constructed).
+    assert (
+        news_type(
+            "Acme Withdraws Guidance, Sees Q1 Sales Below Consensus Est. After Restatement Of "
+            "FY23 Results"
+        )
+        == "restatement"
+    )
+
+
+@pytest.mark.parametrize(
+    ("headline", "itype"),
+    [
+        ("Citi Restates Buy Rating On ON Semiconductor", "other"),
+        ("BWXT Technologies Closes Amended And Restated Credit Agreement With Wells Fargo Bank, "
+         "N.a. And Other Lenders That Increases The Company's Liquidity", "contract_win"),
+        ("Alcoa Amends, Restates Existing Revolving Credit Facility Into $1.25B Revolving Credit "
+         "Facility With Improved Terms", "other"),
+        ("8-K from Apple Shows Board Adopted Amended, Restated Bylaws", "other"),
+        ("UPDATE: Intel, AMD Shares Move Lower On Intel Chip Delay Report", "mover"),
+        ("Nvidia CEO Jensen Huang Dismisses Vera Rubin Hardware Delay Report, Affirms 'Giant' "
+         "Production Volumes", "other"),
+        ("Dave Portnoy Buys $250K GameStop Stock, $250K AMC Stock: 'I Wish I Bought More'",
+         "other"),
+        ("Freight Operator XPO Wins Bankruptcy Court Approval To Acquire 28 Yellow Service "
+         "Centers", "ma_acquirer"),
+        # The real ones stay.
+        ("Kraft Heinz 8-K Shows Co. To Restate Financial Statements For FY16, FY17",
+         "restatement"),
+        ("UPDATE: Ormat Also Restates Q1 2018 Results Due To Tax Benefit Adjustment",
+         "restatement"),
+        ("Beyond Meat Delays Filing Of Its Annual Report On Form 10-K For FY25; Reports "
+         "Preliminary Q4 Revenue ~$61M, FY25 Revenue ~$275M", "restatement"),
+        ("Alexion Pharma Delays 10-Q", "restatement"),
+        ("Bruker Receives Notification From Nasdaq Related To Delayed Annual Report On Form 10-K",
+         "restatement"),
+        ("Portnoy Law Firm Announces Investor Investigation Of Acme", "law_firm"),  # constructed
+        ("Sears Holdings Files For Chapter 11 Bankruptcy Protection", "insolvency"),  # constructed
+    ],
+)  # fmt: skip
+def test_the_verbatim_patterns_false_positives(headline: str, itype: str) -> None:
+    assert news_type(headline) == itype
+
+
+@pytest.mark.parametrize(
+    ("headline", "itype"),
+    [
+        ("Citigroup Maintains Buy on Amazon.com, Lowers Target from $965 to $960",
+         "analyst_pt_cut"),
+        ("UPDATE: Bank Of America Reiterates Buy On Netflix, Lowers Target To $426 As Firm Notes "
+         "'We see Netflix's results providing relief to investors'", "analyst_pt_cut"),
+        ("JPMorgan Cuts Target On Chipotle To $485, Maintains Overweight", "analyst_pt_cut"),
+        ("UPDATE: Baird Maintains Outperform On Costco, Raises Target To $335", "analyst_pt_raise"),
+        # The rating still decides.
+        ("Baird Downgrades Acuity Brands to Neutral, Lowers Target to $265.00",
+         "analyst_downgrade"),
+    ],
+)  # fmt: skip
+def test_the_older_target_wording(headline: str, itype: str) -> None:
+    assert news_type(headline) == itype
 
 
 def test_the_facts_passed_decide_not_the_headline() -> None:
@@ -468,6 +606,15 @@ def test_an_8k_ignores_any_headline() -> None:
         ({"eps_surprise": None, "eps_verdict": "up from"}, "eps", None),
         ({"eps_surprise": None, "eps_verdict": "vs."}, "eps", None),
         ({}, "sales", None),
+        # Not comparable (May Not Compare, or other units): unknown, whatever the word.
+        ({"eps_surprise": None, "eps_verdict": "beats", "eps_not_comparable": True}, "eps", None),
+        (
+            {"sales_surprise": None, "sales_verdict": "miss", "sales_not_comparable": True},
+            "sales",
+            None,
+        ),
+        # The other metric's flag leaves this one alone.
+        ({"eps_surprise": 0.10, "eps_verdict": "beats", "sales_not_comparable": True}, "eps", 1),
     ],
 )
 def test_metric_verdict(fields: dict[str, object], metric: str, verdict: int | None) -> None:
@@ -520,6 +667,26 @@ def test_metric_verdict(fields: dict[str, object], metric: str, verdict: int | N
             "Kandi Technologies Gr H1 EPS $0.10 Up From $0.02 YoY, Sales $57.117M Up From "
             "$36.291M YoY",
             (None, None, "earnings_inline"),
+        ),
+        # Figures that do not compare decide nothing: units, then May Not Compare.
+        (
+            "Merit Medical Reports Q2 EPS $0.26 vs. Est. $151.1M vs. Est. $147.76M",
+            (None, None, "earnings_inline"),
+        ),
+        (
+            "Air Products & Chemicals Q2 2024 Adj EPS $2.85 Beats $2.69 Estimate, Sales $2.930 "
+            "Miss $3.047B Estimate",
+            (1, None, "earnings_beat"),
+        ),
+        (
+            "CMS Energy Reports Q4 GAAP EPS $(0.01) vs $0.51 Est., Sales $1.78B vs $1.77B Est., "
+            "May Not Compare",
+            (None, None, "earnings_inline"),
+        ),
+        (
+            "Tableau Reports Q3 non-GAAP EPS $0.16 vs $0.07 Est, May Not Compare, Revenue $206.1M "
+            "vs $213.78M Est",
+            (None, -1, "earnings_miss"),
         ),
     ],
 )
@@ -579,6 +746,30 @@ def test_real_guidance_wires() -> None:
     assert verdict(
         "Abbott Expects Q2 2025 Adjusted EPS Of $1.23 to $1.27 Versus Consensus Of $1.25"
     ) == ("inline", "guidance_inline")
+    # The figures GUIDE_V4 alone misread.
+    assert verdict(
+        "ESCO Technologies Raises Preliminary Q2 Adj EPS Guidance from $1.75-$1.85 to $1.91 vs "
+        "$1.77 Est"
+    ) == ("up", "guidance_raise")
+    assert verdict(
+        "Whirlpool Narrows FY2025 GAAP EPS Guidance from $5.00-$7.00 to $6.00 vs $5.32 Est; "
+        "Affirms FY2025 Sales Guidance of $15.800B vs $15.491B Est"
+    ) == ("up", "guidance_raise")
+    assert verdict(
+        "HP Expects Adj EPS Of $0.70 - $0.76 For Q1 (Est $0.85); $3.45 - $3.75 For FY25 (Est $3.60)"
+    ) == ("down", "guidance_cut")
+    # Raised, -0.3% against consensus: inside the band, so the action decides.
+    assert verdict(
+        "3M Raises FY24 Adj EPS Guidance To $7.00-$7.30 From $6.80-$7.30 vs. $7.17 Est"
+    ) == ("up", "guidance_raise")
+    # Units that do not compare: the action alone.
+    assert verdict("Agilent Technologies Sees FY25 Adj. EPS $5.54-$5.61 Vs $5.66B Est.") == (
+        "inline",
+        "guidance_inline",
+    )
+    assert verdict(
+        "10x Genomics Lowers FY24 Sales Guidance From $640M-$660M Vs. $663.06M Estimate"
+    ) == ("down", "guidance_cut")
 
 
 MISS = "Trade Desk Q1 EPS $0.45 Misses $0.77 Estimate, Sales $219.80M Beat $216.90M Estimate"
@@ -847,6 +1038,15 @@ def test_unread_earnings() -> None:
         1, 0, "Ulta Sees Q1 Rev. $1.016B-$1.033B vs. Est. $1.01B, EPS $1.25-$1.30 vs. Est. $1.22"
     )
     assert resolve([unparsed], LATER, follower=False).type == "earnings_unparsed"
+    # Single-figure guidance reads like an estimate-first result; it is not a miss.
+    celgene = news(
+        1,
+        0,
+        "Celgene Sees Q4 Adj EPS $1.18 Vs Est $1.30, Sees FY 2016 Adj EPS $5.50-$5.70 VS Est "
+        "$5.68 & Sales $10.5-$11B Vs Est $11.13B",
+    )
+    card = resolve([celgene], LATER, follower=False)
+    assert card.type == "earnings_unparsed" and card.family is None
     # An earnings release outranks the analysts that follow it.
     card = resolve([filing(1, 0, "2.02"), news(2, 5, DOWNGRADE)], LATER, follower=False)
     assert card.type == "earnings_unparsed" and card.family is None
