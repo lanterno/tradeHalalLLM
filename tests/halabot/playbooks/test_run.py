@@ -15,7 +15,13 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from halabot.playbooks import sim
-from halabot.playbooks.legacy import HarnessStory, HoldFactory, reactor_config, reactor_story
+from halabot.playbooks.legacy import (
+    HarnessStory,
+    HoldFactory,
+    r1_dropped,
+    reactor_config,
+    reactor_story,
+)
 from halabot.playbooks.loader import (
     Window,
     WindowLocked,
@@ -25,9 +31,11 @@ from halabot.playbooks.loader import (
 )
 from halabot.playbooks.playbook import Factory, PlaybookFactory
 from halabot.playbooks.records import MemorySink, PgOutcomeSink, outcomes_sha256
-from halabot.playbooks.sim import DATA_SKIPS, pool_method, run
+from halabot.playbooks.sim import pool_method, run
 from halabot.playbooks.types import SimConfig
 from halal_trader.core import events
+from halal_trader.data import minutes
+from halal_trader.events import intraday
 from halal_trader.market_hours import MARKET_TZ, is_trading_day
 from tests.halabot.playbooks._seed import (
     mark_done,
@@ -281,6 +289,35 @@ async def test_an_explicit_set_refuses_other_stories_before_writing(engine: Asyn
     assert sink.info is None and sink.outcomes == []
 
 
+async def test_r1_in_miniature_compares_the_run_with_the_study(engine: AsyncEngine) -> None:
+    """The study's drops (``intraday.entry_and_close`` on the stored rows) against the run's."""
+    stories, expected, unlock = await _headlines(engine)
+    await seed_bars(engine, "GGG", session_bars(MON))  # the study computes it: no story did
+    sink = MemorySink()
+    summary = await _reactor_run(engine, stories, expected, unlock, sink)
+    lo, hi = intraday._PLAUSIBLE
+    study_dropped = set()
+    for hid, (symbol, published) in HEADS.items():
+        day = published.astimezone(MARKET_TZ).date()
+        at = published + intraday.LATENCY
+        if not is_trading_day(day):
+            study_dropped.add(hid)
+            continue
+        s = intraday.entry_and_close(await minutes.read(engine, symbol, day), at)
+        q = intraday.entry_and_close(await minutes.read(engine, "SPY", day), at)
+        if s is None or q is None or not lo < s[1] / s[0] < hi:
+            study_dropped.add(hid)
+    assert study_dropped == {"h-holiday", "h-late", "h-nospy", "h-jump"}
+    trades = [o.trade for o in sink.outcomes if o.trade is not None]
+    check = r1_dropped(HEADS, summary, trades, study_dropped)
+    assert check.set_aside == {"h-bad": ("bad_bars",), "h-thin": ("spy_thin",)}
+    assert check.sim_only == {"h-unbuilt": "no_story"} and check.study_only == ()
+    assert check.kept == ("h-ok",) and check.compared == 6
+    assert check.share == 0.25 and not check.within_cap and not check.passed
+    with pytest.raises(ValueError, match="not H's 7"):
+        r1_dropped([h for h in HEADS if h != "h-ok"], summary, trades, study_dropped)
+
+
 async def test_a_run_logs_its_start_batches_and_end(
     engine: AsyncEngine, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -341,12 +378,6 @@ async def test_a_run_lists_the_stories_its_data_rules_touched(engine: AsyncEngin
     assert summary.bar_drop_ids == ("TWO:2016-03-07",)  # the stock's own bars
     assert summary.spy_drop_ids == ("SPYCUT:2016-03-08",)  # SPY's, on a path session
     assert summary.spy_drop_days == {"2016-03-08": 1}
-    assert summary.data_filtered() == {
-        "BAD:2016-03-07",
-        "DEFECT:2016-03-07",
-        "SPYCUT:2016-03-08",
-        "TWO:2016-03-07",
-    }
     assert summary.spare_drop_ids == ("SPARE:2016-03-07",)  # the spare (TUE), not the path
     assert summary.skips == {"bad_bars": 1, "adjust_defect": 1}
     assert summary.loader["dropped_bars"] == 2 and summary.loader["spy_dropped_bars"] == 1
@@ -367,7 +398,6 @@ async def test_a_run_lists_the_stories_its_data_rules_touched(engine: AsyncEngin
         "SPYCUT:2016-03-08",
         "SPARE:2016-03-07",
     }
-    assert DATA_SKIPS == ("adjust_defect", "bad_bars")
 
 
 def _fail_to_load() -> Context:

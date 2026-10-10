@@ -9,7 +9,9 @@ drop the same ones. Synthetic data only: no stored price is read.
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
+from typing import cast
 
 import numpy as np
 import pytest
@@ -19,16 +21,25 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from halabot.playbooks.clock import US, to_us
 from halabot.playbooks.exchange import MARKET_FILL
 from halabot.playbooks.legacy import (
+    BARS_CUT,
+    R1_SET_ASIDE,
+    R1_SET_ASIDE_CAP,
+    SPY_BARS_CUT,
     DailyBarFill,
     DailyBarSource,
     HoldFactory,
     LegacyReactorFill,
     daily_config,
+    r1_dropped,
+    r1_set_aside,
     reactor_config,
+    reactor_plausible,
     reactor_story,
 )
-from halabot.playbooks.sim import simulate_symbol
+from halabot.playbooks.records import TradeRecord
+from halabot.playbooks.sim import RunSummary, simulate_symbol
 from halabot.playbooks.types import (
+    DATA_SKIPS,
     BarSeries,
     Execution,
     OrderKind,
@@ -218,6 +229,98 @@ def test_r1_admits_what_the_study_took_and_never_flattens() -> None:
         assert t is not None and t.entry_bar_ts == published + timedelta(minutes=1)
         assert t.exit_bar_ts == et(MON, 15, 57) and t.flags == ("last_close",)
         assert t.exit_decided_at == et(MON, 16, 0)  # taken at the close, not at the flatten
+
+
+# ── R1: the dropped sets ──
+
+
+def _summary(n: int, **kw: object) -> RunSummary:
+    base: dict[str, object] = dict(
+        run_id="r",
+        stories=n,
+        started=n,
+        outcomes=n,
+        entries=n,
+        trades=n,
+        terminal={},
+        skips={},
+        loader={},
+        skip_ids={},
+        bar_drop_ids=(),
+        expected=n,
+    )
+    return RunSummary(**{**base, **kw})  # type: ignore[arg-type]
+
+
+@dataclass(frozen=True, slots=True)
+class _Trade:
+    """The fields of a TradeRecord the comparison reads."""
+
+    story_id: str
+    entry_px: float
+    exit_px: float
+
+
+def test_r1_sets_aside_the_loader_rules_the_study_never_had() -> None:
+    """Each id with every reason; SPY's cut bars apart from the stock's; coverage skips stay."""
+    summary = _summary(
+        10,
+        skip_ids={
+            "bad_bars": ("b",),
+            "adjust_defect": ("a",),
+            "no_daily": ("n",),
+            "spy_thin": ("t",),
+            "spy_missing": ("m",),  # compared: the study drops a SPY session with no bar too
+            "units_missing": ("u",),
+            "halted_all_day": ("h",),
+        },
+        bar_drop_ids=("c", "x"),
+        spy_drop_ids=("s", "x"),
+        spare_drop_ids=("p",),  # R1 never reads the spare session
+    )
+    assert R1_SET_ASIDE == ("adjust_defect", "bad_bars", "no_daily", "spy_thin")
+    assert not set(R1_SET_ASIDE) <= DATA_SKIPS  # not the Stage A data skips
+    assert r1_set_aside(summary) == {
+        "a": ("adjust_defect",),
+        "b": ("bad_bars",),
+        "c": (BARS_CUT,),
+        "n": ("no_daily",),
+        "s": (SPY_BARS_CUT,),
+        "t": ("spy_thin",),
+        "x": (BARS_CUT, SPY_BARS_CUT),
+    }
+
+
+def test_r1_compares_the_rest_and_caps_the_set_aside() -> None:
+    ids = [f"h{i:03d}" for i in range(200)]
+    trades = [_Trade(i, 50.0, 51.0) for i in ids[:190]]
+    trades[5] = _Trade(ids[5], 50.0, 101.0)  # exit / entry 2.02: implausible
+    summary = _summary(
+        200,
+        dropped=dict.fromkeys(ids[190:], "entry_unfilled"),
+        bar_drop_ids=(ids[0],),
+        spy_drop_ids=(ids[0],),  # one headline, two reasons
+        skip_ids={"no_daily": (ids[199],)},  # set aside, and dropped by both sides
+    )
+    study = {ids[5], *ids[190:]}
+    check = r1_dropped(ids, summary, cast(list[TradeRecord], trades), study)
+    assert check.set_aside == {ids[0]: (BARS_CUT, SPY_BARS_CUT), ids[199]: ("no_daily",)}
+    assert check.share == 0.01 and check.within_cap  # the cap is inclusive
+    assert check.identical and check.passed and check.compared == 198
+    assert check.kept == tuple(i for i in ids[1:190] if i != ids[5])
+    config = check.as_config()
+    assert config["set_aside_by_reason"] == {BARS_CUT: 1, SPY_BARS_CUT: 1, "no_daily": 1}
+    assert config["set_aside_cap"] == R1_SET_ASIDE_CAP == 0.01
+    assert config["sim_only"] == {} and config["study_only"] == []
+    # One more headline set aside is over the cap; one-sided drops are listed with reasons.
+    over = _summary(200, dropped=summary.dropped, skip_ids={"bad_bars": (ids[0], ids[1], ids[2])})
+    mixed = r1_dropped(ids, over, cast(list[TradeRecord], trades), {*study, ids[7]} - {ids[195]})
+    assert mixed.share == 0.015 and not mixed.within_cap and not mixed.passed
+    assert mixed.sim_only == {ids[195]: "entry_unfilled"} and mixed.study_only == (ids[7],)
+    with pytest.raises(ValueError, match="not in H"):
+        r1_dropped(ids, summary, cast(list[TradeRecord], trades), {"elsewhere"})
+    assert reactor_plausible(cast(TradeRecord, _Trade("p", 50.0, 99.9)))
+    assert not reactor_plausible(cast(TradeRecord, _Trade("p", 50.0, 25.0)))  # bounds excluded
 
 
 # ── S1: the daily-bar study through the simulator ──
