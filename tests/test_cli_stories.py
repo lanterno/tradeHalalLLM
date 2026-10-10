@@ -64,6 +64,7 @@ def test_the_build_command_refuses_without_aliases(database_url: str) -> None:
     assert "Traceback" not in result.output
     forced = CliRunner().invoke(cli, [*args, "--force"])
     assert forced.exit_code == 0, forced.output
+    assert "forced: the range is not marked complete" in forced.output
 
 
 def test_the_build_command_needs_its_range() -> None:
@@ -82,9 +83,7 @@ def test_the_counts_command_prints_each_universe(
         await build_range(engine, start=MON, end=FRI)
 
     _run(database_url, seed)
-    result = CliRunner().invoke(
-        cli, ["events", "stories", "counts", "--start", "2024-01-02", "--end", "2024-12-31"]
-    )
+    result = CliRunner().invoke(cli, ["events", "stories", "counts", *WEEK_ARGS])
     assert result.exit_code == 0, result.output
     lines = result.output.splitlines()
     assert "== all stories ==" in lines and "== Technology (PRIMARY and in Technology) ==" in lines
@@ -93,6 +92,24 @@ def test_the_counts_command_prints_each_universe(
     assert nsn.split()[-4:] == ["1", "0", "1", "1"]  # 2024, train, validation, total
     assert lines[-2] == "eligibility (every story): ok 5, rank 2"
     assert lines[-1] == "eligibility (NSN_CORE stories): ok 1, rank 1"
+
+
+@pytest.mark.usefixtures("small_map")
+def test_the_counts_command_refuses_a_range_no_complete_build_covers(
+    database_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_context(monkeypatch)
+
+    async def seed(engine: AsyncEngine) -> None:
+        await seed_week(engine)
+        await build_range(engine, start=MON, end=FRI)
+
+    _run(database_url, seed)
+    args = ["events", "stories", "counts", "--start", "2024-05-06", "--end", "2024-05-13"]
+    result = CliRunner().invoke(cli, args)
+    assert result.exit_code == 1, result.output
+    assert "1 session(s) in 2024-05-06..2024-05-13" in result.output
+    assert "first: 2024-05-13" in result.output and "Traceback" not in result.output
 
 
 @pytest.mark.usefixtures("small_map")

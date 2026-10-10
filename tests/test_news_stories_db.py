@@ -17,7 +17,7 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from halal_trader.events import earnings_parse
+from halal_trader.events import earnings_parse, stories
 from halal_trader.events.aliases import AliasMatcher, load_aliases
 from halal_trader.events.earnings_parse import (
     EXTRACTOR,
@@ -30,6 +30,8 @@ from halal_trader.events.stories import (
     StoriesNotReady,
     build,
     build_range,
+    build_unit,
+    built_ranges,
     count_stories,
     load_items,
     missing_facts,
@@ -51,6 +53,7 @@ from tests._stories import (
     fake_context,
     filing_row,
     headline_row,
+    mark_built,
     news_row,
     ny,
     seed_week,
@@ -173,9 +176,11 @@ async def test_a_build_waits_for_the_renamed_news_the_aliases_and_the_facts(
     first = min(i for s, i in ids.items() if s.startswith("alpaca:"))
     assert await missing_facts(engine, start=date(2016, 1, 1), end=FRI) == (9, first)
     assert await build_range(engine, start=MON, end=FRI, force=True) > 0
+    assert await built_ranges(engine) == []  # a forced build is never marked complete
     await earnings_parse.extract_all(engine)
     assert await missing_facts(engine, start=date(2016, 1, 1), end=FRI) == (0, None)
     assert await build_range(engine, start=MON, end=FRI) > 0
+    assert await built_ranges(engine) == [(MON, FRI)]
     with pytest.raises(ValueError):
         await build_range(engine, start=FRI, end=MON)
 
@@ -274,6 +279,89 @@ async def test_persist_upserts_a_story(engine: AsyncEngine) -> None:
     assert rows[0]["detect_at"] == ny(TUE, 8, 10) and rows[0]["detect_at"].tzinfo is not None
 
 
+# ── complete builds ───────────────────────────────────────────
+
+
+async def _progress(engine: AsyncEngine) -> dict[str, int]:
+    async with engine.connect() as conn:
+        rows = await conn.execute(
+            text("SELECT unit, items FROM backfill_progress WHERE task = :t"), {"t": stories.TASK}
+        )
+        return {r.unit: r.items for r in rows}
+
+
+async def test_a_build_marks_its_range_complete(ready: AsyncEngine) -> None:
+    assert await built_ranges(ready) == []
+    assert await build_range(ready, start=MON, end=FRI) == 7
+    assert await built_ranges(ready) == [(MON, FRI)]
+    assert await _progress(ready) == {"stories-v1:2024-05-06:2024-05-10": 7}
+    assert build_unit(MON, FRI) == "stories-v1:2024-05-06:2024-05-10"
+
+
+async def test_a_build_that_stops_part_way_leaves_its_range_unmarked(
+    ready: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    loads, _ = fake_context(monkeypatch)
+    await build_range(ready, start=MON, end=FRI)
+    whole = await stored_rows(ready)
+    async with ready.begin() as conn:  # mark every row so a rewrite shows
+        await conn.execute(text("UPDATE news_stories SET n_items = 99"))
+    monkeypatch.setattr(stories, "BATCH_SYMBOLS", 1)  # AAPL, then MSFT
+    real_build = stories.build
+
+    def failing(items: Any, aliases: Any, **kwargs: Any) -> Any:
+        items = list(items)
+        if items and items[0].symbol == "MSFT":
+            raise RuntimeError("killed")
+        return real_build(items, aliases, **kwargs)
+
+    monkeypatch.setattr(stories, "build", failing)
+    with pytest.raises(RuntimeError, match="killed"):
+        await build_range(ready, start=MON, end=FRI)
+    rows = {r["story_id"]: r for r in await stored_rows(ready)}
+    # AAPL's batch was replaced whole; MSFT's delete was rolled back with its batch.
+    assert {r["n_items"] for s, r in rows.items() if s.startswith("AAPL")} == {1, 2}
+    assert {r["n_items"] for s, r in rows.items() if s.startswith("MSFT")} == {99}
+    assert await built_ranges(ready) == []
+    with pytest.raises(StoriesNotReady, match="5 session.*first: 2024-05-06"):
+        await count_stories(ready, start=MON, end=FRI)
+    assert loads == []
+    monkeypatch.setattr(stories, "build", real_build)
+    await build_range(ready, start=MON, end=FRI)
+    assert await stored_rows(ready) == whole
+    assert await built_ranges(ready) == [(MON, FRI)]
+
+
+async def test_rebuilding_part_of_a_range_keeps_the_rest_complete(
+    ready: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_context(monkeypatch)
+    await build_range(ready, start=MON, end=FRI)
+    async with ready.begin() as conn:  # another version's mark is not this one's
+        await conn.execute(
+            text(
+                "INSERT INTO backfill_progress (task, unit, items, done_at) "
+                "VALUES (:t, 'stories-v0:2016-01-01:2026-12-31', 1, now())"
+            ),
+            {"t": stories.TASK},
+        )
+    await build_range(ready, start=TUE, end=WED)
+    assert await built_ranges(ready) == [(MON, MON), (TUE, WED), (THU, FRI)]
+    assert await _progress(ready) == {
+        "stories-v0:2016-01-01:2026-12-31": 1,
+        "stories-v1:2024-05-06:2024-05-06": 1,  # the stories left in each part
+        "stories-v1:2024-05-07:2024-05-08": 3,
+        "stories-v1:2024-05-09:2024-05-10": 3,
+    }
+    assert sum((await count_stories(ready, start=MON, end=FRI)).types.values()) > 0
+    with pytest.raises(StoriesNotReady, match=r"1 session\(s\) in .*first: 2024-05-13"):
+        await count_stories(ready, start=MON, end=date(2024, 5, 13))
+    weekend = await count_stories(ready, start=date(2024, 5, 11), end=date(2024, 5, 12))
+    assert not weekend.types  # no session, nothing to cover
+    await build_range(ready, start=date(2024, 5, 1), end=date(2024, 5, 31))
+    assert await built_ranges(ready) == [(date(2024, 5, 1), date(2024, 5, 31))]
+
+
 # ── counts ────────────────────────────────────────────────────
 
 
@@ -282,8 +370,8 @@ async def test_counts_split_types_and_nsn_by_universe(
 ) -> None:
     loads, made = fake_context(monkeypatch)
     await build_range(ready, start=MON, end=FRI)
-    counts = await count_stories(ready, start=date(2024, 1, 2), end=date(2024, 12, 31))
-    assert loads == [(["AAPL", "MSFT"], date(2024, 1, 2), date(2024, 12, 31))]
+    counts = await count_stories(ready, start=MON, end=FRI)
+    assert loads == [(["AAPL", "MSFT"], MON, FRI)]
     assert counts.types[("all", "fraud_probe", 2024, "validation")] == 1
     assert counts.types[("all", "analyst_downgrade", 2024, "validation")] == 3
     assert counts.types[("primary", "analyst_downgrade", 2024, "validation")] == 2  # no MSFT
@@ -312,6 +400,7 @@ async def test_counts_load_one_year_at_a_time(
         raw_news(2, ny(date(2022, 1, 3), 8), MISS),
     ]
     await persist(engine, build(raws, APPLE))
+    await mark_built(engine, date(2021, 6, 1), date(2022, 6, 30), 2)
     counts = await count_stories(engine, start=date(2021, 6, 1), end=date(2022, 6, 30))
     assert loads == [
         (["AAPL"], date(2021, 6, 1), date(2021, 12, 31)),
