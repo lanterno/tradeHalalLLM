@@ -11,7 +11,9 @@ Design decisions
 * DB timestamps remain UTC — this module provides helpers to convert
   between the two when querying by trading day.
 * The holiday / early-close calendar is maintained as a static set.
-  It covers 2025-2027 and should be extended annually; the evening research
+  It covers 2016-2027 (2016-2024 taken from the broker's ``/v2/calendar``,
+  so research over that history walks real sessions) and should be extended
+  annually; the evening research
   run compares the next 90 days with the broker's calendar
   (:func:`calendar_mismatches`) and alerts on any difference, so a wrong
   entry, or the table running out, is caught months ahead.
@@ -47,8 +49,102 @@ EARLY_CLOSE = time(13, 0)
 
 US_MARKET_HOLIDAYS: frozenset[date] = frozenset(
     {
+        # ── 2016 ─────────────────────────────────────────────
+        date(2016, 1, 1),  # New Year's Day
+        date(2016, 1, 18),  # Martin Luther King Jr. Day
+        date(2016, 2, 15),  # Presidents' Day
+        date(2016, 3, 25),  # Good Friday
+        date(2016, 5, 30),  # Memorial Day
+        date(2016, 7, 4),  # Independence Day
+        date(2016, 9, 5),  # Labor Day
+        date(2016, 11, 24),  # Thanksgiving
+        date(2016, 12, 26),  # Christmas (observed — Dec 25 is Sunday)
+        # ── 2017 ─────────────────────────────────────────────
+        date(2017, 1, 2),  # New Year's Day (observed — Jan 1 is Sunday)
+        date(2017, 1, 16),  # Martin Luther King Jr. Day
+        date(2017, 2, 20),  # Presidents' Day
+        date(2017, 4, 14),  # Good Friday
+        date(2017, 5, 29),  # Memorial Day
+        date(2017, 7, 4),  # Independence Day
+        date(2017, 9, 4),  # Labor Day
+        date(2017, 11, 23),  # Thanksgiving
+        date(2017, 12, 25),  # Christmas
+        # ── 2018 ─────────────────────────────────────────────
+        date(2018, 1, 1),  # New Year's Day
+        date(2018, 1, 15),  # Martin Luther King Jr. Day
+        date(2018, 2, 19),  # Presidents' Day
+        date(2018, 3, 30),  # Good Friday
+        date(2018, 5, 28),  # Memorial Day
+        date(2018, 7, 4),  # Independence Day
+        date(2018, 9, 3),  # Labor Day
+        date(2018, 11, 22),  # Thanksgiving
+        date(2018, 12, 5),  # National Day of Mourning (George H. W. Bush)
+        date(2018, 12, 25),  # Christmas
+        # ── 2019 ─────────────────────────────────────────────
+        date(2019, 1, 1),  # New Year's Day
+        date(2019, 1, 21),  # Martin Luther King Jr. Day
+        date(2019, 2, 18),  # Presidents' Day
+        date(2019, 4, 19),  # Good Friday
+        date(2019, 5, 27),  # Memorial Day
+        date(2019, 7, 4),  # Independence Day
+        date(2019, 9, 2),  # Labor Day
+        date(2019, 11, 28),  # Thanksgiving
+        date(2019, 12, 25),  # Christmas
+        # ── 2020 ─────────────────────────────────────────────
+        date(2020, 1, 1),  # New Year's Day
+        date(2020, 1, 20),  # Martin Luther King Jr. Day
+        date(2020, 2, 17),  # Presidents' Day
+        date(2020, 4, 10),  # Good Friday
+        date(2020, 5, 25),  # Memorial Day
+        date(2020, 7, 3),  # Independence Day (observed — July 4 is Saturday)
+        date(2020, 9, 7),  # Labor Day
+        date(2020, 11, 26),  # Thanksgiving
+        date(2020, 12, 25),  # Christmas
+        # ── 2021 ─────────────────────────────────────────────
+        date(2021, 1, 1),  # New Year's Day
+        date(2021, 1, 18),  # Martin Luther King Jr. Day
+        date(2021, 2, 15),  # Presidents' Day
+        date(2021, 4, 2),  # Good Friday
+        date(2021, 5, 31),  # Memorial Day
+        date(2021, 7, 5),  # Independence Day (observed — July 4 is Sunday)
+        date(2021, 9, 6),  # Labor Day
+        date(2021, 11, 25),  # Thanksgiving
+        date(2021, 12, 24),  # Christmas (observed — Dec 25 is Saturday)
+        # ── 2022 ─────────────────────────────────────────────
+        date(2022, 1, 17),  # Martin Luther King Jr. Day
+        date(2022, 2, 21),  # Presidents' Day
+        date(2022, 4, 15),  # Good Friday
+        date(2022, 5, 30),  # Memorial Day
+        date(2022, 6, 20),  # Juneteenth (observed — June 19 is Sunday)
+        date(2022, 7, 4),  # Independence Day
+        date(2022, 9, 5),  # Labor Day
+        date(2022, 11, 24),  # Thanksgiving
+        date(2022, 12, 26),  # Christmas (observed — Dec 25 is Sunday)
+        # ── 2023 ─────────────────────────────────────────────
+        date(2023, 1, 2),  # New Year's Day (observed — Jan 1 is Sunday)
+        date(2023, 1, 16),  # Martin Luther King Jr. Day
+        date(2023, 2, 20),  # Presidents' Day
+        date(2023, 4, 7),  # Good Friday
+        date(2023, 5, 29),  # Memorial Day
+        date(2023, 6, 19),  # Juneteenth
+        date(2023, 7, 4),  # Independence Day
+        date(2023, 9, 4),  # Labor Day
+        date(2023, 11, 23),  # Thanksgiving
+        date(2023, 12, 25),  # Christmas
+        # ── 2024 ─────────────────────────────────────────────
+        date(2024, 1, 1),  # New Year's Day
+        date(2024, 1, 15),  # Martin Luther King Jr. Day
+        date(2024, 2, 19),  # Presidents' Day
+        date(2024, 3, 29),  # Good Friday
+        date(2024, 5, 27),  # Memorial Day
+        date(2024, 6, 19),  # Juneteenth
+        date(2024, 7, 4),  # Independence Day
+        date(2024, 9, 2),  # Labor Day
+        date(2024, 11, 28),  # Thanksgiving
+        date(2024, 12, 25),  # Christmas
         # ── 2025 ─────────────────────────────────────────────
         date(2025, 1, 1),  # New Year's Day
+        date(2025, 1, 9),  # National Day of Mourning (Jimmy Carter)
         date(2025, 1, 20),  # Martin Luther King Jr. Day
         date(2025, 2, 17),  # Presidents' Day
         date(2025, 4, 18),  # Good Friday
@@ -100,6 +196,33 @@ EARLY_CLOSE_DATES: frozenset[date] = frozenset(
         # AND the SL/TP monitor at 13:00 with positions open. The
         # broker clock said 16:00 all along — keep this table matched
         # to the official NYSE calendar, not derived rules.
+        # ── 2016 ─────────────────────────────────────────────
+        date(2016, 11, 25),  # Day after Thanksgiving
+        # ── 2017 ─────────────────────────────────────────────
+        date(2017, 7, 3),  # Day before Independence Day
+        date(2017, 11, 24),  # Day after Thanksgiving
+        # ── 2018 ─────────────────────────────────────────────
+        date(2018, 7, 3),  # Day before Independence Day
+        date(2018, 11, 23),  # Day after Thanksgiving
+        date(2018, 12, 24),  # Christmas Eve
+        # ── 2019 ─────────────────────────────────────────────
+        date(2019, 7, 3),  # Day before Independence Day
+        date(2019, 11, 29),  # Day after Thanksgiving
+        date(2019, 12, 24),  # Christmas Eve
+        # ── 2020 ─────────────────────────────────────────────
+        date(2020, 11, 27),  # Day after Thanksgiving
+        date(2020, 12, 24),  # Christmas Eve
+        # ── 2021 ─────────────────────────────────────────────
+        date(2021, 11, 26),  # Day after Thanksgiving
+        # ── 2022 ─────────────────────────────────────────────
+        date(2022, 11, 25),  # Day after Thanksgiving
+        # ── 2023 ─────────────────────────────────────────────
+        date(2023, 7, 3),  # Day before Independence Day
+        date(2023, 11, 24),  # Day after Thanksgiving
+        # ── 2024 ─────────────────────────────────────────────
+        date(2024, 7, 3),  # Day before Independence Day
+        date(2024, 11, 29),  # Day after Thanksgiving
+        date(2024, 12, 24),  # Christmas Eve
         # ── 2025 ─────────────────────────────────────────────
         date(2025, 7, 3),  # July 4 is a Friday → July 3 half day
         date(2025, 11, 28),  # Day after Thanksgiving
