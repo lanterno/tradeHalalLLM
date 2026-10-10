@@ -234,6 +234,21 @@ def test_the_lookups_follow_the_tables_they_were_built_from(
     assert owner("FB", date(2020, 1, 2), ["FB"]) == "META"
 
 
+def test_the_renames_pin_changes_with_every_table_owner_reads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    base = renames.renames_sha()
+    assert len(base) == 12 and base == renames.renames_sha()
+    monkeypatch.setattr(renames, "GRACE_SESSIONS", GRACE_SESSIONS + 1)
+    grace = renames.renames_sha()
+    monkeypatch.setattr(renames, "HELD_SINCE", HELD_SINCE | {("XX", "XX"): date(2020, 1, 2)})
+    held = renames.renames_sha()
+    moved = TICKER_RENAMES | {"FB": ("META", date(2022, 6, 9))}
+    monkeypatch.setattr(renames, "TICKER_RENAMES", moved)
+    dated = renames.renames_sha()
+    assert len({base, grace, held, dated}) == 4
+
+
 # ── seeding ───────────────────────────────────────────────────
 
 
