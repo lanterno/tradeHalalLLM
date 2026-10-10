@@ -185,7 +185,9 @@ SESSIONS_PER_YEAR: Final = 252
 # The marginals keyed by a state of the calendar at S (a regime, SPY's state):
 # their per-year rate divides by the time that state covers in the range.
 DATED: Final = ("spy_vol", "spy_trend", "screen_regime", "analyst_regime")
-EXIT_REASONS: Final = ("target", "stop", "abort", "compliance", "time_stop")
+# The bounce's exit reasons, and the simulator's for an exit order without one
+# (playbook.py); any other reason a trade reports gets a share too.
+EXIT_REASONS: Final = ("target", "stop", "abort", "compliance", "time_stop", "unspecified")
 VARIANTS: Final = (("ID", 1), ("MD3", 3))
 BLOCKED: Final = "blocked_open"  # the simulator's reason for a story started behind a live one
 OUTPUT_NAME: Final = f"news_atlas-{builder.BUILDER_VERSION}.json"
@@ -857,7 +859,8 @@ def _machine_stats(rows: Sequence[AtlasRow], variant: str) -> tuple[dict[str, fl
     out[f"{v}_r_mean"], out[f"{v}_r_se"], _ = _mean_se(
         [ret for _, _, ret in finite], [d for d, _, _ in finite]
     )
-    for reason in EXIT_REASONS:
+    other = sorted({str(why) for _, why, _ in trades} - set(EXIT_REASONS))
+    for reason in (*EXIT_REASONS, *other):
         out[f"{v}_share_{reason}"] = sum(why == reason for _, why, _ in trades) / len(trades)
         some = [(d, ret) for d, why, ret in finite if why == reason]
         if some:
