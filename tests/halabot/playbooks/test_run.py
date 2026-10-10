@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import sys
+import threading
+from concurrent.futures.process import BrokenProcessPool
 from datetime import date
 
 import pytest
@@ -20,6 +22,7 @@ from halabot.playbooks.loader import (
     register_gate_units,
     unit_set_sha,
 )
+from halabot.playbooks.playbook import Factory, PlaybookFactory
 from halabot.playbooks.records import MemorySink, PgOutcomeSink, outcomes_sha256
 from halabot.playbooks.sim import pool_method, run
 from halabot.playbooks.types import SimConfig
@@ -29,6 +32,7 @@ from tests.halabot.playbooks._support import (
     FACTS,
     MON,
     Context,
+    Toy,
     ToyFactory,
     et,
     session_bars,
@@ -184,6 +188,59 @@ async def test_a_run_logs_its_start_batches_and_end(
     assert names.count(events.SIM_RUN_BATCH) == len(names) - 2 >= 2
     assert {r.run_id for r in records} == {summary.run_id}  # type: ignore[attr-defined]
     assert records[-1].trades == summary.trades  # type: ignore[attr-defined]
+
+
+def _fail_to_load() -> Context:
+    raise RuntimeError("this context does not load in a worker")
+
+
+class _Unloadable(Context):
+    """Pickles here; unpickling it, as a spawn worker does, raises."""
+
+    def __reduce__(self) -> tuple[object, tuple[()]]:
+        return (_fail_to_load, ())
+
+
+async def test_a_spawn_run_refuses_a_state_it_cannot_ship_before_writing(
+    halabot_engine: AsyncEngine,
+) -> None:
+    """A factory or context a worker cannot get fails the run with no run row."""
+    engine = halabot_engine
+    market = random_market(26, 4, sessions=1)
+    await seed_calendar(engine, date(2016, 1, 4), END)
+    await seed_market(engine, market)
+    toy = ToyFactory(sessions=1, target=0.005)
+
+    async def go(factory: PlaybookFactory, context: Context) -> sim.RunSummary:
+        return await run(
+            engine,
+            market.stories,
+            factory,
+            context=context,
+            window=Window.GATE,
+            window_end=END,
+            cfg=SimConfig(),
+            unlock=WindowUnlock(),
+            sink=PgOutcomeSink(engine),
+            workers=2,
+            parallel="spawn",
+        )
+
+    closure = Factory(lambda s: Toy(s, target=0.005), "toy", "1", 1)
+    with pytest.raises(ValueError, match=r"and make_playbook cannot be pickled"):
+        await go(closure, market.ctx)
+    locked = Context()
+    locked.lock = threading.Lock()  # type: ignore[attr-defined]
+    with pytest.raises(ValueError, match=r"and context cannot be pickled"):
+        await go(toy, locked)
+    with pytest.raises(BrokenProcessPool):  # it pickles, but no worker can load it
+        await go(toy, _Unloadable())
+    async with engine.connect() as conn:
+        assert await conn.scalar(text("SELECT count(*) FROM hb_playbook_run")) == 0
+    summary = await go(toy, market.ctx)  # the same run with a state that ships
+    assert summary.outcomes > 0
+    async with engine.connect() as conn:
+        assert await conn.scalar(text("SELECT count(*) FROM hb_playbook_run")) == 1
 
 
 def test_pool_method_defaults_to_serial_on_macos(monkeypatch: pytest.MonkeyPatch) -> None:
