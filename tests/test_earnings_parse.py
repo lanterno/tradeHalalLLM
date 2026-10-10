@@ -957,7 +957,7 @@ async def test_v4_extraction_reads_events_v3_already_read(engine) -> None:
     assert rows[1].fields["sales_verdict"] == "beat"
 
 
-async def test_a_parser_change_re_extracts_and_drops_the_superseded_label(
+async def test_a_parser_change_re_extracts_and_only_drop_superseded_deletes(
     engine, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from datetime import UTC, datetime
@@ -999,13 +999,19 @@ async def test_a_parser_change_re_extracts_and_drops_the_superseded_label(
     # One event a batch: the pages and the deletes run several rounds.
     assert await ep.extract_all(engine, batch=1) == 2
     current = ep.EXTRACTOR
+    # Extraction only adds: the pin-less label stays until drop_superseded.
+    assert await labels() == {ep.EXTRACTOR_V3: 3, ep.EXTRACTOR_V4: 3, current: 3}
+    assert await ep.drop_superseded(engine, batch=1) == 3
     assert await labels() == {ep.EXTRACTOR_V3: 3, current: 3}
     assert await ep.extract_all(engine, batch=1) == 0  # every event is read
 
-    # A parser change is a new pin, so a new label: every event is read again
-    # and the superseded label's rows go; v3's stay.
+    # Another parser (a dev checkout, a rollback) is a new pin, so a new label:
+    # it reads every event again beside the deployed label, whose rows stay.
     changed = f"{ep.EXTRACTOR_V4}+{'0' * 12}"
     monkeypatch.setattr(ep, "EXTRACTOR", changed)
     assert await ep.extract_all(engine, batch=1) == 2
+    assert await labels() == {ep.EXTRACTOR_V3: 3, current: 3, changed: 3}
+    # Only drop_superseded deletes them; v3's stay.
+    assert await ep.drop_superseded(engine, batch=1) == 3
     assert await labels() == {ep.EXTRACTOR_V3: 3, changed: 3}
     assert await ep.drop_superseded(engine) == 0
