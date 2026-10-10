@@ -31,11 +31,17 @@ short report, fraud probe, ...) before its analyst step, so an admitted
 analyst note that quotes the analyst's commentary ("UPDATE: <Firm> Maintains
 Overweight On Apple, ... 'While Apple pulled guidance'", "<Firm> Maintains
 Buy On TransDigm Following Recent Short Reports") takes that negative type
-instead of an analyst one: about 70 structural items over 2016-2024. Such
-an item never brings a story into the family. It can only keep one out (a
-veto; a structural close makes the next sessions' stories followers) or,
-usable after an entry, abort the trade (the bounce playbook's X3). The fix
-belongs to the taxonomy, where it changes ``TAXONOMY_SHA``.
+instead of an analyst one: about 70 such negative items over 2016-2024.
+They mostly keep stories out of the family: a veto, a structural close
+that makes the next sessions' stories followers, or, usable after an
+entry, the trade's abort (the bounce playbook's X3). Through the parent
+rule one can also let a later story in. A note typed ``antitrust_regulatory``
+(an unclear negative, not structural) leaves its story P no longer all
+reactive, so P is no follower and becomes the next sessions' parent in
+place of an earlier story PP; P's close is not in :data:`FOLLOW_STRUCTURAL`,
+so a later story that re-runs PP's item is no follower any more and can
+turn NSN_CORE. The fix belongs to the taxonomy, where it changes
+``TAXONOMY_SHA``.
 
 Before admission, :func:`load_items` drops every news row that is not its
 symbol's own (``renames.owner``: a ticker another company held that day, or
