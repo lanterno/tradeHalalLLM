@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import date
 
 import pytest
@@ -17,7 +18,7 @@ from halal_trader.compliance.delisted import (
     rescreen_mapped,
     store_matches,
 )
-from halal_trader.compliance.runner import UNMAPPED, run_screen
+from halal_trader.compliance.runner import METHOD, UNMAPPED, run_screen
 from halal_trader.compliance.sec import Company, Fact
 
 
@@ -139,6 +140,59 @@ async def test_a_mapped_ticker_is_screened_under_its_filer_and_rescreened(
     assert (
         await rescreen_mapped(sec, engine) == {}
     )  # nothing left screened as unmapped  # type: ignore[arg-type]
+
+
+async def test_the_rescreen_sizes_the_index_veto_by_the_dates_other_rows(
+    engine: AsyncEngine,
+) -> None:
+    # SPUS holds 40 names the date's full run priced at 50k to 89k; it does not
+    # hold GONE, at 100k (1,000 shares at $100). Alone, GONE prices no held
+    # name and the veto has no range; the stored rows give it the full run's.
+    as_of = date(2019, 12, 31)
+    held = {f"H{i}": 50_000.0 + i * 1_000.0 for i in range(40)}
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO daily_bars (symbol, day, adjustment, open, high, low, close, "
+                "volume, fetched_at) VALUES ('GONE', '2019-12-30', 'raw', 100, 100, 100, 100, "
+                "1, now())"
+            )
+        )
+        await conn.execute(
+            text(
+                "INSERT INTO etf_holdings (etf, filed, period_end, ticker, name, cusip, "
+                "weight_pct) VALUES ('SPUS', '2019-11-25', '2019-09-30', :t, :t, '', 1.0)"
+            ),
+            [{"t": s} for s in held],
+        )
+        await conn.execute(
+            text(
+                "INSERT INTO halal_screen_results (as_of, symbol, cik, sic_description, "
+                "verdict, reasons, metrics, method, screened_at) VALUES (:d, :s, NULL, '', "
+                "'halal', '[]', CAST(:m AS JSONB), :method, now())"
+            ),
+            [
+                {"d": as_of, "s": s, "m": json.dumps({"market_cap": c}), "method": METHOD}
+                for s, c in held.items()
+            ],
+        )
+    sec = GoneSec()
+    (first,) = await run_screen(sec, engine, ["GONE"], as_of)  # type: ignore[arg-type]
+    assert first.verdict == "doubtful"  # unmapped
+    await store_matches(engine, [Match("GONE", "mapped", 50, "Gone Inc.", "GONE INC")])
+
+    assert await rescreen_mapped(sec, engine) == {as_of: 0}  # type: ignore[arg-type]
+    async with engine.connect() as conn:
+        rows = {
+            r.symbol: (r.verdict, list(r.reasons))
+            for r in await conn.execute(
+                text("SELECT symbol, verdict, reasons FROM halal_screen_current")
+            )
+        }
+    verdict, reasons = rows.pop("GONE")
+    assert verdict == "not_halal"
+    assert reasons[-1].startswith("excluded by SPUS's Shariah index")
+    assert set(rows) == set(held) and {v for v, _ in rows.values()} == {"halal"}
 
 
 def test_hand_ciks_map_tickers_the_name_match_cannot() -> None:
