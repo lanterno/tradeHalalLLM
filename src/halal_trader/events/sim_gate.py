@@ -111,17 +111,34 @@ Decisions the spec leaves open, stated for the pre-registration:
   :class:`FlattenHold` sells at the flatten (or at once, when its buy's fill
   arrives just after the flatten passed). R2 compares the headlines R1 did
   not set aside, with the study's plausibility filter.
-* SUE clusters are the entry session (the study's entry day). D10-D1 uses the
-  study's deciles (``study.summarise``). The calibration, S2 and S3 need their
-  returns on at least :data:`MIN_COVERAGE` of their pairs or events, a floor
-  set here so a comparison on a minority cannot pass. A first bar after 09:30
-  is still the minute entry of an open entry (counted ``late_first_bar``).
-* S0 passes when the table and the Σ_c statistics compute; its deltas against
-  the recorded numbers are reported, not judged (the data vintage changed).
+* D10-D1 uses the study's deciles (``study.summarise``). A first bar after
+  09:30 is still the minute entry of an open entry (counted
+  ``late_first_bar``).
 * Refusals are per gate (:class:`GateRun`): ``g1-synthetic`` reads no stored
   bar and always runs; S0 and S1 read daily bars only; S2 is refused unless
   this run's ``s1-calib`` passed (its p99 is S2's bound). ``events sim-gate
   all`` runs every group whatever another refused.
+
+**Three readings the pre-registration states in its own words.** Each is
+defensible, but none is the spec's text, and review asked that the
+registration name them rather than leave them to this code:
+
+1. **A 90% coverage floor** (:data:`MIN_COVERAGE`, added by this runner;
+   spec §E.3 sets none). ``s1-calib`` passes only with a return on at least
+   90% of its pairs, and S2 and S3, at each horizon, on at least 90% of
+   Σ_s's events, so a comparison on a minority of the sample cannot pass.
+2. **S0 passes whenever its table computes.** It passes when the recomputed
+   ``events study sue`` table has every bucket's 5- and 20-day IC and the
+   mid-cap 20-day D10-D1, and Σ_c's daily-mode D10-D1 and IC are finite.
+   Its deltas against the plan's recorded numbers (IC +0.04..0.09, mid-cap
+   +1.98%) are only reported, never judged: the 8-K times moved, so the
+   recomputed values become the record (spec §E.3, "if the data vintage
+   changed").
+3. **SUE statistics are clustered by entry session.** The spec's "date
+   clusters" and "resample event dates" are read as the session the study
+   enters on (``study.entry_point``'s), not the publication's New York
+   date: S0's and S3's bootstrap intervals resample whole entry sessions,
+   and S2's TOST and its 90% interval cluster d by the same sessions.
 """
 
 from __future__ import annotations
@@ -316,20 +333,25 @@ CRITERIA: Final[dict[str, str]] = {
     "s0": (
         "events study sue 2016-2019 by bucket recomputed (the reference) and Σ_c (less the "
         "events meeting H1's train and validation units) daily-mode D10-D1 and IC at 5 and "
-        "20 days with 95% date-cluster bootstrap CIs (B = 2,000)"
+        "20 days with 95% bootstrap CIs over entry-session clusters (B = 2,000); passes when "
+        "both compute, its deltas against the recorded numbers reported, not judged"
     ),
     "s1": (
         "DailyBarSource through the simulator equals study.evaluate on Σ_c within 1e-10 at "
         "h in {1, 5, 20, 60}, identical observations and decile rows"
     ),
-    "s1-calib": "p99 of |minute - daily| on gate_calib (09:30 entry, h = 5 close exit), recorded",
+    "s1-calib": (
+        "p99 of |minute - daily| on gate_calib (09:30 entry, h = 5 close exit), recorded; "
+        "computed on at least 90% of the pairs"
+    ),
     "s2": (
-        "Σ_s minute mode on the study's clock, h = 5 and 20: TOST 90% clustered CI within "
-        "±0.10%, median |d| <= 0.10%, p99 |d| <= max(1.00%, 1.5 p99_cal)"
+        "Σ_s minute mode on the study's clock, h = 5 and 20, on at least 90% of Σ_s: TOST 90% "
+        "CI clustered by entry session within ±0.10%, median |d| <= 0.10%, "
+        "p99 |d| <= max(1.00%, 1.5 p99_cal)"
     ),
     "s3": (
-        "Σ_s realistic fills: D10-D1 and IC at 5 and 20 days inside the daily-mode 95% CI "
-        "recomputed on the same events, same sign"
+        "Σ_s realistic fills, on at least 90% of Σ_s: D10-D1 and IC at 5 and 20 days inside "
+        "the daily-mode 95% CI (entry-session clusters) recomputed on the same events, same sign"
     ),
 }
 
