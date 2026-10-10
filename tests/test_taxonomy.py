@@ -538,6 +538,34 @@ def test_the_figure_re_read_types_the_story(headline: str, kind: str, family: st
     assert (card.type, card.family) == (kind, family)
 
 
+@pytest.mark.parametrize(
+    ("headline", "kind"),
+    [
+        # Benzinga's flag in its other forms: no surprise, so no miss and no NSN_CORE.
+        ("Carlyle Group Q4 EPS $(0.16) vs $0.41 Est, Does Not Compare", "earnings_inline"),
+        ("Westlake Chemical Q3 EPS $0.51 vs $0.89 Est, Revenue $1.28B vs $1.52B Est, Does Not "
+         "Compare", "earnings_inline"),
+        ("Assurant Reports Q4 EPS $0.97 vs. Est. $1.51, Rev. $2.547B vs. Est. $2B; Estimates May "
+         "Not Compare", "earnings_inline"),
+        # ... and in a note of its own: no structural cut.
+        ("Rambus Sees Q1 Adj. EPS $(0.19)-$(0.12) vs $0.18 Est., Sales $41M-$47M vs $100.7M "
+         "Est.; BZ NOTE: Forecast Likely Does Not Compare As Co.'s Results Account For ASC 606",
+         "guidance_inline"),
+        # A tolerance glued to its "+/-": guidance unknown, not a cut.
+        ("Lam Research Expects Q4 Revenue Of $3.8B +/-$300M (Est $3.772B); Adj EPS Of $7.50 +/- "
+         "$0.75 (Est $7.33)", "earnings_unparsed"),
+        # Constructed: the new figure of "(From $X To $Y)", a base after "Down ... From",
+        # and a year read as the EPS.
+        ("Acme Updates FY EPS Guidance (From $1.00 To $0.90) Vs $1.05 Est", "guidance_cut"),
+        ("Acme Sees FY Sales Down 5% From $1.2B vs $1.1B Est", "guidance_inline"),
+        ("Acme Q1 2024 Vs $(0.03) Est.", "earnings_inline"),
+    ],
+)  # fmt: skip
+def test_flagged_and_re_read_figures_type_the_story(headline: str, kind: str) -> None:
+    card = resolve([news(1, 0, headline)], LATER, follower=False)
+    assert (card.type, card.family) == (kind, None)
+
+
 def test_an_explicit_cut_comes_before_unread_guidance() -> None:
     h = (
         "Core & Main Lowered 2024 Outlook: Now Expects Net Sales Of $7.3B-$7.4B (Prior "
