@@ -1130,6 +1130,32 @@ async def test_without_plan_h_d4_and_d5_fail(
     assert gates is not None and not gates.ok  # no gate row at all
 
 
+async def test_a_refused_plan_h_fails_d4_and_d5_and_raises_nothing(
+    engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from halal_trader.events import units
+
+    async def refused(*_: Any, **__: Any) -> Any:
+        raise units.PlanError("plan H reads stories no complete build covers")
+
+    async def ok_check(*_: Any, **__: Any) -> Check:
+        return Check("X", True, "")
+
+    monkeypatch.setattr(units, "h1_plan", refused)
+    for name in (
+        "check_calendar_d1",
+        "check_screens_d2",
+        "check_news_d3",
+        "check_facts_d6",
+        "story_counts_d9",
+    ):
+        monkeypatch.setattr(h1, name, ok_check)
+    report = await h1.preconditions(engine, code=CodeState("c" * 40, (h1.TAG,), False))
+    d4, d5 = report.get("D4"), report.get("D5")
+    assert d4 is not None and not d4.ok and "no complete build" in d4.detail
+    assert d5 is not None and not d5.ok and not report.ok
+
+
 async def test_gate_rows_are_read_from_the_ledger(engine: AsyncEngine) -> None:
     repo = QuantTrialRepoImpl(engine)
     recorded = [(g, "pass") for g in h1.REQUIRED_GATES if g != "r1"]
