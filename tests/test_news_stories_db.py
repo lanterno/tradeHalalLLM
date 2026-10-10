@@ -39,6 +39,7 @@ from halal_trader.events.stories import (
     load_items,
     missing_facts,
     persist,
+    require_built,
     story_row,
     untimed_filings,
 )
@@ -538,6 +539,16 @@ async def test_rebuilding_part_of_a_range_keeps_the_rest_complete(
     assert not weekend.types  # no session, nothing to cover
     await build_range(ready, start=date(2024, 5, 1), end=date(2024, 5, 31))
     assert await built_ranges(ready) == [(date(2024, 5, 1), date(2024, 5, 31))]
+
+
+async def test_require_built_refuses_what_no_complete_build_covers(ready: AsyncEngine) -> None:
+    with pytest.raises(StoriesNotReady, match=r"5 session\(s\) in 2024-05-06\.\.2024-05-10"):
+        await require_built(ready, MON, FRI)
+    await build_range(ready, start=MON, end=FRI)
+    await require_built(ready, MON, FRI)
+    await require_built(ready, date(2024, 5, 11), date(2024, 5, 12))  # no session to cover
+    with pytest.raises(StoriesNotReady, match=r"first: 2024-05-13\)"):
+        await require_built(ready, MON, date(2024, 5, 13))
 
 
 async def test_a_retime_withdraws_every_mark_from_the_first_session_it_moves(
