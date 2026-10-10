@@ -32,8 +32,16 @@ builder version in ``story_aliases`` so the set the pre-registration pins
 
 Names are not dated: a former name matches the company's headlines of any
 day, also when another company has taken it since. Trane's (TT) "Ingersoll
-Rand" is Gardner Denver's (IR) name from 2020; it is checked only against
-articles tagging TT, and no stored TT article after the switch passes by it.
+Rand" and "Ingersoll" are Gardner Denver's (IR) names from 2020-03; they
+are checked only against articles tagging TT, and no stored TT article
+after the switch passes by them (news to 2026-10-09). This is a known risk
+for later news: an article tagging TT and IR that names only Ingersoll Rand
+would be admitted for TT, and an analyst headline could give TT IR's clause.
+Ending a former name with its old ticker's news window needs that date in
+``story_aliases``, which has no column for it (a migration); reading it
+from ``TICKER_RENAMES`` at load time would make the match depend on more
+than the rows ``alias_sha`` pins.
+
 Slots are learned only from rows that are their symbol's own
 (``renames.owner``): Pandora's articles under P teach P nothing.
 

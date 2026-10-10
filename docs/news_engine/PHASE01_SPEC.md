@@ -126,9 +126,12 @@ Each step adds to a counter in the run log.
      - **(d) Tickers.** The ticker itself and every old ticker in `TICKER_RENAMES`, matched case-sensitively, optionally with a leading `$`. Only tickers of 2+ characters are used.
      - **(e) Former names** (source `former`), for each current symbol of `TICKER_RENAMES`, per old ticker:
        - The learned rule of (b) over the slots of the old ticker's own articles: single-symbol articles tagging only the old ticker, on a day of its `news_window`, stored under the current symbol and its own (`renames.owner`). Each old ticker is a pool of its own, so the new name's longer history cannot hold the old name under 10% ("Priceline Group" was 4% of BKNG's slots).
-       - The old ticker's asset names (a), only when the cleaned name matches ≥ 3 of those slots: Alpaca lists an old ticker under its holder today, if at all (PCLN is a Pictet ETF, Q is Qnity, IR is Gardner Denver's Ingersoll Rand).
+       - The old ticker's asset names (a). Alpaca lists an old ticker under its holder today, if at all, so a name counts only when both hold:
+         - no company in the renames trades under the old ticker today (`renames.held_since(old)` is None). IR (Gardner Denver's Ingersoll Rand) and Q (Qnity) are skipped. The slot check alone would let IR's name through: 14 of TT's IR slots match "Ingersoll Rand", because Gardner Denver took the name with the ticker.
+         - the cleaned name matches ≥ 3 of those slots. This catches holders the renames do not know (PCLN is a Pictet ETF).
        - `FORMER_NAME_OVERRIDES`: AGNT: eXp World, eXp Realty; BKNG: Priceline; IQV: Quintiles, QuintilesIMS, Quintiles IMS; KDP: Dr Pepper Snapple, Dr Pepper; KNX: Knight Transportation; NNN: National Retail; NXH: Overstock; TPR: Coach; TT: Ingersoll-Rand. KNX and NNN kept their tickers.
-       - Names are not dated. TT's former "Ingersoll Rand" has been Gardner Denver's (IR) since 2020; it is checked only against articles tagging TT, and no stored TT article after the switch passes by it.
+       - Names are not dated. TT's former "Ingersoll Rand" and "Ingersoll" have been Gardner Denver's (IR) since 2020-03. They are checked only against articles tagging TT, and no stored TT article after the switch passes by them (news to 2026-10-09).
+       - **Known risk, not fixed:** in later news, an article tagging TT and IR that names only Ingersoll Rand would be admitted for TT, and an analyst headline could give TT IR's clause. Ending a former name with its old ticker's `news_window` needs that date in `story_aliases`, which has no column for it (a migration). Reading the date from `TICKER_RENAMES` at load time would make the match depend on more than the rows `alias_sha` pins.
      - Sources (b) and (d) apply to **every** symbol, including ones without a `market_assets` row.
    - The pattern is `(?<![A-Za-z])(?:alias|…|(?-i:\$?TICKER))(?![a-z])` with `re.I`, longest alias first.
 4. **Time.**
