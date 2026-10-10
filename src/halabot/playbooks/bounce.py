@@ -47,7 +47,11 @@ anchor bar is visible: every bar before it is visible by then.
    a market buy with :class:`~halabot.playbooks.types.TradeFacts`. ``L* =
    L_t`` and ``TGT = L* + 0.5 (P0 - L*)`` are frozen there.
 5. ENTERING -> ENTERED on the fill; EXPIRED (``entry_unfilled``) if the buy
-   expires or is cancelled at a close or a flatten.
+   expires or is cancelled at a close or a flatten, ``entry_rejected:<why>``
+   if the simulator refuses it. A buy filled at or after the deadline
+   session's flatten (the exchange fills a bar before the flatten marker of
+   the same instant) goes straight on to EXITING (``time_stop``): the
+   simulator's flatten already sells it, and no exit is judged.
 6. ENTERED -> EXITING, first of: X3 ``abort`` (a structural item known at
    now: the story's card, or another story's item delivered as news) > X1
    ``stop`` (a bar close below L*, in S units) > X2 ``target`` (a close >=
@@ -377,7 +381,11 @@ class OverreactionBounce:
                 if ev.bar_ts is None:
                     raise ValueError(f"{ev.order_id}: an entry fill without its bar")
                 self._entry_bar_ts = to_us(ev.bar_ts) // US
-                return [self._go(BounceState.ENTERED, "filled"), *self._exits(ctx)]
+                filled = self._go(BounceState.ENTERED, "filled")
+                if ctx.now >= ctx.sessions[-1].flatten:
+                    # Filled at the deadline's flatten: the simulator's time stop sells it.
+                    return [filled, self._go(BounceState.EXITING, "time_stop")]
+                return [filled, *self._exits(ctx)]
             if ev.side == "sell":
                 reason = ev.reason or "unspecified"
                 return self._end(BounceState.EXITED, reason)
