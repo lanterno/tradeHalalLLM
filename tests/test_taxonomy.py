@@ -491,6 +491,10 @@ def test_lowering_what_the_company_spends_is_not_a_guidance_cut(headline: str, i
          "Number'", "other"),
         ("Analyst Lowers Target Q1 Forecast Amid Spending Slump, Rising Consumer Tariffs",
          "other"),
+        # Constructed: an analyst's "Target," or "Target And" listing what else it
+        # cut, the guidance further on.
+        ("Barclays Lowers Target, Maintains Overweight After Guidance", "analyst_pt_cut"),
+        ("Analyst Lowers Target And EPS Estimates After Guidance", "other"),
     ],
 )  # fmt: skip
 def test_an_analyst_s_target_is_never_the_guidance_cut(headline: str, itype: str) -> None:
@@ -507,6 +511,8 @@ def test_an_analyst_s_target_is_never_the_guidance_cut(headline: str, itype: str
         "Acme Lowers Profit Targets And Outlook For 2025",
         "Acme Cuts Its 2026 Targets & Outlook",
         "Acme Lowers Long-Term Targets, Outlook",
+        "Acme Lowers Targets And Its Guidance",
+        "Acme Cuts Targets, The Forecast",
     ],
 )
 def test_a_company_s_targets_cut_with_its_guidance_are_a_guidance_cut(headline: str) -> None:
