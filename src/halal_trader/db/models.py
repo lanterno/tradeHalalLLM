@@ -806,7 +806,7 @@ class NewsStory(SQLModel, table=True):
 
 class StoryAlias(SQLModel, table=True):
     """One name the story builder's entity check accepts for a symbol
-    (events/aliases.py). ``source`` is name, learned, override or ticker.
+    (events/aliases.py). ``source`` is name, learned, override, ticker or former.
 
     Backed up: it is pinned by the pre-registration and cannot be rebuilt
     later, because the asset names it was learned from change.

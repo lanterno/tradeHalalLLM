@@ -3,7 +3,7 @@
 Benzinga tags an article with every symbol it touches, so an article about
 one company often carries its peers, customers and index-mates. The story
 builder keeps an (article, symbol) row only when the headline names the
-company (spec §A.2 step 3). The names come from four sources, persisted per
+company (spec §A.2 step 3). The names come from five sources, persisted per
 builder version in ``story_aliases`` so the set the pre-registration pins
 (``alias_sha``) can be read back unchanged:
 
@@ -16,16 +16,23 @@ builder version in ``story_aliases`` so the set the pre-registration pins
   analyst, earnings and guidance templates in articles tagging only that
   symbol, kept when it is at least ``LEARN_MIN_COUNT`` of them and
   ``LEARN_MIN_SHARE`` of the symbol's slots (with its first word, under the
-  same rule). This recovers renamed and abbreviated names ("Priceline",
-  "Square", "JB Hunt Transport Servs");
+  same rule). This recovers abbreviated names ("Square", "JB Hunt Transport
+  Servs");
 * **override** -- ``ALIAS_OVERRIDES``: the brands a headline uses for a few
   large companies (Google, YouTube, AWS, Instagram, ...);
 * **ticker** -- the symbol and its old tickers (``renames.TICKER_RENAMES``),
   matched case-sensitively and optionally after a ``$``. Only tickers of two
-  characters or more: "F" or "T" would match words.
+  characters or more: "F" or "T" would match words;
+* **former** -- a renamed company's names under each old ticker: the learned
+  rule over the slots of the old ticker's own articles, a pool of its own,
+  so a long history under the new name cannot drown the old one
+  ("Priceline", "Coach", "Quintiles"); the old ticker's asset names when
+  those slots confirm them; and ``FORMER_NAME_OVERRIDES``.
 
-Names come from today's asset list, not from the date of each article: a
-renamed company's old name survives only where Benzinga's slot learned it.
+Names are not dated: a former name matches the company's headlines of any
+day, also when another company has taken it since. Trane's (TT) "Ingersoll
+Rand" is Gardner Denver's (IR) name from 2020; it is checked only against
+articles tagging TT, and no stored TT article after the switch passes by it.
 Slots are learned only from rows that are their symbol's own
 (``renames.owner``): Pandora's articles under P teach P nothing.
 
@@ -71,7 +78,7 @@ LEARN_MIN_SHARE: Final = 0.10
 _SLOT_LEN = (2, 40)  # a slot outside this length is not a company name
 _INSERT_CHUNK = 5_000
 
-Source = Literal["name", "learned", "override", "ticker"]
+Source = Literal["name", "learned", "override", "former", "ticker"]
 
 # Legal and generic suffixes stripped from an asset name (the scratchpad
 # prototype's table, verbatim; only the line breaks differ).
@@ -106,6 +113,16 @@ ALIAS_OVERRIDES: Final[dict[str, tuple[str, ...]]] = {
     "TSLA": ("Tesla",),
     "NVDA": ("Nvidia",),
     "AMD": ("AMD", "Advanced Micro"),
+}
+# A company's names from before a rename (source e), measured on the stored
+# news: the five the entity check missed most, which the old tickers' pools
+# give now but a rebuild's counts could drop.
+FORMER_NAME_OVERRIDES: Final[dict[str, tuple[str, ...]]] = {
+    "BKNG": ("Priceline",),  # PCLN to 2018-02
+    "IQV": ("Quintiles", "QuintilesIMS", "Quintiles IMS"),  # Q to 2017-11
+    "KDP": ("Dr Pepper Snapple", "Dr Pepper"),  # DPS to 2018-07
+    "TPR": ("Coach",),  # COH to 2017-10
+    "TT": ("Ingersoll-Rand",),  # IR to 2020-02
 }
 
 
@@ -243,29 +260,58 @@ def slot_of(headline: str) -> str | None:
     return None
 
 
+def _kept(seen: Counter[str]) -> set[str]:
+    """The slots of one pool seen ``LEARN_MIN_COUNT`` times and ``LEARN_MIN_SHARE``
+    of the pool, with their distinctive first words."""
+    total = sum(seen.values())
+    keep = {co for co, n in seen.items() if n >= LEARN_MIN_COUNT and n >= LEARN_MIN_SHARE * total}
+    firsts = {
+        words[0] for co in keep if (words := co.split()) and _distinctive_first_word(words[0])
+    }
+    return keep | firsts
+
+
 def learned_aliases(counts: Mapping[str, Counter[str]]) -> dict[str, set[str]]:
     """Each symbol's slots seen ``LEARN_MIN_COUNT`` times and ``LEARN_MIN_SHARE``
     of its slots, with their distinctive first words."""
-    out: dict[str, set[str]] = {}
-    for symbol, seen in counts.items():
-        total = sum(seen.values())
-        keep = {
-            co for co, n in seen.items() if n >= LEARN_MIN_COUNT and n >= LEARN_MIN_SHARE * total
-        }
-        firsts = {
-            words[0] for co in keep if (words := co.split()) and _distinctive_first_word(words[0])
-        }
-        if keep:
-            out[symbol] = keep | firsts
-    return out
+    return {symbol: kept for symbol, seen in counts.items() if (kept := _kept(seen))}
+
+
+def former_aliases(
+    pools: Mapping[tuple[str, str], Counter[str]], names: Mapping[str, Collection[str]]
+) -> dict[str, set[str]]:
+    """Each renamed symbol's former names (source e), one pool per old ticker.
+
+    ``pools`` holds the slots of each (symbol, old ticker)'s own articles
+    (``learn_former_slots``), judged by the learned rule within that pool
+    alone: Priceline's two years cannot reach a tenth of Booking's eight.
+    An asset name the old ticker has in ``names`` counts only when its
+    cleaned name matches ``LEARN_MIN_COUNT`` of those slots: Alpaca lists
+    the old ticker's current holder, when it lists it at all (PCLN is a
+    Pictet ETF, Q is Qnity, IR is Gardner Denver's Ingersoll Rand).
+    """
+    out: dict[str, set[str]] = defaultdict(set)
+    for old, (symbol, _) in renames.TICKER_RENAMES.items():
+        seen = pools.get((symbol, old), Counter())
+        out[symbol] |= _kept(seen)
+        for name in names.get(old, ()):
+            candidates = name_aliases(name)
+            if not candidates:
+                continue
+            full = AliasMatcher(symbol, (candidates[0],))  # the cleaned name
+            if sum(n for co, n in seen.items() if full.matches(co)) >= LEARN_MIN_COUNT:
+                out[symbol].update(candidates)
+    return {symbol: found for symbol, found in out.items() if found}
 
 
 def alias_rows(
     symbols: Iterable[str],
     names: Mapping[str, Collection[str]],
     learned: Mapping[str, Collection[str]],
+    former: Mapping[str, Collection[str]] | None = None,
 ) -> list[AliasRow]:
-    """Every (symbol, alias, source) row of the four sources, sorted."""
+    """Every (symbol, alias, source) row of the five sources, sorted."""
+    former = former or {}
     rows: set[AliasRow] = set()
     for symbol in set(symbols):
         for name in names.get(symbol, ()):
@@ -273,6 +319,8 @@ def alias_rows(
         rows.update(AliasRow(symbol, a, "learned") for a in learned.get(symbol, ()))
         rows.update(AliasRow(symbol, a, "override") for a in ALIAS_OVERRIDES.get(symbol, ()))
         rows.update(AliasRow(symbol, t, "ticker") for t in tickers_of(symbol) if len(t) >= 2)
+        rows.update(AliasRow(symbol, a, "former") for a in former.get(symbol, ()))
+        rows.update(AliasRow(symbol, a, "former") for a in FORMER_NAME_OVERRIDES.get(symbol, ()))
     return sorted(rows)
 
 
@@ -305,6 +353,46 @@ async def learn_slots(
             slot = slot_of(r.headline or "")
             if slot is not None:
                 counts[r.symbol][slot] += 1
+    return dict(counts)
+
+
+async def learn_former_slots(
+    engine: AsyncEngine, *, start: date = LEARN_FROM, end: date = LEARN_TO
+) -> dict[tuple[str, str], Counter[str]]:
+    """Slot counts per (symbol, old ticker), each old ticker's own pool (source e).
+
+    The articles that tag only the old ticker, on a day of its
+    ``renames.news_window`` in [start, end] (New York), stored under the
+    current symbol and its own (``renames.owner``): the copies the
+    renamed-news backfill made. ``learn_slots`` counts the same articles in
+    the symbol's pool, where the current name outnumbers the old one.
+    """
+    history = renames.ticker_history()
+    windows = {old: renames.news_window(old) for old in renames.TICKER_RENAMES}
+    currents = sorted({current for current, _ in renames.TICKER_RENAMES.values()})
+    counts: dict[tuple[str, str], Counter[str]] = defaultdict(Counter)
+    async with engine.connect() as conn:
+        rows = await conn.stream(
+            text(
+                "SELECT symbol, published_at, payload->'symbols' AS tagged, "
+                "payload->>'headline' AS headline FROM events "
+                "WHERE kind = 'news' AND symbol = ANY(:s) "
+                "AND published_at >= :lo AND published_at < :hi "
+                "AND jsonb_array_length(coalesce(payload->'symbols', '[]'::jsonb)) = 1"
+            ),
+            {"s": currents, "lo": trading_day_start_utc(start), "hi": trading_day_end_utc(end)},
+        )
+        async for r in rows:
+            old = r.tagged[0]
+            if renames.TICKER_RENAMES.get(old, ("",))[0] != r.symbol:
+                continue
+            day = r.published_at.astimezone(MARKET_TZ).date()
+            first, last = windows[old]
+            if not first <= day <= last or history.owner(r.symbol, day, r.tagged) != r.symbol:
+                continue
+            slot = slot_of(r.headline or "")
+            if slot is not None:
+                counts[(r.symbol, old)][slot] += 1
     return dict(counts)
 
 
@@ -372,8 +460,9 @@ async def build_aliases(
             )
     learned = learned_aliases(await learn_slots(engine))
     names = await _asset_names(engine, market)
+    former = former_aliases(await learn_former_slots(engine), names)
     symbols = await _news_symbols(engine) | set(learned)
-    rows = alias_rows(symbols, names, learned)
+    rows = alias_rows(symbols, names, learned, former)
     await _persist(engine, rows)
     logger.info(
         "story aliases: %d rows for %d symbols (%d with learned slots)",
