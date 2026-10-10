@@ -662,28 +662,40 @@ def keys_of(row: AtlasRow) -> dict[str, tuple[str, ...]]:
     }
 
 
-def _finite(values: Iterable[float | None]) -> NDArray[np.float64]:
+def _finite(values: Iterable[float | None]) -> tuple[NDArray[np.float64], int]:
+    """The finite values, and how many others there were (NaN or infinite; None is no value)."""
     a = np.asarray([v for v in values if v is not None], dtype=np.float64)
-    return a[np.isfinite(a)]
+    keep = np.isfinite(a)
+    return a[keep], int(a.size - keep.sum())
 
 
 def _share(flags: Sequence[bool]) -> float:
     return sum(flags) / len(flags) if flags else math.nan
 
 
-def _mean_se(values: Sequence[float], clusters: Sequence[date]) -> tuple[float, float]:
-    """The mean and its CR1 standard error clustered by ``clusters`` (NaN when undefined)."""
-    if not values:
-        return math.nan, math.nan
-    cm = clustered_mean(list(values), list(clusters))
+def _mean_se(values: Sequence[float], clusters: Sequence[date]) -> tuple[float, float, int]:
+    """The mean of the finite ``values`` and its CR1 standard error clustered by
+    ``clusters`` (NaN when undefined), and how many values were not finite (left out:
+    ``stats.clustered_mean`` refuses them, and one must not end a run)."""
+    kept = [(v, c) for v, c in zip(values, clusters) if math.isfinite(v)]
+    dropped = len(values) - len(kept)
+    if not kept:
+        return math.nan, math.nan, dropped
+    xs = [v for v, _ in kept]
+    cm = clustered_mean(xs, [c for _, c in kept])
     if cm is None:
-        return float(np.mean(values)), math.nan
-    return float(cm.mean), float(cm.se)
+        return float(np.mean(xs)), math.nan, dropped
+    return float(cm.mean), float(cm.se), dropped
 
 
 def cell_stats(rows: Sequence[AtlasRow]) -> dict[str, float]:
-    """Every statistic of one cell's measured rows (spec §F)."""
+    """Every statistic of one cell's measured rows (spec §F).
+
+    A value that is not finite (NaN or infinite) enters no statistic;
+    ``nonfinite`` counts them.
+    """
     out: dict[str, float] = {}
+    nonfinite = 0
     ms = [r.measures for r in rows if r.measures is not None]
     series: dict[str, list[float | None]] = {
         "low_sigma": [m.low_sigma for m in ms],
@@ -692,15 +704,18 @@ def cell_stats(rows: Sequence[AtlasRow]) -> dict[str, float]:
         "retrace_s2": [m.retrace_max_s2 for m in ms],
     }
     for name, values in series.items():
-        a = _finite(values)
+        a, bad = _finite(values)
+        nonfinite += bad
         qs = [float(x) for x in np.quantile(a, QUANTILES)] if a.size else [math.nan] * 5
         for q, v in zip(QUANTILES, qs):
             out[f"{name}_q{round(q * 100):02d}"] = v
-    drops = [
+    pairs_s = [
         (m.retrace_max_s, m.retrace_max_s2)
         for m in ms
         if m.retrace_max_s is not None and m.retrace_max_s2 is not None
     ]
+    drops = [(a, b) for a, b in pairs_s if math.isfinite(a) and math.isfinite(b)]
+    nonfinite += len(pairs_s) - len(drops)
     out["drops"] = float(len(drops))
     for x in RETRACE_LEVELS:
         out[f"p_retrace_{x:.2f}_close"] = _share([by_close >= x for by_close, _ in drops])
@@ -710,22 +725,27 @@ def cell_stats(rows: Sequence[AtlasRow]) -> dict[str, float]:
     out["p_fade"] = _share(fades)
     for i, h in enumerate(CONT_HORIZONS):
         pairs = [(c, r.session) for r in rows if (c := r.cont[i]) is not None]
-        mean, se = _mean_se([c for c, _ in pairs], [d for _, d in pairs])
-        out[f"cont_{h}_n"] = float(len(pairs))
+        mean, se, bad = _mean_se([c for c, _ in pairs], [d for _, d in pairs])
+        nonfinite += bad
+        out[f"cont_{h}_n"] = float(len(pairs) - bad)
         out[f"cont_{h}_mean"] = mean
         out[f"cont_{h}_se"] = se
     for variant, _ in VARIANTS:
-        out.update(_machine_stats(rows, variant))
+        machine_out, bad = _machine_stats(rows, variant)
+        out.update(machine_out)
+        nonfinite += bad
+    out["nonfinite"] = float(nonfinite)
     return out
 
 
-def _machine_stats(rows: Sequence[AtlasRow], variant: str) -> dict[str, float]:
-    """P(trigger), P(entry | trigger), exit-reason shares and mean r (CR1 SE by S)."""
+def _machine_stats(rows: Sequence[AtlasRow], variant: str) -> tuple[dict[str, float], int]:
+    """P(trigger), P(entry | trigger), exit-reason shares and mean r (CR1 SE by S), and
+    how many trades' r was not finite (in the shares, not in the means)."""
     v = variant.lower()
     runs = [(r, m) for r in rows if (m := r.run(variant)) is not None and m.ran]
     out: dict[str, float] = {f"{v}_runs": float(len(runs))}
     if not runs:
-        return out
+        return out, 0
     triggered = [m for _, m in runs if m.triggered]
     out[f"{v}_p_trigger"] = len(triggered) / len(runs)
     out[f"{v}_p_entry_given_trigger"] = _share([m.entered for m in triggered])
@@ -736,18 +756,19 @@ def _machine_stats(rows: Sequence[AtlasRow], variant: str) -> dict[str, float]:
     ]
     out[f"{v}_trades"] = float(len(trades))
     if not trades:
-        return out
-    out[f"{v}_r_mean"], out[f"{v}_r_se"] = _mean_se(
-        [ret for _, _, ret in trades], [d for d, _, _ in trades]
+        return out, 0
+    finite = [(d, why, ret) for d, why, ret in trades if math.isfinite(ret)]
+    out[f"{v}_r_mean"], out[f"{v}_r_se"], _ = _mean_se(
+        [ret for _, _, ret in finite], [d for d, _, _ in finite]
     )
     for reason in EXIT_REASONS:
-        some = [(d, ret) for d, why, ret in trades if why == reason]
-        out[f"{v}_share_{reason}"] = len(some) / len(trades)
+        out[f"{v}_share_{reason}"] = sum(why == reason for _, why, _ in trades) / len(trades)
+        some = [(d, ret) for d, why, ret in finite if why == reason]
         if some:
-            out[f"{v}_r_mean_{reason}"], out[f"{v}_r_se_{reason}"] = _mean_se(
+            out[f"{v}_r_mean_{reason}"], out[f"{v}_r_se_{reason}"], _ = _mean_se(
                 [ret for _, ret in some], [d for d, _ in some]
             )
-    return out
+    return out, len(trades) - len(finite)
 
 
 def _sort_key(table: str, key: tuple[str, ...]) -> tuple[Any, ...]:
