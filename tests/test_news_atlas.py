@@ -520,6 +520,21 @@ def test_a_value_that_is_not_finite_is_left_out_and_counted() -> None:
     json.dumps(to_json(Atlas(rows=rows, cells=cells)), allow_nan=False)
 
 
+def test_exit_reason_shares_add_up_to_one() -> None:
+    reasons = ["target", "stop", "unspecified", "close_fallback"] * 10
+    rows = [
+        row(i, DAYS[i % MIN_DATES], md3_run=_run(True, why, 0.001 * i))
+        for i, why in enumerate(reasons)
+    ]
+    stats = cell_stats(rows)
+    shares = {k: v for k, v in stats.items() if k.startswith("md3_share_")}
+    assert sum(shares.values()) == pytest.approx(1.0)
+    assert shares["md3_share_unspecified"] == shares["md3_share_close_fallback"] == 0.25
+    assert stats["md3_r_mean_unspecified"] == pytest.approx(
+        sum(0.001 * i for i, why in enumerate(reasons) if why == "unspecified") / 10
+    )
+
+
 def test_cells_cover_every_table_sorted_by_key() -> None:
     rows = [
         row(1, DAYS[0], type="earnings_miss", measures=measures(-6.0), timing="in_session"),
