@@ -17,24 +17,33 @@ Four resumable backfills, each recording what it finished in
 Point in time: news and filings carry their source's timestamp. The
 insider data sets carry a filing *date* only, so a Form 4 is stamped
 17:00 New York on that date: usable from the next session, never earlier.
+
+A filing's timestamp from the submissions JSON is hours late for about a
+third of filings (``compliance/sec.py``). :func:`correct_filing_times`
+rewrites the stored ones from each filing's EDGAR header, resumably
+(task ``filing-times``).
 """
 
 from __future__ import annotations
 
+import asyncio
 import csv
 import io
 import logging
 import zipfile
-from collections.abc import Iterable
+from collections import Counter
+from collections.abc import Iterable, Sequence
+from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, time, timedelta
-from typing import Any
+from typing import Any, Final
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from halal_trader.compliance.sec import SecClient, filed_at
+from halal_trader.compliance.sec import SecClient, accession_dashed, filed_at
 from halal_trader.core.num import to_float
 from halal_trader.events.store import EventRecord, EventRecorder
+from halal_trader.market_hours import MARKET_TZ
 
 logger = logging.getLogger(__name__)
 
@@ -220,6 +229,253 @@ async def backfill_filings(engine: AsyncEngine, sec: SecClient, companies: dict[
         stored += written
     logger.info("filings: %d events", stored)
     return stored
+
+
+# ── filing times ──────────────────────────────────────────────
+
+# One unit per accession read from its header; items = the stored time minus
+# the header's, in seconds (0: it was right). An accession EDGAR has no
+# header for goes to the second task, so a rerun skips it too.
+TIMES_TASK: Final = "filing-times"
+TIMES_MISSING_TASK: Final = "filing-times-missing"
+TIME_FORMS: Final = ("8-K", "8-K/A")
+# The order 8-Ks are corrected in, by item code: structural and unclear
+# ones first, then results of operations, then agreements, deals and
+# management changes; every other 8-K after these, and other forms last.
+ITEM_PRIORITY: Final = (
+    frozenset({"4.02", "3.01", "2.04", "1.03", "2.06", "3.02", "4.01", "1.02"}),
+    frozenset({"2.02"}),
+    frozenset({"5.02", "1.01", "2.01", "2.03", "2.05"}),
+)
+TIMES_CONCURRENCY: Final = 3  # header requests in flight (the pacer keeps them < 10/s)
+_TIMES_BATCH = 200  # filings written (and marked done) per transaction
+_TIMES_LOG_EVERY = 1000
+
+
+def filing_priority(kind: str, items: Iterable[str]) -> int:
+    """A filing's place in the correction order, 0 first (``ITEM_PRIORITY``)."""
+    if kind not in ("8-k", "8-k/a"):
+        return len(ITEM_PRIORITY) + 1
+    codes = set(items)
+    return next((i for i, tier in enumerate(ITEM_PRIORITY) if codes & tier), len(ITEM_PRIORITY))
+
+
+def time_delta(stored: datetime, accepted: datetime) -> int:
+    """Seconds the stored time is after the header's acceptance (positive: late)."""
+    return round((stored - accepted).total_seconds())
+
+
+async def company_ciks(engine: AsyncEngine) -> dict[str, list[int]]:
+    """Symbol -> the companies' CIKs it was screened under (most screened first),
+    then any CIK ``ticker_ciks`` matched it to."""
+    async with engine.connect() as conn:
+        rows = await conn.execute(
+            text(
+                "SELECT symbol, cik, count(*) AS n FROM halal_screen_current "
+                "WHERE cik IS NOT NULL GROUP BY symbol, cik "
+                "UNION ALL SELECT symbol, cik, 0 AS n FROM ticker_ciks "
+                "WHERE status = 'mapped' AND cik IS NOT NULL "
+                "ORDER BY symbol, n DESC, cik"
+            )
+        )
+        out: dict[str, list[int]] = {}
+        for r in rows:
+            ciks = out.setdefault(r.symbol, [])
+            if int(r.cik) not in ciks:
+                ciks.append(int(r.cik))
+    return out
+
+
+@dataclass(frozen=True, slots=True)
+class _Filing:
+    accession: str
+    symbols: tuple[str, ...]
+    published_at: datetime  # as stored (the earliest, if its rows disagree)
+    priority: int
+
+
+async def _stored_filings(
+    engine: AsyncEngine, start: date, end: date, forms: Sequence[str]
+) -> list[_Filing]:
+    """The stored filings of ``forms`` dated ``start``..``end`` (New York days), one
+    per accession, in correction order: by priority, newest first within one."""
+    async with engine.connect() as conn:
+        rows = await conn.execute(
+            text(
+                "SELECT source_id, symbol, kind, published_at, payload->'items' AS items "
+                "FROM events WHERE source = 'sec' AND kind = ANY(:kinds) "
+                "AND published_at >= :t0 AND published_at < :t1"
+            ),
+            {
+                "kinds": sorted({f.lower() for f in forms}),
+                "t0": datetime.combine(start, time(0), MARKET_TZ),
+                "t1": datetime.combine(end + timedelta(days=1), time(0), MARKET_TZ),
+            },
+        )
+        grouped: dict[str, list[Any]] = {}
+        for r in rows:
+            grouped.setdefault(r.source_id, []).append(r)
+    filings = [
+        _Filing(
+            accession=acc,
+            symbols=tuple(sorted({r.symbol for r in rs})),
+            published_at=min(r.published_at for r in rs),
+            priority=min(filing_priority(r.kind, [str(x) for x in (r.items or [])]) for r in rs),
+        )
+        for acc, rs in grouped.items()
+    ]
+    filings.sort(key=lambda f: (f.priority, -f.published_at.timestamp(), f.accession))
+    return filings
+
+
+def _candidate_ciks(filing: _Filing, ciks: dict[str, list[int]]) -> list[int]:
+    """Where a filing's header may be: its company's CIKs, then the accession's own
+    filer (the company itself when it filed it, else a filing agent: no header)."""
+    out = [c for s in filing.symbols for c in ciks.get(s, [])]
+    try:
+        out.append(int(accession_dashed(filing.accession)[:10]))
+    except ValueError:
+        pass  # not an accession number: no filer to try
+    return list(dict.fromkeys(out))
+
+
+@dataclass
+class FilingTimes:
+    """What one :func:`correct_filing_times` pass did."""
+
+    checked: int = 0  # filings whose header time was read
+    corrected: int = 0  # of those, filings stored at another time
+    rows: int = 0  # event rows retimed (an accession can be stored under two symbols)
+    missing: int = 0  # filings with no header under any candidate CIK
+    done_before: int = 0  # filings an earlier pass finished (skipped)
+    deltas: Counter[int] = field(default_factory=Counter)  # stored minus header, s -> filings
+
+
+async def _write_times(
+    engine: AsyncEngine, fixes: dict[str, tuple[datetime, int]], missing: list[str]
+) -> None:
+    """Stamp each accession's rows at its header time and mark the units done, in one
+    transaction: a unit is done only with its rows written."""
+    async with engine.begin() as conn:
+        if fixes:
+            await conn.execute(
+                text(
+                    "UPDATE events SET published_at = :t, seen_at = :t, "
+                    "payload = COALESCE(payload, CAST('{}' AS JSONB)) "
+                    "|| jsonb_build_object('time_source', 'header') "
+                    "WHERE source = 'sec' AND source_id = :acc AND (published_at <> :t "
+                    "OR seen_at <> :t OR payload->>'time_source' IS DISTINCT FROM 'header')"
+                ),
+                [{"acc": acc, "t": t} for acc, (t, _) in fixes.items()],
+            )
+        units = [{"t": TIMES_TASK, "u": acc, "n": d} for acc, (_, d) in fixes.items()]
+        units += [{"t": TIMES_MISSING_TASK, "u": acc, "n": 0} for acc in missing]
+        if units:
+            await conn.execute(
+                text(
+                    "INSERT INTO backfill_progress (task, unit, items, done_at) "
+                    "VALUES (:t, :u, :n, now()) ON CONFLICT (task, unit) "
+                    "DO UPDATE SET items = EXCLUDED.items, done_at = EXCLUDED.done_at"
+                ),
+                units,
+            )
+
+
+async def _header_time(
+    sec: SecClient, filing: _Filing, ciks: dict[str, list[int]]
+) -> datetime | None:
+    for cik in _candidate_ciks(filing, ciks):
+        accepted = await sec.acceptance(cik, filing.accession)
+        if accepted is not None:
+            return accepted
+    return None
+
+
+async def correct_filing_times(
+    engine: AsyncEngine,
+    sec: SecClient,
+    *,
+    start: date,
+    end: date,
+    forms: Sequence[str] = TIME_FORMS,
+    limit: int | None = None,
+    concurrency: int = TIMES_CONCURRENCY,
+) -> FilingTimes:
+    """Restamp stored filings at the acceptance time of their EDGAR header.
+
+    Covers the filings of ``forms`` dated ``start``..``end`` that no earlier
+    pass finished, in ``ITEM_PRIORITY`` order, at most ``limit`` of them.
+    Each filing's rows (``source='sec'``, ``source_id`` = the accession) get
+    the header's time as ``published_at`` and ``seen_at`` and
+    ``time_source: header`` in their payload; its unit in ``filing-times``
+    records how far off the stored time was. A rerun skips finished units
+    and rewrites nothing that is already right.
+
+    ``concurrency`` requests are in flight at once: a header takes about
+    0.4 s to come back, and the client's pacer still spaces the requests
+    under EDGAR's limit. A failure (EDGAR's outage: SecUnavailable) stops
+    the pass after writing every header read before it.
+    """
+    out = FilingTimes()
+    done = await _done(engine, TIMES_TASK) | await _done(engine, TIMES_MISSING_TASK)
+    todo: list[_Filing] = []
+    for filing in await _stored_filings(engine, start, end, forms):
+        if filing.accession in done:
+            out.done_before += 1
+        else:
+            todo.append(filing)
+    if limit is not None:
+        todo = todo[: max(limit, 0)]
+    if not todo:
+        return out
+    ciks = await company_ciks(engine)
+    queue = iter(todo)  # shared: each filing goes to one worker, in order
+    fixes: dict[str, tuple[datetime, int]] = {}
+    missing: list[str] = []
+    read = 0
+
+    async def flush() -> None:
+        nonlocal fixes, missing
+        batch, gone = fixes, missing
+        fixes, missing = {}, []
+        await _write_times(engine, batch, gone)
+
+    async def worker() -> None:
+        nonlocal read
+        for filing in queue:
+            accepted = await _header_time(sec, filing, ciks)
+            if accepted is None:
+                out.missing += 1
+                missing.append(filing.accession)
+            else:
+                delta = time_delta(filing.published_at, accepted)
+                out.checked += 1
+                out.deltas[delta] += 1
+                if delta:
+                    out.corrected += 1
+                    out.rows += len(filing.symbols)
+                fixes[filing.accession] = (accepted, delta)
+            read += 1
+            if read % _TIMES_LOG_EVERY == 0:
+                logger.info(
+                    "filing times: %d/%d read, %d corrected, %d without a header",
+                    read,
+                    len(todo),
+                    out.corrected,
+                    out.missing,
+                )
+            if len(fixes) + len(missing) >= _TIMES_BATCH:
+                await flush()
+
+    workers = [asyncio.create_task(worker()) for _ in range(max(concurrency, 1))]
+    try:
+        await asyncio.gather(*workers)
+    finally:
+        for task in workers:
+            task.cancel()
+        await asyncio.gather(*workers, return_exceptions=True)
+        await flush()
+    return out
 
 
 # ── insiders ──────────────────────────────────────────────────
