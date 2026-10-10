@@ -79,10 +79,12 @@ floor_minute(ref_at)``; "out": P0 = ``prev_close_s``, SPY0 =
   ``blocked_open``, as in H1, but only behind a story of its own lane: a
   ``legal_adverse`` story held under MD3 never blocks an NSN one (in H1
   only NSN stories start), and the NSN lane's machine numbers are not
-  filtered by another type's outcome. Each cell counts its blocked stories
-  (``<variant>_blocked`` of ``<variant>_starters``); they are not in P(trigger)
-  or r. With a later ``start`` than :data:`ATLAS_START`, a story before it
-  starts nothing, so it blocks nothing.
+  filtered by another type's outcome (its outcomes can still differ from
+  H1's: the family check is off, as spec §F asks). Each cell counts its
+  blocked stories (``<variant>_blocked`` of ``<variant>_starters``); they
+  are not in P(trigger) or r. With a later ``start`` than
+  :data:`ATLAS_START`, a story before it starts nothing, so it blocks
+  nothing.
 
 **Tables** (:func:`cells_of`): ``base`` is type x ``low_sigma`` bucket
 (:data:`BUCKETS`); ``type`` the type alone; the marginals cross the type
@@ -115,6 +117,10 @@ backfilled).
 * The machine also runs on a story NSN by the cutoff whose detect type is
   not negative (an 8-K's unparsed earnings, then a miss): such a story is
   an H1 event.
+* The machine runs one lane at a time (NSN_CORE, then each other negative
+  type), so a story is blocked only behind its own lane; the spec does not
+  say how the types share a symbol, and one run for all of them would let
+  one type's outcome filter another's statistics.
 * "Retrace >= x by the close / by S+2" reads the highest retrace reached
   (``retrace_max_s`` / ``retrace_max_s2``); the denominators of those
   shares are the stories with a drop (P0 > L).
