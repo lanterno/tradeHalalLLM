@@ -79,6 +79,28 @@ async def test_scored_before_pins_the_set_to_the_scores_that_existed(engine: Asy
     assert [h.symbol for h in pinned] == ["AAA"]
 
 
+async def test_headlines_sharing_a_time_come_back_in_one_order(engine: AsyncEngine) -> None:
+    from halal_trader.events.intraday import selection
+
+    when = datetime(2026, 3, 2, 15, 0, tzinfo=UTC)
+    records = [
+        EventRecord(
+            "alpaca", str(i), "news", sym, when, when, {"headline": "h"}, Score("llm-batch:m", sc)
+        )
+        for i, (sym, sc) in enumerate(
+            [("AAA", 0.1), ("AAA", 0.9), ("BBB", 0.2), ("CCC", 0.0), ("DDD", -0.1)]
+        )
+    ]
+    await EventRecorder(engine).record(records)
+
+    first = await first_in_session(engine)
+    assert [h.symbol for h in first] == ["AAA", "BBB", "CCC", "DDD"]  # by time, then symbol
+    assert first[0].score == 0.1  # the same timestamp: the lower event id is first
+    again = [await first_in_session(engine) for _ in range(3)]
+    assert all(a == first for a in again)
+    assert selection(first) == selection(list(reversed(first))[::-1])
+
+
 def test_entry_is_the_first_bar_starting_after_the_latency() -> None:
     t = datetime(2026, 3, 2, 15, 0, tzinfo=UTC)
     rows = [
