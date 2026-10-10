@@ -33,6 +33,18 @@ exclusion stands here as well.
   the last session under it, plus the grace sessions, never past its
   handover). A reused ticker therefore never counts for its former owner
   after the switch: IR in a 2020 holding is Gardner Denver, not Trane.
+
+Follow-up, not yet done: **today's ticker is matched without a date.** A
+reused ticker in holdings dated before its handover counts for the company
+that holds it today (IR in a 2019 holding would count for Gardner Denver,
+and Gardner Denver's CUSIP, recovered as IR there, would count for Trane
+through ``held_as``). No stored holding triggers it (checked 2026-10-11):
+the only ones dated before today's owner took their ticker are SPUS's
+2021-22 holdings of Meta and Revvity, their tickers recovered from their
+own CUSIPs, which carry the newest ticker seen for them. That is also why
+date-checking ``symbol in view.tickers`` alone would break the veto. The
+fix is to date-check only the tickers a filing reports itself and give the
+recovered ones to the match by today's ticker only.
 """
 
 from __future__ import annotations
