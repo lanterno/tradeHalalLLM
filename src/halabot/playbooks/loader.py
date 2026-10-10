@@ -12,12 +12,16 @@
 * a ``gate=`` unlock admits only its **pinned** unit set, whatever the
   date. ``unlock.units`` must hash (``unit_set_sha``) to ``unlock.units_sha``;
   every unit must lie in the gate's date range (:data:`GATE_RANGES`: g1 and
-  calib 2016-01-04..2016-09-30, sue 2016-01-04..2019-12-31, reactor
+  calib 2016-01-04..2016-09-30, sue 2016-01-04..2020-01-30, reactor
   2025-12-01..2026-10-09); and the ledger must hold the pin, a
   ``quant_trials`` row ``kind='gate-units'``, ``name=`` :data:`GATE_UNITS_NAME`,
   ``config={"gate": <id>, "units_sha": <sha>}``, which the gate code writes
   with :func:`register_gate_units` before it runs. SPY is admitted on the
   days of those units.
+
+The sue range ends at :func:`sue_last_exit`, the last h=20 exit session of an
+observation published by 2019-12-31 (spec §H: ``gate_sue`` holds the entry
+session and the h=5 and h=20 exit sessions).
 
 :meth:`MinuteBarLoader.prepare` verifies the unlock against the ledger and
 :meth:`MinuteBarLoader.check` every day of every requested path, so
@@ -109,11 +113,31 @@ WINDOW_START: Final = {
 WINDOW_LAST: Final = {Window.TRAIN: date(2021, 12, 31), Window.VALIDATION: date(2024, 12, 31)}
 
 Gate = Literal["g1", "calib", "reactor", "sue"]
+
+# Σ_c (spec §E.3): SUE observations published 2016-01-04..2019-12-31; gate_sue (spec §H)
+# holds their entry sessions and their exit sessions at h = 5 and h = 20.
+SUE_FIRST: Final = date(2016, 1, 4)
+SUE_LAST_PUBLISHED: Final = date(2019, 12, 31)
+SUE_MAX_HORIZON: Final = 20
+
+
+def sue_last_exit() -> date:
+    """The last session ``gate_sue`` can hold: the h=20 exit of the last observation.
+
+    An observation published on 2019-12-31 enters at the latest at the open
+    of the next session (``study.entry_point``), and exits on the 20th
+    session counted from it (``exit_i = i + h - 1``); a close entry on
+    2019-12-31 exits on the same session (``i + h``). By ``market_hours``:
+    2020-01-30.
+    """
+    return path_days(next_trading_day(SUE_LAST_PUBLISHED), SUE_MAX_HORIZON)[-1]
+
+
 # The sessions each Phase 0 gate may read (spec §E, §H): every unit of its set lies inside.
 GATE_RANGES: Final[dict[str, tuple[date, date]]] = {
     "g1": (date(2016, 1, 4), date(2016, 9, 30)),
     "calib": (date(2016, 1, 4), date(2016, 9, 30)),
-    "sue": (date(2016, 1, 4), date(2019, 12, 31)),
+    "sue": (SUE_FIRST, sue_last_exit()),
     "reactor": (date(2025, 12, 1), date(2026, 10, 9)),
 }
 GATE_UNITS_NAME: Final = "research.news.sim-gate.units"
@@ -594,6 +618,9 @@ __all__ = [
     "HOLDOUT_START",
     "LOCK_START",
     "SPY",
+    "SUE_FIRST",
+    "SUE_LAST_PUBLISHED",
+    "SUE_MAX_HORIZON",
     "WINDOW_LAST",
     "WINDOW_START",
     "CalendarMismatch",
@@ -610,5 +637,6 @@ __all__ = [
     "check_gate_units",
     "register_gate_units",
     "sane",
+    "sue_last_exit",
     "unit_set_sha",
 ]
