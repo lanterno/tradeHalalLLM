@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import json
 import re
+import uuid
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import pytest
+import sqlalchemy as sa
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
@@ -51,11 +53,119 @@ def test_each_job_says_what_it_did() -> None:
     )
 
 
+_JUSTFILE = Path(__file__).parents[1] / "justfile"
+_PLAYBOOK_TABLES = {"hb_playbook_run", "hb_playbook_story", "hb_playbook_trade"}
+
+
 def test_the_tables_marked_not_dumped_are_the_backup_recipes() -> None:
-    justfile = (Path(__file__).parents[1] / "justfile").read_text()
-    recipe = re.search(r"for t in ([a-z_ ]+); do\s+excluded=", justfile)
+    recipe = re.search(r"for t in ([a-z_ ]+); do\s+excluded=", _JUSTFILE.read_text())
     assert recipe is not None
     assert set(recipe.group(1).split()) == NOT_DUMPED
+
+
+def test_playbook_rows_leave_the_dump_and_runs_but_simulations_are_exported() -> None:
+    justfile = _JUSTFILE.read_text()
+    assert _PLAYBOOK_TABLES <= NOT_DUMPED
+    assert '| gzip > "{{dest}}/playbook_runs.jsonl.gz"' in justfile
+    assert "playbook_runs_kb" in justfile  # the nightly beat says how big it was
+
+
+def _playbook_export() -> str:
+    """The backup recipe's query for the playbook runs, as it runs there."""
+    found = re.search(r'\n\s+runs="([^"]+)"\n', _JUSTFILE.read_text())
+    assert found is not None
+    return found.group(1)
+
+
+async def _playbook_run(engine: AsyncEngine, mode: str, at: datetime, stories: int) -> str:
+    """A run of ``mode`` with ``stories`` stories, each one traded."""
+    from halabot.platform.db import playbook_run, playbook_story, playbook_trade
+
+    run_id = uuid.uuid4()
+    day = at.date()
+    async with engine.begin() as conn:
+        await conn.execute(
+            sa.insert(playbook_run).values(
+                run_id=run_id,
+                created_at=at,
+                mode=mode,
+                playbook="bounce",
+                playbook_version="1",
+                cell="c",
+                feed="sip-rt",
+                window="train",
+                stop_at="end",
+                config={},
+                config_hash="h",
+            )
+        )
+        for n in range(stories):
+            story = f"AAPL:{day.isoformat()}:{n}"
+            await conn.execute(
+                sa.insert(playbook_story).values(
+                    run_id=run_id,
+                    story_id=story,
+                    symbol="AAPL",
+                    session=day,
+                    terminal_state="EXITED",
+                    reason="target",
+                )
+            )
+            await conn.execute(
+                sa.insert(playbook_trade).values(
+                    run_id=run_id,
+                    story_id=story,
+                    symbol="AAPL",
+                    family_type="NSN_CORE",
+                    cell="c",
+                    variant="v",
+                    feed="sip-rt",
+                    session=day,
+                    exit_session=day,
+                    sessions_held=1,
+                    start_case="in",
+                    entry_decided_at=at,
+                    entry_active_at=at,
+                    entry_bar_ts=at,
+                    exit_decided_at=at,
+                    exit_active_at=at,
+                    rank=1,
+                    tech=True,
+                    exit_reason="target",
+                    hold_minutes=30,
+                    flags=[],
+                    legs=[],
+                )
+            )
+    return str(run_id)
+
+
+async def test_the_playbook_export_holds_every_run_but_the_simulations(engine) -> None:
+    from halabot.platform.db import bootstrap_schema
+
+    await bootstrap_schema(engine)
+    await _playbook_run(engine, "sim", NOW - timedelta(days=4), stories=3)
+    shadow = await _playbook_run(engine, "shadow", NOW - timedelta(days=3), stories=2)
+    paper = await _playbook_run(engine, "paper", NOW - timedelta(days=2), stories=1)
+    live = await _playbook_run(engine, "live", NOW - timedelta(days=1), stories=0)
+    async with engine.connect() as conn:
+        raw = (
+            await conn.execute(text(f"SELECT j::text FROM ({_playbook_export()}) AS e(j)"))
+        ).scalars()
+        exported = list(raw)
+    assert all("\n" not in line for line in exported)  # one run per line of the .jsonl
+    lines = [json.loads(line) for line in exported]
+    assert [(r["run_id"], r["mode"]) for r in lines] == [
+        (shadow, "shadow"),
+        (paper, "paper"),
+        (live, "live"),
+    ]
+    assert [len(r["stories"]) for r in lines] == [2, 1, 0]
+    assert [len(r["trades"]) for r in lines] == [2, 1, 0]
+    first = lines[0]
+    assert first["stories"][0]["story_id"] == "AAPL:2026-10-05:0"
+    assert first["trades"][1]["exit_reason"] == "target"
+    assert first["config_hash"] == "h"  # every column of the run
 
 
 async def _beat(engine: AsyncEngine, component: str, at: datetime, detail: object = None) -> None:
