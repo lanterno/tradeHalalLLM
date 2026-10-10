@@ -29,6 +29,7 @@ from halabot.playbooks.legacy import (
     DailyBarSource,
     HoldFactory,
     LegacyReactorFill,
+    R1Dropped,
     daily_config,
     r1_dropped,
     r1_set_aside,
@@ -37,7 +38,7 @@ from halabot.playbooks.legacy import (
     reactor_story,
 )
 from halabot.playbooks.records import TradeRecord
-from halabot.playbooks.sim import RunSummary, simulate_symbol
+from halabot.playbooks.sim import RunSummary, id_set_sha, simulate_symbol
 from halabot.playbooks.types import (
     DATA_SKIPS,
     BarSeries,
@@ -234,7 +235,9 @@ def test_r1_admits_what_the_study_took_and_never_flattens() -> None:
 # ── R1: the dropped sets ──
 
 
-def _summary(n: int, **kw: object) -> RunSummary:
+def _summary(ids: list[str], **kw: object) -> RunSummary:
+    """Run ``r``'s summary over the explicit set ``ids``."""
+    n = len(ids)
     base: dict[str, object] = dict(
         run_id="r",
         stories=n,
@@ -248,23 +251,26 @@ def _summary(n: int, **kw: object) -> RunSummary:
         skip_ids={},
         bar_drop_ids=(),
         expected=n,
+        expected_sha=id_set_sha(ids),
     )
     return RunSummary(**{**base, **kw})  # type: ignore[arg-type]
 
 
 @dataclass(frozen=True, slots=True)
 class _Trade:
-    """The fields of a TradeRecord the comparison reads."""
+    """The fields of a TradeRecord the comparison reads (run ``r``'s, a finite return)."""
 
     story_id: str
     entry_px: float
     exit_px: float
+    run_id: str = "r"
+    r_net_abn: float = 0.01
 
 
 def test_r1_sets_aside_the_loader_rules_the_study_never_had() -> None:
     """Each id with every reason; SPY's cut bars apart from the stock's; coverage skips stay."""
     summary = _summary(
-        10,
+        list("abcmnpstux"),
         skip_ids={
             "bad_bars": ("b",),
             "adjust_defect": ("a",),
@@ -296,7 +302,7 @@ def test_r1_compares_the_rest_and_caps_the_set_aside() -> None:
     trades = [_Trade(i, 50.0, 51.0) for i in ids[:190]]
     trades[5] = _Trade(ids[5], 50.0, 101.0)  # exit / entry 2.02: implausible
     summary = _summary(
-        200,
+        ids,
         dropped=dict.fromkeys(ids[190:], "entry_unfilled"),
         bar_drop_ids=(ids[0],),
         spy_drop_ids=(ids[0],),  # one headline, two reasons
@@ -313,7 +319,7 @@ def test_r1_compares_the_rest_and_caps_the_set_aside() -> None:
     assert config["set_aside_cap"] == R1_SET_ASIDE_CAP == 0.01
     assert config["sim_only"] == {} and config["study_only"] == []
     # One more headline set aside is over the cap; one-sided drops are listed with reasons.
-    over = _summary(200, dropped=summary.dropped, skip_ids={"bad_bars": (ids[0], ids[1], ids[2])})
+    over = _summary(ids, dropped=summary.dropped, skip_ids={"bad_bars": (ids[0], ids[1], ids[2])})
     mixed = r1_dropped(ids, over, cast(list[TradeRecord], trades), {*study, ids[7]} - {ids[195]})
     assert mixed.share == 0.015 and not mixed.within_cap and not mixed.passed
     assert mixed.sim_only == {ids[195]: "entry_unfilled"} and mixed.study_only == (ids[7],)
@@ -321,6 +327,40 @@ def test_r1_compares_the_rest_and_caps_the_set_aside() -> None:
         r1_dropped(ids, summary, cast(list[TradeRecord], trades), {"elsewhere"})
     assert reactor_plausible(cast(TradeRecord, _Trade("p", 50.0, 99.9)))
     assert not reactor_plausible(cast(TradeRecord, _Trade("p", 50.0, 25.0)))  # bounds excluded
+
+
+def test_r1_needs_its_run_its_trades_and_h_to_be_one_set() -> None:
+    """A run over H with no drops passes only with each kept id's own trade of that run."""
+    ids = ["a", "b", "c"]
+    trades = [_Trade(i, 50.0, 51.0) for i in ids]
+
+    def check(summary: RunSummary, given: list[_Trade], study: set[str] | None = None) -> R1Dropped:
+        return r1_dropped(ids, summary, cast(list[TradeRecord], given), study or set())
+
+    ok = check(_summary(ids), trades)
+    assert ok.passed and ok.kept == tuple(ids)
+    # No drops and no trades: three headlines never compared, which used to pass.
+    with pytest.raises(ValueError, match="3 ids of H the run kept have no trade of it"):
+        check(_summary(ids), [])
+    with pytest.raises(ValueError, match=r"kept have no trade of it .*: b$"):
+        check(_summary(ids), [trades[0], _Trade("b", 50.0, 51.0, r_net_abn=math.nan), trades[2]])
+    # A run over another set of the same size, or not over an explicit set at all.
+    with pytest.raises(ValueError, match="not H's"):
+        check(_summary(["a", "b", "d"]), trades)
+    with pytest.raises(ValueError, match=r"sha \(none\)"):
+        check(_summary(ids, expected_sha=""), trades)
+    # Another run's trades, a trade twice, a trade outside H.
+    with pytest.raises(ValueError, match="trade a is from run other, not r"):
+        check(_summary(ids), [_Trade("a", 50.0, 51.0, run_id="other"), *trades[1:]])
+    with pytest.raises(ValueError, match="trade c is given twice"):
+        check(_summary(ids), [*trades, trades[2]])
+    with pytest.raises(ValueError, match="trade z is not in H"):
+        check(_summary(ids), [*trades, _Trade("z", 50.0, 51.0)])
+    # An id the run dropped or set aside needs no trade; a NaN trade it dropped is allowed.
+    nospy = _Trade("c", 50.0, 51.0, r_net_abn=math.nan)
+    partial = _summary(ids, dropped={"b": "bad_bars", "c": "no_spy"}, skip_ids={"bad_bars": ("b",)})
+    out = check(partial, [trades[0], nospy], {"c"})
+    assert out.identical and out.kept == ("a",) and out.set_aside == {"b": ("bad_bars",)}
 
 
 # ── S1: the daily-bar study through the simulator ──

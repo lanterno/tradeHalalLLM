@@ -274,6 +274,7 @@ async def test_an_explicit_set_accounts_for_every_id(engine: AsyncEngine) -> Non
     assert nospy is not None and "no_spy" in nospy.flags and math.isnan(nospy.r_net_abn)
     assert sink.summary is not None and sink.summary["dropped"] == summary.dropped
     assert sink.summary["expected"] == 8
+    assert summary.expected_sha == sim.id_set_sha(HEADS) == sink.summary["expected_sha"]
 
 
 async def test_an_explicit_set_refuses_other_stories_before_writing(engine: AsyncEngine) -> None:
@@ -317,6 +318,12 @@ async def test_r1_in_miniature_compares_the_run_with_the_study(engine: AsyncEngi
     assert check.share == 0.25 and not check.within_cap and not check.passed
     with pytest.raises(ValueError, match="not H's 7"):
         r1_dropped([h for h in HEADS if h != "h-ok"], summary, trades, study_dropped)
+    # The same set run again: its summary does not take the first run's trades.
+    again = await _reactor_run(engine, stories, expected, unlock, MemorySink())
+    with pytest.raises(ValueError, match=f"is from run {summary.run_id}, not {again.run_id}"):
+        r1_dropped(HEADS, again, trades, study_dropped)
+    with pytest.raises(ValueError, match="h-ok"):
+        r1_dropped(HEADS, summary, [t for t in trades if t.story_id != "h-ok"], study_dropped)
 
 
 async def test_a_run_logs_its_start_batches_and_end(
