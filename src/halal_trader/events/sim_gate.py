@@ -1265,7 +1265,15 @@ def r1_result(
 # A run summary's per-story lists (R1's dropped check reports what matters of them) and
 # its run id (new each run): left out of a gate row, so a rerun writes the same numbers.
 _NOT_RECORDED: Final = frozenset(
-    {"run_id", "skip_ids", "bar_drop_ids", "spy_drop_ids", "spare_drop_ids", "dropped"}
+    {
+        "run_id",
+        "skip_ids",
+        "bar_drop_ids",
+        "spy_drop_ids",
+        "spy_drop_from_start_ids",
+        "spare_drop_ids",
+        "dropped",
+    }
 )
 
 
