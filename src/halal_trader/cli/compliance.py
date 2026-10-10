@@ -137,6 +137,33 @@ def rescreen_cmd() -> None:
     console.print(f"re-screened {sum(done.values())} verdict(s) across {len(done)} screen date(s)")
 
 
+@compliance.command("rescreen-renamed")
+@click.option("--dry-run", is_flag=True, help="List the affected rows; screen and store nothing.")
+def rescreen_renamed_cmd(dry_run: bool) -> None:
+    """Re-screen the stored rows an index's holding under a renamed company's old ticker
+    changes (resumable)."""
+
+    async def _run(engine: Any, settings: Any) -> list[Any]:
+        from halal_trader.compliance.renamed import rescreen_renamed
+        from halal_trader.compliance.sec import SecClient
+
+        sec = SecClient(settings.edgar.user_agent)
+        try:
+            return await rescreen_renamed(sec, engine, dry_run=dry_run)
+        finally:
+            await sec.aclose()
+
+    done = run_db(_run)
+    for a, verdict in done:
+        after = "" if verdict is None else f", re-screened {verdict}"
+        console.print(
+            f"  {a.as_of} {a.symbol:6} {a.stored} -> {a.replayed}{after}  [dim]{a.why}[/dim]"
+        )
+    dates = len({a.as_of for a, _ in done})
+    did = "would be re-screened" if dry_run else "re-screened"
+    console.print(f"{len(done)} row(s) across {dates} screen date(s) {did}")
+
+
 @compliance.command("etf-history")
 def etf_history_cmd() -> None:
     """Store every N-PORT holdings filing of SPUS and HLAL (the index veto's input)."""
