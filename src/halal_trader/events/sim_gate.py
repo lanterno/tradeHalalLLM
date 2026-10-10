@@ -108,7 +108,8 @@ Decisions the spec leaves open, stated for the pre-registration:
 * R1 and R2 run through ``sim.run`` on the explicit set; R2 uses a gate-only
   copy of the D.5 market rule (:class:`GateMarketFill`) so that, like the
   study, it admits every headline (no screen, no entry window), and
-  :class:`FlattenHold` sells at the flatten. R2 compares the headlines R1 did
+  :class:`FlattenHold` sells at the flatten (or at once, when its buy's fill
+  arrives just after the flatten passed). R2 compares the headlines R1 did
   not set aside, with the study's plausibility filter.
 * SUE clusters are the entry session (the study's entry day). D10-D1 uses the
   study's deciles (``study.summarise``). The calibration, S2 and S3 need their
@@ -1537,15 +1538,23 @@ def realistic_config() -> SimConfig:
 class FlattenHold:
     """R2's playbook: buys at its start and sells at the deadline session's flatten
     (close - 5 min), as the simulator's own flatten would; a buy still working then
-    is cancelled."""
+    is cancelled.
+
+    A buy can fill on the bar the exchange tests just before the flatten while
+    its fill notice arrives after it (a headline a few minutes before close - 5
+    min): the cancel comes too late, and the playbook is still entering when
+    the flatten passes. It remembers that the flatten passed and sells as soon
+    as such a fill arrives, so no position is left to the official close.
+    """
 
     name = "gate-flatten-hold"
-    version = "1"
+    version = "2"
 
     def __init__(self, path_sessions: int, facts: TradeFacts) -> None:
         self._n = path_sessions
         self._facts = facts
         self._state = "DETECTED"
+        self._flattened = False
 
     @property
     def path_sessions(self) -> int:
@@ -1567,16 +1576,24 @@ class FlattenHold:
     def on(self, ev: Input, ctx: Ctx) -> list[Intent]:
         if isinstance(ev, FillIn):
             if ev.side == "buy":
-                return [self._go("ENTERED", "filled")]
+                filled = self._go("ENTERED", "filled")
+                if self._flattened:  # filled at the flatten's own bar: sell at once
+                    return [filled, self._go("EXITING", "time_stop"), self._sell()]
+                return [filled]
             return [self._go("EXITED", ev.reason), Finish(ev.reason)]
         if isinstance(ev, OrderClosedIn) and ev.side == "buy":
             return [self._go("EXPIRED", "entry_unfilled"), Finish("entry_unfilled")]
         if isinstance(ev, SessionIn) and ev.kind == "flatten" and ev.k == self._n - 1:
+            self._flattened = True
             if self._state == "ENTERED":
-                return [self._go("EXITING", "time_stop"), Submit("sell", reason="time_stop")]
+                return [self._go("EXITING", "time_stop"), self._sell()]
             if self._state == "ENTERING":
                 return [Cancel(tag=ENTRY_TAG)]
         return []
+
+    @staticmethod
+    def _sell() -> Submit:
+        return Submit("sell", reason="time_stop")
 
 
 @dataclass(frozen=True, slots=True)
