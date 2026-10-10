@@ -777,6 +777,17 @@ async def _story_row(
         )
 
 
+async def _raw_days(engine: AsyncEngine, symbol: str, days: list[date]) -> None:
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO daily_bars (symbol, day, adjustment, open, high, low, close, volume, "
+                "fetched_at) VALUES (:s, :d, 'raw', 50, 50, 50, 50, 1e6, now())"
+            ),
+            [{"s": symbol, "d": d} for d in days],
+        )
+
+
 @pytest.mark.usefixtures("small_map")
 async def test_d3_needs_the_renamed_news_and_news_for_every_halal_name(
     engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
@@ -788,6 +799,8 @@ async def test_d3_needs_the_renamed_news_and_news_for_every_halal_name(
         [("AAA", 1, "X"), ("BBB", 2, "X"), ("CCC", None, "X")],  # CCC: not halal
     )
     await _monthly(engine, ["AAA", "BBB", "CCC"], date(2016, 1, 1), date(2017, 6, 1))
+    for symbol in ("AAA", "BBB", "CCC"):
+        await _raw_days(engine, symbol, h1.sessions_between(date(2017, 1, 1), date(2017, 6, 30)))
     q1, q2 = date(2017, 2, 7), date(2017, 5, 9)
     ids = await store(
         engine,
@@ -816,6 +829,8 @@ async def test_d3_needs_the_renamed_news_and_news_for_every_halal_name(
         "silent": ["BBB"],
         "share": 0.5,
         "screen": "2016-12-30",
+        "sessions": 62,
+        "not_trading": {},
     }
     await mark_renamed_news_done(engine)
     ids = await store(
@@ -833,6 +848,66 @@ async def test_d3_needs_the_renamed_news_and_news_for_every_halal_name(
         "2017-01-01": [],
         "2017-04-01": [],
     }
+
+
+@pytest.mark.usefixtures("small_map")
+async def test_d3_leaves_out_and_lists_the_names_that_no_longer_traded(
+    engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(h1, "D3_SPAN", (date(2017, 1, 1), date(2017, 6, 30)))
+    await mark_renamed_news_done(engine)
+    await _screen(engine, date(2016, 12, 30), [("AAA", 1, "X"), ("GONE", 2, "X"), ("HALF", 3, "X")])
+    await _monthly(engine, ["AAA", "HALF"], date(2016, 1, 1), date(2017, 6, 1))
+    # GONE's trailing year still ranks it in Q2, after it stopped trading.
+    await _monthly(engine, ["GONE"], date(2016, 1, 1), date(2017, 2, 1))
+    q1 = h1.sessions_between(date(2017, 1, 1), date(2017, 3, 31))
+    q2 = h1.sessions_between(date(2017, 4, 1), date(2017, 6, 30))
+    assert (len(q1), len(q2)) == (62, 63)
+    await _raw_days(engine, "AAA", q1 + q2)
+    # GONE was acquired after 30 sessions of Q1, one short of half; a bar on a
+    # Saturday is no session, so it does not count either.
+    await _raw_days(engine, "GONE", [*q1[:30], date(2017, 3, 4)])
+    await _raw_days(engine, "HALF", q1[-31:] + q2)  # listed for exactly half of Q1: judged
+    ids = await store(
+        engine,
+        [
+            news_row(1, "AAA", ny(q1[5], 8), "Acme news"),
+            news_row(2, "AAA", ny(q2[5], 8), "Acme news"),
+            news_row(3, "HALF", ny(q2[9], 8), "Half news"),
+        ],
+        facts=False,
+    )
+    await _story_row(engine, "AAA", q1[5], [ids["alpaca:1"]])
+    await _story_row(engine, "AAA", q2[5], [ids["alpaca:2"]])
+    await _story_row(engine, "HALF", q2[9], [ids["alpaca:3"]])
+    bad = await h1.check_news_d3(engine)
+    assert not bad.ok
+    assert bad.detail == "1 quarter(s) above 2% without news (first 2017-01-01)"
+    assert bad.data["quarters"] == {
+        "2017-01-01": {
+            "names": 2,
+            "silent": ["HALF"],  # GONE has no news either, and is not counted
+            "share": 0.5,
+            "screen": "2016-12-30",
+            "sessions": 62,
+            "not_trading": {"GONE": 30},
+        },
+        "2017-04-01": {
+            "names": 2,
+            "silent": [],
+            "share": 0.0,
+            "screen": "2016-12-30",
+            "sessions": 63,
+            "not_trading": {"GONE": 0},
+        },
+    }
+    ids = await store(engine, [news_row(4, "HALF", ny(q1[-3], 8), "Half news")], facts=False)
+    await _story_row(engine, "HALF", q1[-3], [ids["alpaca:4"]])
+    ok = await h1.check_news_d3(engine)
+    assert ok.ok, ok.detail
+    assert ok.detail == (
+        "2 quarters, silent names at most 0.00% (2 name-quarter(s) that no longer traded left out)"
+    )
 
 
 class _Plan:
