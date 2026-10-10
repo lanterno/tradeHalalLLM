@@ -11,16 +11,17 @@ from __future__ import annotations
 import json
 import math
 from collections.abc import Collection
-from dataclasses import dataclass, field
-from datetime import date, datetime, time, timedelta
+from dataclasses import dataclass, field, fields
+from datetime import UTC, date, datetime, time, timedelta
 
 import numpy as np
 import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from halal_trader.data.minutes import session_bounds
 from halal_trader.events import context as context_module
-from halal_trader.events.context import PitContext, index_veto_only
+from halal_trader.events.context import DailyPoint, PitContext, index_veto_only
 from halal_trader.events.earnings_parse import EXTRACTOR
 from halal_trader.market_hours import MARKET_TZ, is_trading_day
 from halal_trader.signals.indicators import atr
@@ -412,6 +413,68 @@ async def test_eligibility_and_pre_event_judge_sigma_on_one_window(engine: Async
         ctx.eligibility("EDGE", S)  # type: ignore[call-arg]  # no default window
 
 
+@pytest.mark.parametrize("failure", ["no_daily", "price", "no_sigma"])
+async def test_a_share_class_winner_that_fails_later_keeps_the_other_class_out(
+    engine: AsyncEngine, failure: str
+) -> None:
+    world = await _world(engine)
+    i = _i(PREV)
+    if failure == "no_daily":
+        await _drop(engine, "AAA", {PREV})
+    elif failure == "price":  # $4 the evening before, A kept
+        await _scale(engine, ["AAA"], since=PREV, until=PREV, by=4.0 / world.closes["AAA"][PREV])
+    else:  # HALT's gap: 25 bars inside the sigma window
+        await _drop(engine, "AAA", set(SESSIONS[i - 50 : i - 25]))
+    ctx = await _load(engine)
+
+    aaa = ctx.eligibility("AAA", S, at_news=PRE_OPEN)
+    aab = ctx.eligibility("AAB", S, at_news=PRE_OPEN)
+
+    # The winner is chosen on screen and rank, before any bar is read: AAB does not step up.
+    assert aaa.reason == failure
+    assert (aab.reason, aab.eligible, aab.cik) == ("share_class", False, 100)
+    assert ctx.eligibility("AAB", S, at_news=PRE_OPEN, universe="broad").reason == "share_class"
+
+
+async def test_broad_counts_a_name_without_a_ticker_ciks_row_as_no_fund(
+    engine: AsyncEngine,
+) -> None:
+    await _world(engine)
+    unmapped = "not an SEC registrant (or ticker not mapped)"
+    await _clone(engine, "UNM", "ORPH", cik=None, verdict="doubtful", sic=unmapped)
+    await _clone(engine, "UNM", "ETF2", cik=None, verdict="doubtful", sic=unmapped)
+    from halal_trader.compliance.delisted import Match, store_matches
+
+    await store_matches(engine, [Match("ETF2", "fund")])
+    async with engine.connect() as conn:
+        rows = (
+            await conn.execute(text("SELECT count(*) FROM ticker_ciks WHERE symbol = 'ORPH'"))
+        ).scalar_one()
+    assert rows == 0
+    ctx = await _load(engine, [*SYMBOLS, "ORPH", "ETF2"])
+
+    # No ticker_ciks row: not known to be a fund, so BROAD admits it (spec's
+    # SQL `status != 'fund'` would not); PRIMARY still wants a CIK.
+    assert ctx.eligibility("ORPH", S, at_news=PRE_OPEN).reason == "unmapped"
+    assert ctx.eligibility("ORPH", S, at_news=PRE_OPEN, universe="broad").reason == "ok"
+    assert ctx.eligibility("ETF2", S, at_news=PRE_OPEN, universe="broad").reason == "not_halal"
+
+
+async def test_a_name_without_a_bar_on_the_session_is_no_daily(engine: AsyncEngine) -> None:
+    # A(S) reads S's own bar: a name halted all of S is refused here, before the
+    # simulator could call it halted_all_day. Either half of the bar missing is enough.
+    await _world(engine)
+    await _drop(engine, "BETA0", {S})
+    await _drop(engine, "BETA3", {S}, adjustment="all")
+    ctx = await _load(engine)
+
+    for symbol in ("BETA0", "BETA3"):
+        assert ctx.eligibility(symbol, S, at_news=PRE_OPEN).reason == "no_daily"
+        assert ctx.pre_event(symbol, S, PRE_OPEN) is None
+        assert ctx.daily(symbol, S) is None and ctx.adj(symbol, S) is None
+        assert ctx.daily(symbol, PREV) is not None  # S-1 is there: only S's own bar is missing
+
+
 async def test_news_from_before_the_previous_session_is_refused(engine: AsyncEngine) -> None:
     await _world(engine)
     ctx = await _load(engine)
@@ -532,6 +595,34 @@ async def test_beta_is_clipped_to_half_and_two(engine: AsyncEngine) -> None:
 
     assert high is not None and low is not None
     assert (high.beta, low.beta) == (2.0, 0.5)
+
+
+@pytest.mark.parametrize(
+    ("story", "at_news", "last"),
+    [
+        # 2024-03-11, the Monday after clocks went forward, closed at 20:00 UTC:
+        # 20:30 UTC is after its close (a fixed EST offset would call it 15:30).
+        (date(2024, 3, 12), datetime(2024, 3, 11, 20, 30, tzinfo=UTC), date(2024, 3, 11)),
+        # 2023-11-06, the Monday after clocks went back, closed at 21:00 UTC:
+        # 20:30 UTC is 15:30, late in its session (a fixed EDT offset: 16:30, after).
+        (date(2023, 11, 7), datetime(2023, 11, 6, 20, 30, tzinfo=UTC), date(2023, 11, 3)),
+        # News on the change days themselves, for the Monday stories.
+        (date(2024, 3, 11), datetime(2024, 3, 10, 7, 30, tzinfo=UTC), date(2024, 3, 8)),
+        (date(2023, 11, 6), datetime(2023, 11, 5, 6, 30, tzinfo=UTC), date(2023, 11, 3)),
+    ],
+)
+async def test_the_sigma_cutoff_follows_the_clock_change(
+    engine: AsyncEngine, story: date, at_news: datetime, last: date
+) -> None:
+    world = await _world(engine)
+    ctx = await _load(engine)
+
+    pe = ctx.pre_event("AAA", story, at_news)
+
+    assert pe is not None
+    sigma, n, beta = _expected_sigma_beta(world, "AAA", last)
+    assert (pe.sigma, pe.sigma_n) == (pytest.approx(sigma, rel=1e-10), n)
+    assert pe.beta == pytest.approx(beta, rel=1e-9)
 
 
 async def test_levels_cover_every_session_they_name_or_are_nan(engine: AsyncEngine) -> None:
@@ -688,9 +779,71 @@ async def test_facts_are_the_ones_published_strictly_before(engine: AsyncEngine)
         ctx.facts_before("AAA", datetime(2024, 3, 19, 8))  # naive
     with pytest.raises(ValueError):
         ctx.facts_before("AAA", et(START, 8), lookback_days=400)  # before what was loaded
+    # Loaded up to a day after END's close: that moment is answered, a moment later is not.
+    loaded_to = session_bounds(END)[1] + timedelta(days=1)
+    assert [f.fields["id"] for f in ctx.facts_before("AAA", loaded_to)] == [
+        "q4",
+        "guide",
+        "same-moment",
+        "later",
+    ]
+    with pytest.raises(ValueError, match="facts were loaded for"):
+        ctx.facts_before("AAA", loaded_to + timedelta(microseconds=1))
 
 
 # ── data access and guards ───────────────────────────────────────
+
+
+def test_a_daily_point_names_its_fields() -> None:
+    # The simulator reads .open and .close (halabot.playbooks.interfaces.DailyPointLike).
+    assert [f.name for f in fields(DailyPoint)] == [
+        "day",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "adj",
+    ]
+
+
+async def test_a_daily_point_is_the_raw_bar_and_its_a(engine: AsyncEngine) -> None:
+    world = await _world(engine)
+    ctx = await _load(engine)
+
+    point = ctx.daily("AAA", PREV)
+
+    assert point is not None
+    c, a = world.closes["AAA"][PREV], _adj("AAA", PREV)
+    o = c * (1.0 + 0.003 * math.sin(_i(PREV)))
+    assert point.day == PREV
+    assert (point.open, point.high, point.low, point.close, point.volume, point.adj) == (
+        pytest.approx(o / a, rel=1e-12),
+        pytest.approx(max(o, c) * 1.01 / a, rel=1e-12),
+        pytest.approx(min(o, c) * 0.99 / a, rel=1e-12),
+        pytest.approx(c / a, rel=1e-12),
+        world.volumes["AAA"][PREV],
+        pytest.approx(0.98, rel=1e-12),
+    )
+
+
+async def test_daily_bars_are_answered_up_to_seven_days_after_the_last_session(
+    engine: AsyncEngine,
+) -> None:
+    await _world(engine)
+    ctx = await _load(engine)
+    edge = END + timedelta(days=7)  # 2024-04-04, a Thursday
+    beyond = END + timedelta(days=8)  # a session with bars in the database, never read
+
+    assert ctx.sessions[-1] == edge  # every session the simulator walks is answerable
+    assert ctx.daily("AAA", edge) is not None and ctx.adj("AAA", edge) is not None
+    # Outside what was loaded is an error, not None (which would claim a missing bar).
+    with pytest.raises(ValueError, match="outside the loaded daily bars"):
+        ctx.daily("AAA", beyond)
+    with pytest.raises(ValueError, match="outside the loaded daily bars"):
+        ctx.adj("AAA", beyond)
+    with pytest.raises(ValueError, match="outside the loaded daily bars"):
+        ctx.adj("AAA", START - timedelta(days=381))
 
 
 async def test_daily_points_and_a_ratios(engine: AsyncEngine) -> None:
