@@ -122,4 +122,9 @@ gate's complement drops events whose units meet H1's own.
 
 **Gates (`sim_gate.py`).** A 90% coverage floor; S0 passes when its table computes and reports the
 deltas to the recorded study; SUE statistics are clustered by entry session; determinism runs the real
-`sim.run` serially against a 6-worker pool.
+`sim.run` serially against a 6-worker pool. R0's reference changes in two numbers: the 2026-10-09
+study read its headlines in no fixed order, so its seeded sample of 1,500 controls (recorded at
+−0.28%) and one same-timestamp first headline (7,932 strong headlines recorded) cannot be reproduced.
+With the order fixed, the pinned set has 7,931 strong headlines and the controls (n = 1,483, as
+recorded) are at −0.30%; the strong group (n = 7,922, −0.30%, t −12.1) and the negative group
+(−0.40%), which take every headline, reproduce exactly.
