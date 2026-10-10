@@ -61,3 +61,13 @@ async def test_scoring_covers_post_cutoff_company_news_once(engine: AsyncEngine)
             )
         ).scalar()
     assert n == 1
+
+
+async def test_a_headline_with_line_breaks_stays_one_item(engine: AsyncEngine) -> None:
+    from halal_trader.events.llm_score import Pending, score_batch
+
+    llm = _LLM()
+    at = datetime(2026, 3, 2, 15, tzinfo=UTC)
+    item = (("VICR", "Vicor Q2 beat\nSees FY revenue above $600M"), Pending([1], at))
+    await score_batch(llm, engine, "s", [item])
+    assert llm.prompts[0] == "0|VICR|Vicor Q2 beat Sees FY revenue above $600M"
