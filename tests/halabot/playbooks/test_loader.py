@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 from sqlalchemy import text
@@ -12,6 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from halabot.playbooks.loader import (
     GATE_RANGES,
     GATE_UNITS_NAME,
+    SUE_FIRST,
+    SUE_MAX_HORIZON,
     CalendarMismatch,
     MinuteBarLoader,
     PathRequest,
@@ -21,13 +23,16 @@ from halabot.playbooks.loader import (
     WindowUnlock,
     batches_of,
     check_calendar,
+    check_gate_units,
     register_gate_units,
     sane,
+    sue_last_exit,
     unit_set_sha,
 )
 from halabot.playbooks.types import PathData, PathSkip
 from halal_trader.db.repos.quant_trials import QuantTrialRepoImpl, config_hash
-from halal_trader.market_hours import is_trading_day
+from halal_trader.events import study
+from halal_trader.market_hours import MARKET_TZ, is_trading_day
 from tests.halabot.playbooks._seed import mark_done, seed_bars, seed_calendar, seed_daily
 from tests.halabot.playbooks._support import (
     FRI,
@@ -164,13 +169,13 @@ async def test_a_gate_reads_only_inside_its_dates(engine: AsyncEngine) -> None:
     assert GATE_RANGES == {
         "g1": (date(2016, 1, 4), date(2016, 9, 30)),
         "calib": (date(2016, 1, 4), date(2016, 9, 30)),
-        "sue": (date(2016, 1, 4), date(2019, 12, 31)),
+        "sue": (date(2016, 1, 4), date(2020, 1, 30)),
         "reactor": (date(2025, 12, 1), date(2026, 10, 9)),
     }
     cases = [
         ("g1", ("AAPL", date(2016, 10, 3))),  # train
         ("calib", ("AAPL", date(2015, 12, 31))),
-        ("sue", ("MSFT", date(2020, 1, 2))),
+        ("sue", ("MSFT", date(2020, 1, 31))),  # past the last h=20 exit
         ("reactor", ("AAPL", date(2025, 6, 2))),  # the clean holdout
         ("reactor", ("MSFT", date(2019, 5, 1))),
     ]
@@ -187,6 +192,28 @@ async def test_a_gate_reads_only_inside_its_dates(engine: AsyncEngine) -> None:
         await register_gate_units(engine, "g1", [])
     edges = frozenset({("AAA", date(2016, 1, 4)), ("AAA", date(2016, 9, 30))})
     assert await register_gate_units(engine, "g1", edges) == unit_set_sha(edges)
+
+
+def test_the_sue_range_ends_at_the_last_h20_exit_of_2019() -> None:
+    """An observation published on 2019-12-31 holds its h=20 exit in the gate's set."""
+    days = (date(2019, 12, 31) + timedelta(days=i) for i in range(40))
+    sessions = [d for d in days if is_trading_day(d)]
+    published = (
+        datetime(2019, 12, 31, 15, 0, tzinfo=MARKET_TZ),  # a close entry on 12-31
+        datetime(2019, 12, 31, 18, 0, tzinfo=MARKET_TZ),  # an open entry on 2020-01-02
+        datetime(2019, 12, 31, 23, 59, tzinfo=UTC),  # the year's last instant, read in UTC
+    )
+    exits = set()
+    for t in published:
+        point = study.entry_point(t, sessions)
+        assert point is not None
+        i, at = point
+        exits.add(sessions[i + SUE_MAX_HORIZON - (1 if at == "open" else 0)])
+    assert exits == {sue_last_exit()} == {date(2020, 1, 30)}  # MLK day 2020-01-20 skipped
+    assert GATE_RANGES["sue"] == (SUE_FIRST, sue_last_exit())
+    assert check_gate_units("sue", [("MSFT", date(2020, 1, 30)), ("MSFT", date(2016, 1, 4))])
+    with pytest.raises(WindowLocked, match="outside"):
+        check_gate_units("sue", [("MSFT", date(2020, 1, 31))])
 
 
 async def test_pinning_is_idempotent_and_never_a_trial(engine: AsyncEngine) -> None:
