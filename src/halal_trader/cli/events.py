@@ -92,6 +92,77 @@ def backfill_cmd(what: str, rate: int) -> None:
         console.print(f"{name}: {n} new")
 
 
+@events.group("filings")
+def filings_group() -> None:
+    """The SEC filings in the event store."""
+
+
+def _delta(seconds: int) -> str:
+    """A time difference as +4h00m00s (0s when there is none)."""
+    if seconds == 0:
+        return "0s"
+    sign = "+" if seconds > 0 else "-"
+    h, rest = divmod(abs(seconds), 3600)
+    m, s = divmod(rest, 60)
+    return f"{sign}{h}h{m:02d}m{s:02d}s"
+
+
+_DELTAS_SHOWN = 12
+
+
+@filings_group.command("fix-times")
+@click.option("--start", type=click.DateTime(["%Y-%m-%d"]), default="2016-01-01", show_default=True)
+@click.option(
+    "--end", type=click.DateTime(["%Y-%m-%d"]), default=None, help="Last day [default: today]."
+)
+@click.option("--limit", type=click.IntRange(min=1), default=None, help="At most N filings.")
+def filings_fix_times_cmd(start: Any, end: Any, limit: int | None) -> None:
+    """Restamp stored 8-Ks at their EDGAR header's acceptance time (resumable).
+
+    The submissions JSON's time is hours late for about a third of filings.
+    One EDGAR request per filing, at EDGAR's pace (about 7 a second): the
+    history from 2016 takes about 7 hours. Finished filings are skipped,
+    so an interrupted run picks up where it stopped.
+    """
+    import httpx
+
+    from halal_trader.compliance.sec import SecClient, SecUnavailable
+    from halal_trader.market_hours import today_eastern
+
+    last = end.date() if end is not None else today_eastern()
+
+    async def _run(engine: Any, settings: Any) -> Any:
+        from halal_trader.events.history import correct_filing_times
+
+        sec = SecClient(settings.edgar.user_agent)
+        try:
+            return await correct_filing_times(
+                engine, sec, start=start.date(), end=last, limit=limit
+            )
+        finally:
+            await sec.aclose()
+
+    try:
+        times = run_db(_run)
+    except (SecUnavailable, httpx.HTTPStatusError) as e:
+        # What was read before is kept; a 403 is EDGAR's rate block (10 minutes).
+        fail(f"EDGAR stopped answering ({e}); run it again to resume")
+    console.print(
+        f"{start:%Y-%m-%d}..{last}: {times.checked} filing(s) read, {times.corrected} "
+        f"corrected ({times.rows} row(s)), {times.missing} without a header; "
+        f"{times.done_before} done before"
+    )
+    if not times.deltas:
+        return
+    console.print("stored time minus EDGAR's header, filings:")
+    common = times.deltas.most_common()
+    for seconds, n in common[:_DELTAS_SHOWN]:
+        console.print(f"  {_delta(seconds):>12}  {n}", markup=False, highlight=False)
+    rest = common[_DELTAS_SHOWN:]
+    if rest:
+        console.print(f"  {len(rest)} other difference(s): {sum(n for _, n in rest)} filing(s)")
+
+
 @events.group("renames")
 def renames_group() -> None:
     """Renamed tickers: companies whose older news is filed under another ticker."""
