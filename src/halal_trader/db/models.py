@@ -769,6 +769,57 @@ class EventLabel(SQLModel, table=True):
     labeled_at: datetime = Field(sa_type=sa.DateTime(timezone=True))
 
 
+class NewsStory(SQLModel, table=True):
+    """One story of the news engine's builder: every admitted item of one symbol
+    that shares a reaction session (events/stories.py).
+
+    Derived from the event store and rebuilt per ``builder_version``, so it is
+    left out of the backup. ``type_close`` is for display and counts only: a
+    playbook asks the story for its card at the moment it decides.
+    """
+
+    __tablename__ = "news_stories"
+    __table_args__ = (
+        sa.Index("ix_news_stories_symbol_session", "symbol", "session"),
+        sa.Index("ix_news_stories_family_ever_session", "family_ever", "session"),
+    )
+
+    builder_version: str = Field(primary_key=True)
+    story_id: str = Field(primary_key=True)  # "<symbol>:<session ISO date>"
+    symbol: str
+    session: date  # the reaction session
+    start_case: str  # "in" | "out"
+    detect_at: datetime | None = Field(default=None, sa_type=sa.DateTime(timezone=True))
+    nsn_at: datetime | None = Field(default=None, sa_type=sa.DateTime(timezone=True))
+    at_news: datetime | None = Field(default=None, sa_type=sa.DateTime(timezone=True))
+    type_detect: str
+    type_close: str
+    family_ever: str | None = None
+    follower_close: bool
+    parent: str | None = None  # the parent story's story_id
+    n_items: int
+    n_distinct: int
+    # [{event_id, at, available_at, itype, dup_of, supersedes, entity_ok}]
+    items: list[Any] = Field(sa_column=sa.Column("items", JSONB, nullable=False))
+    flags: Any = Field(sa_column=sa.Column("flags", JSONB, nullable=False))
+
+
+class StoryAlias(SQLModel, table=True):
+    """One name the story builder's entity check accepts for a symbol
+    (events/aliases.py). ``source`` is name, learned, override or ticker.
+
+    Backed up: it is pinned by the pre-registration and cannot be rebuilt
+    later, because the asset names it was learned from change.
+    """
+
+    __tablename__ = "story_aliases"
+
+    builder_version: str = Field(primary_key=True)
+    symbol: str = Field(primary_key=True)
+    alias: str = Field(primary_key=True)
+    source: str = Field(primary_key=True)
+
+
 class Dividend(SQLModel, table=True):
     """A cash dividend from Alpaca's corporate actions: rate per share, by ex-date."""
 
