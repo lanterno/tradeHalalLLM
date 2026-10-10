@@ -59,9 +59,19 @@ floor_minute(ref_at)``; "out": P0 = ``prev_close_s``, SPY0 =
   ``OverreactionBounce`` with the family check disabled
   (``require_family=False``), once for ID and once for MD3, through
   ``sim.run``. It starts at ``max(news detection, open)`` as H1 does
-  (:class:`AtlasStory`); every other story of the symbol reaches it as
-  news only. One playbook per symbol is live at a time, so a story can
-  end ``blocked_open``, as in H1.
+  (:class:`AtlasStory`). Each **lane** (:attr:`AtlasRow.lane`) is its own
+  run: the stories NSN_CORE by S's cutoff (``NSN_CORE``: exactly H1's
+  starters over the range, H1 starting every eligible NSN story from
+  2016-10-03), and each other negative type alone. In a run every other
+  story of the symbol, of any lane, reaches the playbook as news only. One
+  playbook per symbol is live at a time, so a story can end
+  ``blocked_open``, as in H1, but only behind a story of its own lane: a
+  ``legal_adverse`` story held under MD3 never blocks an NSN one (in H1
+  only NSN stories start), and the NSN lane's machine numbers are not
+  filtered by another type's outcome. Each cell counts its blocked stories
+  (``<variant>_blocked`` of ``<variant>_starters``); they are not in P(trigger)
+  or r. With a later ``start`` than :data:`ATLAS_START`, a story before it
+  starts nothing, so it blocks nothing.
 
 **Tables** (:func:`cells_of`): ``base`` is type x ``low_sigma`` bucket
 (:data:`BUCKETS`); ``type`` the type alone; the marginals cross the type
@@ -133,7 +143,7 @@ from halal_trader.events import stories as builder
 from halal_trader.events.aliases import load_aliases
 from halal_trader.events.context import LOOKAHEAD_DAYS, Eligibility, PitContext, PreEvent
 from halal_trader.events.stats import clustered_mean
-from halal_trader.events.taxonomy import NOISE_TYPES, StoryCard
+from halal_trader.events.taxonomy import FAMILY, NOISE_TYPES, StoryCard
 from halal_trader.events.units import TRAIN_SKIP_TYPES
 from halal_trader.market_hours import MARKET_TZ, is_trading_day, previous_trading_day
 
@@ -170,6 +180,7 @@ SESSIONS_PER_YEAR: Final = 252
 DATED: Final = ("spy_vol", "spy_trend", "screen_regime", "analyst_regime")
 EXIT_REASONS: Final = ("target", "stop", "abort", "compliance", "time_stop")
 VARIANTS: Final = (("ID", 1), ("MD3", 3))
+BLOCKED: Final = "blocked_open"  # the simulator's reason for a story started behind a live one
 OUTPUT_NAME: Final = f"news_atlas-{builder.BUILDER_VERSION}.json"
 BATCH_SYMBOLS: Final = 100
 
@@ -266,6 +277,11 @@ class MachineRun:
         """A playbook ran on the story: not skipped by the loader, not dismissed or blocked."""
         return self.skip is None and self.state != "DISMISSED"
 
+    @property
+    def blocked(self) -> bool:
+        """Started while a playbook of its symbol (in its lane) was live: it never got one."""
+        return self.state == "DISMISSED" and self.reason == BLOCKED
+
     @classmethod
     def of(cls, o: StoryOutcome) -> MachineRun:
         trade = o.trade
@@ -309,6 +325,7 @@ class AtlasRow:
     measures: PathMeasures | None
     cont: tuple[float | None, ...]  # one per CONT_HORIZONS
     machine: bool  # the bounce ran on it (negative direction, or NSN)
+    lane: str | None = None  # its machine run: "NSN_CORE" (H1's starters) or its type
     id_run: MachineRun | None = None
     md3_run: MachineRun | None = None
 
@@ -790,11 +807,20 @@ def cell_stats(rows: Sequence[AtlasRow]) -> dict[str, float]:
 
 
 def _machine_stats(rows: Sequence[AtlasRow], variant: str) -> tuple[dict[str, float], int]:
-    """P(trigger), P(entry | trigger), exit-reason shares and mean r (CR1 SE by S), and
-    how many trades' r was not finite (in the shares, not in the means)."""
+    """The stories the machine started (``starters``), how many were ``blocked``
+    behind a live story of their lane and their share; over the ones that ran:
+    P(trigger), P(entry | trigger), exit-reason shares and mean r (CR1 SE by S);
+    and how many trades' r was not finite (in the shares, not in the means)."""
     v = variant.lower()
+    starters = [m for r in rows if (m := r.run(variant)) is not None]
+    blocked = sum(m.blocked for m in starters)
     runs = [(r, m) for r in rows if (m := r.run(variant)) is not None and m.ran]
-    out: dict[str, float] = {f"{v}_runs": float(len(runs))}
+    out: dict[str, float] = {
+        f"{v}_starters": float(len(starters)),
+        f"{v}_blocked": float(blocked),
+        f"{v}_blocked_share": blocked / len(starters) if starters else math.nan,
+        f"{v}_runs": float(len(runs)),
+    }
     if not runs:
         return out, 0
     triggered = [m for _, m in runs if m.triggered]
@@ -883,7 +909,7 @@ _HEAD: Final = (
     f"{'key':<44}{'n':>6}{'dates':>6}{'/yr':>7}"
     f"{'lowσ50':>8}{'tlow50':>8}{'retC50':>8}{'retS2_50':>9}"
     f"{'P.5C':>6}{'P.5S2':>6}{'Pfade':>6}{'cont5 (se)':>18}"
-    f"{'ID Ptr':>7}{'Pen|tr':>7}{'ID r (se)':>18}{'MD3 r (se)':>18}"
+    f"{'ID Ptr':>7}{'Pen|tr':>7}{'ID r (se)':>18}{'MD3blk':>7}{'MD3 r (se)':>18}"
 )
 
 
@@ -900,7 +926,8 @@ def _line(cell: AtlasCell) -> str:
         + f"{_f(s.get('p_retrace_0.50_close'), '.2f'):>6}{_f(s.get('p_retrace_0.50_s2'), '.2f'):>6}"
         + f"{_f(s.get('p_fade'), '.2f'):>6}{_mse(s, 'cont_5_mean', 'cont_5_se'):>18}"
         + f"{_f(s.get('id_p_trigger'), '.2f'):>7}{_f(s.get('id_p_entry_given_trigger'), '.2f'):>7}"
-        + f"{_mse(s, 'id_r_mean', 'id_r_se'):>18}{_mse(s, 'md3_r_mean', 'md3_r_se'):>18}"
+        + f"{_mse(s, 'id_r_mean', 'id_r_se'):>18}{_f(s.get('md3_blocked_share'), '.2f'):>7}"
+        + f"{_mse(s, 'md3_r_mean', 'md3_r_se'):>18}"
     )
 
 
@@ -1067,6 +1094,14 @@ class _Unit:
         return self.nsn or self.card.direction == "neg"
 
     @property
+    def lane(self) -> str | None:
+        """The machine run it starts in: H1's (``NSN_CORE``) when NSN by the cutoff,
+        else its detect type's; None when the machine does not run on it."""
+        if not self.machine:
+            return None
+        return FAMILY if self.nsn else self.card.type
+
+    @property
     def view(self) -> AtlasStory:
         return AtlasStory(self.story, self.detect, self.at)
 
@@ -1146,6 +1181,7 @@ def _row(
         measures=m,
         cont=continuation(ctx, s.symbol, s.session),
         machine=u.machine,
+        lane=u.lane,
     )
 
 
@@ -1218,6 +1254,20 @@ def _measured(
     return _row(u, ctx, regimes, None, m)
 
 
+def lanes_of(units: Sequence[_Unit]) -> dict[str, dict[str, _Unit]]:
+    """The machine units by lane (:attr:`_Unit.lane`), then story id; lanes sorted.
+
+    Every unit starts in its lane, eligible as all units are, as H1 starts an
+    eligible NSN story whatever its pre-event state (without one, the
+    playbook dismisses it at its start and it blocks nothing).
+    """
+    lanes: dict[str, dict[str, _Unit]] = defaultdict(dict)
+    for u in units:
+        if u.lane is not None:
+            lanes[u.lane][u.story.story_id] = u
+    return {lane: lanes[lane] for lane in sorted(lanes)}
+
+
 async def machine(
     engine: AsyncEngine,
     units: Sequence[_Unit],
@@ -1228,39 +1278,44 @@ async def machine(
     hold_sessions: int,
     workers: int,
     path_end: date,
-) -> tuple[dict[str, MachineRun], dict[str, Any]]:
-    """``OverreactionBounce`` without the family check on every machine unit, through
-    ``sim.run``; the symbols' other stories (S up to ``path_end``) bring their news."""
-    starters = {u.story.story_id: u for u in units if u.machine and u.pre is not None}
-    if not starters:
-        return {}, {}
-    symbols = {u.story.symbol for u in starters.values()}
-    views: list[AtlasStory] = []
-    for symbol in sorted(symbols):
-        for story in built.get(symbol, ()):
-            if story.session > path_end:
-                continue
-            u = starters.get(story.story_id)
-            views.append(u.view if u is not None else AtlasStory.news_only(story))
-    factory = BounceFactory(
-        context={sid: (u.pre, u.elig) for sid, u in starters.items()},
-        params=BounceParams(hold_sessions=hold_sessions, require_family=False),
-    )
-    sink = MemorySink()
-    summary = await simulate(
-        engine,
-        views,
-        factory,
-        context=ctx,
-        window=Window.TRAIN,
-        window_end=DATA_END,
-        cfg=SimConfig(),
-        unlock=unlock,
-        sink=sink,
-        workers=workers,
-    )
-    runs = {o.story_id: MachineRun.of(o) for o in sink.outcomes if o.story_id in starters}
-    return runs, summary.as_dict()
+) -> tuple[dict[str, MachineRun], dict[str, dict[str, Any]]]:
+    """``OverreactionBounce`` without the family check on every machine unit: one
+    ``sim.run`` per lane (:func:`lanes_of`), in which the lane's units start and every
+    other story of their symbols (S up to ``path_end``) brings its news only.
+
+    Returns each unit's run and each lane's run summary.
+    """
+    runs: dict[str, MachineRun] = {}
+    summaries: dict[str, dict[str, Any]] = {}
+    for lane, starters in lanes_of(units).items():
+        symbols = {u.story.symbol for u in starters.values()}
+        views: list[AtlasStory] = []
+        for symbol in sorted(symbols):
+            for story in built.get(symbol, ()):
+                if story.session > path_end:
+                    continue
+                u = starters.get(story.story_id)
+                views.append(u.view if u is not None else AtlasStory.news_only(story))
+        factory = BounceFactory(
+            context={sid: (u.pre, u.elig) for sid, u in starters.items()},
+            params=BounceParams(hold_sessions=hold_sessions, require_family=False),
+        )
+        sink = MemorySink()
+        summary = await simulate(
+            engine,
+            views,
+            factory,
+            context=ctx,
+            window=Window.TRAIN,
+            window_end=DATA_END,
+            cfg=SimConfig(),
+            unlock=unlock,
+            sink=sink,
+            workers=workers,
+        )
+        runs.update({o.story_id: MachineRun.of(o) for o in sink.outcomes if o.story_id in starters})
+        summaries[lane] = summary.as_dict()
+    return runs, summaries
 
 
 async def spy_state(engine: AsyncEngine) -> SpyRegimes:
@@ -1333,7 +1388,9 @@ async def run_atlas(
         },
     }
     rows: list[AtlasRow] = []
-    summaries: dict[str, list[dict[str, Any]]] = {v: [] for v, _ in VARIANTS}
+    summaries: dict[str, dict[str, list[dict[str, Any]]]] = {
+        v: defaultdict(list) for v, _ in VARIANTS
+    }
     regimes = await spy_state(engine)
     meta["spy_vol_edges"] = list(regimes.edges)
     if symbols:
@@ -1359,8 +1416,8 @@ async def run_atlas(
                     path_end=path_end,
                 )
                 runs[variant] = found
-                if summary:
-                    summaries[variant].append(summary)
+                for lane, lane_summary in summary.items():
+                    summaries[variant][lane].append(lane_summary)
             rows += [
                 replace(r, id_run=runs["ID"].get(r.story_id), md3_run=runs["MD3"].get(r.story_id))
                 for r in measured
@@ -1369,7 +1426,14 @@ async def run_atlas(
     rows.sort(key=lambda r: (r.session, r.story_id))
     counts["missing_rebuilt"] = len(chosen) - counts["rebuilt"]
     meta["counts"] = dict(sorted(counts.items()))
-    meta["machine"] = {v: _merge(s) for v, s in summaries.items()}
+    meta["machine"] = {
+        v: _merge([x for lane in by_lane.values() for x in lane])
+        for v, by_lane in summaries.items()
+    }
+    meta["machine_lanes"] = {
+        v: {lane: _merge(by_lane[lane]) for lane in sorted(by_lane)}
+        for v, by_lane in summaries.items()
+    }
     exposed = exposure(h1.sessions_between(start, end), regimes)
     meta["years"] = exposed.total
     meta["state_years"] = {f"{t}:{k}": y for (t, k), y in exposed.states.items()}
@@ -1417,6 +1481,7 @@ __all__ = [
     "exposure",
     "h1_closed",
     "keys_of",
+    "lanes_of",
     "output_path",
     "path_measures",
     "regime",
