@@ -540,6 +540,45 @@ async def test_rebuilding_part_of_a_range_keeps_the_rest_complete(
     assert await built_ranges(ready) == [(date(2024, 5, 1), date(2024, 5, 31))]
 
 
+async def test_a_retime_withdraws_every_mark_from_the_first_session_it_moves(
+    ready: AsyncEngine,
+) -> None:
+    await build_range(ready, start=MON, end=MON)
+    await build_range(ready, start=TUE, end=FRI)
+    before = {r["story_id"]: r for r in await stored_rows(ready)}
+    # Stored after the builds at the JSON's late time (public Wednesday 06:00);
+    # its header says Tuesday 11:00, the session of a story the marks cover.
+    await store(ready, [filing_row("acc-5", "AAPL", ny(TUE, 17, 45), ["4.02"])])
+    # Retimes that move no 8-K row withdraw nothing: one already right, a 10-Q.
+    await write_times(ready, {"acc-1": (ny(THU, 18), 0), "acc-2": (ny(WED, 7), 3600)})
+    assert await built_ranges(ready) == [(MON, MON), (TUE, FRI)]
+
+    await write_times(ready, {"acc-5": (ny(TUE, 11), 6 * 3600 + 45 * 60)})
+
+    # Tuesday's story changes, and through the parent rule any later one may:
+    # Monday's mark stays, Tuesday's on is withdrawn (rows are left as they were).
+    inputs = await inputs_sha(ready)
+    assert await _progress(ready) == {f"stories-v1:2024-05-06:2024-05-06:{inputs}": 1}
+    assert {r["story_id"]: r for r in await stored_rows(ready)} == before
+    with pytest.raises(StoriesNotReady, match=r"4 session\(s\) in .*\(first: 2024-05-07\);"):
+        await count_stories(ready, start=MON, end=FRI)
+    await build_range(ready, start=TUE, end=FRI)
+    assert await built_ranges(ready) == [(MON, MON), (TUE, FRI)]
+    tuesday = {r["story_id"]: r for r in await stored_rows(ready)}["AAPL:2024-05-07"]
+    filing = await _event_id(ready, "acc-5", "AAPL")
+    assert [i["event_id"] for i in tuesday["items"]][-1] == filing
+    assert before["AAPL:2024-05-07"]["type_close"] == "analyst_downgrade"
+    assert tuesday["type_close"] == "restatement"
+    # A retime inside a mark keeps the part before its session. The earnings
+    # 8-K moves from Friday (public 06:00, accepted Thursday 18:00) to Thursday.
+    await write_times(ready, {"acc-1": (ny(THU, 9), 9 * 3600)})
+    assert await built_ranges(ready) == [(MON, MON), (TUE, WED)]
+    assert await _progress(ready) == {
+        f"stories-v1:2024-05-06:2024-05-06:{inputs}": 1,
+        f"stories-v1:2024-05-07:2024-05-08:{inputs}": 3,
+    }
+
+
 # ── counts ────────────────────────────────────────────────────
 
 

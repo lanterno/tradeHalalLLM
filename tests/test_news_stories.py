@@ -346,6 +346,26 @@ def test_the_reaction_session(available: datetime, session: date) -> None:
     assert reaction_session(available) == session
 
 
+@pytest.mark.parametrize(
+    ("accepted", "session"),
+    [
+        (ny(TUE, 11), TUE),
+        (ny(TUE, 14, 20), TUE),  # usable 14:30: the cutoff
+        (ny(TUE, 14, 20, 1), WED),
+        (ny(TUE, 17, 45), WED),  # public at 06:00 the next business day
+        (ny(TUE, 5), TUE),  # before 06:00: that day's 06:00
+        (ny(FRI, 18), NEXT_MON),
+    ],
+)
+def test_a_filings_session_is_the_one_its_story_item_reacts_in(
+    accepted: datetime, session: date
+) -> None:
+    assert stories.filing_session(accepted) == session
+    raw = RawItem(1, "acc-1", "8-k", "AAPL", accepted, accepted, "", None, ("8.01",))
+    item = stories.admit(raw, {}, Counter())
+    assert item is not None and reaction_session(item.available_at) == session
+
+
 def utc(y: int, mo: int, d: int, hh: int, mm: int = 0, ss: int = 0) -> datetime:
     return datetime(y, mo, d, hh, mm, ss, tzinfo=UTC)
 

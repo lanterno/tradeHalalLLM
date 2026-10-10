@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from halal_trader.cli import cli
 from halal_trader.compliance.sec import SecClient, SecUnavailable
-from halal_trader.events import daily, history
+from halal_trader.events import daily, history, stories
 from halal_trader.events.store import EventRecord, EventRecorder
 from halal_trader.market_hours import MARKET_TZ
 
@@ -354,6 +354,53 @@ async def test_a_row_stored_late_after_its_filing_was_read_takes_its_time_unrequ
     )
     assert (third.copied, third.done_before, third.checked) == (0, 2, 1)
     assert edgar.header_requests() == [f"{AAPL}/{unread}"]
+
+
+async def test_fix_times_withdraws_the_stories_marks_its_retimes_make_stale(
+    engine: AsyncEngine,
+) -> None:
+    edgar = Edgar()
+    read, quarterly = accession(AAPL, 2023, 104), accession(AAPL, 2023, 105)
+    true = ny(2023, 11, 2, 11, 0)  # Thursday 11:00: a story of Thursday 11-02
+    late = ny(2023, 11, 2, 17, 45)  # the JSON's: public Friday 06:00, a story of 11-03
+    edgar.header(AAPL, read, true)
+    edgar.header(AAPL, quarterly, true)
+    marks = {
+        stories.build_unit(date(2023, 10, 30), date(2023, 11, 1), "x"): 4,
+        stories.build_unit(date(2023, 11, 2), date(2023, 11, 10), "x"): 9,
+        stories.build_unit(date(2023, 11, 13), date(2023, 11, 17), "x"): 5,
+    }
+    kept = {stories.build_unit(date(2023, 10, 30), date(2023, 11, 1), "x"): 4}
+    await history.mark_units(engine, stories.TASK, marks)
+    await store(engine, [(quarterly, "AAPL", "10-q", late, [])])
+
+    await history.correct_filing_times(
+        engine, edgar.client(), start=date(2023, 1, 1), end=date(2023, 12, 31), forms=["10-Q"]
+    )
+    assert await progress(engine, stories.TASK) == marks  # a 10-Q is no story item
+
+    await store(engine, [(read, "AAPL", "8-k", late, ["2.02"])])
+    await history.correct_filing_times(
+        engine, edgar.client(), start=date(2023, 1, 1), end=date(2023, 12, 31)
+    )
+    # Every mark from 11-02 on is withdrawn (no story row is left in its parts).
+    assert await progress(engine, stories.TASK) == kept
+
+    # The filing stored again under a second symbol at the JSON's time takes the
+    # header's with no request, and that retime withdraws the marks again.
+    await history.mark_units(engine, stories.TASK, marks)
+    await store(engine, [(read, "AAPL2", "8-k", late, ["2.02"])])
+    again = await history.correct_filing_times(
+        engine, edgar.client(), start=date(2023, 1, 1), end=date(2023, 12, 31)
+    )
+    assert again.copied == 1
+    assert await progress(engine, stories.TASK) == kept
+    # A pass that moves nothing withdraws nothing.
+    await history.mark_units(engine, stories.TASK, marks)
+    await history.correct_filing_times(
+        engine, edgar.client(), start=date(2023, 1, 1), end=date(2023, 12, 31)
+    )
+    assert await progress(engine, stories.TASK) == marks
 
 
 async def test_concurrent_workers_read_each_filing_once(engine: AsyncEngine) -> None:
