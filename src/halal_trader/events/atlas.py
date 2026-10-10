@@ -65,11 +65,20 @@ floor_minute(ref_at)``; "out": P0 = ``prev_close_s``, SPY0 =
 
 **Tables** (:func:`cells_of`): ``base`` is type x ``low_sigma`` bucket
 (:data:`BUCKETS`); ``type`` the type alone; the marginals cross the type
-with one of: timing, rank, SPY 20-day realised-volatility tercile (edges
-from SPY's sessions in [start, 2021-12-31]), SPY above or below its 200-day
-SMA (both at S-1), screen regime (2020-10-01), analyst-coverage regime
-(2018-01-01), Technology. ``coverage`` counts every unit by type and path
-outcome (measured, or the loader's skip). Cells hold the measured stories.
+with one of: timing, rank, SPY 20-day realised-volatility tercile, SPY
+above or below its 200-day SMA (both known at S: closes through S-1),
+screen regime (2020-10-01), analyst-coverage regime (2018-01-01),
+Technology. ``coverage`` counts every unit by type and path outcome
+(measured, or the loader's skip). Cells hold the measured stories.
+
+**SPY's regimes** (:func:`spy_state`) come from a SPY-only context of the
+whole atlas range, whatever ``start`` and ``end`` are asked: the tercile
+edges are fixed on SPY's sessions in [:data:`ATLAS_START`,
+:data:`DATA_END`] (spec §F: SPY 2016-10..2021-12), so a shorter run puts a
+story in the same tercile as the full one. SPY's daily bars start on
+2016-01-04, so its 200-session SMA first exists on 2016-10-18: stories of
+2016-10-03..2016-10-17 have the trend ``n/a`` (their own cell; nothing is
+backfilled).
 
 **Deviations from spec §F** (stated for the integrator):
 
@@ -1214,7 +1223,11 @@ async def machine(
     return runs, summary.as_dict()
 
 
-def _spy(ctx: PitContext, start: date) -> SpyRegimes:
+async def spy_state(engine: AsyncEngine) -> SpyRegimes:
+    """SPY's regimes on every session of the atlas range, from a context of SPY alone
+    loaded for [:data:`ATLAS_START`, :data:`ATLAS_END`] (daily bars to
+    :data:`DATA_END`, never after); the tercile edges from [ATLAS_START, DATA_END]."""
+    ctx = await PitContext.load(engine, symbols=(), start=ATLAS_START, end=context_end(ATLAS_END))
     sessions = [d for d in ctx.sessions if d <= DATA_END]
 
     def close_all(day: date) -> float | None:
@@ -1222,7 +1235,7 @@ def _spy(ctx: PitContext, start: date) -> SpyRegimes:
         return p.close * p.adj if p is not None else None
 
     return spy_regimes(
-        sessions, [close_all(d) for d in sessions], edges_from=start, edges_to=DATA_END
+        sessions, [close_all(d) for d in sessions], edges_from=ATLAS_START, edges_to=DATA_END
     )
 
 
@@ -1281,10 +1294,10 @@ async def run_atlas(
     }
     rows: list[AtlasRow] = []
     summaries: dict[str, list[dict[str, Any]]] = {v: [] for v, _ in VARIANTS}
+    regimes = await spy_state(engine)
+    meta["spy_vol_edges"] = list(regimes.edges)
     if symbols:
         ctx = await PitContext.load(engine, symbols=symbols, start=start, end=context_end(end))
-        regimes = _spy(ctx, start)
-        meta["spy_vol_edges"] = list(regimes.edges)
         aliases = await load_aliases(engine)
         path_end = path_days(end, PATH_SESSIONS)[-1]
         items_end = min(DATA_END, end + timedelta(days=14))
@@ -1363,6 +1376,7 @@ __all__ = [
     "rebuild",
     "run_atlas",
     "spy_regimes",
+    "spy_state",
     "substantive",
     "tables",
     "timing_of",
