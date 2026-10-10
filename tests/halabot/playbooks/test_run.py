@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import sys
 import threading
 from concurrent.futures.process import BrokenProcessPool
@@ -14,7 +15,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from halabot.playbooks import sim
-from halabot.playbooks.legacy import HoldFactory, reactor_config, reactor_story
+from halabot.playbooks.legacy import HarnessStory, HoldFactory, reactor_config, reactor_story
 from halabot.playbooks.loader import (
     Window,
     WindowLocked,
@@ -27,7 +28,7 @@ from halabot.playbooks.records import MemorySink, PgOutcomeSink, outcomes_sha256
 from halabot.playbooks.sim import DATA_SKIPS, pool_method, run
 from halabot.playbooks.types import SimConfig
 from halal_trader.core import events
-from halal_trader.market_hours import is_trading_day
+from halal_trader.market_hours import MARKET_TZ, is_trading_day
 from tests.halabot.playbooks._seed import (
     mark_done,
     seed_bars,
@@ -39,6 +40,7 @@ from tests.halabot.playbooks._support import (
     FACTS,
     MON,
     TUE,
+    WED,
     Context,
     Toy,
     ToyFactory,
@@ -183,6 +185,102 @@ async def test_a_gate_only_fill_model_needs_a_gate_unlock(engine: AsyncEngine) -
     assert t.flags == ("last_close",) and t.exit_reason == "time_stop"
 
 
+GOOD_FRIDAY = date(2016, 3, 25)  # a weekday, not a session
+HEADS = {  # headline id -> (symbol, published at)
+    "h-ok": ("AAA", et(MON, 10, 14, 30)),
+    "h-late": ("BBB", et(MON, 15, 20)),  # no stock bar after 15:21
+    "h-nospy": ("CCC", et(TUE, 15, 20)),  # no SPY bar after 15:21
+    "h-holiday": ("DDD", et(GOOD_FRIDAY, 11, 0)),
+    "h-bad": ("EEE", et(MON, 11, 0)),
+    "h-thin": ("FFF", et(WED, 11, 0)),
+    "h-jump": ("III", et(MON, 11, 0)),
+    "h-unbuilt": ("GGG", et(MON, 11, 0)),  # in the set, but no story is built for it
+}
+
+
+async def _headlines(
+    engine: AsyncEngine,
+) -> tuple[list[HarnessStory], dict[str, tuple[str, date]], WindowUnlock]:
+    """Reactor headlines, each meeting one way to have no result, and a pinned unit set."""
+    await seed_calendar(engine, date(2016, 1, 4), END)
+    insane = (10.0, 9.0, 8.0, 9.5, 1.0, 9.5)
+    await seed_bars(engine, "SPY", session_bars(MON, price=200.0))
+    await seed_bars(engine, "SPY", session_bars(TUE, price=200.0, last=(15, 0)))  # 331 bars
+    await seed_bars(engine, "SPY", session_bars(WED, price=200.0, last=(12, 49)))  # 200: thin
+    await seed_bars(engine, "AAA", session_bars(MON, price=50.0))
+    await seed_bars(engine, "BBB", session_bars(MON, last=(15, 0)))
+    await seed_bars(engine, "CCC", session_bars(TUE))
+    await seed_bars(engine, "EEE", session_bars(MON, rows={(9, 30 + i): insane for i in range(6)}))
+    await seed_bars(engine, "FFF", session_bars(WED))
+    jump = {(15, 59): (120.0, 121.0, 119.0, 120.0, 1_000.0, 120.0)}  # 50 -> 120: implausible
+    await seed_bars(engine, "III", session_bars(MON, price=50.0, rows=jump))
+    stories = [reactor_story(i, s, t) for i, (s, t) in HEADS.items() if i != "h-unbuilt"]
+    expected = {i: (s, t.astimezone(MARKET_TZ).date()) for i, (s, t) in HEADS.items()}
+    done = [u for u in expected.values() if u[1] != GOOD_FRIDAY]
+    await mark_done(engine, [*done, ("SPY", MON), ("SPY", TUE), ("SPY", WED)])
+    units = frozenset(expected.values())
+    await register_gate_units(engine, "g1", units)
+    return stories, expected, WindowUnlock(gate="g1", units=units, units_sha=unit_set_sha(units))
+
+
+async def _reactor_run(  # type: ignore[no-untyped-def]
+    engine: AsyncEngine,
+    stories: list[HarnessStory],
+    expected: dict[str, tuple[str, date]],
+    unlock: WindowUnlock,
+    sink: MemorySink,
+):
+    return await run(
+        engine,
+        stories,
+        HoldFactory(1, {s.story_id: FACTS for s in stories}),
+        context=Context(),
+        window=Window.GATE,
+        window_end=END,
+        cfg=reactor_config(),
+        unlock=unlock,
+        sink=sink,
+        workers=2,
+        expected=expected,
+    )
+
+
+async def test_an_explicit_set_accounts_for_every_id(engine: AsyncEngine) -> None:
+    """R1's run: each headline without a return has its reason, simulated or not."""
+    stories, expected, unlock = await _headlines(engine)
+    sink = MemorySink()
+    summary = await _reactor_run(engine, stories, expected, unlock, sink)
+    assert summary.expected == 8 and summary.stories == 7 and summary.started == 6
+    assert summary.dropped == {
+        "h-bad": "bad_bars",
+        "h-holiday": "no_session",
+        "h-late": "entry_unfilled",
+        "h-nospy": "no_spy",
+        "h-thin": "spy_thin",
+        "h-unbuilt": "no_story",
+    }
+    trades = {o.story_id: o.trade for o in sink.outcomes if o.trade is not None}
+    assert set(trades) == {"h-ok", "h-jump", "h-nospy"}  # the study's filter is R1's, not run's
+    nospy = trades["h-nospy"]
+    assert nospy is not None and "no_spy" in nospy.flags and math.isnan(nospy.r_net_abn)
+    assert sink.summary is not None and sink.summary["dropped"] == summary.dropped
+    assert sink.summary["expected"] == 8
+
+
+async def test_an_explicit_set_refuses_other_stories_before_writing(engine: AsyncEngine) -> None:
+    stories, expected, unlock = await _headlines(engine)
+    sink = MemorySink()
+    stray = reactor_story("h-stray", "AAA", et(TUE, 10, 0))
+    with pytest.raises(ValueError, match="h-stray is not in the expected set"):
+        await _reactor_run(engine, [*stories, stray], expected, unlock, sink)
+    moved = reactor_story("h-ok", "AAA", et(TUE, 10, 0))  # the set says MON
+    with pytest.raises(ValueError, match="h-ok is AAA 2016-03-08; the expected set says"):
+        await _reactor_run(engine, [moved, *stories[1:]], expected, unlock, sink)
+    with pytest.raises(ValueError, match="h-ok is given twice"):
+        await _reactor_run(engine, [*stories, stories[0]], expected, unlock, sink)
+    assert sink.info is None and sink.outcomes == []
+
+
 async def test_a_run_logs_its_start_batches_and_end(
     engine: AsyncEngine, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -253,6 +351,7 @@ async def test_a_run_lists_the_stories_its_data_rules_touched(engine: AsyncEngin
     assert summary.skips == {"bad_bars": 1, "adjust_defect": 1}
     assert summary.loader["dropped_bars"] == 2 and summary.loader["spy_dropped_bars"] == 1
     assert summary.loader["spare_dropped_bars"] == 1
+    assert summary.expected == 0 and summary.dropped == {}  # no explicit set
     assert sink.summary is not None
     assert sink.summary["skip_ids"] == {
         "adjust_defect": ["DEFECT:2016-03-07"],
