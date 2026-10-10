@@ -939,3 +939,33 @@ async def test_pins_gather_every_sha(monkeypatch: pytest.MonkeyPatch) -> None:
     # The parser's pin is read when asked, as the extractor is.
     monkeypatch.setattr(earnings_parse, "PARSER_SHA", "parser123456")
     assert (await stories.pins(object()))["parser_sha"] == "parser123456"  # type: ignore[arg-type]
+
+
+async def test_a_builds_inputs_hash_every_pin_and_the_extractor_read_now(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def returning(value: str) -> object:
+        async def sha(engine: object) -> str:
+            return value
+
+        return sha
+
+    monkeypatch.setattr(stories, "alias_sha", returning("aliases12345"))
+    engine: object = object()
+    inputs = await stories.inputs_sha(engine)  # type: ignore[arg-type]
+    pinned = await stories.pins(engine)  # type: ignore[arg-type]
+    assert inputs == stories._sha(pinned | {"extractor": earnings_parse.EXTRACTOR})
+    assert len(inputs) == 12
+    seen = {inputs}
+    for module, name, value in [
+        (stories, "STORIES_SHA", "rules1234567"),
+        (stories, "TAXONOMY_SHA", "taxonomy1234"),
+        (stories, "HEADLINE_PATTERNS_SHA", "patterns1234"),
+        (earnings_parse, "PARSER_SHA", "parser123456"),
+        (earnings_parse, "EXTRACTOR", "benzinga-earnings-next"),
+        (renames, "renames_sha", lambda: "renames12345"),
+        (stories, "alias_sha", returning("aliases99999")),
+    ]:
+        monkeypatch.setattr(module, name, value)
+        seen.add(await stories.inputs_sha(engine))  # type: ignore[arg-type]
+    assert len(seen) == 8  # each change gives another hash

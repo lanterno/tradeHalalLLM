@@ -34,6 +34,7 @@ from halal_trader.events.stories import (
     build_unit,
     built_ranges,
     count_stories,
+    inputs_sha,
     load_items,
     missing_facts,
     persist,
@@ -306,12 +307,112 @@ async def _progress(engine: AsyncEngine) -> dict[str, int]:
         return {r.unit: r.items for r in rows}
 
 
-async def test_a_build_marks_its_range_complete(ready: AsyncEngine) -> None:
+async def _counted(engine: AsyncEngine, start: date, end: date) -> int:
+    """Every story ``count_stories`` counts in [start, end]."""
+    counts = await count_stories(engine, start=start, end=end)
+    return sum(n for (u, *_), n in counts.types.items() if u == "all")
+
+
+async def test_a_build_marks_its_range_complete_with_its_inputs(ready: AsyncEngine) -> None:
     assert await built_ranges(ready) == []
     assert await build_range(ready, start=MON, end=FRI) == 7
     assert await built_ranges(ready) == [(MON, FRI)]
-    assert await _progress(ready) == {"stories-v1:2024-05-06:2024-05-10": 7}
-    assert build_unit(MON, FRI) == "stories-v1:2024-05-06:2024-05-10"
+    inputs = await inputs_sha(ready)
+    assert await _progress(ready) == {f"stories-v1:2024-05-06:2024-05-10:{inputs}": 7}
+    assert build_unit(MON, FRI, "abc") == "stories-v1:2024-05-06:2024-05-10:abc"
+
+
+async def test_counts_refuse_a_range_built_from_other_inputs(
+    ready: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_context(monkeypatch)
+    await build_range(ready, start=MON, end=FRI)
+    assert await _counted(ready, MON, FRI) == 7
+    before = await _progress(ready)
+    await add_aliases(ready, [("AAPL", "Apple Inc", "name")])  # the aliases changed
+    assert await built_ranges(ready) == []
+    assert await _progress(ready) == before  # the mark is still there, naming the old inputs
+    stale = r"5 session\(s\) in .*first: 2024-05-06\); 5 of them built from other inputs"
+    with pytest.raises(StoriesNotReady, match=stale):
+        await count_stories(ready, start=MON, end=FRI)
+    await build_range(ready, start=MON, end=FRI)
+    assert await built_ranges(ready) == [(MON, FRI)]
+    assert await _counted(ready, MON, FRI) == 7
+    # A pin of the code, or the extractor read, changes the inputs too.
+    taxonomy = stories.TAXONOMY_SHA
+    monkeypatch.setattr(stories, "TAXONOMY_SHA", "taxonomy-next")
+    assert await built_ranges(ready) == []
+    monkeypatch.setattr(stories, "TAXONOMY_SHA", taxonomy)
+    assert await built_ranges(ready) == [(MON, FRI)]
+    monkeypatch.setattr(earnings_parse, "EXTRACTOR", "benzinga-earnings-next")
+    assert await built_ranges(ready) == []
+
+
+async def test_rebuilding_part_of_a_range_after_its_inputs_changed_leaves_the_rest_refused(
+    ready: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_context(monkeypatch)
+    await build_range(ready, start=MON, end=FRI)
+    old = await inputs_sha(ready)
+    monkeypatch.setattr(stories, "STORIES_SHA", "rules-next")  # the builder's constants changed
+    new = await inputs_sha(ready)
+    assert new != old
+    await build_range(ready, start=TUE, end=WED)
+    assert await _progress(ready) == {
+        f"stories-v1:2024-05-06:2024-05-06:{old}": 1,  # each outside part keeps its inputs
+        f"stories-v1:2024-05-07:2024-05-08:{new}": 3,
+        f"stories-v1:2024-05-09:2024-05-10:{old}": 3,
+    }
+    assert await built_ranges(ready) == [(TUE, WED)]
+    assert await _counted(ready, TUE, WED) == 3
+    with pytest.raises(StoriesNotReady, match=r"3 session.*3 of them built from other inputs"):
+        await count_stories(ready, start=MON, end=FRI)
+    # Sessions with no mark at all are not called stale.
+    with pytest.raises(StoriesNotReady, match=r"4 session.*first: 2024-05-06\); 3 of them"):
+        await count_stories(ready, start=MON, end=date(2024, 5, 13))
+    await build_range(ready, start=MON, end=FRI)
+    assert await built_ranges(ready) == [(MON, FRI)]
+
+
+async def test_a_mark_that_names_no_inputs_matches_none(ready: AsyncEngine) -> None:
+    async with ready.begin() as conn:  # a mark written before marks named their inputs
+        await conn.execute(
+            text(
+                "INSERT INTO backfill_progress (task, unit, items, done_at) "
+                "VALUES (:t, 'stories-v1:2024-05-06:2024-05-10', 7, now())"
+            ),
+            {"t": stories.TASK},
+        )
+    assert await built_ranges(ready) == []
+    with pytest.raises(StoriesNotReady, match="5 of them built from other inputs"):
+        await count_stories(ready, start=MON, end=FRI)
+    await build_range(ready, start=TUE, end=WED)  # withdrawn over the range, split around it
+    inputs = await inputs_sha(ready)
+    assert await _progress(ready) == {
+        "stories-v1:2024-05-06:2024-05-06:": 0,
+        f"stories-v1:2024-05-07:2024-05-08:{inputs}": 3,
+        "stories-v1:2024-05-09:2024-05-10:": 0,
+    }
+    assert await built_ranges(ready) == [(TUE, WED)]
+
+
+async def test_the_inputs_are_hashed_before_the_aliases_are_read(
+    ready: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Aliases changed while a build starts: it read the new ones, but its mark
+    # names the inputs hashed before, so the counts refuse it (never the reverse).
+    real_load = stories.load_aliases
+
+    async def load_after_a_change(engine: AsyncEngine) -> Any:
+        await add_aliases(engine, [("AAPL", "Apple Inc", "name")])
+        return await real_load(engine)
+
+    monkeypatch.setattr(stories, "load_aliases", load_after_a_change)
+    await build_range(ready, start=MON, end=FRI)
+    assert await built_ranges(ready) == []
+    monkeypatch.setattr(stories, "load_aliases", real_load)
+    await build_range(ready, start=MON, end=FRI)
+    assert await built_ranges(ready) == [(MON, FRI)]
 
 
 async def test_a_build_that_stops_part_way_leaves_its_range_unmarked(
@@ -363,11 +464,12 @@ async def test_rebuilding_part_of_a_range_keeps_the_rest_complete(
         )
     await build_range(ready, start=TUE, end=WED)
     assert await built_ranges(ready) == [(MON, MON), (TUE, WED), (THU, FRI)]
+    inputs = await inputs_sha(ready)
     assert await _progress(ready) == {
         "stories-v0:2016-01-01:2026-12-31": 1,
-        "stories-v1:2024-05-06:2024-05-06": 1,  # the stories left in each part
-        "stories-v1:2024-05-07:2024-05-08": 3,
-        "stories-v1:2024-05-09:2024-05-10": 3,
+        f"stories-v1:2024-05-06:2024-05-06:{inputs}": 1,  # the stories left in each part
+        f"stories-v1:2024-05-07:2024-05-08:{inputs}": 3,
+        f"stories-v1:2024-05-09:2024-05-10:{inputs}": 3,
     }
     assert sum((await count_stories(ready, start=MON, end=FRI)).types.values()) > 0
     with pytest.raises(StoriesNotReady, match=r"1 session\(s\) in .*first: 2024-05-13"):

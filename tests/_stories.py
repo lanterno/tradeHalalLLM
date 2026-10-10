@@ -80,8 +80,10 @@ async def store(
 
 
 async def mark_built(engine: AsyncEngine, start: date, end: date, items: int = 0) -> None:
-    """Record [start, end] as completely built (stories persisted outside build_range)."""
-    await mark_units(engine, stories.TASK, {stories.build_unit(start, end): items})
+    """Record [start, end] as completely built from the current inputs (stories
+    persisted outside build_range)."""
+    unit = stories.build_unit(start, end, await stories.inputs_sha(engine))
+    await mark_units(engine, stories.TASK, {unit: items})
 
 
 async def add_aliases(engine: AsyncEngine, rows: list[tuple[str, str, str]]) -> None:
