@@ -19,6 +19,8 @@ from halal_trader.events.aliases import (
     alias_sha,
     build_aliases,
     collapse_initials,
+    former_aliases,
+    learn_former_slots,
     learn_slots,
     learned_aliases,
     load_aliases,
@@ -234,6 +236,92 @@ async def test_slots_are_learned_only_from_rows_that_are_their_symbols_own(
     }
 
 
+# ── source (e): former names ──────────────────────────────────
+
+
+def test_former_names_are_judged_within_the_old_tickers_own_pool() -> None:
+    priceline = Counter({"Priceline Group": 23, "Priceline": 6, "To Overweight": 1})
+    pools = {
+        ("BKNG", "PCLN"): priceline,
+        ("XYZ", "SQ"): Counter({"Square": 285, "Block": 232, "Square Reports": 10}),
+        ("TT", "IR"): Counter({"Ingersoll-Rand": 63, "Ingersoll Rand": 12, "Inersoll-Rand": 1}),
+        ("IQV", "Q"): Counter({"Quintiles": 2}),  # short of three sightings
+    }
+    assert former_aliases(pools, {}) == {
+        "BKNG": {"Priceline Group", "Priceline"},
+        "XYZ": {"Square", "Block"},
+        "TT": {"Ingersoll-Rand", "Ingersoll Rand", "Ingersoll"},
+    }
+    # in the symbol's whole pool, the old name is short of a tenth
+    whole = Counter({"Booking Holdings": 400}) + priceline
+    assert learned_aliases({"BKNG": whole}) == {"BKNG": {"Booking Holdings", "Booking"}}
+
+
+def test_an_old_tickers_asset_name_counts_only_where_its_slots_confirm_it() -> None:
+    pools = {("PPLI", "IAC"): Counter({"IAC/InterActiveCorp": 50, "IAC": 2})}
+    names = {
+        "IAC": {"IAC Inc. Common Stock"},  # the company: its slots name it 52 times
+        "PCLN": {"Pictet Cleaner Planet ETF"},  # the ticker's holder today
+        "Q": {"Qnity Electronics, Inc."},
+    }
+    assert former_aliases(pools, names) == {"PPLI": {"IAC/InterActiveCorp", "IAC"}}
+
+
+def test_former_names_are_stored_as_their_own_source() -> None:
+    rows = alias_rows(
+        ["BKNG", "TPR", "ZZZZ"],
+        {"BKNG": ["Booking Holdings Inc. Common Stock"]},
+        {},
+        {"BKNG": {"Priceline Group", "Priceline"}, "ZZZZ": {"Zed Corp"}},
+    )
+    assert rows == sorted(
+        [
+            AliasRow("BKNG", "Booking", "name"),
+            AliasRow("BKNG", "Priceline Group", "former"),
+            AliasRow("BKNG", "Priceline", "former"),  # learned, and FORMER_NAME_OVERRIDES
+            AliasRow("BKNG", "BKNG", "ticker"),
+            AliasRow("BKNG", "PCLN", "ticker"),
+            AliasRow("TPR", "Coach", "former"),  # FORMER_NAME_OVERRIDES alone
+            AliasRow("TPR", "TPR", "ticker"),
+            AliasRow("TPR", "COH", "ticker"),
+            AliasRow("ZZZZ", "Zed Corp", "former"),
+            AliasRow("ZZZZ", "ZZZZ", "ticker"),
+        ]
+    )
+
+
+async def test_former_slots_come_from_each_old_tickers_own_articles(engine: AsyncEngine) -> None:
+    def at(day: date) -> datetime:
+        return datetime(day.year, day.month, day.day, 15, tzinfo=UTC)
+
+    priceline = "Priceline Group Q1 EPS $11.15 Beats $10.30 Estimate"
+    await _news(
+        engine,
+        [
+            # Priceline's articles, as the renamed-news backfill copied them under BKNG
+            *((n, "BKNG", at(date(2017, 5, 9)), priceline, ["PCLN"]) for n in (1, 2, 3)),
+            # the same article under the old ticker is a duplicate, not BKNG's
+            (4, "PCLN", at(date(2017, 5, 9)), priceline, ["PCLN"]),
+            # Booking's articles make BKNG's own pool, not PCLN's
+            (5, "BKNG", at(date(2020, 5, 7)), "Booking Holdings Q1 EPS $10.00 Beats", ["BKNG"]),
+            # PCLN after its news window is another holder's
+            (6, "BKNG", at(date(2025, 5, 7)), "Pictet Fund Q1 Sales $1M", ["PCLN"]),
+            # two symbols: not Benzinga's name for either
+            (7, "BKNG", at(date(2017, 5, 9)), "Priceline Group Q1 Sales Beat", ["PCLN", "EXPE"]),
+            # Ingersoll-Rand under TT before the switch; Gardner Denver's IR after it
+            (8, "TT", at(date(2019, 5, 1)), "Ingersoll-Rand Q1 EPS $1.30 Beats", ["IR"]),
+            (9, "TT", at(date(2021, 5, 4)), "Ingersoll Rand Q1 EPS $0.40 Beats", ["IR"]),
+        ],
+    )
+    assert await learn_former_slots(engine) == {
+        ("BKNG", "PCLN"): Counter({"Priceline Group": 3}),
+        ("TT", "IR"): Counter({"Ingersoll-Rand": 1}),
+    }
+    assert await learn_former_slots(engine, start=date(2018, 1, 1)) == {
+        ("TT", "IR"): Counter({"Ingersoll-Rand": 1})
+    }
+
+
 # ── the matcher ───────────────────────────────────────────────
 
 
@@ -394,6 +482,37 @@ async def test_build_stores_every_source_and_load_reads_them_back(engine: AsyncE
     assert matchers["AAPL"].matches("AAPL, MSFT lead")
     assert matchers["XYZ"].tickers == ("XYZ", "SQ")
     assert not matchers["AAPL"].matches("Microsoft Sees Q3 Sales")
+
+
+async def test_build_stores_the_former_names_a_long_history_would_drown(
+    engine: AsyncEngine,
+) -> None:
+    await mark_renamed_news_done(engine)
+    old, new = datetime(2017, 5, 9, 15, tzinfo=UTC), datetime(2020, 5, 7, 15, tzinfo=UTC)
+    await _news(
+        engine,
+        [(n, "BKNG", old, "Priceline Group Q1 EPS $11.15 Beats", ["PCLN"]) for n in range(1, 4)]
+        + [(n, "BKNG", new, "Booking Holdings Q1 EPS $10 Beats", ["BKNG"]) for n in range(4, 44)],
+    )
+    await build_aliases(engine, _Market([]))
+    async with engine.connect() as conn:
+        rows = {
+            (r.symbol, r.alias, r.source)
+            for r in await conn.execute(
+                text("SELECT symbol, alias, source FROM story_aliases WHERE builder_version = :v"),
+                {"v": BUILDER_VERSION},
+            )
+        }
+    assert ("BKNG", "Priceline Group", "former") in rows
+    assert ("BKNG", "Priceline Group", "learned") not in rows  # 3 of BKNG's 43 slots
+    assert ("BKNG", "Booking Holdings", "learned") in rows
+    assert ("TPR", "Coach", "former") in rows  # FORMER_NAME_OVERRIDES
+
+    matchers = await load_aliases(engine)
+    assert matchers["BKNG"].matches("Priceline Group Q4 EPS $14.29 Beats")
+    assert matchers["BKNG"].matches("Priceline Has Very Little Priced In")
+    assert matchers["TPR"].matches("Coach Q1 Adj. EPS $0.46 Beats")
+    assert not matchers["TPR"].matches("Michael Kors Q1 EPS Beats")
 
 
 async def test_a_rebuild_replaces_the_rows_and_the_hash_follows_them(engine: AsyncEngine) -> None:
