@@ -443,6 +443,23 @@ async def test_a_spy_session_without_an_a_factor_is_spy_missing(engine: AsyncEng
     assert isinstance(item, PathSkip) and item.reason == "spy_missing"
 
 
+async def test_bars_cut_on_the_spare_session_are_counted_apart(engine: AsyncEngine) -> None:
+    """The spare is not a path session: its cut bars never make bad_bars, and count apart."""
+    await seed_calendar(engine, date(2016, 1, 4), END)
+    for d in (MON, TUE):
+        await seed_bars(engine, "SPY", session_bars(d, price=200.0))
+    insane = {(9, 30 + i): (10.0, 9.0, 8.0, 9.5, 1.0, 9.5) for i in range(7)}
+    await seed_bars(engine, "SPARE", session_bars(MON))
+    await seed_bars(engine, "SPARE", session_bars(TUE, rows=insane))  # 7 > MAX_DROPPED
+    await mark_done(engine, [("SPY", MON), ("SPY", TUE), ("SPARE", MON), ("SPARE", TUE)])
+    loader = MinuteBarLoader(engine, window=Window.GATE, window_end=END, unlock=WindowUnlock())
+    (item,) = [x async for x in loader.paths([PathRequest("s", "SPARE", MON, 1)], Context())]
+    assert isinstance(item, PathData)
+    assert item.spare is not None and item.spare.day == TUE and item.spare_bars is not None
+    assert (item.dropped, item.spare_dropped, len(item.spare_bars)) == (0, 7, 383)
+    assert loader.counts["spare_dropped_bars"] == 7 and loader.counts["dropped_bars"] == 0
+
+
 async def test_a_path_past_the_window_end_is_refused(engine: AsyncEngine) -> None:
     ctx = await _market(engine)
     loader = MinuteBarLoader(engine, window=Window.GATE, window_end=TUE, unlock=WindowUnlock())

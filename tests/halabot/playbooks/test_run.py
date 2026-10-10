@@ -211,8 +211,10 @@ async def test_a_run_lists_the_stories_its_data_rules_set_apart(engine: AsyncEng
     await seed_bars(engine, "TWO", session_bars(MON, rows={(9, 31): insane, (9, 32): insane}))
     await seed_bars(engine, "SPYCUT", session_bars(TUE))  # its own bars clean, SPY's cut
     await seed_bars(engine, "DEFECT", session_bars(MON))
-    days = [(s, MON) for s in ("OK", "BAD", "TWO", "DEFECT")] + [("SPYCUT", TUE)]
-    await mark_done(engine, [*days, ("SPY", MON), ("SPY", TUE)])
+    await seed_bars(engine, "SPARE", session_bars(MON))
+    await seed_bars(engine, "SPARE", session_bars(TUE, rows={(9, 40): insane}))  # its spare
+    days = [(s, MON) for s in ("OK", "BAD", "TWO", "DEFECT", "SPARE")] + [("SPYCUT", TUE)]
+    await mark_done(engine, [*days, ("SPARE", TUE), ("SPY", MON), ("SPY", TUE)])
     # DEFECT's adjusted series halves on 2016-02-01 while raw / adjusted holds still (stale).
     closes = {
         d: (100.0 if d < date(2016, 2, 1) else 50.0)
@@ -245,18 +247,22 @@ async def test_a_run_lists_the_stories_its_data_rules_set_apart(engine: AsyncEng
         "SPYCUT:2016-03-08",
         "TWO:2016-03-07",
     }
+    assert summary.spare_drop_ids == ("SPARE:2016-03-07",)  # the spare (TUE), not the path
     assert summary.skips == {"bad_bars": 1, "adjust_defect": 1}
     assert summary.loader["dropped_bars"] == 2 and summary.loader["spy_dropped_bars"] == 1
+    assert summary.loader["spare_dropped_bars"] == 1
     assert sink.summary is not None
     assert sink.summary["skip_ids"] == {
         "adjust_defect": ["DEFECT:2016-03-07"],
         "bad_bars": ["BAD:2016-03-07"],
     }
     assert sink.summary["bar_drop_ids"] == ["SPYCUT:2016-03-08", "TWO:2016-03-07"]
+    assert sink.summary["spare_drop_ids"] == ["SPARE:2016-03-07"]
     assert {o.story_id for o in sink.outcomes if o.skip is None} == {
         "OK:2016-03-07",
         "TWO:2016-03-07",
         "SPYCUT:2016-03-08",
+        "SPARE:2016-03-07",
     }
     assert DATA_SKIPS == ("adjust_defect", "bad_bars")
 
