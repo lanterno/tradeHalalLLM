@@ -139,3 +139,26 @@ async def test_a_mapped_ticker_is_screened_under_its_filer_and_rescreened(
     assert (
         await rescreen_mapped(sec, engine) == {}
     )  # nothing left screened as unmapped  # type: ignore[arg-type]
+
+
+def test_hand_ciks_map_tickers_the_name_match_cannot() -> None:
+    filers = {1087423: "RED HAT INC", 1578845: "ALLERGAN PLC", 850693: "ALLERGAN INC."}
+    out = match_symbols(
+        ["RHT", "AGN", "ZZZZ"],
+        {"AGN": "Allergan plc Ordinary Shares"},  # RHT: Alpaca keeps no name
+        filers,
+        [("ALLERGAN INC", 850693)],
+    )
+    by = {m.symbol: m for m in out}
+    assert (by["RHT"].status, by["RHT"].cik, by["RHT"].filer_name) == (
+        "mapped",
+        1087423,
+        "RED HAT INC",
+    )
+    assert (by["AGN"].status, by["AGN"].cik) == ("mapped", 1578845)  # not ambiguous
+    assert by["ZZZZ"].status == "no_name"
+
+
+def test_a_hand_cik_that_is_no_filer_falls_back_to_the_name_match() -> None:
+    (m,) = match_symbols(["RHT"], {}, {}, [])
+    assert m.status == "no_name"
