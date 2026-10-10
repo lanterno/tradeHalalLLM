@@ -306,6 +306,56 @@ async def test_an_edgar_outage_keeps_what_was_read_and_a_rerun_resumes(
     assert (times.checked, times.corrected, times.done_before) == (1, 1, 2)
 
 
+async def test_a_row_stored_late_after_its_filing_was_read_takes_its_time_unrequested(
+    engine: AsyncEngine,
+) -> None:
+    edgar = Edgar()
+    read = accession(AAPL, 2023, 104)
+    lost_rows = accession(AAPL, 2023, 105)  # read once, but no stamped row is left
+    unread = accession(AAPL, 2023, 106)
+    true = ny(2023, 11, 2, 16, 30, 32)
+    late = true + timedelta(hours=4)
+    for acc in (read, lost_rows, unread):
+        edgar.header(AAPL, acc, true)
+    await store(engine, [(read, "AAPL", "8-k", late, ["2.02"])])
+    first = await history.correct_filing_times(
+        engine, edgar.client(), start=date(2023, 1, 1), end=date(2023, 12, 31)
+    )
+    assert first.corrected == 1
+    # Another path stores the filing under a second symbol at the JSON's time (a
+    # company whose covered symbol changed); the second filing's unit is done, but
+    # its stamped rows are gone.
+    await store(
+        engine,
+        [
+            (read, "AAPL2", "8-k", late, ["2.02"]),
+            (lost_rows, "AAPL", "8-k", late, []),
+            (unread, "AAPL", "8-k", late, []),
+        ],
+    )
+    await history.mark_units(engine, history.TIMES_TASK, {lost_rows: 14400})
+    edgar.requests.clear()
+
+    again = await history.correct_filing_times(
+        engine, edgar.client(), start=date(2023, 1, 1), end=date(2023, 12, 31), limit=1
+    )
+
+    rows = await stored(engine)
+    assert rows[(read, "AAPL2")] == rows[(read, "AAPL")] == (true, true, "header")
+    assert (again.copied, again.done_before) == (1, 1)  # no request, outside the limit
+    assert edgar.header_requests() == [f"{AAPL}/{lost_rows}"]  # read again, in the limit
+    assert rows[(lost_rows, "AAPL")] == (true, true, "header")
+    assert rows[(unread, "AAPL")][2] is None  # past the limit
+    assert (await progress(engine, history.TIMES_TASK))[read] == 14400  # the first read's
+
+    edgar.requests.clear()
+    third = await history.correct_filing_times(
+        engine, edgar.client(), start=date(2023, 1, 1), end=date(2023, 12, 31), limit=1
+    )
+    assert (third.copied, third.done_before, third.checked) == (0, 2, 1)
+    assert edgar.header_requests() == [f"{AAPL}/{unread}"]
+
+
 async def test_concurrent_workers_read_each_filing_once(engine: AsyncEngine) -> None:
     edgar = Edgar()
     accs = [accession(AAPL, 2024, n) for n in range(1, 31)]
@@ -511,6 +561,15 @@ def test_fix_times_prints_counts_by_delta_and_resumes(
     assert "0 filing(s) read, 0 corrected (0 row(s)), 0 without a header; 2 done before" in (
         again.output
     )
+
+    # The filing stored since under a second symbol, at the JSON's time.
+    _run(
+        database_url,
+        lambda e: store(e, [(late, "AAPL2", "8-k", ny(2023, 11, 2, 20, 30, 32), ["2.02"])]),
+    )
+    third = CliRunner().invoke(cli, args)
+    assert third.exit_code == 0, third.output
+    assert "; 2 done before (1 row(s) stored late since, retimed)" in third.output
 
 
 @pytest.mark.parametrize("status", [503, 403])
