@@ -210,16 +210,19 @@ class VisibleBars:
     linear time over a path (a fresh copy per bar cost quadratic time).
     The head of the current ``n`` is cached: asking twice returns the same
     object.
+
+    The buffers themselves are read-only too, except while :meth:`head`
+    copies the new bars in: a write through a view's ``.base`` is refused,
+    so a head a playbook keeps never changes under it.
     """
 
-    __slots__ = ("_bufs", "_head", "_n", "_read_only", "_src")
+    __slots__ = ("_bufs", "_head", "_n", "_src")
 
     def __init__(self, series: BarSeries) -> None:
         self._src = series.columns()
-        self._bufs = tuple(np.zeros_like(a) for a in self._src)
-        # Read-only views of the buffers: their slices are read-only too, and
-        # their ``.base`` is the buffer (numpy points a view at the owner).
-        self._read_only = tuple(_frozen(b.view()) for b in self._bufs)
+        # Read-only buffers: their slices are read-only views whose ``.base``
+        # is the buffer (numpy points a view at the owner).
+        self._bufs = tuple(_frozen(np.zeros_like(a)) for a in self._src)
         self._n = 0
         self._head: BarSeries | None = None
 
@@ -235,11 +238,15 @@ class VisibleBars:
             raise ValueError(f"{n} bars asked of a path of {len(self._bufs[0])}")
         if n > self._n:
             for buf, src in zip(self._bufs, self._src):
-                buf[self._n : n] = src[self._n : n]
+                buf.flags.writeable = True  # the buffer owns its memory: allowed
+                try:
+                    buf[self._n : n] = src[self._n : n]
+                finally:
+                    buf.flags.writeable = False
             self._n = n
             self._head = None
         if self._head is None:
-            self._head = BarSeries(*(a[:n] for a in self._read_only))
+            self._head = BarSeries(*(b[:n] for b in self._bufs))
         return self._head
 
 
