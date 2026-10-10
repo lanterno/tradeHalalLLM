@@ -138,9 +138,10 @@ def renames_backfill_cmd(rate: int) -> None:
         from halal_trader.data.alpaca_market import AlpacaMarketData
         from halal_trader.events.renames import backfill_renamed_news
 
+        # The client paces every request, each page included.
         market = AlpacaMarketData.from_settings(settings, min_interval_s=60.0 / max(rate, 1))
         try:
-            return await backfill_renamed_news(engine, market, rate_per_min=rate)
+            return await backfill_renamed_news(engine, market)
         finally:
             await market.aclose()
 

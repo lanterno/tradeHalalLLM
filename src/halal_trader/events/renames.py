@@ -39,7 +39,6 @@ from typing import Any, Final
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from halal_trader.core.http import Pacer
 from halal_trader.events.history import NEWS_FROM, _done, mark_units, news_records
 from halal_trader.events.store import EventRecord, EventRecorder
 from halal_trader.market_hours import (
@@ -353,25 +352,21 @@ async def backfill_renamed_news(
     engine: AsyncEngine,
     market: Any,
     *,
-    rate_per_min: int = 100,
     now: datetime | None = None,
 ) -> int:
     """Store every old ticker's articles under its current symbol; returns events written.
 
-    ``market.news`` is called at most ``rate_per_min`` times a minute (the
-    client paces its own page requests). Before any month is fetched,
-    ``PROBE`` must return an article, or nothing is fetched and nothing
-    marked (``RenamedNewsError``). A month is marked done once its last day
-    is over.
+    The client paces its own requests (``min_interval_s``), every page
+    included. Before any month is fetched, ``PROBE`` must return an article,
+    or nothing is fetched and nothing marked (``RenamedNewsError``). A month
+    is marked done once its last day is over.
     """
     now = now or datetime.now(UTC)
     done = await _done(engine, TASK)
     todo = [(old, lo, hi) for old, lo, hi in _plan() if unit(old, lo, hi) not in done]
     if not todo:
         return 0
-    pacer = Pacer(60.0 / max(rate_per_min, 1))
     probe, lo, hi = PROBE
-    await pacer.wait()
     if not any(probe in a.symbols for a in await _news(market, probe, lo, hi, 1)):
         raise RenamedNewsError(
             f"Alpaca returned no {probe} article for {lo:%Y-%m}: its news filter does not "
@@ -381,7 +376,6 @@ async def backfill_renamed_news(
     stored: dict[str, int] = {}
     for old, lo, hi in todo:
         current = TICKER_RENAMES[old][0]
-        await pacer.wait()
         articles = await _news(market, old, lo, hi, _MAX_PAGES)
         written = await recorder.record(renamed_records(articles, old, current))
         if trading_day_end_utc(hi) <= now:
