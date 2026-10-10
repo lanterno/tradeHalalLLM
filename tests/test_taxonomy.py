@@ -486,11 +486,31 @@ def test_lowering_what_the_company_spends_is_not_a_guidance_cut(headline: str, i
         ("Bank Of America Cuts Square Target Due To Questions About 2020 Guidance", "other"),
         ("Analysts Lower Cigna Targets As PBM Segment Guidance Surprises Market", "other"),
         ("These Analysts Cut Price Targets On Walmart Following Outlook Cut", "other"),
+        # A price target in a list is still the analyst's.
+        ("JPMorgan Lowers General Electric Price Target, Says EPS Guidance Is 'Not A Credible "
+         "Number'", "other"),
+        ("Analyst Lowers Target Q1 Forecast Amid Spending Slump, Rising Consumer Tariffs",
+         "other"),
     ],
 )  # fmt: skip
 def test_an_analyst_s_target_is_never_the_guidance_cut(headline: str, itype: str) -> None:
     # The older wires say "Target" alone: the cut is the analyst's, not the company's.
     assert news_type(headline) == itype
+
+
+@pytest.mark.parametrize(
+    "headline",
+    [
+        # Constructed: a company's targets listed with its guidance.
+        "Acme Lowers Targets And Guidance",
+        "Acme Shares Fall After Company Lowers Targets And Guidance",
+        "Acme Lowers Profit Targets And Outlook For 2025",
+        "Acme Cuts Its 2026 Targets & Outlook",
+        "Acme Lowers Long-Term Targets, Outlook",
+    ],
+)
+def test_a_company_s_targets_cut_with_its_guidance_are_a_guidance_cut(headline: str) -> None:
+    assert news_type(headline) == "guidance_cut"
 
 
 @pytest.mark.parametrize(
