@@ -426,6 +426,49 @@ async def test_new_filings_are_stamped_from_their_header_highest_priority_first(
     assert await progress(engine, history.TIMES_TASK) == {struct: 0, earn: 4 * 3600}
 
 
+async def test_a_filing_stored_under_another_symbol_gets_its_header_time_on_every_row(
+    engine: AsyncEngine,
+) -> None:
+    """A company whose covered symbol changed: its recent page is new to the store
+    under the new symbol, and the old symbol's rows take the header time too."""
+    edgar = Edgar()
+    unread, read = accession(AAPL, 2026, 18), accession(AAPL, 2026, 17)
+    true = {unread: ny(2026, 7, 30, 16, 30, 28), read: ny(2026, 7, 29, 16, 0)}
+    json_time = {acc: at + timedelta(hours=4) for acc, at in true.items()}
+    edgar.submissions[AAPL] = submissions(  # the one read before comes first
+        [
+            ("8-K", "2026-07-29", f"{json_time[read]:%Y-%m-%dT%H:%M:%S}.000Z", read, "2.02"),
+            ("8-K", "2026-07-30", f"{json_time[unread]:%Y-%m-%dT%H:%M:%S}.000Z", unread, "2.02"),
+        ]
+    )
+    for acc, at in true.items():
+        edgar.header(AAPL, acc, at)
+    await store(engine, [(acc, "OLD", "8-k", at, ["2.02"]) for acc, at in json_time.items()])
+    await history.correct_filing_times(  # an earlier pass read one of them
+        engine, edgar.client(), start=date(2026, 7, 29), end=date(2026, 7, 29)
+    )
+    edgar.requests.clear()
+
+    written = await daily.refresh_filings(
+        engine, edgar.client(), {AAPL: "NEW"}, header_budget=1, today=date(2026, 8, 1)
+    )
+
+    assert written == 2
+    # The one read before costs no request (nor any of the budget).
+    assert edgar.header_requests() == [f"{AAPL}/{unread}"]
+    rows = await stored(engine)
+    for acc, at in true.items():
+        assert rows[(acc, "OLD")] == rows[(acc, "NEW")] == (at, at, "header")
+    assert await progress(engine, history.TIMES_TASK) == {unread: 4 * 3600, read: 4 * 3600}
+
+    edgar.requests.clear()
+    after = await history.correct_filing_times(
+        engine, edgar.client(), start=date(2026, 7, 1), end=date(2026, 7, 31)
+    )
+    assert edgar.requests == []
+    assert (after.done_before, after.copied) == (2, 0)
+
+
 @pytest.mark.parametrize("status", [503, 403])
 async def test_an_outage_stops_header_requests_but_not_the_refresh(
     engine: AsyncEngine, status: int
