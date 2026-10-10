@@ -60,3 +60,7 @@ TRACE_SPAN: Final[str] = "trace.span"
 SIM_RUN_START: Final[str] = "playbooks.sim.run.start"
 SIM_RUN_BATCH: Final[str] = "playbooks.sim.run.batch"
 SIM_RUN_DONE: Final[str] = "playbooks.sim.run.done"
+
+# ── News research (events/: descriptive and pre-registered runs, never trades) ──
+# The atlas's rebuilt stories that differ from their news_stories rows (one per run).
+ATLAS_STORIES_MISMATCH: Final[str] = "events.atlas.stories_mismatch"

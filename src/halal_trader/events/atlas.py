@@ -30,7 +30,8 @@ which fetched the paths). Candidates are read from the persisted
 ``stories.count_stories`` does), then the stories are rebuilt from the
 event store with ``stories.build`` (``card_at`` needs the items) and checked
 against their rows: a story whose rebuilt labels differ from its row is
-counted (``meta["counts"]["persisted_mismatch"]``), not dropped.
+counted (``meta["counts"]["persisted_mismatch"]``, the first ids in
+``meta["persisted_mismatch_ids"]``, one warning per run), not dropped.
 
 **Keys.** Cells are keyed by ``card_at(detect_at).type`` (``type_detect``);
 ``type_close`` and ``family_ever`` are row columns.
@@ -142,6 +143,7 @@ from halabot.playbooks.loader import (
 from halabot.playbooks.records import MemorySink, StoryOutcome
 from halabot.playbooks.sim import run as simulate
 from halabot.playbooks.types import PathData, PathSkip, Session, SimConfig, path_days
+from halal_trader.core import events
 from halal_trader.data.minutes import BarArrays
 from halal_trader.events import h1
 from halal_trader.events import stories as builder
@@ -188,6 +190,7 @@ VARIANTS: Final = (("ID", 1), ("MD3", 3))
 BLOCKED: Final = "blocked_open"  # the simulator's reason for a story started behind a live one
 OUTPUT_NAME: Final = f"news_atlas-{builder.BUILDER_VERSION}.json"
 BATCH_SYMBOLS: Final = 100
+MISMATCH_IDS: Final = 20  # the stories differing from their rows that meta names
 
 Timing = Literal["pre_open", "in_session", "evening_weekend"]
 
@@ -1130,6 +1133,7 @@ def _units(
     start: date,
     end: date,
     counts: Counter[str],
+    mismatched: list[str],
 ) -> list[_Unit]:
     out: list[_Unit] = []
     for symbol in sorted(built):
@@ -1141,7 +1145,7 @@ def _units(
             row = builder.story_row(story)
             if tuple(row[k] for k in _LABELS) != persisted.labels:
                 counts["persisted_mismatch"] += 1
-                logger.warning("atlas: %s differs from its news_stories row", story.story_id)
+                mismatched.append(story.story_id)
             found = detection(story)
             if found is None or not substantive(i.itype for i in story.items):
                 counts["dropped:not_substantive"] += 1
@@ -1419,6 +1423,7 @@ async def run_atlas(
         },
     }
     rows: list[AtlasRow] = []
+    mismatched: list[str] = []
     summaries: dict[str, dict[str, list[dict[str, Any]]]] = {
         v: defaultdict(list) for v, _ in VARIANTS
     }
@@ -1432,7 +1437,9 @@ async def run_atlas(
         for i in range(0, len(symbols), batch_symbols):
             batch = symbols[i : i + batch_symbols]
             built = await rebuild(engine, batch, aliases, lo=start, hi=items_end)
-            units = _units(built, chosen, ctx, start=start, end=end, counts=counts)
+            units = _units(
+                built, chosen, ctx, start=start, end=end, counts=counts, mismatched=mismatched
+            )
             measured = await measure(engine, units, ctx, regimes, unlock, counts)
             runs: dict[str, dict[str, MachineRun]] = {}
             for variant, hold in VARIANTS:
@@ -1456,6 +1463,15 @@ async def run_atlas(
             logger.info("atlas: %d of %d symbols, %d rows", i + len(batch), len(symbols), len(rows))
     rows.sort(key=lambda r: (r.session, r.story_id))
     counts["missing_rebuilt"] = len(chosen) - counts["rebuilt"]
+    mismatched.sort()
+    meta["persisted_mismatch_ids"] = mismatched[:MISMATCH_IDS]
+    if mismatched:
+        logger.warning(
+            "atlas: %d rebuilt stories differ from their news_stories rows (first: %s)",
+            len(mismatched),
+            ", ".join(mismatched[:5]),
+            extra={"event": events.ATLAS_STORIES_MISMATCH, "stories": len(mismatched)},
+        )
     meta["counts"] = dict(sorted(counts.items()))
     meta["machine"] = {
         v: _merge([x for lane in by_lane.values() for x in lane])
