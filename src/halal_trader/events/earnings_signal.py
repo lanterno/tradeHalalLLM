@@ -11,7 +11,8 @@ tradable price (events/study.py: the open after a pre-market or after-hours
 release, the close for one in the session), net of cost, against SPY.
 
 One observation per release: a company's earliest result headline on a New
-York day. Its guidance counts if published within a day of it.
+York day. Its guidance counts if published within a day of it. A metric the
+parser flags as not comparable is unknown: no surprise, no beat or miss.
 
 Pre-registered (written before any result was seen):
 
@@ -66,6 +67,16 @@ def _num(v: Any) -> float | None:
         return None
 
 
+def _comparable(fields: dict[str, Any]) -> dict[str, Any]:
+    """A result's fields with each metric the parser flags as not comparable
+    ("May Not Compare", or not in the estimate's units) unknown: no surprise
+    and no verdict, since Benzinga's word is computed from the same figures."""
+    for metric in ("eps", "sales"):
+        if fields.get(f"{metric}_not_comparable"):
+            fields |= {f"{metric}_surprise": None, f"{metric}_verdict": None}
+    return fields
+
+
 async def releases(engine: AsyncEngine) -> list[Release]:
     """Every earnings release with an extracted result, earliest headline first."""
     from halal_trader.events.earnings_parse import EXTRACTOR
@@ -83,7 +94,7 @@ async def releases(engine: AsyncEngine) -> list[Release]:
             {"x": EXTRACTOR},
         )
         for r in rows:
-            fields = dict(r.fields)
+            fields = _comparable(dict(r.fields))
             if r.kind == "result":
                 key = (r.symbol, r.published_at.astimezone(MARKET_TZ).date())
                 results.setdefault(key, (r.published_at, fields))  # the earliest headline
