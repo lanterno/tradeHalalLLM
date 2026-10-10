@@ -271,8 +271,10 @@ async def build(
     next_day = today if trades_at is not None and now < trades_at and not ran_today else None
     next_day = next_day or next_trading_day(today)
     next_check = scheduled_at(core_job, next_day)
-    is_due = await monthly_due(engine, today, account)
-    rebalance_day = next_day if is_due else first_trading_day_of_next_month(today)
+    # Asked for the next run's day, as the run itself will ask: a weekend before
+    # a new month, or a rule change (strict_core.RULE_SINCE), makes it monthly.
+    is_due = await monthly_due(engine, next_day, account)
+    rebalance_day = next_day if is_due else first_trading_day_of_next_month(next_day)
 
     # ── the live-money gate, and the days it counts ──
     ready = await gate.check(engine, today=today, account=account)
