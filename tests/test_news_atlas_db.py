@@ -235,6 +235,28 @@ async def test_the_same_week_gives_the_same_atlas(world: AsyncEngine) -> None:
     assert not math.isnan(one.meta["spy_vol_edges"][0])
 
 
+async def test_spy_regimes_do_not_move_with_the_range(world: AsyncEngine) -> None:
+    closes = daily_closes("SPY")
+    days = sorted(closes)
+    expected = atlas.spy_regimes(
+        days,
+        [closes[d] for d in days],
+        edges_from=date(2016, 10, 3),
+        edges_to=date(2021, 12, 31),
+    )
+    full = await run_atlas(world, start=START, end=END)
+    short = await run_atlas(world, start=S2, end=S2)
+    assert full.meta["spy_vol_edges"] == short.meta["spy_vol_edges"] == list(expected.edges)
+    state = await atlas.spy_state(world)
+    assert state.edges == expected.edges
+    # Known from the first session the atlas covers; the SMA from 2016-10-18 only.
+    assert state.vol_tercile(date(2016, 10, 3)) != "n/a"
+    assert state.trend(date(2016, 10, 17)) == "n/a" and state.trend(date(2016, 10, 18)) != "n/a"
+    by_id = {r.story_id: r for r in full.rows}
+    alfa = by_id["ALFA:2017-03-07"]
+    assert alfa.spy_vol == expected.vol_tercile(S1) and alfa.spy_trend == expected.trend(S1)
+
+
 # ── the command ───────────────────────────────────────────────
 
 
