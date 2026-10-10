@@ -448,17 +448,9 @@ async def write_times(
     transaction: a unit is done only with its rows written."""
     async with engine.begin() as conn:
         await _retime(conn, {acc: t for acc, (t, _) in fixes.items()})
-        units = [{"t": TIMES_TASK, "u": acc, "n": d} for acc, (_, d) in fixes.items()]
-        units += [{"t": TIMES_MISSING_TASK, "u": acc, "n": 0} for acc in missing]
-        if units:
-            await conn.execute(
-                text(
-                    "INSERT INTO backfill_progress (task, unit, items, done_at) "
-                    "VALUES (:t, :u, :n, now()) ON CONFLICT (task, unit) "
-                    "DO UPDATE SET items = EXCLUDED.items, done_at = EXCLUDED.done_at"
-                ),
-                units,
-            )
+        read = {acc: d for acc, (_, d) in fixes.items()}
+        await mark_units(engine, TIMES_TASK, read, conn=conn)
+        await mark_units(engine, TIMES_MISSING_TASK, dict.fromkeys(missing, 0), conn=conn)
 
 
 async def _header_time(
