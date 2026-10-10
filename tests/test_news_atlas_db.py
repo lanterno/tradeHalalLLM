@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import json
 import math
+from collections import Counter
 from collections.abc import Awaitable, Callable
 from datetime import date
 from pathlib import Path
@@ -23,6 +24,7 @@ from halal_trader.events import atlas
 from halal_trader.events.atlas import (
     OUTPUT_NAME,
     AtlasLocked,
+    candidates,
     h1_closed,
     run_atlas,
     write_atlas,
@@ -122,6 +124,19 @@ async def test_the_units_are_the_primary_stories_with_a_substantive_item(
     assert by_id["CHRL:2017-03-07"].type == "product"
     assert result.meta["registration"]["config_hash"]
     assert result.meta["pins"]["builder_version"] == "stories-v1"
+
+
+async def test_candidates_read_the_unit_items_from_postgres(world: AsyncEngine) -> None:
+    counts: Counter[str] = Counter()
+    chosen = await candidates(world, START, END, counts)
+    # Six stories; ECHO's preview is noise only; DLTA is not halal.
+    assert (counts["stories"], counts["substantive"], counts["candidates"]) == (6, 5, 4)
+    assert sorted(chosen) == [
+        "ALFA:2017-03-07",
+        "ALFA:2017-03-09",
+        "BRVO:2017-03-08",
+        "CHRL:2017-03-07",
+    ]
 
 
 async def test_an_nsn_story_is_measured_from_its_previous_close(world: AsyncEngine) -> None:
