@@ -357,6 +357,36 @@ def test_the_rating_decides_an_analyst_wire(itype: str, headline: str) -> None:
     assert news_type(headline) == itype
 
 
+@pytest.mark.parametrize(
+    "headline",
+    [
+        "CORRECTION: RBC Did Not Downgrade KB Home Today; This Was A Duplicate Entry, The "
+        "Downgrade Happened Yesterday Morning",
+        "CORRECTION: Bank of America Did Not Issue A Downgrade Of AMC Entertainment, A Prior "
+        "Headline Had Incorrectly Indicated The Firm Had Downgraded The Stock",
+        "CORRECTION: Oppenheimer Does Not Cover Oshkosh And Did Not Downgrade The Stock",
+        "CORRECTION: UBS Did Not Upgrade UPS",
+        "CORRECTION: Himax Was Not Downgraded At Credit Suisse This Morning; The Stock Was "
+        "Upgraded To Outperform At Baird",
+        "CORRECTION: Morgan Stanley Did Not Issue A Rating Change On Bilibili; A Prior Headline "
+        "Had Indicated The Firm Upgraded The Stock To Overweight, This Was Incorrect",
+        "CORRECTION: KeyBanc Did Not Issue An Initiation Note Today On Target And Walmart",
+    ],
+)
+def test_a_denied_rating_change_is_no_rating_change(headline: str) -> None:
+    assert news_type(headline) == "analyst_other"
+    assert news_type(headline, clause=headline) == "analyst_other"
+
+
+def test_a_denied_downgrade_starts_no_nsn_core_story() -> None:
+    card = resolve(
+        [news(1, 0, "CORRECTION: Wells Fargo Did Not Downgrade Hyatt Hotels This Morning")],
+        LATER,
+        follower=False,
+    )
+    assert card.type == "analyst_other" and card.family is None
+
+
 def test_the_clause_group_decides_for_its_company() -> None:
     h = "Mo-Mo Pair Trade? FBR Downgrades Netflix, Upgrades Pandora"
     assert news_type(h, clause="Mo-Mo Pair Trade? FBR Downgrades Netflix") == "analyst_downgrade"
@@ -1241,6 +1271,7 @@ def test_taxonomy_sha_pins_every_pattern_and_table() -> None:
         "PT_CUT",
         "PT_RAISE",
         "INIT_NEG",
+        "ANALYST_DENIAL",
         "GUIDE_UNPARSED",
         "RESTATEMENT",
         "ANTITRUST_REGULATORY",
