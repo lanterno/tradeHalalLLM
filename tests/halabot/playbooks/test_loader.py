@@ -122,6 +122,41 @@ async def test_the_holdout_opens_only_after_a_passing_verdict(engine: AsyncEngin
     assert no_holdout.allows("AAA", date(2024, 12, 31))
 
 
+async def test_only_the_latest_verdict_of_the_trial_opens_the_holdout(engine: AsyncEngine) -> None:
+    """An old pass opens nothing: an amended fail, or a window or amendment after it, close."""
+    repo = QuantTrialRepoImpl(engine)
+    cfg = {"hypothesis": "h"}
+    h = config_hash(cfg)
+    pid = await repo.record_trial(name="research.news.h1", kind="preregistration", config=cfg)
+
+    async def opens() -> bool:
+        unlock = WindowUnlock(prereg_id=pid, config_hash=h, holdout=True)
+        guard = WindowGuard(window=Window.HOLDOUT, window_end=date(2025, 11, 28), unlock=unlock)
+        try:
+            await guard.verify(engine)
+        except WindowLocked:
+            return False
+        return guard.allows("AAA", date(2025, 2, 3))
+
+    async def record(kind: str, verdict: str | None = None, name: str = "research.news.h1") -> None:
+        await repo.record_trial(name=name, kind=kind, config=cfg, verdict=verdict)
+
+    await record("verdict", "pass", name="research.other")  # another trial's verdict
+    assert not await opens()
+    await record("verdict", "pass")
+    assert await opens()
+    await record("amendment")  # train is rerun: the pass no longer stands
+    assert not await opens()
+    await record("window")
+    assert not await opens()
+    await record("verdict", "fail")  # the amended verdict
+    assert not await opens()
+    await record("verdict", "pass")  # passing again, nothing after it
+    assert await opens()
+    await record("stage-a")
+    assert not await opens()
+
+
 REACTOR_END = date(2026, 10, 9)
 
 
