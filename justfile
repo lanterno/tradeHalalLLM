@@ -230,6 +230,7 @@ logs-snapshot:
 #     `events extract`, the evening run's labelling
 #   eps_facts, annual_fundamentals, etf_holdings         -> `events backfill eps`,
 #     `data fundamentals`, `compliance etf-history`
+#   news_stories                                         -> `events stories build`
 # event_scores goes with events (it references them). What cannot be rebuilt --
 # the live reactor's headlines with the time it saw them, and every score
 # (the post-cutoff LLM evidence) -- is exported to live_events.jsonl.gz, keyed by
@@ -244,7 +245,7 @@ backup dest:
     set -euo pipefail
     pg() { docker exec halal-trader-pg psql -U trader -d halal_trader -tAq "$@"; }
     excluded=""
-    for t in daily_bars market_assets monthly_bars minute_bars events event_facts event_labels event_scores eps_facts annual_fundamentals etf_holdings; do
+    for t in daily_bars market_assets monthly_bars minute_bars events event_facts event_labels event_scores eps_facts annual_fundamentals etf_holdings news_stories; do
         excluded="$excluded --exclude-table-data=$t"
     done
     docker exec halal-trader-pg pg_dump -U trader -d halal_trader -Fc $excluded -f /tmp/backup.dump

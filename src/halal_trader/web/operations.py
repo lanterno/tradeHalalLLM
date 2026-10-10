@@ -50,8 +50,9 @@ PROCESSES: tuple[tuple[str, str, str], ...] = (
 
 # The host's backup timer (infra/server/systemd/halabot-backup.timer).
 BACKUP_AT_UTC = time(7, 0)
-# Tables `just backup` dumps without their rows: market data a run re-fetches
-# (the justfile's backup recipe; tests/test_operations.py keeps the two equal).
+# Tables `just backup` dumps without their rows: market data a run re-fetches,
+# and what is derived from it (the justfile's backup recipe;
+# tests/test_operations.py keeps the two equal).
 NOT_DUMPED = frozenset(
     {
         "daily_bars",
@@ -65,6 +66,7 @@ NOT_DUMPED = frozenset(
         "eps_facts",
         "annual_fundamentals",
         "etf_holdings",
+        "news_stories",
     }
 )
 BIGGEST = 8
