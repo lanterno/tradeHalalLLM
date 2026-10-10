@@ -32,6 +32,7 @@ from halal_trader.execution.alpaca_http import (
 logger = logging.getLogger(__name__)
 
 Adjustment = Literal["raw", "all"]
+MinuteFeed = Literal["sip", "iex"]
 
 _SYMBOLS_PER_REQUEST = 100
 _PAGE_LIMIT = 10_000
@@ -198,19 +199,28 @@ class AlpacaMarketData:
         return sorted(out.values(), key=lambda a: a.created_at, reverse=True)
 
     async def minute_bars(
-        self, symbol: str, *, start: datetime, end: datetime
+        self, symbol: str, *, start: datetime, end: datetime, feed: MinuteFeed = "sip"
     ) -> list[dict[str, Any]]:
-        """Raw SIP minute bars of one symbol in [start, end], as Alpaca returns them."""
-        return (await self.minute_bars_many([symbol], start=start, end=end)).get(symbol, [])
+        """Raw minute bars of one symbol in [start, end], as Alpaca returns them."""
+        bars = await self.minute_bars_many([symbol], start=start, end=end, feed=feed)
+        return bars.get(symbol, [])
 
     async def minute_bars_many(
-        self, symbols: Iterable[str], *, start: datetime, end: datetime
+        self,
+        symbols: Iterable[str],
+        *,
+        start: datetime,
+        end: datetime,
+        feed: MinuteFeed = "sip",
     ) -> dict[str, list[dict[str, Any]]]:
-        """Raw SIP minute bars of several symbols in [start, end], by symbol.
+        """Raw minute bars of several symbols in [start, end], by symbol.
 
-        One request carries up to ``_SYMBOLS_PER_REQUEST`` symbols and a page
-        holds ``_PAGE_LIMIT`` bars across them, so a session of a hundred names
-        takes about four requests instead of a hundred.
+        ``feed`` is SIP (the consolidated tape research stores) unless asked
+        otherwise; ``"iex"`` is only probed (the news engine's D8), never
+        stored as history. One request carries up to ``_SYMBOLS_PER_REQUEST``
+        symbols and a page holds ``_PAGE_LIMIT`` bars across them, so a
+        session of a hundred names takes about four requests instead of a
+        hundred.
         """
         wanted = sorted({s.upper() for s in symbols})
         out: dict[str, list[dict[str, Any]]] = {}
@@ -220,7 +230,7 @@ class AlpacaMarketData:
                 "timeframe": "1Min",
                 "start": iso_z(start),
                 "end": iso_z(min(end, datetime.now(UTC) - SIP_EMBARGO)),
-                "feed": "sip",
+                "feed": feed,
                 "adjustment": "raw",
                 "limit": _PAGE_LIMIT,
             }
