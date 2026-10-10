@@ -34,7 +34,7 @@ import logging
 from collections.abc import Collection, Iterable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -48,6 +48,9 @@ from halal_trader.market_hours import (
     trading_day_end_utc,
     trading_day_start_utc,
 )
+
+if TYPE_CHECKING:
+    from halal_trader.data.alpaca_market import AlpacaMarketData, NewsArticle
 
 logger = logging.getLogger(__name__)
 
@@ -338,19 +341,20 @@ async def missing_units(engine: AsyncEngine, *, now: datetime | None = None) -> 
     ]
 
 
-async def _news(market: Any, old: str, lo: date, hi: date, pages: int) -> list[Any]:
-    articles: list[Any] = await market.news(
+async def _news(
+    market: AlpacaMarketData, old: str, lo: date, hi: date, pages: int
+) -> list[NewsArticle]:
+    return await market.news(
         [old],
         start=trading_day_start_utc(lo),
         end=trading_day_end_utc(hi) - timedelta(seconds=1),
         max_pages=pages,
     )
-    return articles
 
 
 async def backfill_renamed_news(
     engine: AsyncEngine,
-    market: Any,
+    market: AlpacaMarketData,
     *,
     now: datetime | None = None,
 ) -> int:

@@ -45,7 +45,7 @@ from collections import Counter, defaultdict
 from collections.abc import Collection, Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Any, Final, Literal
+from typing import TYPE_CHECKING, Final, Literal
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -53,6 +53,9 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from halal_trader.events import renames
 from halal_trader.events.headline_patterns import ANALYST_SLOT, EARN_CO, GUIDE_CO
 from halal_trader.market_hours import MARKET_TZ, trading_day_end_utc, trading_day_start_utc
+
+if TYPE_CHECKING:
+    from halal_trader.data.alpaca_market import AlpacaMarketData
 
 logger = logging.getLogger(__name__)
 
@@ -283,7 +286,7 @@ async def learn_slots(
     return dict(counts)
 
 
-async def _asset_names(engine: AsyncEngine, market: Any) -> dict[str, set[str]]:
+async def _asset_names(engine: AsyncEngine, market: AlpacaMarketData) -> dict[str, set[str]]:
     """Every name each symbol has had in ``market_assets`` or Alpaca's inactive list."""
     names: dict[str, set[str]] = defaultdict(set)
     async with engine.connect() as conn:
@@ -329,7 +332,9 @@ async def _persist(engine: AsyncEngine, rows: list[AliasRow]) -> None:
             )
 
 
-async def build_aliases(engine: AsyncEngine, market: Any, *, force: bool = False) -> int:
+async def build_aliases(
+    engine: AsyncEngine, market: AlpacaMarketData, *, force: bool = False
+) -> int:
     """Learn every symbol's aliases and store them (replacing this version's); returns rows.
 
     Refuses (``renames.RenamedNewsError``) while a month of the renamed
