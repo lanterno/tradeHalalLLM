@@ -24,6 +24,7 @@ from halabot.playbooks.loader import (
     batches_of,
     check_calendar,
     check_gate_units,
+    gate_pins,
     register_gate_units,
     sane,
     sue_last_exit,
@@ -230,6 +231,60 @@ async def test_pinning_is_idempotent_and_never_a_trial(engine: AsyncEngine) -> N
     assert (row.name, row.kind) == (GATE_UNITS_NAME, "gate-units")
     assert row.config == {"gate": "sue", "units_sha": first}
     assert "active_sr_period" not in (row.metrics or {})  # never counted for the DSR
+
+
+async def test_a_gate_keeps_its_first_pin(engine: AsyncEngine) -> None:
+    """One pin per gate: a different set is refused, the same set again is a no-op."""
+    first = frozenset({("AAA", date(2017, 5, 1)), ("AAA", date(2017, 5, 8))})
+    sha = await register_gate_units(engine, "sue", first)
+    widened = first | {("MSFT", date(2019, 5, 1))}  # a train-era unit slipped into the set
+    with pytest.raises(WindowLocked, match="already pinned"):
+        await register_gate_units(engine, "sue", widened)
+    with pytest.raises(WindowLocked, match="already pinned"):
+        await register_gate_units(engine, "sue", [("AAA", date(2017, 5, 1))])
+    assert await register_gate_units(engine, "sue", first) == sha
+    assert await gate_pins(engine, "sue") == {sha}
+    with pytest.raises(WindowLocked, match="not pinned"):
+        await _gate("sue", widened).verify(engine)
+    await _gate("sue", first).verify(engine)
+    # Another gate pins its own set.
+    calib = frozenset({("AAA", date(2016, 3, 7))})
+    assert await register_gate_units(engine, "calib", calib) == unit_set_sha(calib)
+    async with engine.connect() as conn:
+        assert await conn.scalar(text("SELECT count(*) FROM quant_trials")) == 2
+
+
+async def test_a_pin_must_hash_to_the_expected_sha(engine: AsyncEngine) -> None:
+    """The units plan passes its own sha: a set that differs from it is never pinned."""
+    plan = frozenset({("AAA", date(2016, 3, 7)), ("BBB", date(2016, 3, 8))})
+    want = unit_set_sha(plan)
+    with pytest.raises(WindowLocked, match="not the expected"):
+        await register_gate_units(
+            engine, "g1", plan - {("BBB", date(2016, 3, 8))}, expected_sha=want
+        )
+    assert await gate_pins(engine, "g1") == set()
+    assert await register_gate_units(engine, "g1", plan, expected_sha=want) == want
+
+
+async def test_two_pins_for_one_gate_open_neither(engine: AsyncEngine) -> None:
+    """A race that left two pins (or a row written by hand) keeps the gate shut."""
+    a = frozenset({("AAA", date(2025, 12, 4))})
+    b = frozenset({("BBB", date(2025, 12, 5))})
+    repo = QuantTrialRepoImpl(engine)
+    for units in (a, b):  # what two concurrent registrations would leave
+        await repo.record_trial(
+            name=GATE_UNITS_NAME,
+            kind="gate-units",
+            config={"gate": "reactor", "units_sha": unit_set_sha(units)},
+        )
+    assert await gate_pins(engine, "reactor") == {unit_set_sha(a), unit_set_sha(b)}
+    for units in (a, b):
+        guard = _gate("reactor", units)
+        with pytest.raises(WindowLocked, match="2 pinned unit sets"):
+            await guard.verify(engine)
+        assert not guard.allows(*next(iter(units)))
+        with pytest.raises(WindowLocked, match="already pinned"):
+            await register_gate_units(engine, "reactor", units)
 
 
 # ── the calendar ──
