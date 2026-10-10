@@ -117,7 +117,51 @@ def test_the_dry_run_prints_each_part_and_the_estimate(
     assert lines[3].split()[:7] == ["gate_g1", "2", "1", "0", "1", "1", "1"]
     assert "unique units 3; to fetch 3; about 3 request(s), 0.0 h at 100 a minute" in lines[4]
     assert "selection: g1.stories 1" in result.output
+    assert "SUE complement" not in result.output  # no gate_sue part
     assert asked == [None] and made == [] and market.calls == []  # nothing fetched
+
+
+def test_the_dry_run_says_how_many_sue_events_meet_h1s_units(
+    database_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sue = UnitPlan({"gate_sue": frozenset({("A", D1)})})
+
+    async def h1_plan(engine: Any, *, parts: Any = None, counts: Counter[str]) -> UnitPlan:
+        counts.update({"sue.h1_overlap": 7, "sue.complement": 40})
+        return sue
+
+    monkeypatch.setattr(units, "h1_plan", h1_plan)
+
+    result = CliRunner().invoke(cli, ["data", "minutes", "--plan", "h1", "--dry-run"])
+
+    assert result.exit_code == 0, result.output
+    assert (
+        "gate_sue: 7 SUE complement event(s) dropped because their units meet the train or "
+        "validation part" in result.output.replace("\n", " ")
+    )
+
+
+@pytest.mark.parametrize("dry_run", [True, False])
+def test_a_plan_that_fails_its_check_is_refused_before_anything_is_fetched(
+    database_url: str, monkeypatch: pytest.MonkeyPatch, dry_run: bool
+) -> None:
+    async def h1_plan(engine: Any, **kwargs: Any) -> UnitPlan:
+        UnitPlan({"gate_reactor": frozenset({("A", date(2025, 6, 2))})}).check()
+        raise AssertionError("check() passed")
+
+    monkeypatch.setattr(units, "h1_plan", h1_plan)
+    monkeypatch.setattr(units, "busy", lambda now: None)
+    market, made = _market(monkeypatch)
+
+    args = ["data", "minutes", "--plan", "h1", *(["--dry-run"] if dry_run else [])]
+    result = CliRunner().invoke(cli, args)
+
+    assert result.exit_code == 1
+    assert "plan h1 refused, nothing fetched: gate_reactor: 1 unit(s) outside" in " ".join(
+        result.output.split()
+    )
+    assert "Traceback" not in result.output
+    assert made == [] and market.calls == [] and _done(database_url) == set()
 
 
 def test_the_dry_run_takes_the_parts_asked(
