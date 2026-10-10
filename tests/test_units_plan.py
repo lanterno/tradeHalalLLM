@@ -11,25 +11,30 @@ from datetime import UTC, date, datetime, time, timedelta
 import pytest
 
 from halabot.playbooks.loader import GATE_RANGES, unit_set_sha
+from halabot.playbooks.types import Session, path_days
 from halal_trader.data.minutes import session_bounds
-from halal_trader.events import units
+from halal_trader.events import h1, stories, taxonomy, units
 from halal_trader.events.intraday import Headline
 from halal_trader.events.study import Observation
 from halal_trader.events.units import (
     GateStory,
+    PlanError,
     StoryRef,
     SueEvent,
     UnitPlan,
-    broad_eligible,
     busy,
     calib_units,
     estimate,
+    g1_path_sessions,
     g1_units,
     hours_at,
+    in_universe,
     news_times,
+    nsn_by_cutoff,
     order_g1,
     path,
     prev_close_s,
+    reaction_sessions,
     reactor_units,
     requests_for,
     sessions_between,
@@ -51,6 +56,7 @@ def ref(
     session: date,
     *,
     nsn: bool = False,
+    nsn_fast: bool | None = None,
     type_close: str = "analyst_downgrade",
     substantive: bool = True,
     has_8k: bool = False,
@@ -60,6 +66,7 @@ def ref(
         symbol=symbol,
         session=session,
         nsn=nsn,
+        nsn_fast=nsn if nsn_fast is None else nsn_fast,
         type_close=type_close,
         substantive=substantive,
         has_8k=has_8k,
@@ -115,24 +122,36 @@ def test_the_plan_pins_each_part_with_the_loaders_sha() -> None:
 
 
 def test_nothing_after_2024_except_the_reactors_set() -> None:
+    UnitPlan({"gate_reactor": frozenset({("AAPL", date(2026, 3, 2))})}).check()
     late = frozenset({("AAPL", date(2025, 1, 2))})
-    UnitPlan({"gate_reactor": late}).check()
-    with pytest.raises(ValueError, match="validation: 1 unit"):
+    with pytest.raises(PlanError, match="validation: 1 unit"):
         UnitPlan({"validation": late}).check()
-    with pytest.raises(ValueError, match="unknown part"):
+    with pytest.raises(PlanError, match="unknown part"):
         UnitPlan({"holdout": frozenset()}).check()
+    assert issubclass(PlanError, ValueError)
 
 
-def test_the_plan_reports_gate_units_outside_their_gates_dates() -> None:
-    plan = UnitPlan(
-        {
-            "gate_g1": frozenset({("A", date(2016, 9, 30)), ("A", date(2016, 10, 3))}),
-            "gate_reactor": frozenset({("B", date(2026, 3, 2))}),
-            "train": frozenset({("C", date(2018, 1, 2))}),
-        }
-    )
-    assert plan.outside_gate_ranges() == {"gate_g1": 1}
+def test_the_plan_refuses_gate_units_outside_their_gates_dates() -> None:
+    inside = {
+        "gate_g1": frozenset({("A", date(2016, 9, 30))}),
+        "gate_calib": frozenset({("A", date(2016, 1, 4))}),
+        "gate_sue": frozenset({("A", GATE_RANGES["sue"][1])}),
+        "gate_reactor": frozenset({("B", date(2025, 12, 1)), ("B", date(2026, 10, 9))}),
+        "train": frozenset({("C", date(2018, 1, 2))}),
+    }
+    UnitPlan(inside).check()
     assert set(units.GATE_OF_PART.values()) == set(GATE_RANGES)
+    outside = {
+        "gate_g1": ("A", date(2016, 10, 3)),
+        "gate_calib": ("A", date(2015, 12, 31)),
+        "gate_sue": ("A", GATE_RANGES["sue"][1] + timedelta(days=1)),
+        "gate_reactor": ("B", date(2025, 6, 2)),  # in 2025, before the gate's own bars
+    }
+    for part, unit in outside.items():
+        plan = UnitPlan(inside | {part: inside[part] | {unit}})
+        gate = units.GATE_OF_PART[part]
+        with pytest.raises(PlanError, match=rf"{part}: 1 unit\(s\) outside the {gate} gate"):
+            plan.check()
 
 
 # ── stories ───────────────────────────────────────────────────
@@ -151,6 +170,67 @@ def test_the_session_before_stays_inside_the_window() -> None:
     got = story_units(ref("AAPL", first, has_8k=True), *units.VALIDATION)
     assert ("AAPL", date(2021, 12, 31)) not in got
     assert min(d for _, d in got) == first
+    assert reaction_sessions(ref("AAPL", first, has_8k=True), first) == [first]
+
+
+def test_an_8k_story_in_the_universe_only_the_session_before_holds_that_path() -> None:
+    s, before = date(2018, 3, 6), date(2018, 3, 5)
+    start, cap = units.TRAIN
+    story = ref("AAPL", s, has_8k=True)
+    assert reaction_sessions(story, start) == [s, before]
+
+    only_before = story_units(story, start, cap, eligible=lambda d: d == before)
+    assert only_before == {("AAPL", d) for d in path(before, 4, cap)}
+    only_s = story_units(story, start, cap, eligible=lambda d: d == s)
+    assert only_s == {("AAPL", d) for d in path(s, 4, cap)} | {("AAPL", before)}
+    assert story_units(story, start, cap) == only_s | only_before
+    assert story_units(story, start, cap, eligible=lambda d: False) == set()
+    asked: list[date] = []
+
+    def never(day: date) -> bool:
+        asked.append(day)
+        return False
+
+    assert story_units(ref("AAPL", s), start, cap, eligible=never) == set()
+    assert asked == [s]  # without an 8-K the session before is never asked
+
+
+def test_train_skips_the_specs_five_types_and_filing_other() -> None:
+    assert units.TRAIN_SKIP_TYPES == {
+        "noise",
+        "law_firm",
+        "mover",
+        "other",
+        "analyst_other",
+        "filing_other",
+    }
+    assert units.TRAIN_SKIP_TYPES <= set(taxonomy.TYPES)
+    assert vars(units)["FILING_KINDS"] is taxonomy.FILING_KINDS  # imported, not a copy
+
+
+# ── NSN by the cutoff, at each news lag ───────────────────────
+
+
+def test_the_fastest_news_lag_is_h1s_shortest_sensitivity() -> None:
+    assert units.FASTEST_NEWS_LAG == min(h1.NEWS_LAGS.values())
+    assert units.FASTEST_NEWS_LAG < stories.NEWS_LAG
+
+
+@pytest.mark.parametrize("day", [date(2023, 5, 2), date(2023, 11, 24)])  # full day, early close
+def test_nsn_by_the_cutoff_moves_with_the_news_lag(day: date) -> None:
+    cutoff = Session.of(day).entry_cutoff
+    fast, slow = units.FASTEST_NEWS_LAG, timedelta(seconds=1200)
+    shift = stories.NEWS_LAG - fast  # items usable 540 s sooner
+    second = timedelta(seconds=1)
+    assert nsn_by_cutoff(cutoff, day) and nsn_by_cutoff(cutoff, day, lag=fast)
+    assert not nsn_by_cutoff(cutoff + second, day)
+    assert nsn_by_cutoff(cutoff + second, day, lag=fast)
+    assert nsn_by_cutoff(cutoff + shift, day, lag=fast)
+    assert not nsn_by_cutoff(cutoff + shift + second, day, lag=fast)
+    # Usable later: NSN later, a subset of the stories at 600 s.
+    assert nsn_by_cutoff(cutoff - timedelta(seconds=600), day, lag=slow)
+    assert not nsn_by_cutoff(cutoff - timedelta(seconds=599), day, lag=slow)
+    assert not nsn_by_cutoff(None, day) and not nsn_by_cutoff(None, day, lag=fast)
 
 
 def test_g1_puts_the_nsn_stories_first_then_the_other_negative_ones() -> None:
@@ -166,6 +246,25 @@ def test_g1_puts_the_nsn_stories_first_then_the_other_negative_ones() -> None:
     assert all(s.nsn for s in ordered[:5]) and not any(s.nsn for s in ordered[5:])
     assert ordered == order_g1(list(reversed(pool)), seed=7)  # seeded, not input order
     assert [s.symbol for s in ordered] != [s.symbol for s in order_g1(pool, seed=8)]
+
+
+@pytest.mark.parametrize(
+    ("day", "n"),
+    [
+        (date(2016, 9, 26), 3),
+        (date(2016, 9, 27), 3),  # its spare, 09-30, is a unit
+        (date(2016, 9, 28), 3),  # no spare: 10-03 is outside the gate
+        (date(2016, 9, 29), 2),
+        (date(2016, 9, 30), 1),
+    ],
+)
+def test_g1_paths_ask_only_for_the_sessions_the_gate_holds(day: date, n: int) -> None:
+    story = GateStory("s", "A", day, True)
+    assert g1_path_sessions(story) == n
+    assert {("A", d) for d in path_days(day, n)} <= g1_units([story])
+    assert g1_path_sessions(story, hold=1) == 1
+    with pytest.raises(ValueError, match="at least one"):
+        g1_path_sessions(story, hold=0)
 
 
 def test_g1_keeps_at_most_500_stories_on_paths_inside_its_range(
@@ -196,14 +295,18 @@ class Daily:
 
 @dataclass
 class Ctx:
-    """Eligible for news at S's open only (``late``), or at any time (``broad``)."""
+    """BROAD-eligible for news at S's open only (``late``) or at any time
+    (``broad``); PRIMARY-eligible at any time (``primary``)."""
 
     broad: set[str] = field(default_factory=set)
     late: set[str] = field(default_factory=set)
+    primary: set[str] = field(default_factory=set)
     asked: list[tuple[str, date, datetime, str]] = field(default_factory=list)
 
     def eligibility(self, symbol: str, session: date, *, at_news: datetime, universe: str) -> Elig:
         self.asked.append((symbol, session, at_news, universe))
+        if universe == "primary":
+            return Elig(symbol in self.primary)
         late_ok = symbol in self.late and at_news >= session_bounds(session)[0]
         return Elig(symbol in self.broad or late_ok)
 
@@ -214,16 +317,30 @@ class Ctx:
         return 1.0
 
 
-def test_broad_is_asked_at_both_news_times_a_story_can_have() -> None:
+def test_the_universe_is_asked_at_both_news_times_a_story_can_have() -> None:
     s = date(2018, 3, 6)
     before, opening = news_times(s)
     assert before == session_bounds(date(2018, 3, 5))[1] - timedelta(seconds=1)
     assert opening == session_bounds(s)[0]
     ctx = Ctx(broad={"A"}, late={"B"})
-    assert broad_eligible(ctx, "A", s) and broad_eligible(ctx, "B", s)
-    assert not broad_eligible(ctx, "C", s)
-    assert {u for *_, u in ctx.asked} == {"broad"}
-    assert [t for sym, _, t, _ in ctx.asked if sym == "C"] == [before, opening]
+    assert in_universe(ctx, "A", s) and in_universe(ctx, "B", s)
+    assert not in_universe(ctx, "C", s)
+    assert [(t, u) for sym, _, t, u in ctx.asked if sym == "C"] == [
+        (before, "broad"),
+        (opening, "broad"),
+        (before, "primary"),
+        (opening, "primary"),
+    ]
+
+
+def test_a_name_primary_admits_and_broad_does_not_is_in_the_universe() -> None:
+    # A halal share class wins PRIMARY; a more liquid class that only an index
+    # veto keeps out of PRIMARY wins BROAD, where the first is share_class.
+    ctx = Ctx(broad={"GOOG"}, primary={"GOOGL"})
+    s = date(2018, 3, 6)
+    assert in_universe(ctx, "GOOGL", s) and in_universe(ctx, "GOOG", s)
+    assert not in_universe(ctx, "MSFT", s)
+    assert {u for sym, *_, u in ctx.asked if sym == "GOOGL"} == {"broad", "primary"}
 
 
 def test_the_previous_close_is_in_session_units() -> None:
