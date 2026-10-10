@@ -713,6 +713,69 @@ async def test_levels_do_not_depend_on_where_the_load_starts(engine: AsyncEngine
     assert math.isnan(late.hi252_s) and math.isnan(late.lo252_s)
 
 
+async def test_a_level_needs_a_bar_on_nine_in_ten_of_its_sessions(engine: AsyncEngine) -> None:
+    world = await _world(engine)
+    i = _i(PREV)
+    window = SESSIONS[i - 251 : i + 1]
+    window20 = SESSIONS[i - 19 : i + 1]
+    # Holes before the sigma window (the 60 sessions through S-1) leave sigma whole.
+    gaps = {
+        "MOST": set(SESSIONS[i - 200 : i - 175]),  # 25 missing: 227 of 252
+        "FEW": set(SESSIONS[i - 200 : i - 174]),  # 26 missing: 226 of 252
+        "TWO": {SESSIONS[i - 10], SESSIONS[i - 5]},  # 18 of 20
+        "THREE": {SESSIONS[i - 12], SESSIONS[i - 10], SESSIONS[i - 5]},  # 17 of 20
+    }
+    for cik, (name, gone) in enumerate(gaps.items(), start=980):
+        await _clone(engine, "UNM", name, cik=cik)
+        await _drop(engine, name, gone)
+    ctx = await _load(engine, [*SYMBOLS, *gaps])
+
+    got = {s: ctx.pre_event(s, S, PRE_OPEN) for s in gaps}
+
+    highs, lows = world.highs["UNM"], world.lows["UNM"]  # A(S) = 1: adjusted = S units
+
+    def level(days: list[date], gone: set[date]) -> tuple[float, float]:
+        kept = [d for d in days if d not in gone]
+        return max(highs[d] for d in kept), min(lows[d] for d in kept)
+
+    most, few, two, three = (got[s] for s in gaps)
+    assert most is not None and few is not None and two is not None and three is not None
+    assert (most.hi252_s, most.lo252_s) == pytest.approx(level(window, gaps["MOST"]), rel=1e-12)
+    assert math.isnan(few.hi252_s) and math.isnan(few.lo252_s)
+    assert few.hi20_s == most.hi20_s and few.lo20_s == most.lo20_s
+    assert (two.hi20_s, two.lo20_s) == pytest.approx(level(window20, gaps["TWO"]), rel=1e-12)
+    assert math.isnan(three.hi20_s) and math.isnan(three.lo20_s)
+    assert (three.hi252_s, three.lo252_s) == pytest.approx(level(window, gaps["THREE"]), rel=1e-12)
+
+
+async def test_a_recycled_ticker_gets_no_252_session_level_from_a_few_bars(
+    engine: AsyncEngine,
+) -> None:
+    world = await _world(engine)
+    i = _i(PREV)
+    window = SESSIONS[i - 251 : i + 1]
+    # An earlier company traded as RCY to the end of 2022; the ticker's new
+    # company starts 100 sessions before S. The first raw bar is the old one's.
+    await _clone(engine, "UNM", "RCY", cik=995)
+    await _drop(engine, "RCY", {d for d in SESSIONS if date(2023, 1, 1) <= d < SESSIONS[i - 99]})
+    names = [*SYMBOLS, "RCY"]
+    loads = [
+        await PitContext.load(engine, symbols=names, start=start, end=end)
+        for start, end in ((S, S), (START, END), (date(2022, 11, 1), END))
+    ]
+
+    answers = [ctx.pre_event("RCY", S, PRE_OPEN) for ctx in loads]
+
+    assert date(2023, 1, 1) < window[0] < SESSIONS[i - 99]  # the window holds 100 bars
+    assert len({_comparable(pe) for pe in answers}) == 1
+    pe = answers[0]
+    assert pe is not None
+    assert math.isnan(pe.hi252_s) and math.isnan(pe.lo252_s)
+    window20 = SESSIONS[i - 19 : i + 1]
+    assert pe.hi20_s == pytest.approx(max(world.highs["UNM"][d] for d in window20), rel=1e-12)
+    assert pe.lo20_s == pytest.approx(min(world.lows["UNM"][d] for d in window20), rel=1e-12)
+
+
 # ── look-ahead ───────────────────────────────────────────────────
 
 
