@@ -11,6 +11,8 @@ import pytest
 
 from halabot.playbooks.records import Leg as SimLeg
 from halal_trader.events.stats import (
+    MAX_DROPPED_SHARE,
+    BootstrapCI,
     ClusteredMean,
     Leg,
     LegLike,
@@ -261,7 +263,15 @@ def test_the_bootstrap_resamples_whole_clusters() -> None:
     values = [0.0, 0.0, 1.0, 1.0, 1.0, 1.0]
     clusters = ["A", "A", "B", "B", "B", "B"]
 
-    assert cluster_bootstrap_ci(_mean_of(values), clusters) == (0.0, 1.0)
+    assert cluster_bootstrap_ci(_mean_of(values), clusters) == BootstrapCI(0.0, 1.0, 2000, 0)
+
+
+def _replay(
+    stat: Callable[[Sequence[int]], float], groups: list[list[int]], b: int, seed: int
+) -> list[float]:
+    """The statistic on each resample of the stated scheme, in draw order."""
+    draws = np.random.default_rng(seed).integers(0, len(groups), size=(b, len(groups)))
+    return [stat([i for g in row for i in groups[g]]) for row in draws.tolist()]
 
 
 def test_the_bootstrap_is_seeded_and_follows_the_stated_scheme() -> None:
@@ -272,10 +282,9 @@ def test_the_bootstrap_is_seeded_and_follows_the_stated_scheme() -> None:
 
     got = cluster_bootstrap_ci(stat, clusters, b=500, seed=11)
 
-    groups = [list(range(4 * g, 4 * g + 4)) for g in range(20)]
-    draws = np.random.default_rng(11).integers(0, 20, size=(500, 20))
-    replay = [stat([i for g in row for i in groups[g]]) for row in draws.tolist()]
-    assert got == pytest.approx(tuple(np.quantile(replay, [0.025, 0.975])), rel=1e-12)
+    replay = _replay(stat, [list(range(4 * g, 4 * g + 4)) for g in range(20)], 500, 11)
+    assert (got.lo, got.hi) == pytest.approx(tuple(np.quantile(replay, [0.025, 0.975])), rel=1e-12)
+    assert (got.draws, got.dropped) == (500, 0)
     assert cluster_bootstrap_ci(stat, clusters, b=500, seed=11) == got
     assert cluster_bootstrap_ci(stat, clusters, b=500, seed=12) != got
 
@@ -287,28 +296,56 @@ def test_the_bootstrap_interval_agrees_with_cr1_on_a_large_sample() -> None:
     values = [float(shocks[g] + rng.normal(0.002, 0.01)) for g in clusters]
     cm = clustered_mean(values, clusters)
 
-    lo, hi = cluster_bootstrap_ci(_mean_of(values), clusters)
+    ci = cluster_bootstrap_ci(_mean_of(values), clusters)
 
     assert cm is not None
     cr_lo, cr_hi = cm.ci(0.95)
-    assert (hi - lo) == pytest.approx(cr_hi - cr_lo, rel=0.15)
-    assert lo < cm.mean < hi
+    assert (ci.hi - ci.lo) == pytest.approx(cr_hi - cr_lo, rel=0.15)
+    assert ci.lo < cm.mean < ci.hi
 
 
-def test_the_bootstrap_drops_undefined_draws_and_needs_two_clusters() -> None:
-    values = [0.0, 1.0, 2.0]
-    clusters = ["a", "b", "c"]
+def test_the_bootstrap_counts_the_resamples_it_leaves_out() -> None:
+    # Five dates of one value each; the statistic is undefined (no spread) on
+    # a resample that draws one date five times: 5 / 5^5 of draws, about 0.16%.
+    values = [0.0, 1.0, 2.0, 3.0, 4.0]
+    groups = [[i] for i in range(5)]
 
     def stat(idx: Sequence[int]) -> float:
         picked = [values[i] for i in idx]
-        return math.nan if 0.0 in picked else float(np.mean(picked))
+        return math.nan if len(set(picked)) == 1 else float(np.mean(picked))
 
-    lo, hi = cluster_bootstrap_ci(stat, clusters, b=200)
-    assert 1.0 <= lo <= hi <= 2.0
-    with pytest.raises(ValueError):
+    ci = cluster_bootstrap_ci(stat, list(range(5)), b=4000, seed=7)
+
+    replay = np.array(_replay(stat, groups, 4000, 7))
+    undefined = int(np.isnan(replay).sum())
+    assert 0 < undefined <= 40  # the case this test is about: a few, under 1%
+    assert (ci.draws, ci.dropped) == (4000, undefined)
+    finite = replay[np.isfinite(replay)]
+    assert (ci.lo, ci.hi) == pytest.approx(tuple(np.quantile(finite, [0.025, 0.975])))
+
+
+@pytest.mark.parametrize(("b", "allowed"), [(2000, 20), (200, 2), (99, 0)])
+def test_more_than_one_percent_of_resamples_undefined_is_an_error(b: int, allowed: int) -> None:
+    clusters = ["a", "b", "c", "d"]
+
+    def first(k: int) -> Callable[[Sequence[int]], float]:
+        """Undefined on the first ``k`` draws (the statistic is called once per draw)."""
+        calls = iter(range(b))
+        return lambda idx: math.nan if next(calls) < k else float(len(idx))
+
+    assert MAX_DROPPED_SHARE * b >= allowed > MAX_DROPPED_SHARE * b - 1
+    ci = cluster_bootstrap_ci(first(allowed), clusters, b=b)
+    assert (ci.draws, ci.dropped) == (b, allowed)
+    with pytest.raises(ValueError, match=f"undefined on {allowed + 1} of {b} resamples"):
+        cluster_bootstrap_ci(first(allowed + 1), clusters, b=b)
+
+
+def test_the_bootstrap_needs_two_clusters_and_a_defined_statistic() -> None:
+    values = [0.0, 1.0, 2.0]
+    with pytest.raises(ValueError, match="two clusters"):
         cluster_bootstrap_ci(_mean_of(values), ["a", "a", "a"])
-    with pytest.raises(ValueError):
-        cluster_bootstrap_ci(lambda idx: math.nan, clusters, b=10)
+    with pytest.raises(ValueError, match="undefined on 10 of 10"):
+        cluster_bootstrap_ci(lambda idx: math.nan, ["a", "b", "c"], b=10)
 
 
 # ── TOST ─────────────────────────────────────────────────────────
