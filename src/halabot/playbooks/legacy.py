@@ -71,9 +71,28 @@ another set of the same size, another run's trades, a missing trade). Then:
    (``sim_only`` with the simulator's reason, ``study_only``), and R1
    passes the dropped-set check only when both lists are empty and the
    set-aside is within its cap. The coverage skips (``units_missing``,
-   ``spy_missing``, ``halted_all_day``) and ``blocked_open`` are compared,
-   not set aside: the study on the same rows must drop those headlines too
-   (no stock bar, no SPY bar), or the lists show them.
+   ``spy_missing``, ``halted_all_day``) are compared, not set aside. The
+   study drops those headlines too only where a done unit has no stored
+   bar: ``halted_all_day``, ``units_missing`` for a stock session with no
+   bar while a daily bar exists, and ``spy_missing`` for a SPY session with
+   no bar. In their other cases bars can be stored, so the study computes
+   the headline and R1 fails by construction (``sim_only``):
+
+   * a stock or SPY unit of S that is not done (``units_missing`` or
+     ``spy_missing`` from the loader's done check, whatever is stored);
+   * a SPY session with bars but no A-factor (``spy_missing``);
+   * a session whose every stored bar the sanity rule cut (the loader then
+     sees none: ``halted_all_day``, ``units_missing`` or ``spy_missing``).
+
+   **So the R1 gate first asserts that every unit of H is done: 100%, not
+   D4's 99%** (each headline's (symbol, S) and SPY's S, on every session of
+   H; :func:`r1_units_not_done` must be empty), and does not run
+   otherwise. R0 needs it as well: its market stub raises on any fetch,
+   and ``intraday.minute_series`` backfills a unit with no stored bar,
+   which fetches it unless it is done. The other two cases are not set
+   aside: each fails R1 in ``sim_only`` until it is explained.
+   ``blocked_open`` cannot occur (one headline per symbol and day, each
+   held only through S); it would show in ``sim_only`` too.
 4. On the headlines both sides kept (:attr:`R1Dropped.kept`), the gate
    requires ``|Δr| <= 1e-10``.
 
@@ -139,11 +158,11 @@ from halabot.playbooks.types import (
     Transition,
     WorkingOrder,
 )
-from halal_trader.data.minutes import BarArrays
+from halal_trader.data.minutes import BarArrays, unit
 from halal_trader.events import study
 from halal_trader.events.intraday import _PLAUSIBLE as STUDY_PLAUSIBLE  # read, not copied
 from halal_trader.events.intraday import LATENCY
-from halal_trader.market_hours import MARKET_TZ
+from halal_trader.market_hours import MARKET_TZ, is_trading_day
 
 SPY: Final = "SPY"
 CLOSE_ENTRY_AFTER_OPEN: Final = timedelta(seconds=1)  # past the 09:30 pseudo-bar's start
@@ -361,6 +380,26 @@ def r1_set_aside(summary: RunSummary) -> dict[str, tuple[str, ...]]:
     for sid in summary.spy_drop_from_start_ids:
         out.setdefault(sid, []).append(SPY_BARS_CUT)
     return {sid: tuple(out[sid]) for sid in sorted(out)}
+
+
+def r1_units_not_done(
+    headlines: Mapping[str, tuple[str, date]], done: Collection[str]
+) -> tuple[str, ...]:
+    """The minute units R1 reads that are not done (``SYMBOL:YYYY-MM-DD``), sorted.
+
+    ``headlines`` is H (id -> (symbol, New York day)) and ``done`` the
+    backfill's done units (``minutes.done_units``). R1 reads each headline's
+    (symbol, day) and SPY's day, on trading days only (on another day both
+    sides drop the headline without reading a bar). The R1 gate runs only
+    when this is empty (module docstring, step 3).
+    """
+    units = {
+        unit(name, day)
+        for symbol, day in headlines.values()
+        if is_trading_day(day)
+        for name in (symbol, SPY)
+    }
+    return tuple(u for u in sorted(units) if u not in done)
 
 
 def reactor_plausible(trade: TradeRecord) -> bool:
@@ -636,6 +675,7 @@ __all__ = [
     "daily_config",
     "r1_dropped",
     "r1_set_aside",
+    "r1_units_not_done",
     "reactor_config",
     "reactor_plausible",
     "reactor_story",
