@@ -18,6 +18,7 @@ from halal_trader.events.renames import (
     RenamedNewsError,
     backfill_renamed_news,
     held_since,
+    later_tickers,
     missing_units,
     months,
     news_window,
@@ -84,6 +85,33 @@ def test_a_chain_of_tickers_hands_over_on_consecutive_sessions() -> None:
     assert window("BBBY") == (date(2025, 8, 29), date(2026, 8, 14))
     assert window("AAXN") == (date(2017, 4, 6), date(2021, 1, 25))
     assert old_tickers("AAPL") == ()
+
+
+def test_later_tickers_follow_a_company_through_its_renames(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert later_tickers("IAC") == ("PPLI",)
+    assert later_tickers("DWDP") == ("DD",)
+    assert later_tickers("PPLI") == () and later_tickers("AAPL") == ()
+    # Gardner Denver took IR at the close Ingersoll-Rand left it for TT: a
+    # recycled ticker, not a chain, so GDI's company never traded as TT.
+    assert later_tickers("GDI") == ("IR",)
+    assert later_tickers("IR") == ("TT",)
+    # The table maps each old ticker to today's symbol: no real chain.
+    assert all(len(later_tickers(old)) == 1 for old in TICKER_RENAMES)
+    monkeypatch.setattr(
+        renames,
+        "TICKER_RENAMES",
+        {
+            "OLDA": ("MIDA", date(2016, 2, 10)),  # OLDA -> MIDA -> NEWA, one company
+            "MIDA": ("NEWA", date(2016, 3, 4)),
+            "OLDB": ("MIDB", date(2016, 3, 4)),  # MIDB's own old company left it that day
+            "MIDB": ("NEWB", date(2016, 3, 4)),
+        },
+    )
+    assert later_tickers("OLDA") == ("MIDA", "NEWA")
+    assert later_tickers("MIDA") == ("NEWA",)
+    assert later_tickers("OLDB") == ("MIDB",)
 
 
 def test_a_ticker_another_company_held_first_starts_when_this_one_took_it() -> None:

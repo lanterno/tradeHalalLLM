@@ -21,7 +21,14 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from halal_trader.data.minutes import session_bounds
 from halal_trader.events import context as context_module
-from halal_trader.events.context import DailyPoint, PitContext, PreEvent, index_veto_only
+from halal_trader.events import renames
+from halal_trader.events.context import (
+    DailyPoint,
+    PitContext,
+    PreEvent,
+    Universe,
+    index_veto_only,
+)
 from halal_trader.events.earnings_parse import EXTRACTOR
 from halal_trader.market_hours import MARKET_TZ, is_trading_day
 from halal_trader.signals.indicators import atr
@@ -434,6 +441,85 @@ async def test_a_share_class_winner_that_fails_later_keeps_the_other_class_out(
     assert aaa.reason == failure
     assert (aab.reason, aab.eligible, aab.cik) == ("share_class", False, 100)
     assert ctx.eligibility("AAB", S, at_news=PRE_OPEN, universe="broad").reason == "share_class"
+
+
+async def test_a_renamed_companys_later_ticker_wins_its_cik_whatever_the_ranks(
+    engine: AsyncEngine,
+) -> None:
+    # Live screens hold IAC and PPLI under one CIK, with the same bars: they
+    # tie on liquidity and the universe's symbol order ranks IAC first. The
+    # story builder files the company's news under PPLI (renames.owner).
+    await _world(engine)
+    for symbol in ("IAC", "PPLI"):
+        await _clone(engine, "UNM", symbol, cik=1800227)
+    ctx = await _load(engine, [*SYMBOLS, "IAC", "PPLI"])
+
+    iac = ctx.eligibility("IAC", S, at_news=PRE_OPEN)
+    ppli = ctx.eligibility("PPLI", S, at_news=PRE_OPEN)
+
+    assert (iac.liquidity_rank, ppli.liquidity_rank) == (12, 13)  # IAC is the more liquid
+    assert (ppli.reason, ppli.eligible, ppli.cik) == ("ok", True, 1800227)
+    assert (iac.reason, iac.eligible) == ("share_class", False)
+    broad = {s: ctx.eligibility(s, S, at_news=PRE_OPEN, universe="broad") for s in ("IAC", "PPLI")}
+    assert (broad["IAC"].reason, broad["PPLI"].reason) == ("share_class", "ok")
+    # As for any winner, one that then fails its bars does not let the other step up.
+    await _drop(engine, "PPLI", {PREV})
+    ctx = await _load(engine, [*SYMBOLS, "IAC", "PPLI"])
+    assert ctx.eligibility("PPLI", S, at_news=PRE_OPEN).reason == "no_daily"
+    assert ctx.eligibility("IAC", S, at_news=PRE_OPEN).reason == "share_class"
+
+
+async def test_an_old_ticker_wins_where_the_screen_keeps_its_later_one_out(
+    engine: AsyncEngine,
+) -> None:
+    # Live 2021-10 to 2022-09: an index veto alone fails PPLI (the index held
+    # the company as IAC). PRIMARY admits IAC only, so IAC wins there; BROAD
+    # admits both, and PPLI wins.
+    await _world(engine)
+    await _clone(engine, "UNM", "IAC", cik=1800227)
+    await _clone(engine, "UNM", "PPLI", cik=1800227, verdict="not_halal", reasons=[VETO])
+    ctx = await _load(engine, [*SYMBOLS, "IAC", "PPLI"])
+
+    def reasons(universe: Universe) -> dict[str, str]:
+        return {
+            s: ctx.eligibility(s, S, at_news=PRE_OPEN, universe=universe).reason
+            for s in ("IAC", "PPLI")
+        }
+
+    assert reasons("primary") == {"IAC": "ok", "PPLI": "not_halal"}
+    assert reasons("broad") == {"IAC": "share_class", "PPLI": "ok"}
+
+
+async def test_a_chain_of_renames_keeps_the_last_ticker_and_a_recycled_one_is_no_chain(
+    engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        renames,
+        "TICKER_RENAMES",
+        {
+            "ABLE": ("MIDL", date(2016, 2, 10)),  # one company: ABLE, MIDL, then ZEST
+            "MIDL": ("ZEST", date(2016, 3, 4)),
+            "CORE": ("RCY", date(2016, 3, 4)),  # took RCY the day RCY's company became ZOOM
+            "RCY": ("ZOOM", date(2016, 3, 4)),
+        },
+    )
+    await _world(engine)
+    for symbol in ("ABLE", "ZEST"):  # the screen holds the chain's ends only
+        await _clone(engine, "UNM", symbol, cik=991)
+    for symbol in ("CORE", "ZOOM"):
+        await _clone(engine, "UNM", symbol, cik=992)
+    names = ["ABLE", "CORE", "ZEST", "ZOOM"]
+    ctx = await _load(engine, [*SYMBOLS, *names])
+
+    got = {s: ctx.eligibility(s, S, at_news=PRE_OPEN) for s in names}
+
+    assert [got[s].liquidity_rank for s in names] == [12, 13, 14, 15]  # equal bars: by symbol
+    assert {s: e.reason for s, e in got.items()} == {
+        "ABLE": "share_class",
+        "ZEST": "ok",  # ABLE's company took it through MIDL
+        "CORE": "ok",  # CORE's company never traded as ZOOM: the rank decides
+        "ZOOM": "share_class",
+    }
 
 
 async def test_broad_counts_a_name_without_a_ticker_ciks_row_as_no_fund(
