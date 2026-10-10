@@ -258,13 +258,24 @@ def test_former_names_are_judged_within_the_old_tickers_own_pool() -> None:
 
 
 def test_an_old_tickers_asset_name_counts_only_where_its_slots_confirm_it() -> None:
-    pools = {("PPLI", "IAC"): Counter({"IAC/InterActiveCorp": 50, "IAC": 2})}
+    pools = {
+        ("PPLI", "IAC"): Counter({"IAC/InterActiveCorp": 50, "IAC": 2}),
+        # three slots name Gardner Denver's name, short of a tenth of the pool
+        ("TT", "IR"): Counter({"Ingersoll-Rand": 63, "Ingersoll Rand": 3}),
+    }
     names = {
         "IAC": {"IAC Inc. Common Stock"},  # the company: its slots name it 52 times
         "PCLN": {"Pictet Cleaner Planet ETF"},  # the ticker's holder today
         "Q": {"Qnity Electronics, Inc."},
+        "IR": {"Ingersoll Rand Inc. Common Stock"},  # Gardner Denver's since 2020
     }
-    assert former_aliases(pools, names) == {"PPLI": {"IAC/InterActiveCorp", "IAC"}}
+    assert renames.held_since("PCLN") is None  # a holder the renames do not know
+    assert renames.held_since("IR") is not None
+    assert renames.held_since("Q") is not None
+    assert former_aliases(pools, names) == {
+        "PPLI": {"IAC/InterActiveCorp", "IAC"},
+        "TT": {"Ingersoll-Rand"},  # the pool's own; not IR's "Ingersoll Rand", "Ingersoll"
+    }
 
 
 def test_former_names_are_stored_as_their_own_source() -> None:
