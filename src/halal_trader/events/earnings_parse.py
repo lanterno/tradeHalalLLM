@@ -44,9 +44,11 @@ $6.80-$7.30 vs. $7.17 Est", "(Prior $8.00) Vs."). Its figure is re-read as
 the last dollar figure between its metric and its estimate that is neither
 glued nor introduced by From/Prior/Previous/Was ("From $80M To $75M" gives
 the $75M; Prior and Previous may name it in a few words first, "Versus Prior
-Guidance Of $13.20-$13.60") nor, once a figure qualified, inside a
-parenthetical opening with Prior, From or Previous ("To $9.00 (From $8.80 To
-$8.90)"; "Guidance (From $1.00 To $0.90) Vs" gives the $0.90). Guidance kept
+Guidance Of $13.20-$13.60") nor inside a parenthetical opening with Prior,
+From or Previous: once a figure qualified, no figure in it ("To $9.00 (From
+$8.80 To $8.90)"); before any, only one a "To" introduces ("Guidance (From
+$1.00 To $0.90) Vs" gives the $0.90, "(Prior Outlook Had Called For $1.30)
+Vs" none). Guidance kept
 as it was (Sees, Affirms, Reaffirms, Maintains, Reiterates) may state its
 range with a "Guidance from" no "to" follows ("PPL Reaffirms FY2017 EPS
 Guidance from $1.92-2.12 vs $2.16 Est"); any other "from" states a base
@@ -210,10 +212,15 @@ OLD_WINDOW: Final = 40
 KEEP_ACTIONS: Final = frozenset({"sees", "affirms", "reaffirms", "maintains", "reiterates"})
 _GUIDANCE_FROM = re.compile(r"\bGuidance\s+From\s*:?\s*\(?\s*~?\s*$", re.I)
 _TO = re.compile(r"\bto\b", re.I)
+# The "To" a figure in an old parenthetical follows: the new guidance it
+# states ("(From $1.00 To $0.90)"); any other figure there is the old one.
+_TO_END = re.compile(r"\bTo\s*~?\s*$", re.I)
 # A parenthetical stating the guidance replaced: after the guided figure, no
 # figure in it is the guidance ("Sees Adj. EPS To $9.00 (From $8.80 To $8.90)
 # Vs $8.87 Est."); before any, it may state the old and the new ("Updates FY
-# EPS Guidance (From $1.00 To $0.90) Vs $1.05 Est"), read like the words.
+# EPS Guidance (From $1.00 To $0.90) Vs $1.05 Est"), and only the figure a
+# "To" introduces (_TO_END) is the new: "(Prior Outlook Had Called For
+# $1.30)", "(From Its Earlier $1.10)" state none.
 _OLD_PAREN = re.compile(r"\(\s*(?:Prior|From|Previous(?:ly)?)\b", re.I)
 # The verbs of a forecast: a result template never reads a statement they precede.
 _FORWARD = re.compile(r"\b(?:Sees|Expects|Guides|Forecasts|Projects)\b", re.I)
@@ -426,8 +433,9 @@ def _guided_figure(segment: str, g: re.Match[str]) -> tuple[str | None, str | No
 
     It is the last dollar figure between the read's metric and its estimate
     that is not glued to the token before it and not introduced as the
-    guidance being replaced, by the words before it (after the metric) or,
-    once a figure qualified, a parenthetical; of "From $80M To $75M" the "To"
+    guidance being replaced, by the words before it (after the metric) or a
+    parenthetical: once a figure qualified, every figure in one; before, every
+    figure in one but those a "To" introduces. Of "From $80M To $75M" the "To"
     figure counts, in a parenthetical too. Guidance kept as it was
     (:data:`KEEP_ACTIONS`) may state its range with a "Guidance from" that no
     "to" follows, as its first figure.
@@ -438,9 +446,13 @@ def _guided_figure(segment: str, g: re.Match[str]) -> tuple[str | None, str | No
     pos = floor = g.end("metric")
     while (f := _FIGURE.search(segment, pos, end)) is not None:
         before = max(floor, f.start() - OLD_WINDOW)
-        if found != (None, None) and _in_old_paren(segment, f.start()):
+        in_paren = _in_old_paren(segment, f.start())
+        replaced = _OLD.search(segment, before, f.start()) is not None or (
+            in_paren and _TO_END.search(segment, before, f.start()) is None
+        )
+        if found != (None, None) and in_paren:
             pos = f.end()
-        elif _OLD.search(segment, before, f.start()) is None or (
+        elif not replaced or (
             kept
             and found == (None, None)
             and _GUIDANCE_FROM.search(segment, before, f.start())
@@ -622,6 +634,7 @@ def sources() -> dict[str, str]:
         "_CLOSING_FLAG": _CLOSING_FLAG,
         "_OLD_PAREN": _OLD_PAREN,
         "_TO": _TO,
+        "_TO_END": _TO_END,
     }
     return {name: rx.pattern for name, rx in patterns.items()} | {
         "PARSE_ORDER": ",".join(PARSE_ORDER),
