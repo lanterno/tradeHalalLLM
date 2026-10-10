@@ -21,14 +21,14 @@ from halal_trader.cli import cli
 from halal_trader.db.repos.quant_trials import QuantTrialRepoImpl
 from halal_trader.events import atlas
 from halal_trader.events.atlas import (
-    H1_NAME,
     OUTPUT_NAME,
-    STAGE_A_FAIL,
     AtlasLocked,
     h1_closed,
     run_atlas,
     write_atlas,
 )
+from halal_trader.events.h1 import NAME as H1_NAME
+from halal_trader.events.h1 import STAGE_A_FAIL
 from tests._atlas import CONFIG, END, S1, S2, START, daily_closes, register_h1, seed_world
 
 COST = 7.0 / 1e4  # study.cost_bps for a rank below 300, one way

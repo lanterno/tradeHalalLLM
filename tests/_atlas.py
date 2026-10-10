@@ -26,7 +26,8 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from halal_trader.data.minutes import BarArrays
 from halal_trader.db.repos.quant_trials import QuantTrialRepoImpl
-from halal_trader.events.atlas import H1_NAME, STAGE_A_FAIL
+from halal_trader.events.h1 import NAME as H1_NAME
+from halal_trader.events.h1 import STAGE_A_FAIL
 from halal_trader.events.stories import build_range
 from halal_trader.market_hours import is_trading_day
 from tests._renames import mark_renamed_news_done
