@@ -1,0 +1,609 @@
+"""Point-in-time context (events/context.py): every answer from data dated before the story.
+
+One synthetic world serves the tests: SPY and a dozen names with daily bars
+(raw and all-adjusted) from 2022-10 to 2024-04, a liquidity history, two
+screens and a few earnings facts. Expected values are recomputed here from
+the world's own series, not read back from the context.
+"""
+
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass, field
+from datetime import date, datetime, time, timedelta
+
+import numpy as np
+import pytest
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncEngine
+
+from halal_trader.events import context as context_module
+from halal_trader.events.context import PitContext, index_veto_only
+from halal_trader.events.earnings_parse import EXTRACTOR
+from halal_trader.market_hours import MARKET_TZ, is_trading_day
+from halal_trader.signals.indicators import atr
+
+FIRST, LAST = date(2022, 10, 3), date(2024, 4, 12)
+SESSIONS = [
+    d
+    for d in (FIRST + timedelta(days=i) for i in range((LAST - FIRST).days + 1))
+    if is_trading_day(d)
+]
+S = date(2024, 3, 19)  # a Tuesday: the story's reaction session
+PREV = date(2024, 3, 18)  # S-1, a Monday
+PREV2 = date(2024, 3, 15)  # S-2, a Friday
+NEXT = date(2024, 3, 20)
+SCREEN = date(2024, 3, 8)  # the screen the story sees
+SCREEN_AT_S = S  # dated the session itself: not yet known at S
+START, END = date(2023, 11, 1), date(2024, 3, 28)
+EARLY = date(2023, 11, 24)  # closes at 13:00
+AFTER_EARLY = date(2023, 11, 27)
+
+VETO = (
+    "excluded by SPUS's Shariah index (holdings filed 2024-02-29) although within its "
+    "size range (market cap >= 12.0B)"
+)
+SOFTWARE = "SERVICES-PREPACKAGED SOFTWARE"
+SEMIS = "SEMICONDUCTORS & RELATED DEVICES"
+BANKING = "NATIONAL COMMERCIAL BANKS"
+
+BETAS = {
+    "AAA": 1.2,
+    "AAB": 1.2,
+    "VET": 0.9,
+    "UNM": 1.0,
+    "CHEAP": 1.0,
+    "HALT": 1.1,
+    "GAP": 1.0,
+    "SPLIT": 1.3,
+    "BETA3": 3.0,
+    "BETA0": 0.0,
+}
+# Universe order (most traded first): ranks 0..11. THIN trades only from S's month.
+LIQUIDITY = [
+    "AAA",
+    "AAB",
+    "VET",
+    "UNM",
+    "FND",
+    "NOH",
+    "CHEAP",
+    "HALT",
+    "GAP",
+    "SPLIT",
+    "BETA3",
+    "BETA0",
+]
+SCREEN_ROWS = [
+    # symbol, verdict, cik, sic, reasons
+    ("AAA", "halal", 100, SOFTWARE, []),
+    ("AAB", "halal", 100, SOFTWARE, []),  # AAA's other share class, less traded
+    ("VET", "not_halal", 200, SOFTWARE, [VETO]),
+    ("VET2", "not_halal", 210, SOFTWARE, [VETO, "interest-bearing debt / market cap 0.41"]),
+    ("UNM", "doubtful", None, "not an SEC registrant (or ticker not mapped)", ["unmapped"]),
+    ("FND", "doubtful", None, "not an SEC registrant (or ticker not mapped)", ["unmapped"]),
+    ("NOH", "not_halal", 300, BANKING, ["impermissible business: banking"]),
+    ("CHEAP", "halal", 400, SOFTWARE, []),
+    ("THIN", "halal", 500, SOFTWARE, []),
+    ("HALT", "halal", 600, SOFTWARE, []),
+    ("GAP", "halal", 700, SOFTWARE, []),
+    ("SPLIT", "halal", 800, SEMIS, []),
+    ("BETA3", "halal", 900, SOFTWARE, []),
+    ("BETA0", "halal", 910, SOFTWARE, []),
+]
+SYMBOLS = sorted({r[0] for r in SCREEN_ROWS})
+
+
+def et(day: date, hh: int, mm: int = 0) -> datetime:
+    return datetime.combine(day, time(hh, mm), MARKET_TZ)
+
+
+def _i(day: date) -> int:
+    return SESSIONS.index(day)
+
+
+def _adj(symbol: str, day: date) -> float:
+    """A(day) of the synthetic world."""
+    if symbol == "SPLIT":  # 2-for-1, effective at S's open
+        return 0.5 if day < S else 1.0
+    if symbol == "AAA":  # a dividend going ex on S
+        return 0.98 if day < S else 1.0
+    if symbol == "SPY":
+        return 0.995 if day < PREV2 else 1.0
+    return 0.97 if day < date(2023, 6, 1) else 1.0
+
+
+@dataclass
+class World:
+    closes: dict[str, dict[date, float]] = field(default_factory=dict)  # all-adjusted
+    highs: dict[str, dict[date, float]] = field(default_factory=dict)
+    lows: dict[str, dict[date, float]] = field(default_factory=dict)
+    volumes: dict[str, dict[date, float]] = field(default_factory=dict)  # raw
+
+    def raw_close(self, symbol: str, day: date) -> float:
+        return self.closes[symbol][day] / _adj(symbol, day)
+
+
+def _missing(symbol: str) -> set[date]:
+    if symbol == "GAP":
+        return {PREV}
+    if symbol == "HALT":  # 25 sessions inside the sigma window: 26 returns lost, 34 left
+        i = _i(PREV)
+        return set(SESSIONS[i - 50 : i - 25])
+    return set()
+
+
+async def _world(engine: AsyncEngine) -> World:
+    rng = np.random.default_rng(20261010)
+    n = len(SESSIONS)
+    spy_r = rng.normal(0.0004, 0.01, n)
+    returns = {"SPY": spy_r}
+    for symbol, beta in BETAS.items():
+        returns[symbol] = beta * spy_r + rng.normal(0.0, 0.015, n)
+    world = World()
+    rows = []
+    for symbol, r in returns.items():
+        path = 40.0 * np.cumprod(1.0 + r)
+        if symbol == "CHEAP":
+            path *= 4.0 / path[_i(PREV)]  # closes at $4 the evening before S
+        gone = _missing(symbol)
+        for j, day in enumerate(SESSIONS):
+            if day in gone:
+                continue
+            c = float(path[j])
+            o = c * (1.0 + 0.003 * math.sin(j))
+            h, lo = max(o, c) * 1.01, min(o, c) * 0.99
+            v = 1e6 + 1000.0 * j
+            a = _adj(symbol, day)
+            world.closes.setdefault(symbol, {})[day] = c
+            world.highs.setdefault(symbol, {})[day] = h
+            world.lows.setdefault(symbol, {})[day] = lo
+            world.volumes.setdefault(symbol, {})[day] = v
+            rows.append((symbol, day, "all", o, h, lo, c, v * a))
+            rows.append((symbol, day, "raw", o / a, h / a, lo / a, c / a, v))
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO daily_bars (symbol, day, adjustment, open, high, low, close, volume, "
+                "fetched_at) VALUES (:s, :d, :a, :o, :h, :l, :c, :v, now())"
+            ),
+            [
+                {"s": s, "d": d, "a": a, "o": o, "h": h, "l": lo, "c": c, "v": v}
+                for s, d, a, o, h, lo, c, v in rows
+            ],
+        )
+        months = [date(2022 + (9 + k) // 12, (9 + k) % 12 + 1, 1) for k in range(17)]  # to 2024-02
+        monthly = [
+            {"s": symbol, "m": m, "c": 50.0, "v": 1e9 / (rank + 1)}
+            for rank, symbol in enumerate(LIQUIDITY)
+            for m in months
+        ]
+        # THIN trades heavily, but only from S's month on: unknown at S.
+        monthly += [{"s": "THIN", "m": date(2024, 3, 1), "c": 50.0, "v": 1e12}]
+        await conn.execute(
+            text(
+                "INSERT INTO monthly_bars (symbol, month, close, volume, vwap) "
+                "VALUES (:s, :m, :c, :v, :c)"
+            ),
+            monthly,
+        )
+        screen = [
+            {"a": SCREEN, "s": s, "v": v, "k": cik, "d": sic, "r": _json(reasons)}
+            for s, v, cik, sic, reasons in SCREEN_ROWS
+        ]
+        # The screen dated S itself turns AAA away: it may not count at S.
+        screen += [
+            {"a": SCREEN_AT_S, "s": "AAA", "v": "not_halal", "k": 100, "d": SOFTWARE, "r": "[]"}
+        ]
+        await conn.execute(
+            text(
+                "INSERT INTO halal_screen_results (as_of, symbol, cik, sic_description, verdict, "
+                "reasons, metrics, method, screened_at) "
+                "VALUES (:a, :s, :k, :d, :v, CAST(:r AS JSONB), '{}', 'v12', now())"
+            ),
+            screen,
+        )
+    from halal_trader.compliance.delisted import Match, store_matches
+
+    await store_matches(engine, [Match("FND", "fund"), Match("UNM", "no_match")])
+    return world
+
+
+def _json(reasons: list[str]) -> str:
+    import json
+
+    return json.dumps(reasons)
+
+
+async def _load(engine: AsyncEngine, symbols: list[str] | None = None) -> PitContext:
+    return await PitContext.load(engine, symbols=symbols or SYMBOLS, start=START, end=END)
+
+
+def _expected_sigma_beta(world: World, symbol: str, last: date) -> tuple[float, int, float]:
+    """sigma, valid returns and clipped beta over the 60 sessions ending ``last``."""
+    i = _i(last)
+    own, spy = world.closes[symbol], world.closes["SPY"]
+    rs, rm = [], []
+    for x, px in zip(SESSIONS[i - 59 : i + 1], SESSIONS[i - 60 : i], strict=True):
+        if x in own and px in own:
+            rs.append(own[x] / own[px] - 1.0)
+            rm.append(spy[x] / spy[px] - 1.0)
+    abn = np.array(rs) - np.array(rm)
+    beta = float(np.polyfit(rm, rs, 1)[0])
+    return float(np.std(abn, ddof=1)), len(rs), min(max(beta, 0.5), 2.0)
+
+
+# ── eligibility ──────────────────────────────────────────────────
+
+
+async def test_eligibility_names_the_first_rule_a_name_fails(engine: AsyncEngine) -> None:
+    await _world(engine)
+    ctx = await _load(engine)
+
+    reasons = {s: ctx.eligibility(s, S).reason for s in SYMBOLS}
+
+    assert reasons == {
+        "AAA": "ok",
+        "AAB": "share_class",  # same CIK as AAA, less traded
+        "VET": "not_halal",  # an index's exclusion is a fail in PRIMARY
+        "VET2": "not_halal",
+        "UNM": "unmapped",
+        "FND": "not_halal",  # a fund is never a company
+        "NOH": "not_halal",
+        "CHEAP": "price",  # $4 the evening before
+        "THIN": "rank",  # not in the universe built from the months before S
+        "HALT": "no_sigma",  # 34 valid returns of 60
+        "GAP": "no_daily",  # no bar on S-1
+        "SPLIT": "ok",
+        "BETA3": "ok",
+        "BETA0": "ok",
+    }
+
+
+async def test_broad_adds_index_veto_only_and_unmapped_names(engine: AsyncEngine) -> None:
+    await _world(engine)
+    ctx = await _load(engine)
+
+    broad = {s: ctx.eligibility(s, S, universe="broad").reason for s in SYMBOLS}
+
+    assert broad["VET"] == "ok"
+    assert broad["UNM"] == "ok"
+    assert broad["VET2"] == "not_halal"  # the veto was not its only reason
+    assert broad["FND"] == "not_halal"
+    assert broad["AAA"] == "ok" and broad["AAB"] == "share_class"
+    assert ctx.eligibility("VET", S, universe="broad").universe == "broad"
+
+
+async def test_eligibility_reports_what_was_known(engine: AsyncEngine) -> None:
+    await _world(engine)
+    ctx = await _load(engine)
+
+    aaa = ctx.eligibility("AAA", S)
+    split = ctx.eligibility("SPLIT", S)
+    noh = ctx.eligibility("NOH", S)
+
+    assert aaa.eligible
+    assert (aaa.screen_as_of, aaa.verdict, aaa.cik) == (SCREEN, "halal", 100)
+    assert (aaa.sector, aaa.tech) == ("Technology", True)
+    assert (aaa.liquidity_rank, aaa.cost_bps) == (0, 7.0)
+    assert (split.liquidity_rank, split.tech) == (9, True)
+    assert not noh.eligible and not noh.tech and noh.liquidity_rank == 5
+    thin = ctx.eligibility("THIN", S)
+    assert (thin.liquidity_rank, thin.cost_bps) == (None, 30.0)
+
+
+async def test_a_screen_counts_only_after_its_date(engine: AsyncEngine) -> None:
+    await _world(engine)
+    ctx = await _load(engine)
+
+    assert ctx.eligibility("AAA", SCREEN).reason == "no_screen"  # dated that day: not yet
+    assert ctx.eligibility("AAA", date(2023, 12, 1)).reason == "no_screen"
+    assert ctx.eligibility("AAA", date(2024, 3, 11)).reason == "ok"
+    assert ctx.eligibility("AAA", S).reason == "ok"  # the screen dated S is not known at S
+    assert ctx.eligibility("AAA", NEXT).reason == "not_halal"
+    assert ctx.screen_verdict("AAA", SCREEN) == "no_screen"
+    assert ctx.screen_verdict("AAA", S) == "halal"
+    assert ctx.screen_verdict("AAA", NEXT) == "not_halal"
+    assert ctx.screen_verdict("ZZZ", NEXT) == "not_halal"  # absent from the screen
+
+
+async def test_a_rank_past_999_is_out(engine: AsyncEngine) -> None:
+    await _world(engine)
+    months = [date(2023, 3 + k, 1) if k < 10 else date(2024, k - 9, 1) for k in range(12)]
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO monthly_bars (symbol, month, close, volume, vwap) "
+                "VALUES (:s, :m, 50, 1e10, 50)"
+            ),
+            [{"s": f"F{k:04d}", "m": m} for k in range(1000) for m in months],
+        )
+    ctx = await _load(engine)
+
+    aaa = ctx.eligibility("AAA", S)
+
+    assert (aaa.reason, aaa.liquidity_rank, aaa.cost_bps) == ("rank", 1000, 30.0)
+
+
+async def test_sigma_can_be_judged_at_the_news(engine: AsyncEngine) -> None:
+    await _world(engine)
+    ctx = await _load(engine)
+
+    # HALT's 60 sessions back from S-2 still lose 25 returns; from much later news, more.
+    assert ctx.eligibility("HALT", S, at_news=et(PREV, 15)).reason == "no_sigma"
+    assert ctx.eligibility("AAA", S, at_news=et(PREV, 15)).reason == "ok"
+    assert ctx.pre_event("HALT", S, et(S, 8)) is None
+
+
+# ── pre-event state ──────────────────────────────────────────────
+
+
+async def test_pre_event_known_answers(engine: AsyncEngine) -> None:
+    world = await _world(engine)
+    ctx = await _load(engine)
+
+    pe = ctx.pre_event("AAA", S, et(S, 8))  # pre-open news
+
+    assert pe is not None
+    i = _i(PREV)
+    sigma, n, beta = _expected_sigma_beta(world, "AAA", PREV)
+    closes, spy = world.closes["AAA"], world.closes["SPY"]
+    window20 = SESSIONS[i - 19 : i + 1]
+    window252 = SESSIONS[i - 251 : i + 1]
+    window60 = SESSIONS[i - 59 : i + 1]
+    assert (pe.session, pe.prev_session) == (S, PREV)
+    # A dividend goes ex on S: A(S-1)/A(S) = 0.98 carries the raw close into S's units.
+    assert pe.prev_close_s == pytest.approx(world.raw_close("AAA", PREV) * 0.98, rel=1e-12)
+    assert pe.prev_close_s == pytest.approx(closes[PREV], rel=1e-12)
+    assert pe.spy_prev_close_s == pytest.approx(world.raw_close("SPY", PREV), rel=1e-12)
+    assert (pe.sigma, pe.sigma_n) == (pytest.approx(sigma, rel=1e-10), n)
+    assert n == 60
+    assert pe.beta == pytest.approx(beta, rel=1e-9)
+    expected_atr = atr(
+        np.array([world.highs["AAA"][d] for d in window60]),
+        np.array([world.lows["AAA"][d] for d in window60]),
+        np.array([closes[d] for d in window60]),
+        14,
+    )
+    assert pe.atr_pct == pytest.approx(expected_atr / closes[PREV], rel=1e-12)
+    dollar = [world.raw_close("AAA", d) * world.volumes["AAA"][d] for d in window20]
+    assert pe.adv20_usd == pytest.approx(sum(dollar) / 20, rel=1e-12)
+    for h, got in ((5, pe.ret5_vs_spy), (20, pe.ret20_vs_spy)):
+        back = SESSIONS[i - h]
+        want = (closes[PREV] / closes[back] - 1) - (spy[PREV] / spy[back] - 1)
+        assert got == pytest.approx(want, rel=1e-10)
+    # Levels: raw high * A(d) / A(S), i.e. the adjusted high since A(S) = 1.
+    assert pe.hi20_s == pytest.approx(max(world.highs["AAA"][d] for d in window20), rel=1e-12)
+    assert pe.lo20_s == pytest.approx(min(world.lows["AAA"][d] for d in window20), rel=1e-12)
+    assert pe.hi252_s == pytest.approx(max(world.highs["AAA"][d] for d in window252), rel=1e-12)
+    assert pe.lo252_s == pytest.approx(min(world.lows["AAA"][d] for d in window252), rel=1e-12)
+
+
+async def test_a_split_on_the_session_is_carried_by_the_a_ratio(engine: AsyncEngine) -> None:
+    world = await _world(engine)
+    ctx = await _load(engine)
+
+    pe = ctx.pre_event("SPLIT", S, et(S, 8))
+
+    assert pe is not None
+    raw_prev = world.raw_close("SPLIT", PREV)  # twice the post-split price
+    assert ctx.adj("SPLIT", PREV) == pytest.approx(0.5)
+    assert ctx.adj("SPLIT", S) == pytest.approx(1.0)
+    assert pe.prev_close_s == pytest.approx(raw_prev * 0.5, rel=1e-12)
+    assert pe.hi20_s < raw_prev  # levels are in post-split units too
+    point = ctx.daily("SPLIT", S)
+    assert point is not None
+    assert (point.day, point.adj) == (S, pytest.approx(1.0))
+    assert point.close == pytest.approx(world.raw_close("SPLIT", S), rel=1e-12)
+    before = ctx.daily("SPLIT", PREV)
+    assert before is not None and before.close == pytest.approx(raw_prev, rel=1e-12)
+    assert before.volume == world.volumes["SPLIT"][PREV]
+
+
+@pytest.mark.parametrize(
+    ("story", "at_news", "last"),
+    [
+        (S, et(S, 8), PREV),  # pre-open news: S-1 back
+        (S, et(S, 11), PREV),  # news in S's session: S-1 back
+        (S, et(PREV, 17), PREV),  # after N's close: N back
+        (S, et(PREV, 15), PREV2),  # late in N's session: N-1 back
+        (S, et(PREV, 16), PREV2),  # at N's close exactly: not strictly before
+        (PREV, et(date(2024, 3, 17), 20), PREV2),  # Sunday news for a Monday story
+        (AFTER_EARLY, et(EARLY, 13, 30), EARLY),  # after a 13:00 early close
+        (AFTER_EARLY, et(EARLY, 12, 30), date(2023, 11, 22)),  # before it (23rd: Thanksgiving)
+    ],
+)
+async def test_sigma_uses_the_sessions_closed_strictly_before_the_news(
+    engine: AsyncEngine, story: date, at_news: datetime, last: date
+) -> None:
+    world = await _world(engine)
+    ctx = await _load(engine)
+
+    pe = ctx.pre_event("AAA", story, at_news)
+
+    assert pe is not None
+    sigma, n, beta = _expected_sigma_beta(world, "AAA", last)
+    assert pe.sigma == pytest.approx(sigma, rel=1e-10)
+    assert pe.sigma_n == n
+    assert pe.beta == pytest.approx(beta, rel=1e-9)
+
+
+async def test_beta_is_clipped_to_half_and_two(engine: AsyncEngine) -> None:
+    await _world(engine)
+    ctx = await _load(engine, [*SYMBOLS])
+
+    high = ctx.pre_event("BETA3", S, et(S, 8))
+    low = ctx.pre_event("BETA0", S, et(S, 8))
+
+    assert high is not None and low is not None
+    assert (high.beta, low.beta) == (2.0, 0.5)
+
+
+# ── look-ahead ───────────────────────────────────────────────────
+
+
+async def _scale(
+    engine: AsyncEngine, symbols: list[str], *, since: date, until: date, by: float
+) -> None:
+    """Move raw and adjusted bars together (A kept), volume too."""
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "UPDATE daily_bars SET open = open * :f, high = high * :f, low = low * :f, "
+                "close = close * :f, volume = volume * :f WHERE symbol = ANY(:s) "
+                "AND day >= :lo AND day <= :hi"
+            ),
+            {"f": by, "s": symbols, "lo": since, "hi": until},
+        )
+
+
+async def test_bars_from_the_session_on_change_nothing(engine: AsyncEngine) -> None:
+    await _world(engine)
+    names = ["AAA", "SPLIT", "VET", "UNM"]
+    before = await _load(engine)
+    pre = {s: before.pre_event(s, S, et(S, 8)) for s in names}
+    elig = {
+        (s, u): before.eligibility(s, S, universe=u) for s in SYMBOLS for u in ("primary", "broad")
+    }
+
+    # A power of two scales raw and adjusted prices exactly, so A(S) keeps every bit.
+    await _scale(engine, ["SPY", *SYMBOLS], since=S, until=LAST, by=2.0)
+    after = await _load(engine)
+
+    assert {s: after.pre_event(s, S, et(S, 8)) for s in names} == pre
+    assert {
+        (s, u): after.eligibility(s, S, universe=u) for s in SYMBOLS for u in ("primary", "broad")
+    } == elig
+
+    # The control: the evening before is information, and moves the answer.
+    await _scale(engine, ["AAA"], since=PREV, until=PREV, by=1.1)
+    moved = await _load(engine)
+    assert moved.pre_event("AAA", S, et(S, 8)) != pre["AAA"]
+
+
+async def test_late_session_news_does_not_see_that_session_in_sigma(engine: AsyncEngine) -> None:
+    await _world(engine)
+    late = et(PREV, 15)
+    before = (await _load(engine)).pre_event("AAA", S, late)
+
+    await _scale(engine, ["AAA"], since=PREV, until=PREV, by=1.25)
+    after = (await _load(engine)).pre_event("AAA", S, late)
+
+    assert before is not None and after is not None
+    assert (after.sigma, after.sigma_n, after.beta) == (before.sigma, before.sigma_n, before.beta)
+    assert after.prev_close_s == pytest.approx(before.prev_close_s * 1.25)  # known by S's open
+
+
+# ── facts ────────────────────────────────────────────────────────
+
+
+async def _fact(
+    engine: AsyncEngine, sid: str, at: datetime, kind: str, *, extractor: str = EXTRACTOR
+) -> None:
+    async with engine.begin() as conn:
+        event_id = (
+            await conn.execute(
+                text(
+                    "INSERT INTO events (source, source_id, kind, symbol, published_at, seen_at, "
+                    "payload) VALUES ('benzinga', :s, 'news', 'AAA', :t, :t, '{}') RETURNING id"
+                ),
+                {"s": sid, "t": at},
+            )
+        ).scalar_one()
+        await conn.execute(
+            text(
+                "INSERT INTO event_facts (event_id, extractor, kind, fields) "
+                "VALUES (:e, :x, :k, CAST(:f AS JSONB))"
+            ),
+            {"e": event_id, "x": extractor, "k": kind, "f": f'{{"id": "{sid}"}}'},
+        )
+
+
+async def test_facts_are_the_ones_published_strictly_before(engine: AsyncEngine) -> None:
+    await _world(engine)
+    at = et(S, 8)
+    await _fact(engine, "old", at - timedelta(days=250), "result")  # beyond 200 days
+    await _fact(engine, "q4", et(PREV2, 16, 5), "result")
+    await _fact(engine, "guide", et(PREV, 7), "guidance")
+    await _fact(engine, "nothing", et(PREV, 7, 30), "none")  # the parser's no-fact marker
+    await _fact(engine, "other", et(PREV, 7, 45), "result", extractor="some-other-parser")
+    await _fact(engine, "same-moment", at, "result")
+    await _fact(engine, "later", et(S, 9), "result")
+    ctx = await _load(engine)
+
+    ids = [f.fields["id"] for f in ctx.facts_before("AAA", at)]
+    recent = [f.fields["id"] for f in ctx.facts_before("AAA", at, lookback_days=3)]
+
+    assert ids == ["q4", "guide"]
+    assert [f.kind for f in ctx.facts_before("AAA", at)] == ["result", "guidance"]
+    assert recent == ["guide"]
+    assert ctx.facts_before("SPLIT", at) == []
+    with pytest.raises(ValueError):
+        ctx.facts_before("AAA", datetime(2024, 3, 19, 8))  # naive
+    with pytest.raises(ValueError):
+        ctx.facts_before("AAA", et(START, 8), lookback_days=400)  # before what was loaded
+
+
+# ── data access and guards ───────────────────────────────────────
+
+
+async def test_daily_points_and_a_ratios(engine: AsyncEngine) -> None:
+    world = await _world(engine)
+    ctx = await _load(engine)
+
+    spy = ctx.daily("SPY", S)
+
+    assert spy is not None
+    assert spy.close == pytest.approx(world.raw_close("SPY", S), rel=1e-12)
+    assert ctx.adj("SPY", date(2024, 3, 14)) == pytest.approx(0.995)
+    assert ctx.daily("GAP", PREV) is None and ctx.adj("GAP", PREV) is None
+    assert ctx.daily("AAA", date(2024, 3, 16)) is None  # a Saturday
+    assert ctx.daily("THIN", S) is None  # loaded, no bars
+    assert ctx.sessions == [
+        d for d in SESSIONS if START - timedelta(days=380) <= d <= END + timedelta(days=7)
+    ]
+
+
+async def test_questions_beyond_what_was_loaded_are_errors(engine: AsyncEngine) -> None:
+    await _world(engine)
+    ctx = await _load(engine, ["AAA"])
+
+    with pytest.raises(ValueError, match="not loaded"):
+        ctx.eligibility("SPLIT", S)
+    with pytest.raises(ValueError, match="outside the loaded sessions"):
+        ctx.pre_event("AAA", date(2024, 4, 2), et(date(2024, 4, 2), 8))
+    with pytest.raises(ValueError, match="not a session"):
+        ctx.eligibility("AAA", date(2024, 3, 16))
+    with pytest.raises(ValueError, match="outside the loaded daily bars"):
+        ctx.daily("AAA", date(2022, 1, 3))
+    with pytest.raises(ValueError, match="timezone"):
+        ctx.pre_event("AAA", S, datetime(2024, 3, 19, 8))
+    # News after S's close cannot react in S: refused, never let into S's sigma.
+    with pytest.raises(ValueError, match="after the close"):
+        ctx.pre_event("AAA", S, et(S, 16))
+    with pytest.raises(ValueError, match="after the close"):
+        ctx.eligibility("AAA", PREV, at_news=et(S, 8))
+    assert ctx.pre_event("AAA", S, et(S, 15, 59)) is not None
+
+
+async def test_loading_in_small_batches_gives_the_same_answers(
+    engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await _world(engine)
+    whole = await _load(engine)
+    monkeypatch.setattr(context_module, "BATCH_SYMBOLS", 3)
+    batched = await _load(engine)
+
+    for symbol in SYMBOLS:
+        assert batched.eligibility(symbol, S) == whole.eligibility(symbol, S)
+        assert batched.pre_event(symbol, S, et(S, 8)) == whole.pre_event(symbol, S, et(S, 8))
+
+
+def test_only_a_lone_index_exclusion_is_an_index_veto() -> None:
+    assert index_veto_only([VETO])
+    assert index_veto_only(["excluded by HLAL's Shariah index"])
+    assert not index_veto_only([VETO, "debt"])
+    assert not index_veto_only([])
+    assert not index_veto_only(
+        ["business activity unverified: x; no Shariah index (SPUS, HLAL) holds the company"]
+    )
