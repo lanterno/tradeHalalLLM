@@ -6,6 +6,7 @@ import io
 import zipfile
 from datetime import UTC, date, datetime
 
+import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
@@ -15,6 +16,7 @@ from halal_trader.events.history import (
     eps_rows,
     filing_records,
     insider_records,
+    mark_units,
     news_records,
     quarters,
 )
@@ -171,3 +173,28 @@ async def test_backfilled_events_are_queryable(engine: AsyncEngine) -> None:
     async with engine.connect() as conn:
         row = (await conn.execute(text("SELECT payload->>'backfill' AS b FROM events"))).one()
     assert row.b == "true"
+
+
+async def _units(engine: AsyncEngine) -> dict[str, int]:
+    async with engine.connect() as conn:
+        rows = await conn.execute(
+            text("SELECT unit, items FROM backfill_progress WHERE task = 'test'")
+        )
+        return {r.unit: r.items for r in rows}
+
+
+async def test_marks_on_an_open_connection_commit_and_roll_back_with_it(
+    engine: AsyncEngine,
+) -> None:
+    async with engine.begin() as conn:
+        await mark_units(object(), "test", {"a": 1, "b": 2}, conn=conn)  # type: ignore[arg-type]
+        assert await _units(engine) == {}  # the caller's transaction, not committed yet
+    assert await _units(engine) == {"a": 1, "b": 2}
+    with pytest.raises(RuntimeError, match="the caller failed"):
+        async with engine.begin() as conn:
+            await mark_units(engine, "test", {"c": 3}, conn=conn)
+            raise RuntimeError("the caller failed")
+    assert await _units(engine) == {"a": 1, "b": 2}
+    await mark_units(engine, "test", {"a": 5})  # a transaction of its own, upserting
+    await mark_units(engine, "test", {})
+    assert await _units(engine) == {"a": 5, "b": 2}
