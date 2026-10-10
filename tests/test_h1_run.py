@@ -12,6 +12,7 @@ of entries can be eligible.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date, datetime, time, timedelta
 from typing import Any
 
@@ -20,9 +21,18 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from halabot.playbooks.clock import SIP_DELAYED
+from halabot.playbooks.loader import Window, WindowGuard, WindowLocked, WindowUnlock
 from halal_trader.db.repos.quant_trials import config_hash
 from halal_trader.events import h1
-from halal_trader.events.h1 import CELLS, Carrier, Check, H1Locked, Preconditions, StoriesStale
+from halal_trader.events.h1 import (
+    CELLS,
+    Carrier,
+    Check,
+    CodeState,
+    H1Locked,
+    Preconditions,
+    StoriesStale,
+)
 from halal_trader.events.stories import build_range
 from halal_trader.market_hours import (
     MARKET_TZ,
@@ -153,11 +163,22 @@ async def _minutes(engine: AsyncEngine) -> None:
     await mark_done(engine, sorted(units))
 
 
+FROZEN = CodeState("c" * 40, (h1.TAG,), False)  # the tagged, clean checkout registered
+
+
 def _report() -> Preconditions:
-    data = {"commit": "c" * 40, "tags": [h1.TAG], "dirty": False}
+    data = {"commit": FROZEN.commit, "tags": list(FROZEN.tags), "dirty": FROZEN.dirty}
     return Preconditions(
         tuple(Check(i, True, "ok", data if i == "C0" else {}) for i in h1.REQUIRED_CHECKS)
     )
+
+
+@pytest.fixture(autouse=True)
+def frozen(monkeypatch: pytest.MonkeyPatch) -> list[CodeState]:
+    """Every step sees the registered checkout unless a test changes ``frozen[0]``."""
+    state = [FROZEN]
+    monkeypatch.setattr(h1, "code_state", lambda root=None: state[0])
+    return state
 
 
 @pytest.fixture
@@ -303,8 +324,195 @@ async def test_h1_runs_in_order_and_records_every_row(
     assert all(ws.status == "pass" for ws in again.values())
     (amendment,) = await _rows(engine, h1.NAME, "amendment")
     assert amendment.metrics["reason"] == "loader fix (test)"
+    assert await _holdout_opens(engine, reg) is False  # the pass no longer stands
     with pytest.raises(H1Locked, match="rerun validation"):
         await h1.verdict(engine)
+    with pytest.raises(H1Locked, match="ran after the verdict"):
+        await h1.sensitivities(engine, workers=1)  # they read the rows the verdict cites
+    await h1.run_window(engine, "validation", workers=1, amend="loader fix (test)")
+    assert await h1.verdict(engine) == "pass"
+    assert await _holdout_opens(engine, reg) is True
+    second = (await _rows(engine, h1.NAME, "verdict"))[-1]
+    windows = await _rows(engine, h1.NAME, "window")
+    assert [r["row"] for r in second.metrics["replaced"]] == [w.id for w in windows[:2]]
+    assert second.metrics["replaced"][0]["cells"][ID.key]["status"] == "pass"  # the old results
+    assert [a["reason"] for a in second.metrics["amendments"]] == ["loader fix (test)"] * 2
+    assert [v["id"] for v in second.metrics["previous_verdicts"]] == [verdict_row.id]
+
+
+async def _holdout_opens(engine: AsyncEngine, reg: h1.Registration) -> bool:
+    unlock = WindowUnlock(prereg_id=reg.id, config_hash=reg.hash, holdout=True)
+    guard = WindowGuard(window=Window.HOLDOUT, window_end=date(2025, 11, 28), unlock=unlock)
+    try:
+        await guard.verify(engine)
+    except WindowLocked:
+        return False
+    return guard.allows("AAA", date(2025, 2, 3))
+
+
+async def _through_validation(engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch) -> int:
+    monkeypatch.setattr(h1, "COUNT_RULE", LENIENT)
+    reg_id = await h1.register(engine, report=_report())
+    await h1.stage_a(engine, workers=1)
+    await h1.run_window(engine, "train", workers=1)
+    await h1.run_window(engine, "validation", workers=1)
+    return reg_id
+
+
+async def test_an_amended_train_without_passers_is_decided_and_closes_the_holdout(
+    world: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine = world
+    await _through_validation(engine, monkeypatch)
+    assert await h1.verdict(engine) == "pass"
+    reg = await h1.registration(engine)
+    assert await _holdout_opens(engine, reg)
+    old_train, old_validation = await _rows(engine, h1.NAME, "window")
+
+    real_judge = h1.judge_window
+
+    def fixed(results: Any) -> dict[Any, Any]:  # after a simulator fix no cell passes train
+        return {c: replace(ws, status="fail") for c, ws in real_judge(results).items()}
+
+    monkeypatch.setattr(h1, "judge_window", fixed)
+    amended = await h1.run_window(engine, "train", workers=1, amend="a simulator fix (test)")
+    assert all(ws.status == "fail" for ws in amended.values())
+    assert not await _holdout_opens(engine, reg)  # the old pass stands no more
+    with pytest.raises(H1Locked, match="ran after the verdict"):
+        await h1.implementability(engine, workers=1)
+    with pytest.raises(H1Locked, match="no cell runs on validation"):
+        await h1.run_window(engine, "validation", workers=1, amend="nothing to run")
+
+    assert await h1.verdict(engine) == "fail"  # decided on train alone: no deadlock
+    final = (await _rows(engine, h1.NAME, "verdict"))[-1]
+    assert final.verdict == "fail" and final.metrics["validation_row"] is None
+    assert final.metrics["validation_ignored"] == old_validation.id
+    replaced = {r["row"]: r for r in final.metrics["replaced"]}
+    assert set(replaced) == {old_train.id, old_validation.id}
+    assert replaced[old_train.id]["cells"][ID.key]["status"] == "pass"  # old and new reported
+    assert final.metrics["train"][ID.key]["status"] == "fail"
+    (amendment,) = final.metrics["amendments"]
+    assert amendment["replaces"] == old_train.id and amendment["window_role"] == "train"
+    assert not await _holdout_opens(engine, reg)  # the latest verdict fails
+    assert await h1.implementability(engine, workers=1) == {}  # no cell passed H1
+    with pytest.raises(H1Locked, match="recorded already"):
+        await h1.verdict(engine)
+
+
+async def test_changed_code_runs_only_as_an_amendment_and_runs_record_their_head(
+    world: AsyncEngine, monkeypatch: pytest.MonkeyPatch, frozen: list[CodeState]
+) -> None:
+    engine = world
+    monkeypatch.setattr(h1, "COUNT_RULE", LENIENT)
+    await h1.register(engine, report=_report())
+    real = h1.file_shas()
+    fixed = {**real, "halabot.playbooks.sim": "0123456789ab"}
+    monkeypatch.setattr(h1, "file_shas", lambda: fixed)  # a simulator fix after registering
+    with pytest.raises(H1Locked, match=r"code differs.*--amend"):
+        await h1.stage_a(engine, workers=1)
+    assert await _rows(engine, h1.NAME, "stage-a") == []  # refused before anything ran
+    await h1.stage_a(engine, workers=1, amend="sim fix (test)")
+    (amendment,) = await _rows(engine, h1.NAME, "amendment")
+    assert amendment.metrics["step"] == "stage-a"
+    assert amendment.metrics["code_diff"] == {
+        "files": {"halabot.playbooks.sim": [real["halabot.playbooks.sim"], "0123456789ab"]}
+    }
+    assert amendment.metrics["files"] == fixed  # the code later steps compare with
+    await h1.run_window(engine, "train", workers=1)  # the same code: no amendment
+
+    frozen[0] = CodeState("d" * 40, (), True)  # another, modified checkout
+    with pytest.raises(H1Locked, match="code differs"):
+        await h1.run_window(engine, "validation", workers=1)
+    await h1.run_window(engine, "validation", workers=1, amend="unrelated commit (test)")
+    last = (await _rows(engine, h1.NAME, "amendment"))[-1]
+    assert last.metrics["code_diff"] == {"commit": ["c" * 40, "d" * 40], "dirty": [False, True]}
+    assert last.metrics["window_role"] == "validation"
+    assert await h1.verdict(engine) == "pass"  # the amended code is the code in force
+    async with engine.connect() as conn:
+        shas = (
+            await conn.execute(
+                text(
+                    "SELECT config->>'role' AS role, code_sha FROM hb_playbook_run "
+                    "ORDER BY created_at"
+                )
+            )
+        ).all()
+    assert {(r.role, r.code_sha) for r in shas} == {
+        ("stage-a", "c" * 40),
+        ("train", "c" * 40),
+        ("validation", "d" * 40 + "-dirty"),
+    }
+
+
+async def test_data_changed_since_stage_a_runs_only_as_an_amendment(
+    world: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine = world
+    monkeypatch.setattr(h1, "COUNT_RULE", LENIENT)
+    await h1.register(engine, report=_report())
+    await h1.stage_a(engine, workers=1)
+    (stage,) = await _rows(engine, h1.NAME, "stage-a")
+    frozen_train = stage.metrics["data"]["train"]
+    assert frozen_train["candidates"] == 4  # three AAA stories and BBB's
+    # Units: AAA and SPY on S and S+1 (ID's spare), S..S+3 (MD3 and its spare).
+    assert frozen_train["units"] == 3 * 2 * 4 and frozen_train["done"] == 3 * 2 * 3
+
+    spare = _path(TRAIN[0], 4)[3]
+    await mark_done(engine, [("AAA", spare)])  # a unit fetched after Stage A
+    with pytest.raises(H1Locked, match="data differs"):
+        await h1.run_window(engine, "train", workers=1)
+    assert await _rows(engine, h1.NAME, "window") == []
+    await h1.run_window(engine, "train", workers=1, amend="spare session fetched (test)")
+    (amendment,) = await _rows(engine, h1.NAME, "amendment")
+    diff = amendment.metrics["data_diff"]["train"]
+    assert set(diff) == {"done", "done_sha"} and diff["done"] == [18, 19]
+    assert amendment.metrics["data"]["train"]["done"] == 19  # what later steps compare with
+    await h1.run_window(engine, "validation", workers=1)  # its own data did not change
+
+    async with engine.begin() as conn:  # a screen re-run makes AAA not halal from 2018
+        await conn.execute(
+            text(
+                "UPDATE halal_screen_results SET verdict = 'not_halal' "
+                "WHERE symbol = 'AAA' AND as_of >= '2018-01-01' AND as_of < '2022-01-01'"
+            )
+        )
+    await h1.verdict(engine)
+    with pytest.raises(H1Locked, match="data differs"):
+        await h1.sensitivities(engine, workers=1)
+
+
+async def test_an_unfinished_window_run_reruns_only_as_an_amendment(
+    world: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine = world
+    monkeypatch.setattr(h1, "COUNT_RULE", LENIENT)
+    await h1.register(engine, report=_report())
+    await h1.stage_a(engine, workers=1)
+    real = h1._record
+
+    async def crash(engine_: AsyncEngine, **kw: Any) -> int:
+        if kw["kind"] == "window":
+            raise RuntimeError("the machine died (test)")
+        return await real(engine_, **kw)
+
+    monkeypatch.setattr(h1, "_record", crash)
+    with pytest.raises(RuntimeError, match="died"):
+        await h1.run_window(engine, "train", workers=1)
+    monkeypatch.setattr(h1, "_record", real)
+    async with engine.connect() as conn:
+        partial = [
+            int(r.id)
+            for r in await conn.execute(
+                text("SELECT id FROM quant_trials WHERE kind = 'backtest' ORDER BY id")
+            )
+        ]
+    assert len(partial) == 2  # both cells' trials, but no window row
+    with pytest.raises(H1Locked, match="unfinished run"):
+        await h1.run_window(engine, "train", workers=1)
+    await h1.run_window(engine, "train", workers=1, amend="rerun after a crash (test)")
+    (amendment,) = await _rows(engine, h1.NAME, "amendment")
+    assert amendment.metrics["partial"] == partial and "replaces" not in amendment.metrics
+    await h1.run_window(engine, "validation", workers=1)  # validation is untouched
 
 
 async def test_too_few_entries_fail_h1_at_stage_a(world: AsyncEngine) -> None:
@@ -351,3 +559,53 @@ async def test_the_window_starts_eligible_nsn_stories_only(world: AsyncEngine) -
         )
     with pytest.raises(StoriesStale, match=f"AAA:{TRAIN[1]}"):
         await h1.load_window(engine, "train")
+
+
+async def test_a_live_eligible_story_blocks_the_next_while_carriers_never_do(
+    world: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AAA: S's story enters; S+1 brings a product item (a carrier); S+2 another downgrade.
+
+    Stage A assumes the full hold, so in MD3 S's playbook is live through S+2:
+    S+2's story is ``blocked_open``. The carrier in between is passed to the
+    simulator (its item reaches the live playbook) but starts nothing, blocks
+    nothing and has no outcome. In ID, S's playbook is done by S's close.
+    """
+    engine = world
+    s0, s1, s2 = _path(TRAIN[0], 3)
+    await store(
+        engine,
+        [
+            news_row(201, "AAA", ny(s1, 8), "Acme Announces New Product Line"),
+            news_row(202, "AAA", ny(s2, 8), "Barclays Downgrades Acme to Underweight"),
+        ],
+    )
+    await build_range(engine, start=date(2016, 10, 3), end=date(2024, 12, 31), force=True)
+    data = await h1.load_window(engine, "train")
+    assert f"AAA:{s2}" in data.candidates and f"AAA:{s1}" not in data.candidates
+    inputs = h1.run_inputs(data, MD3)
+    carrier = next(s for s in inputs.stories if s.story_id == f"AAA:{s1}")
+    assert isinstance(carrier, Carrier)
+    assert f"AAA:{s2}" in inputs.context  # eligible: it starts, and is blocked by S's
+
+    monkeypatch.setattr(h1, "COUNT_RULE", LENIENT)
+    await h1.register(engine, report=_report())
+    stage = await h1.stage_a(engine, workers=1)
+    md3, id_ = stage.counts[("train", MD3.key)], stage.counts[("train", ID.key)]
+    assert (md3.eligible, md3.blocked_open, md3.entries) == (4, 1, 3)
+    assert (id_.eligible, id_.blocked_open) == (4, 0)
+    async with engine.connect() as conn:
+        rows = (
+            await conn.execute(
+                text(
+                    "SELECT r.cell, s.story_id, s.terminal_state, s.reason "
+                    "FROM hb_playbook_story s JOIN hb_playbook_run r ON r.run_id = s.run_id "
+                    "WHERE r.window = 'train' AND s.symbol = 'AAA' AND s.session BETWEEN :a AND :b"
+                ),
+                {"a": s0, "b": s2},
+            )
+        ).all()
+    by_cell = {(r.cell, r.story_id): (r.terminal_state, r.reason) for r in rows}
+    assert by_cell[(MD3.key, f"AAA:{s2}")] == ("DISMISSED", "blocked_open")
+    assert by_cell[(ID.key, f"AAA:{s2}")] != ("DISMISSED", "blocked_open")
+    assert not any(sid == f"AAA:{s1}" for _, sid in by_cell)  # the carrier has no outcome

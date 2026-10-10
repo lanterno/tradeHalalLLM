@@ -245,6 +245,54 @@ def test_pinned_files_are_hashed() -> None:
     assert shas["halal_trader.events.h1"] is not None and len(shas["halal_trader.events.h1"]) == 12
 
 
+def test_code_drift_names_the_files_the_head_and_the_tree_that_changed() -> None:
+    code = {"commit": "a" * 40, "tags": [h1.TAG], "dirty": False}
+    files: dict[str, str | None] = {"m.sim": "111111111111", "m.h1": "222222222222"}
+    same = h1.CodeNow(CodeState("a" * 40, (h1.TAG,), False), dict(files))
+    assert h1.code_drift(code, files, same) == {} and same.sha == "a" * 40
+    moved = h1.CodeNow(
+        CodeState("b" * 40, (), True), {"m.sim": "333333333333", "m.h1": "222222222222"}
+    )
+    assert h1.code_drift(code, files, moved) == {
+        "files": {"m.sim": ["111111111111", "333333333333"]},
+        "commit": ["a" * 40, "b" * 40],
+        "dirty": [False, True],
+    }
+    assert moved.sha == "b" * 40 + "-dirty"  # the provenance says the tree was modified
+    amended = {"commit": "b" * 40, "dirty": True}  # a modified tree, once amended, runs on
+    assert h1.code_drift(amended, moved.files, moved) == {}
+    unknown = h1.CodeNow(CodeState("a" * 40, (), None), dict(files))
+    assert h1.code_drift(code, files, unknown) == {"dirty": [False, None]}
+    assert h1.CodeNow(CodeState(None), {}).sha is None
+
+
+def test_data_drift_lists_each_changed_digest_field() -> None:
+    before = {"candidates": 4, "candidates_sha": "x", "units": 8, "done": 6}
+    assert h1.data_drift(before, dict(before)) == {}
+    assert h1.data_drift(before, {**before, "done": 7}) == {"done": [6, 7]}
+    assert h1.data_drift(None, {"units": 8}) == {"units": [None, 8]}  # no baseline: a change
+
+
+def test_an_amendment_refuses_without_a_reason_and_says_why() -> None:
+    a = h1.Amendment("train", None, window_role="train")
+    a.require()  # nothing found: nothing to refuse
+    a.need("replaces", 12)
+    a.need("partial", [13, 14])
+    a.need("code_diff", {"files": {}, "commit": []}, code={}, files={})
+    a.need("data_diff", {"train": {"done": [1, 2]}}, data={})
+    with pytest.raises(H1Locked) as refused:
+        a.require()
+    message = str(refused.value)
+    assert "train has run (quant_trials 12); a rerun is an amendment" in message
+    assert "2 backtest row(s) of an unfinished run are on the ledger (quant_trials 13, 14)" in (
+        message
+    )
+    assert "the code differs from the code pinned for this trial (files, commit)" in message
+    assert "the data differs from the data Stage A froze (train)" in message
+    assert message.endswith("give the amendment's reason (--amend)")
+    h1.Amendment("train", "a reason", found=dict(a.found)).require()
+
+
 # ── stories: carriers and the news-lag sensitivity ────────────
 
 S = date(2017, 3, 7)

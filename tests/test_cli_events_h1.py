@@ -115,3 +115,16 @@ def test_every_step_refuses_before_the_registration(step: list[str]) -> None:
     result = CliRunner().invoke(cli, ["events", "h1", *step])
     assert result.exit_code == 1, result.output
     assert "not registered" in result.output and "Traceback" not in result.output
+    amended = CliRunner().invoke(cli, ["events", "h1", *step, "--amend", "a reason"])
+    assert amended.exit_code == 1 and "not registered" in amended.output  # every step takes it
+
+
+def test_an_amendment_refusal_names_the_option(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def refused(engine: Any, **kw: Any) -> Any:
+        assert kw["amend"] is None
+        raise h1.H1Locked("stage-a: the code differs (files): give the reason (--amend)")
+
+    monkeypatch.setattr(h1, "stage_a", refused)
+    result = CliRunner().invoke(cli, ["events", "h1", "stage-a", "--workers", "1"])
+    assert result.exit_code == 1 and "--amend" in result.output
+    assert "Traceback" not in result.output
