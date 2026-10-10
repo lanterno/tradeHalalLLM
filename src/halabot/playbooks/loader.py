@@ -9,10 +9,19 @@
   equals ``unlock.config_hash``;
 * sessions from 2025-01-01 need ``holdout=True`` and a ``kind='verdict'``
   row with ``verdict='pass'`` under that same hash;
-* a ``gate=`` unlock admits only its registered unit set, whatever the
-  date: ``unlock.units`` must hash (``unit_set_sha``) to ``unlock.units_sha``,
-  the value pinned for that gate, and SPY is admitted on the days of those
-  units.
+* a ``gate=`` unlock admits only its **pinned** unit set, whatever the
+  date. ``unlock.units`` must hash (``unit_set_sha``) to ``unlock.units_sha``;
+  every unit must lie in the gate's date range (:data:`GATE_RANGES`: g1 and
+  calib 2016-01-04..2016-09-30, sue 2016-01-04..2019-12-31, reactor
+  2025-12-01..2026-10-09); and the ledger must hold the pin, a
+  ``quant_trials`` row ``kind='gate-units'``, ``name=`` :data:`GATE_UNITS_NAME`,
+  ``config={"gate": <id>, "units_sha": <sha>}``, which the gate code writes
+  with :func:`register_gate_units` before it runs. SPY is admitted on the
+  days of those units.
+
+:meth:`MinuteBarLoader.prepare` verifies the unlock against the ledger and
+:meth:`MinuteBarLoader.check` every day of every requested path, so
+``sim.run`` refuses a run before it writes anything.
 
 **Coverage.** A path is simulated only if every (symbol, d) and (SPY, d) of
 it is a done unit of the minute backfill (``minutes.done_units``; zero bars
@@ -91,6 +100,17 @@ WINDOW_START: Final = {
 }
 WINDOW_LAST: Final = {Window.TRAIN: date(2021, 12, 31), Window.VALIDATION: date(2024, 12, 31)}
 
+Gate = Literal["g1", "calib", "reactor", "sue"]
+# The sessions each Phase 0 gate may read (spec §E, §H): every unit of its set lies inside.
+GATE_RANGES: Final[dict[str, tuple[date, date]]] = {
+    "g1": (date(2016, 1, 4), date(2016, 9, 30)),
+    "calib": (date(2016, 1, 4), date(2016, 9, 30)),
+    "sue": (date(2016, 1, 4), date(2019, 12, 31)),
+    "reactor": (date(2025, 12, 1), date(2026, 10, 9)),
+}
+GATE_UNITS_NAME: Final = "research.news.sim-gate.units"
+GATE_UNITS_KIND: Final = "gate-units"
+
 
 @dataclass(frozen=True, slots=True)
 class WindowUnlock:
@@ -99,12 +119,14 @@ class WindowUnlock:
     ``prereg_id``: a ``quant_trials`` row of kind ``preregistration`` whose
     ``config_hash`` is ``config_hash`` (``config_hash(PREREG)``). ``holdout``
     additionally needs a passing ``verdict`` row under that hash. ``gate``
-    with ``units`` and ``units_sha`` admits exactly that unit set.
+    with ``units`` and ``units_sha`` admits exactly that unit set, once it is
+    pinned in the ledger (:func:`register_gate_units`) and inside the gate's
+    dates (:data:`GATE_RANGES`).
     """
 
     prereg_id: int | None = None
     config_hash: str | None = None
-    gate: Literal["g1", "calib", "reactor", "sue"] | None = None
+    gate: Gate | None = None
     units: frozenset[tuple[str, date]] | None = None
     units_sha: str | None = None
     holdout: bool = False
@@ -124,6 +146,61 @@ def unit_set_sha(units: Iterable[tuple[str, date]]) -> str:
     return hashlib.sha256("\n".join(lines).encode()).hexdigest()
 
 
+def check_gate_units(gate: str, units: Iterable[tuple[str, date]]) -> frozenset[tuple[str, date]]:
+    """``units`` as a set; :class:`WindowLocked` unless all lie in ``gate``'s dates."""
+    span = GATE_RANGES.get(gate)
+    if span is None:
+        raise WindowLocked(f"unknown gate {gate!r}")
+    out = frozenset(units)
+    if not out:
+        raise WindowLocked(f"gate {gate!r} has an empty unit set")
+    lo, hi = span
+    outside = sorted(u for u in out if not lo <= u[1] <= hi)
+    if outside:
+        shown = ", ".join(minutes.unit(s, d) for s, d in outside[:5])
+        raise WindowLocked(
+            f"gate {gate!r} reads {lo}..{hi} only; {len(outside)} units outside: {shown}"
+        )
+    return out
+
+
+async def _gate_pinned(engine: AsyncEngine, gate: str, sha: str) -> bool:
+    async with engine.connect() as conn:
+        found = await conn.scalar(
+            text(
+                "SELECT count(*) FROM quant_trials WHERE kind = :k AND name = :n "
+                "AND config->>'gate' = :g AND config->>'units_sha' = :sha"
+            ),
+            {"k": GATE_UNITS_KIND, "n": GATE_UNITS_NAME, "g": gate, "sha": sha},
+        )
+    return bool(found)
+
+
+async def register_gate_units(
+    engine: AsyncEngine, gate: Gate, units: Iterable[tuple[str, date]]
+) -> str:
+    """Pin ``gate``'s unit set in the ledger before the gate runs; returns its sha256.
+
+    Writes one ``quant_trials`` row (``kind='gate-units'``, no Sharpe, so it
+    is never counted as a trial) unless the same pin exists. Refuses
+    (:class:`WindowLocked`) a unit outside the gate's dates.
+    """
+    from halal_trader.db.repos.quant_trials import QuantTrialRepoImpl
+
+    unit_set = check_gate_units(gate, units)
+    sha = unit_set_sha(unit_set)
+    if not await _gate_pinned(engine, gate, sha):
+        lo, hi = GATE_RANGES[gate]
+        await QuantTrialRepoImpl(engine).record_trial(
+            name=GATE_UNITS_NAME,
+            kind=GATE_UNITS_KIND,
+            config={"gate": gate, "units_sha": sha},
+            window=f"{lo}..{hi}",
+            metrics={"units": len(unit_set)},
+        )
+    return sha
+
+
 class WindowGuard:
     """Refuses every session a run may not read (see the module docstring)."""
 
@@ -136,19 +213,29 @@ class WindowGuard:
         self.unlock = unlock
         self._prereg_ok = False
         self._holdout_ok = False
+        self._gate_ok = False
         self._gate_days: frozenset[date] = frozenset()
         if unlock.gate is not None:
             if unlock.units is None or unlock.units_sha is None:
                 raise WindowLocked(f"gate {unlock.gate!r} needs its unit set and its sha256")
-            if unit_set_sha(unlock.units) != unlock.units_sha:
+            units = check_gate_units(unlock.gate, unlock.units)
+            if unit_set_sha(units) != unlock.units_sha:
                 raise WindowLocked(f"gate {unlock.gate!r}: the unit set does not match its sha256")
-            self._gate_days = frozenset(day for _, day in unlock.units)
+            self._gate_days = frozenset(day for _, day in units)
 
     async def verify(self, engine: AsyncEngine) -> None:
         """Check the unlock's ledger rows; raises :class:`WindowLocked` on any mismatch."""
         u = self.unlock
         if (u.prereg_id is not None or u.holdout) and not u.config_hash:
             raise WindowLocked("an unlock needs the preregistered config_hash")
+        if u.gate is not None:
+            assert u.units_sha is not None  # checked at construction
+            if not await _gate_pinned(engine, u.gate, u.units_sha):
+                raise WindowLocked(
+                    f"gate {u.gate!r}: unit set {u.units_sha[:12]} is not pinned in the ledger "
+                    f"(register_gate_units)"
+                )
+            self._gate_ok = True
         async with engine.connect() as conn:
             if u.prereg_id is not None:
                 row = (
@@ -182,6 +269,8 @@ class WindowGuard:
         if day > self.window_end:
             return f"{day} is after the window's end {self.window_end}"
         if self.unlock.gate is not None:
+            if not self._gate_ok:
+                return f"gate {self.unlock.gate!r}'s unit set is not verified as pinned"
             units = self.unlock.units or frozenset()
             if (symbol, day) in units or (symbol == SPY and day in self._gate_days):
                 return None
@@ -301,6 +390,18 @@ class MinuteBarLoader:
         await self.guard.verify(self._engine)
         await check_calendar(self._engine, WINDOW_START[self.guard.window], self.guard.window_end)
         self._done = await minutes.done_units(self._engine)
+
+    def check(self, requests: Sequence[PathRequest]) -> None:
+        """Raise :class:`WindowLocked` unless every day of every path (and SPY's) may be read.
+
+        Call it after :meth:`prepare` and before writing anything: a path
+        that crosses ``window_end``, or leaves a gate's unit set, is refused
+        up front rather than when its batch loads.
+        """
+        for req in requests:
+            for d in path_days(req.session, req.n_sessions):
+                self.guard.check(req.symbol, d)
+                self.guard.check(SPY, d)
 
     async def spy(self) -> SpyData:
         """SPY's bars, filled batch by batch as paths load."""
@@ -479,21 +580,27 @@ class MinuteBarLoader:
 
 
 __all__ = [
-    "SpyData",
+    "GATE_RANGES",
+    "GATE_UNITS_KIND",
+    "GATE_UNITS_NAME",
     "HOLDOUT_START",
     "LOCK_START",
     "SPY",
     "WINDOW_LAST",
     "WINDOW_START",
     "CalendarMismatch",
+    "Gate",
     "MinuteBarLoader",
     "PathRequest",
+    "SpyData",
     "Window",
     "WindowGuard",
     "WindowLocked",
     "WindowUnlock",
     "batches_of",
     "check_calendar",
+    "check_gate_units",
+    "register_gate_units",
     "sane",
     "unit_set_sha",
 ]
