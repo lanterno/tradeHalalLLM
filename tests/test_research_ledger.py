@@ -103,3 +103,20 @@ async def test_degenerate_active_series_is_not_recorded(engine):
         engine, strategy="t", config={}, days=DAYS, returns=flat, benchmark=flat
     )
     assert out is None
+
+
+@pytest.mark.asyncio
+async def test_a_later_row_without_a_sharpe_keeps_the_trial_counted(engine):
+    """A degenerate run recorded under a trial's hash neither drops nor replaces its Sharpe."""
+    from halal_trader.db.repos.quant_trials import QuantTrialRepoImpl
+    from halal_trader.research.ledger import _trial_sharpes
+
+    first = await _record(engine, {"v": 1}, seed=1, alpha=0.0002)
+    assert first is not None
+    before = await _trial_sharpes(engine)
+    await QuantTrialRepoImpl(engine).record_trial(
+        name=PREFIX + "t", kind="backtest", config={"v": 1}, metrics={"degenerate": True}
+    )
+    assert await _trial_sharpes(engine) == before
+    second = await _record(engine, {"v": 2}, seed=2, alpha=0.0)
+    assert second is not None and second.n_trials == 2
