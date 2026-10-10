@@ -50,15 +50,24 @@ class Headline:
 
 
 async def first_in_session(
-    engine: AsyncEngine, scorer_prefix: str = "llm-batch:"
+    engine: AsyncEngine,
+    scorer_prefix: str = "llm-batch:",
+    *,
+    scored_before: datetime | None = None,
 ) -> list[Headline]:
+    """The first scored in-session headline of each (symbol, New York day).
+
+    ``scored_before`` pins the set to the scores that existed then, so a
+    result can be reproduced after later scoring runs add headlines.
+    """
     async with engine.connect() as conn:
         rows = await conn.execute(
             text(
                 "SELECT e.symbol, e.published_at, s.score FROM event_scores s "
-                "JOIN events e ON e.id = s.event_id WHERE s.scorer LIKE :p AND e.kind = 'news'"
+                "JOIN events e ON e.id = s.event_id WHERE s.scorer LIKE :p AND e.kind = 'news' "
+                "AND (CAST(:before AS timestamptz) IS NULL OR s.scored_at < :before)"
             ),
-            {"p": scorer_prefix + "%"},
+            {"p": scorer_prefix + "%", "before": scored_before},
         )
         first: dict[tuple[str, date], Headline] = {}
         for r in rows:
