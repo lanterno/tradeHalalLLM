@@ -23,7 +23,10 @@ without moving a verdict is no reason to re-screen). That covers
 ``rescreen_renamed`` re-screens exactly those rows with
 ``runner.run_screen``, the date's other stored rows sizing the veto
 (``runner.stored_peers``) as the full run did. It is resumable: a row
-re-screened to its new outcome is no longer affected.
+re-screened to its new outcome is no longer affected. Neither is one
+re-screened to an outcome the replay did not predict (SEC not serving its
+record, a restated figure), so each of those is reported
+(``Rescreened.unexpected``) rather than left for a rerun that will not come.
 """
 
 from __future__ import annotations
@@ -34,7 +37,7 @@ from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import date
-from typing import Final, cast
+from typing import Final, NamedTuple, cast
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -81,6 +84,24 @@ class Affected:
     stored: str  # the outcome on file (``describe``)
     replayed: str  # the outcome the replay gives with old tickers
     why: str
+
+
+class Rescreened(NamedTuple):
+    """An affected row and the outcome its re-screen gave (``describe``; None on a dry run)."""
+
+    affected: Affected
+    now: str | None
+
+    @property
+    def unexpected(self) -> bool:
+        """Re-screened to an outcome other than the replay's.
+
+        The replay reads the stored inputs; the re-screen reads SEC again. A
+        submissions record SEC would not serve (screened doubtful) or a figure
+        restated since moves the outcome elsewhere, and a rerun does not
+        revisit the row: its stored outcome no longer turns on the veto.
+        """
+        return self.now is not None and self.now != self.affected.replayed
 
 
 def outcome(verdict: str, reasons: Sequence[str]) -> Outcome:
@@ -207,22 +228,22 @@ async def affected(sec: SecClient, engine: AsyncEngine) -> list[Affected]:
 
 async def rescreen_renamed(
     sec: SecClient, engine: AsyncEngine, *, dry_run: bool = False
-) -> list[tuple[Affected, str | None]]:
+) -> list[Rescreened]:
     """Re-screen every affected row; returns each with its new outcome (None on a dry run)."""
     companies = await company_map(sec, engine)
     todo = await _affected(engine, companies)
     if dry_run:
-        return [(a, None) for a in todo]
+        return [Rescreened(a, None) for a in todo]
     by_date: dict[date, list[Affected]] = defaultdict(list)
     for a in todo:
         by_date[a.as_of].append(a)
-    out: list[tuple[Affected, str | None]] = []
+    out: list[Rescreened] = []
     for as_of, rows in sorted(by_date.items()):
         symbols = {a.symbol for a in rows}
         peers = await stored_peers(engine, companies, as_of, symbols)
         results = await run_screen(sec, engine, sorted(symbols), as_of, peers=peers)
         now = {r.symbol: describe(outcome(r.verdict, r.reasons)) for r in results}
-        out.extend((a, now.get(a.symbol)) for a in rows)
+        out.extend(Rescreened(a, now.get(a.symbol, "not re-screened")) for a in rows)
         logger.info(
             "rescreen renamed %s: %s",
             as_of,

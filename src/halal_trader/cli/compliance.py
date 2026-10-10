@@ -162,6 +162,15 @@ def rescreen_renamed_cmd(dry_run: bool) -> None:
     dates = len({a.as_of for a, _ in done})
     did = "would be re-screened" if dry_run else "re-screened"
     console.print(f"{len(done)} row(s) across {dates} screen date(s) {did}")
+    unexpected = [r for r in done if r.unexpected]
+    if unexpected:
+        console.print(
+            f"[yellow]{len(unexpected)} row(s) re-screened to an outcome the replay did not "
+            "predict (SEC not serving a record, or a restated figure); a rerun will not "
+            "revisit them:[/yellow]"
+        )
+        for a, now in unexpected:
+            console.print(f"  {a.as_of} {a.symbol:6} predicted {a.replayed}, re-screened {now}")
 
 
 @compliance.command("etf-history")
