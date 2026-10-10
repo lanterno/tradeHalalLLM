@@ -21,7 +21,10 @@ from __future__ import annotations
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
+    CheckConstraint,
     Column,
+    Date,
     DateTime,
     Float,
     Index,
@@ -176,6 +179,108 @@ perception_seen = Table(
     UniqueConstraint("namespace", "key", name="uq_hb_perception_seen"),
 )
 
+# ── Playbook simulator output (src/halabot/playbooks/records.py) ──
+# One row per simulation (or shadow/paper/live) run, one per story it saw and
+# one per trade. Simulation rows (mode 'sim') are recomputable from code and
+# data; only modes shadow, paper and live are meant for backups.
+playbook_run = Table(
+    "hb_playbook_run",
+    metadata,
+    Column("run_id", PgUUID(as_uuid=True), primary_key=True),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("mode", Text, nullable=False),  # sim | shadow | paper | live
+    Column("playbook", Text, nullable=False),
+    Column("playbook_version", Text, nullable=False),
+    Column("cell", Text, nullable=False),
+    Column("feed", Text, nullable=False),
+    Column("window", Text, nullable=False),
+    Column("window_end", Date, nullable=True),
+    Column("stop_at", Text, nullable=False),  # entry | end
+    Column("config", JSONB, nullable=False),
+    Column("config_hash", Text, nullable=False),
+    Column("prereg_trial_id", Integer, nullable=True),
+    Column("code_sha", Text, nullable=True),
+    Column("summary", JSONB, nullable=True),  # RunSummary, written when the run ends
+    CheckConstraint("mode IN ('sim', 'shadow', 'paper', 'live')", name="ck_hb_playbook_run_mode"),
+)
+
+playbook_story = Table(
+    "hb_playbook_story",
+    metadata,
+    Column("run_id", PgUUID(as_uuid=True), primary_key=True),
+    Column("story_id", Text, primary_key=True),
+    Column("symbol", Text, nullable=False),
+    Column("session", Date, nullable=False),
+    Column("start_at", DateTime(timezone=True), nullable=True),
+    Column("nsn_at", DateTime(timezone=True), nullable=True),
+    Column("terminal_state", Text, nullable=False),
+    Column("reason", Text, nullable=False),
+    Column("skip", Text, nullable=True),
+    Column("triggered_at", DateTime(timezone=True), nullable=True),
+    Column("armed_at", DateTime(timezone=True), nullable=True),
+    Column("entry_decided_at", DateTime(timezone=True), nullable=True),
+    Column("entry_bar_ts", DateTime(timezone=True), nullable=True),
+)
+
+# TradeRecord's fields; floats that are NaN are stored as NULL.
+playbook_trade = Table(
+    "hb_playbook_trade",
+    metadata,
+    Column("run_id", PgUUID(as_uuid=True), primary_key=True),
+    Column("story_id", Text, primary_key=True),
+    Column("symbol", Text, nullable=False),
+    Column("family_type", Text, nullable=False),
+    Column("cell", Text, nullable=False),
+    Column("variant", Text, nullable=False),
+    Column("feed", Text, nullable=False),
+    Column("session", Date, nullable=False),
+    Column("exit_session", Date, nullable=False),
+    Column("sessions_held", Integer, nullable=False),
+    Column("start_case", Text, nullable=False),
+    Column("at_news", DateTime(timezone=True), nullable=True),
+    Column("nsn_at", DateTime(timezone=True), nullable=True),
+    Column("anchor_ts", DateTime(timezone=True), nullable=True),
+    Column("entry_decided_at", DateTime(timezone=True), nullable=False),
+    Column("entry_active_at", DateTime(timezone=True), nullable=False),
+    Column("entry_bar_ts", DateTime(timezone=True), nullable=False),
+    Column("exit_decided_at", DateTime(timezone=True), nullable=False),
+    Column("exit_active_at", DateTime(timezone=True), nullable=False),
+    Column("exit_bar_ts", DateTime(timezone=True), nullable=True),
+    *(
+        Column(name, Float, nullable=True)
+        for name in (
+            "p0",
+            "spy0",
+            "sigma",
+            "thr",
+            "low_star",
+            "target",
+            "entry_px",
+            "exit_px",
+            "adj_entry",
+            "adj_exit",
+            "spy_entry_px",
+            "spy_exit_px",
+            "spy_adj_entry",
+            "spy_adj_exit",
+            "cost_bps",
+        )
+    ),
+    Column("rank", Integer, nullable=False),
+    Column("tech", Boolean, nullable=False),
+    *(
+        Column(name, Float, nullable=True)
+        for name in ("beta", "r_gross", "r_spy", "r_net_abn", "r_beta_adj")
+    ),
+    Column("exit_reason", Text, nullable=False),
+    Column("mae", Float, nullable=True),
+    Column("mfe", Float, nullable=True),
+    Column("hold_minutes", Integer, nullable=False),
+    Column("participation", Float, nullable=True),
+    Column("flags", JSONB, nullable=False),
+    Column("legs", JSONB, nullable=False),  # the daily legs (records.Leg), for the NW series
+)
+
 # Replay + lookup indexes (created by create_all alongside the tables).
 Index("ix_hb_event_type_ts", event_log.c.type, event_log.c.ts)
 Index("ix_hb_event_asset_ts", event_log.c.asset, event_log.c.ts)
@@ -185,6 +290,7 @@ Index("ix_hb_outcome_asset_ts", outcome.c.asset, outcome.c.exit_ts)
 Index("ix_hb_perception_seen_ns_ts", perception_seen.c.namespace, perception_seen.c.seen_at)
 Index("ix_hb_conv_asset_ts", conviction_score.c.asset, conviction_score.c.ts)
 Index("ix_hb_target_asset_ts", target_weight.c.asset, target_weight.c.ts)
+Index("ix_hb_playbook_story_symbol", playbook_story.c.symbol, playbook_story.c.session)
 
 
 async def bootstrap_schema(engine: AsyncEngine) -> None:
@@ -226,6 +332,9 @@ __all__ = [
     "perception_seen",
     "conviction_score",
     "target_weight",
+    "playbook_run",
+    "playbook_story",
+    "playbook_trade",
     "bootstrap_schema",
     "make_engine",
 ]
