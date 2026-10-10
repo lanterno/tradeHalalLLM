@@ -62,6 +62,16 @@ async def test_the_universe_knows_only_the_trailing_twelve_months(engine: AsyncE
     assert await universe_at(engine, date(2026, 3, 15), top_n=1) == ["BIG"]
 
 
+async def test_equal_dollar_volumes_rank_by_symbol(engine: AsyncEngine) -> None:
+    year = month_starts(date(2025, 3, 1), date(2026, 2, 1))
+    for symbol in ("ZED", "ALF", "MID"):  # three clones: one dollar volume
+        await _months(engine, symbol, year, 100.0, 1e6)
+
+    for _ in range(3):
+        assert await universe_at(engine, date(2026, 3, 15), top_n=10) == ["ALF", "MID", "ZED"]
+    assert await universe_at(engine, date(2026, 3, 15), top_n=2) == ["ALF", "MID"]
+
+
 async def test_pit_schedule_joins_that_months_universe_with_the_last_screen_before_it(
     engine: AsyncEngine,
 ) -> None:
