@@ -52,34 +52,49 @@ anchor bar is visible: every bar before it is visible by then.
    session's flatten (the exchange fills a bar before the flatten marker of
    the same instant) goes straight on to EXITING (``time_stop``): the
    simulator's flatten already sells it, and no exit is judged.
-6. ENTERED -> EXITING, first of: X3 ``abort`` (a structural item known at
-   now: the story's card, or another story's item delivered as news) > X1
-   ``stop`` (a bar close below L*, in S units) > X2 ``target`` (a close >=
-   TGT). Exits are judged on every bar from the entry's fill bar on. X5
-   ``compliance`` and X4 ``time_stop`` are the simulator's sells (its
-   pre-open screen check and its flatten at close - 5 min of the deadline
-   session); the playbook follows them (``ComplianceIn``, the ``flatten``
-   ``SessionIn``). Another story's structural item counts for X3 even when
-   it came before the entry (spec §D.10: such items "can only trigger the
-   structural abort"), while E5 reads only the story's own card.
+6. ENTERED -> EXITING, first of: X3 ``abort`` > X1 ``stop`` (a bar close
+   below L*, in S units) > X2 ``target`` (a close >= TGT). Exits are judged
+   on every bar from the entry's fill bar on, X3 also at the fill and on
+   each item. X5 ``compliance`` and X4 ``time_stop`` are the simulator's
+   sells (its pre-open screen check and its flatten at close - 5 min of the
+   deadline session); the playbook follows them (``ComplianceIn``, the
+   ``flatten`` ``SessionIn``).
 7. WATCHING / ARMED -> EXPIRED at the entry cutoff (``cutoff``, a timer at
    ``close - 60 min``, after any bar visible at that instant), on a SPY close
    of S <= ``(1 + market_break) * spy_prev_close_s`` (``market_break``), or
-   when the card is no longer NSN_CORE (``veto``).
+   on a ``veto``: the card is no longer NSN_CORE, or another story of the
+   symbol delivers a structural item (below).
 8. One entry per story: every terminal state (EXITED, EXPIRED, DISMISSED)
    ends with ``Finish``.
 
+**Structural items** (spec §B.1: "veto before entry, abort after") reach
+the playbook from the story's own card and, for the symbol's other stories
+(a blocked story, or the next session's), only as ``NewsIn``. An item
+*brings a structural item* when it is the story's own and adds a structural
+type to its card's vetoes, or it is another story's and that story's card
+is structural (every such item counts, not only the first).
+
+* H1 (``require_family``): any structural item known while WATCHING or
+  ARMED ends the story EXPIRED (``veto``), the own one through E5's family
+  check and another story's on its ``NewsIn``. Another story's item usable
+  at the entry decision's own instant vetoes it too (the bar comes before
+  the news at one instant, and E5 would have read an own item then): the
+  ``Finish`` cancels the buy before it works. After the decision, X3 aborts
+  on any structural item of the story's card or one brought since.
+* The atlas (``require_family=False``, spec §F) drops E5 and the vetoes, so
+  a structural item already known at the entry decision does not abort (the
+  story's own type may be structural): X3 aborts only on an item that
+  brings a structural item later than the decision.
+
 Prices on later path sessions are put in S units with
 ``MarketView.to_s_units`` (splits and dividends inside the path are not
-moves). ``require_family=False`` (the atlas, spec §F) drops E5 and the veto
-expiry; a structural item already known at the entry decision then does not
-abort (the story's own type may be structural), only one that arrives after.
+moves).
 """
 
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from enum import StrEnum
@@ -114,6 +129,7 @@ from halabot.playbooks.types import (
     TradeFacts,
     Transition,
 )
+from halal_trader.events.taxonomy import STRUCTURAL
 
 NAME: Final = "overreaction_bounce"
 VERSION: Final = "1"
@@ -127,12 +143,17 @@ RECLAIM: Final = "close > AVWAP from anchor"
 STOP: Final = "bar close < L*"
 ABORT: Final = "structural item"
 PRIORITY: Final = ("abort", "stop", "target")
+_TICK: Final = timedelta(microseconds=1)  # a card at ``t - _TICK`` lacks the items of ``t``
 
 
 def _minutes(d: timedelta) -> int | float:
     """A span in minutes: an int when whole (the pre-registration writes ``20``, not ``20.0``)."""
     whole, rest = divmod(d, timedelta(minutes=1))
     return whole if not rest else d.total_seconds() / 60.0
+
+
+def _structural(vetoes: Iterable[str]) -> frozenset[str]:
+    return frozenset(v for v in vetoes if v in STRUCTURAL)
 
 
 @dataclass(frozen=True, slots=True)
@@ -306,12 +327,11 @@ class OverreactionBounce:
         self._broken = False
         # the entry and the exits
         self._decided_at: datetime | None = None
-        self._structural_at_entry = False
         self._low_star = math.nan
         self._target = math.nan
         self._entry_bar_ts: int | None = None
         self._exit_next = 0
-        self._foreign_abort_at: datetime | None = None
+        self._structural_at: datetime | None = None  # the last item that brought a structural one
 
     # ── the protocol ──
 
@@ -528,7 +548,6 @@ class OverreactionBounce:
         assert pre is not None and self._anchor_ts is not None
         card = ctx.story.card_at(ctx.now)
         self._decided_at = ctx.now
-        self._structural_at_entry = card.structural
         self._low_star = self._low
         self._target = self._low_star + p.target_retrace * (self._p0 - self._low_star)
         family = FAMILY if p.require_family else card.type
@@ -555,28 +574,43 @@ class OverreactionBounce:
 
     def _news(self, ev: NewsIn, ctx: Ctx) -> list[Intent]:
         st = self._state
-        if not ev.own:
-            # Another story's item (a blocked or later story): it can only abort a position.
-            if self._foreign_abort_at is None and ev.story.card_at(ev.at).structural:
-                self._foreign_abort_at = ctx.now
-        elif (
-            st in _WAITING
-            and self.params.require_family
-            and ctx.story.card_at(ctx.now).family != FAMILY
-        ):
+        strict = self.params.require_family
+        if self._brings_structural(ev):
+            self._structural_at = ev.at
+            at_decision = st is BounceState.ENTERING and ev.at == self._decided_at
+            if strict and (st in _WAITING or at_decision):
+                return self._end(BounceState.EXPIRED, "veto")  # the Finish cancels a buy
+        if ev.own and strict and st in _WAITING and ctx.story.card_at(ctx.now).family != FAMILY:
             return self._end(BounceState.EXPIRED, "veto")
         if st is BounceState.ENTERED and self._aborts(ctx):
             return self._exit("abort")
         return []
 
+    @staticmethod
+    def _brings_structural(ev: NewsIn) -> bool:
+        """Whether the item(s) usable at ``ev.at`` bring a structural item (module docstring).
+
+        The story's own: a structural type its card's vetoes lacked just
+        before. Another story's: any item once that story's card is
+        structural.
+        """
+        after = ev.story.card_at(ev.at)
+        if not after.structural:
+            return False
+        if not ev.own:
+            return True
+        before = ev.story.card_at(ev.at - _TICK)
+        return bool(_structural(after.vetoes) - _structural(before.vetoes))
+
     def _aborts(self, ctx: Ctx) -> bool:
-        """X3: a structural item known at ``now`` (one known at the decision, outside H1, aside)."""
-        strict = self.params.require_family
-        own = ctx.story.card_at(ctx.now).structural and (strict or not self._structural_at_entry)
-        foreign = self._foreign_abort_at is not None and (
-            strict or self._decided_at is None or self._foreign_abort_at > self._decided_at
+        """X3: an item brought a structural item after the decision; under H1 also any
+        structural item on the story's card (none can be known at the decision there)."""
+        later = (
+            self._structural_at is not None
+            and self._decided_at is not None
+            and self._structural_at > self._decided_at
         )
-        return own or foreign
+        return later or (self.params.require_family and ctx.story.card_at(ctx.now).structural)
 
     def _s_units(self, ctx: Ctx, bars: BarSeries, u: int) -> float:
         """Bar ``u``'s close in session-S units (``MarketView.to_s_units`` after S)."""
