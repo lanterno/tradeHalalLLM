@@ -9,9 +9,11 @@ from datetime import date
 import numpy as np
 import pytest
 
+from halabot.playbooks.records import Leg as SimLeg
 from halal_trader.events.stats import (
     ClusteredMean,
     Leg,
+    LegLike,
     calendar_series,
     cluster_bootstrap_ci,
     clustered_mean,
@@ -178,9 +180,9 @@ D1, D2, D3, D4 = date(2024, 3, 18), date(2024, 3, 19), date(2024, 3, 20), date(2
 
 def test_the_calendar_series_averages_the_open_legs_of_each_session() -> None:
     legs = {
-        "A:2024-03-18": [Leg(D1, 0.02, "A:2024-03-18"), Leg(D2, -0.01, "A:2024-03-18")],
-        "B:2024-03-19": [Leg(D2, 0.03, "B:2024-03-19"), Leg(D4, 0.01, "B:2024-03-19")],
-        "C:2024-03-19": [Leg(D2, 0.04, "C:2024-03-19")],
+        "A:2024-03-18": [Leg(D1, 0.02), Leg(D2, -0.01)],
+        "B:2024-03-19": [Leg(D2, 0.03), Leg(D4, 0.01)],
+        "C:2024-03-19": [Leg(D2, 0.04)],
     }
 
     series = calendar_series(legs, [D4, D1, D2, D3])  # D3 holds nothing: no point
@@ -189,11 +191,28 @@ def test_the_calendar_series_averages_the_open_legs_of_each_session() -> None:
     assert [x for _, x in series] == pytest.approx([0.02, 0.02, 0.01])
 
 
-def test_a_leg_off_the_calendar_or_misfiled_is_an_error() -> None:
+def test_the_calendar_series_takes_the_simulators_legs_as_they_are() -> None:
+    # records.Leg carries the bars and the cost; its abn is z/a - 1 - (Z/A - 1) - cost.
+    entry = SimLeg(D1, a=100.0, z=102.0, spy_a=400.0, spy_z=404.0, cost=0.001)  # 0.009
+    held = SimLeg(D2, a=102.0, z=101.0, spy_a=404.0, spy_z=404.0)  # -1/102
+    other = Leg(D2, 0.03)
+    legs: dict[str, list[LegLike]] = {"A:2024-03-18": [entry, held], "B:2024-03-19": [other]}
+
+    series = calendar_series(legs, [D1, D2])
+
+    assert series == [
+        (D1, pytest.approx(0.009, rel=1e-12)),
+        (D2, pytest.approx((-1.0 / 102.0 + 0.03) / 2.0, rel=1e-12)),
+    ]
+
+
+def test_a_leg_off_the_calendar_or_not_finite_is_an_error() -> None:
     with pytest.raises(ValueError, match="not a session"):
-        calendar_series({"A": [Leg(D3, 0.01, "A")]}, [D1, D2])
-    with pytest.raises(ValueError, match="filed under"):
-        calendar_series({"A": [Leg(D1, 0.01, "B")]}, [D1, D2])
+        calendar_series({"A": [Leg(D3, 0.01)]}, [D1, D2])
+    with pytest.raises(ValueError, match="non-finite"):
+        calendar_series({"A": [Leg(D1, math.nan)]}, [D1, D2])
+    with pytest.raises(ValueError, match="non-finite"):
+        calendar_series({"A": [SimLeg(D1, a=1.0, z=math.nan, spy_a=1.0, spy_z=1.0)]}, [D1])
 
 
 # ── Holm ─────────────────────────────────────────────────────────
