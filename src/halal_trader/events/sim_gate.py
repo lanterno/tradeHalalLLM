@@ -38,7 +38,11 @@ admits exactly the pinned set).
   at T changed (``halabot.playbooks.lookahead``, its fill-bar exemption
   included): every intent and transition at or before T, and the set of
   stories started by T, must be identical, and every fill bar must start at
-  or after its order's active time.
+  or after its order's active time. Each cell must also have exercised the
+  machine (an entry, a trade and an exit); the share of started stories
+  dismissed (``no_pre_event`` before σ has its 40 returns, about 2016-03)
+  is recorded. A selection of fewer than 500 stories is refused, with
+  ``g1-determinism``.
 * ``g1-synthetic``: the same on 1,000 synthetic paths (:func:`synthetic_world`).
 * ``g1-determinism``: 1 and 6 workers give the same sha256 over the records.
 
@@ -218,6 +222,7 @@ Group = Literal["lookahead", "reactor", "sue"]
 G1_CELLS: Final = (1, 3)  # H1's ID and MD3 holds
 G1_PER_STORY: Final = 5  # decision times T per story and cell
 G1_SYNTHETIC: Final = 1_000
+G1_MIN_STORIES: Final = units.G1_STORIES  # 500: fewer, and the real G1 gates are refused
 G1_T_BEFORE_OPEN: Final = timedelta(minutes=30)
 DETERMINISM_WORKERS: Final = 6
 MISMATCHES_SHOWN: Final = 20
@@ -261,11 +266,15 @@ SUE_PLAN_PARTS: Final = ("train", "validation", "gate_calib", "gate_sue")
 
 CRITERIA: Final[dict[str, str]] = {
     "g1-lookahead": (
-        "500 gate_g1 stories, cells ID and MD3, 5 seeded T each: every intent and transition "
-        "at or before T and the stories started by T identical after perturbing what is unknown "
-        "at T; no fill bar before its order's active time"
+        "500 gate_g1 stories (refused below), cells ID and MD3, 5 seeded T each: every intent "
+        "and transition at or before T and the stories started by T identical after perturbing "
+        "what is unknown at T; no fill bar before its order's active time; at least one entry, "
+        "one trade and one exit per cell (the dismissed share recorded)"
     ),
-    "g1-synthetic": "the same look-ahead invariance on 1,000 synthetic paths",
+    "g1-synthetic": (
+        "the same look-ahead invariance on 1,000 synthetic paths, with an entry, a trade and an "
+        "exit per cell"
+    ),
     "g1-determinism": "1 and 6 workers give the same sha256 over the sorted records, each cell",
     "r0": (
         "intraday.run on the pinned set, no fetch: score >= 0.4 same day n = 7,922, mean -0.30% "
@@ -718,14 +727,15 @@ def lookahead(
     seed: int = SEED,
     per_story: int = G1_PER_STORY,
     cfg: SimConfig | None = None,
-    require_trades: bool = False,
 ) -> tuple[bool, dict[str, Any]]:
     """The look-ahead invariance of every gate story of ``world`` in each cell.
 
-    Passes when every replay agrees with its base run, at least one
-    comparison is made per cell, and no fill bar starts before its order's
-    active time; ``require_trades`` also needs trades with exits (a synthetic
-    market built to exercise the machine).
+    Passes when every replay agrees with its base run, no fill bar starts
+    before its order's active time, and each cell exercised the machine: at
+    least one comparison, one entry, one trade and one exit. A cell whose
+    stories all end before an entry (say every one dismissed for want of σ)
+    proves nothing about the orders and fills, so it fails. The share of the
+    started stories dismissed is recorded (``dismissed_share``), not judged.
     """
     cfg = cfg or SimConfig()
     by_symbol = world.by_symbol()
@@ -763,16 +773,21 @@ def lookahead(
                 entries += o.entered
                 trades += o.trade is not None
         exits = sum(n for k, n in terminal.items() if k.startswith("EXITED/"))
-        ok = not mismatches and not violations and checked > 0
-        if require_trades:
-            ok = ok and trades > 0 and exits > 0
+        outcomes = sum(terminal.values())
+        dismissed = sum(n for k, n in terminal.items() if k.startswith("DISMISSED/"))
+        exercised = entries > 0 and trades > 0 and exits > 0
+        ok = not mismatches and not violations and checked > 0 and exercised
         passed = passed and ok
         cells[f"hold{hold}"] = {
             "passed": ok,
             "stories": len(world.gate_stories()),
             "started": started,
+            "outcomes": outcomes,
+            "dismissed": dismissed,
+            "dismissed_share": dismissed / outcomes if outcomes else None,
             "entries": entries,
             "trades": trades,
+            "exits": exits,
             "probes": probes,
             "checked": checked,
             "mismatches": len(mismatches),
@@ -1180,16 +1195,19 @@ async def run_lookahead(
             await record_gate(engine, r)
 
     synth = synthetic_world(n_paths=synthetic_paths)
-    ok, metrics = lookahead(synth, require_trades=True)
+    ok, metrics = lookahead(synth)
     metrics["paths"] = synthetic_paths
     await done(GateResult("g1-synthetic", ok, metrics, {"paths": synthetic_paths}))
     chosen = await units.g1_stories(engine)
-    if len(chosen) < units.G1_STORIES:
-        logger.warning("g1: the selection holds %d stories, not %d", len(chosen), units.G1_STORIES)
     unit_set = frozenset(units.g1_units(chosen))
     try:
         if not unit_set:
             raise GateRefused("g1: the selection is empty (no gate_g1 story)")
+        if len(chosen) < G1_MIN_STORIES:
+            raise GateRefused(
+                f"g1: the selection holds {len(chosen)} stories, fewer than the "
+                f"{G1_MIN_STORIES} spec §E.1 runs"
+            )
         await require_done(engine, ["g1-lookahead", "g1-determinism"], unit_set)
         built = await g1_rebuild(engine, chosen)
         sha = await pin_units(engine, "g1", "gate_g1", unit_set, await plan_h(engine, "gate_g1"))
@@ -2411,8 +2429,15 @@ def describe(result: GateResult) -> str:
     g = result.gate
     if g in ("g1-lookahead", "g1-synthetic"):
         cells = m.get("cells", {})
+
+        def share(c: Mapping[str, Any]) -> str:
+            x = c.get("dismissed_share")
+            return f"{x:.0%}" if x is not None else "-"
+
         return "; ".join(
-            f"{k}: {c['checked']} checked, {c['mismatches']} mismatches, {c['trades']} trades"
+            f"{k}: {c['checked']} checked, {c['mismatches']} mismatches, "
+            f"{c.get('entries', 0)} entries, {c['trades']} trades, {c.get('exits', 0)} exits, "
+            f"{share(c)} dismissed"
             for k, c in cells.items()
         )
     if g == "g1-determinism":
