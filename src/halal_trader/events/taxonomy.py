@@ -5,12 +5,13 @@ Two levels, both pure:
 * **Items.** :func:`classify_item` types one Benzinga headline or one 8-K
   filing by fixed rules, first match wins: an 8-K by its item codes;
   law-firm alerts and auto-generated filler (``law_firm``, ``noise``);
-  headlines the earnings parser read (``earnings_fact``) or could not
-  (``guidance_unparsed``); the structural negatives, checked **before**
-  analyst actions so "Downgrades On Fraud Concerns" is fraud; analyst
-  actions; price-mover pieces (``mover``, written because the price moved,
-  so they never name a cause); then the unclear negatives, the positives and
-  the neutrals.
+  headlines the earnings parser read (``earnings_fact``, or ``guidance_cut``
+  when the headline also cuts or withdraws guidance) or could not
+  (``guidance_unparsed``, unless it cuts guidance); the structural
+  negatives, checked **before** analyst actions so "Downgrades On Fraud
+  Concerns" is fraud; analyst actions; price-mover pieces (``mover``,
+  written because the price moved, so they never name a cause); then the
+  unclear negatives, the positives and the neutrals.
 * **Stories.** :func:`resolve` types a story (one symbol's items of one
   reaction session) from the items **available by** ``t`` only, so a card
   read at 10:05 never knows the 11:00 wire. A structural negative wins,
@@ -208,9 +209,11 @@ FILING_KINDS: Final = frozenset({"8-k", "8-k/a"})
 
 # ── Headline patterns (spec §B.4) ───────────────────────────────────────────
 
+# "Portnoy" alone is Barstool's Dave Portnoy, never the Portnoy Law Firm.
 LAW_FIRM: Final = re.compile(
     r"Law Firm|Rosen Law|Pomerantz|Levi & Korsinsky|Bragar|Faruqi|Kessler Topaz|Glancy|"
-    r"Bronstein|Schall Law|Robbins (?:Geller|LLP)|Gross Law|Kirby McInerney|Holzer|Portnoy|"
+    r"Bronstein|Schall Law|Robbins (?:Geller|LLP)|Gross Law|Kirby McInerney|Holzer|"
+    r"Portnoy (?:Law|&)|"
     r"Block & Leviton|Hagens Berman|Bernstein Liebhard|Johnson Fistel|Halper Sadeh|"
     r"Gainey McKenna|Kahn Swick|Monteverde|Ademi|Brodsky & Smith|Rigrodsky|Wohl & Fruchter|"
     r"Frank R\.? Cruz|Howard G\.? Smith|Edelson Lechtzin|Investor Alert|Shareholder Alert|"
@@ -274,15 +277,19 @@ DOWNGRADE: Final = re.compile(
     re.I,
 )
 UPGRADE: Final = re.compile(r"\bUpgrade[sd]?\b|\bRaised To (?:Buy|Outperform|Overweight)\b", re.I)
+# The older wires say "Target" alone: "Baird Downgrades Acuity Brands to
+# Neutral, Lowers Target to $265.00".
 PT_CUT: Final = re.compile(
     r"\b(?:Lowers?|Lowered|Cuts?|Slashes|Trims|Reduces|Decreases)\b.{0,40}"
     r"\b(?:Price Target|PT|Target Price)\b|"
-    r"\b(?:Price Target|PT)\b.{0,10}\b(?:Cut|Lowered|Reduced|Slashed|Trimmed)\b",
+    r"\b(?:Price Target|PT)\b.{0,10}\b(?:Cut|Lowered|Reduced|Slashed|Trimmed)\b|"
+    r"\b(?:Lowers?|Lowered|Cuts?|Slashes|Trims|Reduces|Decreases)\s+(?:Its\s+)?Target\b",
     re.I,
 )
 PT_RAISE: Final = re.compile(
     r"\b(?:Raises?|Raised|Boosts?|Lifts?|Increases?|Hikes?|Bumps?)\b.{0,40}"
-    r"\b(?:Price Target|PT|Target Price)\b",
+    r"\b(?:Price Target|PT|Target Price)\b|"
+    r"\b(?:Raises?|Raised|Boosts?|Lifts?|Increases?|Hikes?|Bumps?)\s+(?:Its\s+)?Target\b",
     re.I,
 )
 # Case-sensitive, like Benzinga's rating wires.
@@ -291,15 +298,24 @@ INIT_NEG: Final = re.compile(
 )
 
 # Structural negatives, and antitrust (unclear) checked among them.
+# Not a restatement: a contract "Amended And Restated", an analyst who
+# "Restates Buy Rating", or a "Chip Delay Report" (a filing delay names the
+# filing: an annual or quarterly report, a 10-K/Q, a filing).
 RESTATEMENT: Final = re.compile(
-    r"\bRestat(?:e|es|ed|ement)\b|Non-?Reliance|Material Weakness|"
+    r"(?<!Amended And )(?<!Amended & )(?<!Amended, )(?<!Amended )(?<!Amend, )(?<!Amends, )"
+    r"(?<!Amend And )(?<!Amends And )\bRestat(?:e|es|ed|ement)\b"
+    r"(?!\s+(?:Its\s+)?(?:Strong\s+)?(?:Buy|Outperform|Overweight|Neutral|Hold|Sell|"
+    r"Underperform|Underweight|Market Perform|Equal[- ]?Weight|Sector Perform|Peer Perform|"
+    r"In-Line|Accumulate|Reduce|Positive|Negative)\b)|"
+    r"Non-?Reliance|Material Weakness|"
     r"Accounting (?:Irregularit|Review|Errors?|Issues?|Probe)|"
-    r"Delay(?:s|ed)? (?:Its |Filing|Of )?(?:Annual|Quarterly)? ?(?:Report|10-[KQ]|Filing)|"
+    r"Delay(?:s|ed)? (?:Its |Of )?(?:(?:Annual|Quarterly) Report|10-[KQ]|Filing)|"
     r"Late Filing|NT 10-[KQ]|Unable To Timely File",
     re.I,
 )
+# A bankruptcy court approving a purchase types the buyer's story, not an insolvency.
 INSOLVENCY: Final = re.compile(
-    r"\bBankrupt|Chapter (?:11|7)\b|Going Concern|\bDefault(?:s|ed)? On\b|"
+    r"\bBankrupt(?!cy Court Approv)|Chapter (?:11|7)\b|Going Concern|\bDefault(?:s|ed)? On\b|"
     r"Missed (?:Interest|Coupon) Payment|Forbearance|Restructuring Support Agreement|Insolven|"
     r"Covenant (?:Breach|Waiver)|Debt Restructuring",
     re.I,
@@ -345,9 +361,16 @@ DILUTION: Final = re.compile(
     r"Equity Distribution Agreement|Sales Agreement For .{0,30}Shares",
     re.I,
 )
+# Not a cut: raising the lower end of a range ("Raises Lower End Of FY21
+# Guidance"), or lowering what the company spends ("Cuts FY20 Capex Guidance",
+# "Reduces Annual Cash Burn Guidance"); "At The Lower End Of Guidance" is one.
 GUIDANCE_CUT: Final = re.compile(
-    r"\b(?:Cuts?|Lowers?|Lowered|Slashes|Reduces|Trims|Withdraws|Withdrew|Suspends|Pulls|Pulled)\b"
-    r"(?:(?!Price Target|\bPT\b).){0,50}"
+    r"\b(?:Cuts?|Lowers?(?![- ]End\b)|"
+    r"(?<!Raises )(?<!Raised )(?<!Raise )(?<!Increases )(?<!Raises The )(?<!Raised The )"
+    r"Lower(?=[- ]End\b)|"
+    r"Lowered|Slashes|Reduces|Trims|Withdraws|Withdrew|Suspends|Pulls|Pulled)\b"
+    r"(?:(?!Price Target|\bPT\b|\bCap(?:ital )?Ex|\bOpEx\b|Capital Spending|\bSpending\b|"
+    r"Cash Burn|\bCosts?\b|\bExpenses?\b|Tax Rate).){0,50}"
     r"\b(?:Guidance|Outlook|Forecast|Guide|"
     r"(?:Financial|Long-Term|Margin|Revenue|Sales|Earnings|Growth) Targets?)\b|"
     r"Profit Warning|"
@@ -598,6 +621,12 @@ def classify_item(
     the story's company (the story builder computes it), or None to read the
     whole headline. Only the analyst step reads the clause: every other rule
     reads the headline.
+
+    A guidance cut stated with the numbers ("SLM Q1 EPS $0.870 Misses $0.880
+    Estimate; Withdraws FY20 Guidance") is a ``guidance_cut`` item: its facts
+    still count in :func:`earnings_verdict`, whatever the item's type. An
+    explicit cut also comes before guidance no template reads ("Aptiv Lowers
+    FY24 Revenue Outlook: ... Vs. $21.03B Estimate (Prior View: ...)").
     """
     if kind in FILING_KINDS:
         return _filing_type(items_8k)
@@ -605,9 +634,10 @@ def classify_item(
         return "law_firm"
     if NOISE.search(headline):
         return "noise"
+    cut = GUIDANCE_CUT.search(headline) is not None
     if any(f.kind in ("result", "guidance") for f in facts):
-        return "earnings_fact"
-    if GUIDE_UNPARSED.search(headline):
+        return "guidance_cut" if cut else "earnings_fact"
+    if not cut and GUIDE_UNPARSED.search(headline):
         return "guidance_unparsed"
     for name, rx in NEGATIVE_ORDER:
         if rx.search(headline):
@@ -678,8 +708,12 @@ def metric_verdict(fields: Mapping[str, object], metric: Literal["eps", "sales"]
 
     A stated surprise decides, with a dead band of :data:`DEAD_BAND` (so a
     pre-2018 "EPS $1.27 vs $1.12 Est." is a beat); without one, Benzinga's
-    verdict word does; "Up From ... YoY" and a bare "vs" decide nothing.
+    verdict word does; "Up From ... YoY" and a bare "vs" decide nothing, and
+    neither does a figure the parser flags as not comparable ("May Not
+    Compare", or not in the estimate's units), whatever its word says.
     """
+    if fields.get(f"{metric}_not_comparable"):
+        return None
     surprise = _rounded(fields.get(f"{metric}_surprise"))
     if surprise is not None:
         if surprise >= DEAD_BAND:
