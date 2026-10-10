@@ -62,7 +62,11 @@ and is nobody's parent.
 **Inputs a build checks** (:func:`build_range`, unless forced): every month
 of the renamed tickers' news fetched, the story aliases stored, and every
 news event it reads parsed by the current earnings extractor
-(``earnings_parse.EXTRACTOR``, read when the build runs).
+(``earnings_parse.EXTRACTOR``, read when the build runs). A build replaces
+its range one symbol batch at a time, each batch in one transaction, and
+records the range complete in ``backfill_progress`` (task :data:`TASK`,
+unit :func:`build_unit`) only once every batch is written; counts refuse a
+range no complete build covers.
 
 The builder's own constants are pinned by :data:`STORIES_SHA`;
 :func:`pins` gathers it with the other pins of the pre-registration.
@@ -84,7 +88,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal
 
 from sqlalchemy import text
 from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy.ext.asyncio import AsyncEngine
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from halal_trader.data.minutes import session_bounds
 from halal_trader.db.models import NewsStory
@@ -136,10 +140,13 @@ __all__ = [
     "StoryCounts",
     "StoryItem",
     "StoriesNotReady",
+    "TASK",
     "admit",
     "analyst_clause",
     "build",
     "build_range",
+    "build_unit",
+    "built_ranges",
     "count_stories",
     "counts_table",
     "edgar_business_day",
@@ -157,6 +164,7 @@ __all__ = [
     "reaction_session",
     "shingles",
     "story_row",
+    "uncovered_sessions",
     "window_of",
 ]
 
@@ -220,6 +228,9 @@ HISTORY_FROM: Final = date(2016, 1, 1)
 _LEAD_DAYS: Final = 10
 BATCH_SYMBOLS: Final = 100
 _INSERT_CHUNK: Final = 500
+# A complete build of [start, end] is one backfill_progress row (task TASK,
+# unit build_unit(start, end)), written after its last batch.
+TASK: Final = "stories"
 
 # The research windows `events stories counts` splits by (spec §G.5).
 TRAIN: Final = (date(2016, 10, 3), date(2021, 12, 31))
@@ -232,7 +243,8 @@ UNIVERSES: Final[tuple[Universe, ...]] = ("all", "primary", "tech")
 
 class StoriesNotReady(RuntimeError):
     """A build's inputs are incomplete (renamed-ticker news, story aliases, the
-    current extractor's facts)."""
+    current extractor's facts), or counts were asked of a range no complete
+    build covers."""
 
 
 # ── types (spec §A.1) ──────────────────────────────────────────
@@ -818,23 +830,29 @@ def story_row(story: Story) -> dict[str, Any]:
     }
 
 
-async def persist(engine: AsyncEngine, stories: Sequence[Story]) -> int:
-    """Upsert the stories' rows (this builder version); returns rows written."""
+async def _upsert(conn: AsyncConnection, stories: Sequence[Story]) -> int:
+    """Upsert the stories' rows on ``conn`` (its transaction); returns rows written."""
     rows = [story_row(s) for s in stories]
     table = NewsStory.__table__  # type: ignore[attr-defined]
-    async with engine.begin() as conn:
-        for i in range(0, len(rows), _INSERT_CHUNK):
-            stmt = insert(table).values(rows[i : i + _INSERT_CHUNK])
-            stmt = stmt.on_conflict_do_update(
-                index_elements=["builder_version", "story_id"],
-                set_={
-                    c.name: stmt.excluded[c.name]
-                    for c in table.columns
-                    if c.name not in ("builder_version", "story_id")
-                },
-            )
-            await conn.execute(stmt)
+    for i in range(0, len(rows), _INSERT_CHUNK):
+        stmt = insert(table).values(rows[i : i + _INSERT_CHUNK])
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["builder_version", "story_id"],
+            set_={
+                c.name: stmt.excluded[c.name]
+                for c in table.columns
+                if c.name not in ("builder_version", "story_id")
+            },
+        )
+        await conn.execute(stmt)
     return len(rows)
+
+
+async def persist(engine: AsyncEngine, stories: Sequence[Story]) -> int:
+    """Upsert the stories' rows (this builder version) in one transaction;
+    returns rows written. Marks no range complete (that is :func:`build_range`'s)."""
+    async with engine.begin() as conn:
+        return await _upsert(conn, stories)
 
 
 # ── reading the event store ────────────────────────────────────
@@ -977,6 +995,95 @@ async def _per_symbol(raws: AsyncIterator[RawItem]) -> AsyncIterator[list[RawIte
         yield batch
 
 
+# ── complete builds (backfill_progress) ────────────────────────
+
+_MARK_SQL: Final = (
+    "INSERT INTO backfill_progress (task, unit, items, done_at) "
+    "VALUES (:t, :u, :n, now()) ON CONFLICT (task, unit) "
+    "DO UPDATE SET items = EXCLUDED.items, done_at = EXCLUDED.done_at"
+)
+_DELETE_RANGE: Final = (
+    "DELETE FROM news_stories WHERE builder_version = :v AND session >= :a AND session <= :b"
+)
+
+
+def build_unit(start: date, end: date) -> str:
+    """The ``backfill_progress`` unit (task :data:`TASK`) of a complete build of [start, end]."""
+    return f"{BUILDER_VERSION}:{start.isoformat()}:{end.isoformat()}"
+
+
+def _range_of(unit: str) -> tuple[date, date] | None:
+    """[start, end] of this builder version's unit; None for another version's."""
+    prefix = f"{BUILDER_VERSION}:"
+    if not unit.startswith(prefix):
+        return None
+    lo, _, hi = unit.removeprefix(prefix).partition(":")
+    try:
+        return date.fromisoformat(lo), date.fromisoformat(hi)
+    except ValueError:
+        return None
+
+
+async def _ranges(conn: AsyncConnection) -> list[tuple[date, date]]:
+    rows = await conn.execute(
+        text("SELECT unit FROM backfill_progress WHERE task = :t ORDER BY unit"), {"t": TASK}
+    )
+    return [r for u in rows if (r := _range_of(str(u.unit))) is not None]
+
+
+async def built_ranges(engine: AsyncEngine) -> list[tuple[date, date]]:
+    """The ranges [start, end] this builder version has completely built."""
+    async with engine.connect() as conn:
+        return await _ranges(conn)
+
+
+def uncovered_sessions(
+    ranges: Sequence[tuple[date, date]], *, start: date, end: date
+) -> list[date]:
+    """The sessions in [start, end] no range covers (a story's S is always a session)."""
+    out: list[date] = []
+    day = start if is_trading_day(start) else next_trading_day(start)
+    while day <= end:
+        if not any(a <= day <= b for a, b in ranges):
+            out.append(day)
+        day = next_trading_day(day)
+    return out
+
+
+async def _unmark(engine: AsyncEngine, start: date, end: date) -> None:
+    """Withdraw the complete marks over [start, end] before it is rebuilt.
+
+    A mark reaching past the range keeps its parts outside it (with their
+    stories counted), so rebuilding a month leaves the rest of a complete
+    build complete; a build that stops before its own mark leaves [start,
+    end] unmarked.
+    """
+    async with engine.begin() as conn:
+        keep: dict[str, int] = {}
+        for a, b in await _ranges(conn):
+            if b < start or a > end:
+                continue
+            await conn.execute(
+                text("DELETE FROM backfill_progress WHERE task = :t AND unit = :u"),
+                {"t": TASK, "u": build_unit(a, b)},
+            )
+            parts = [(a, start - timedelta(days=1))] if a < start else []
+            parts += [(end + timedelta(days=1), b)] if b > end else []
+            for lo, hi in parts:
+                n = await conn.scalar(
+                    text(
+                        "SELECT count(*) FROM news_stories WHERE builder_version = :v "
+                        "AND session >= :a AND session <= :b"
+                    ),
+                    {"v": BUILDER_VERSION, "a": lo, "b": hi},
+                )
+                keep[build_unit(lo, hi)] = int(n or 0)
+        if keep:
+            await conn.execute(
+                text(_MARK_SQL), [{"t": TASK, "u": u, "n": n} for u, n in keep.items()]
+            )
+
+
 async def build_range(
     engine: AsyncEngine,
     *,
@@ -993,10 +1100,17 @@ async def build_range(
     (:func:`missing_facts` over every day items are read from), unless
     ``force``. Items are read from :data:`HISTORY_FROM` (or a few days before
     ``start``, if earlier) so each story's parent comes from the same history
-    however the build is split; symbols go in batches of
-    :data:`BATCH_SYMBOLS`, one symbol at a time, sessions in order. Returns
-    the stories written; ``counters`` collects the admission counts over
-    every row read.
+    however the build is split.
+
+    Symbols go in batches of :data:`BATCH_SYMBOLS`, one symbol at a time,
+    sessions in order; a batch's old rows in the range are deleted and its
+    new ones written in one transaction. The range's complete mark
+    (:func:`build_unit`) is withdrawn first and written last, in the
+    transaction that deletes the rows of symbols with no story there any
+    more, so a build that stops part-way leaves its range unmarked and
+    :func:`count_stories` refuses it. A forced build is never marked: its
+    inputs were not checked. Returns the stories written; ``counters``
+    collects the admission counts over every row read.
     """
     if end < start:
         raise ValueError(f"end {end} is before start {start}")
@@ -1024,23 +1138,29 @@ async def build_range(
     c = counters if counters is not None else Counter()
     aliases = await load_aliases(engine)
     symbols = await _symbols(engine, lead, end)
-    async with engine.begin() as conn:
-        await conn.execute(
-            text(
-                "DELETE FROM news_stories WHERE builder_version = :v "
-                "AND session >= :a AND session <= :b"
-            ),
-            {"v": BUILDER_VERSION, "a": start, "b": end},
-        )
+    await _unmark(engine, start, end)
+    span = {"v": BUILDER_VERSION, "a": start, "b": end}
     written = 0
     for i in range(0, len(symbols), BATCH_SYMBOLS):
         batch = symbols[i : i + BATCH_SYMBOLS]
         c["kind"] += await _other_kinds(engine, batch, lo, end)
-        raws = load_items(engine, start=lo, end=end, symbols=batch, counters=c)
-        async for rows in _per_symbol(raws):
-            stories = build(rows, aliases, counters=c)
-            written += await persist(engine, [s for s in stories if start <= s.session <= end])
+        async with engine.begin() as conn:
+            await conn.execute(text(_DELETE_RANGE + " AND symbol = ANY(:s)"), span | {"s": batch})
+            raws = load_items(engine, start=lo, end=end, symbols=batch, counters=c)
+            async for rows in _per_symbol(raws):
+                stories = build(rows, aliases, counters=c)
+                written += await _upsert(conn, [s for s in stories if start <= s.session <= end])
         logger.info("stories: %d of %d symbols, %d stories", i + len(batch), len(symbols), written)
+    async with engine.begin() as conn:
+        await conn.execute(text(_DELETE_RANGE + " AND symbol <> ALL(:s)"), span | {"s": symbols})
+        if not force:
+            await conn.execute(
+                text(_MARK_SQL), {"t": TASK, "u": build_unit(start, end), "n": written}
+            )
+    if force:
+        logger.warning(
+            "stories %s..%s: a forced build, left unmarked (counts refuse it)", start, end
+        )
     logger.info(
         "stories %s..%s (%s): %d written; items read from %s: %s",
         start,
@@ -1112,9 +1232,19 @@ async def count_stories(
     A story counts as NSN when ``nsn_at`` is no later than S's entry cutoff
     (the simulator's ``Session.entry_cutoff``). Eligibility is read one year
     at a time, each year's context loaded for that year's symbols only.
+
+    Refuses (:class:`StoriesNotReady`) when a session in [start, end] lies in
+    no completely built range (:func:`built_ranges`): a build that stopped
+    part-way, or none at all, would be counted as if it held every story.
     """
     from halabot.playbooks.types import Session
 
+    gaps = uncovered_sessions(await built_ranges(engine), start=start, end=end)
+    if gaps:
+        raise StoriesNotReady(
+            f"{len(gaps)} session(s) in {start}..{end} have no complete {BUILDER_VERSION} "
+            f"build (first: {gaps[0]}); run `halal-trader events stories build` over them"
+        )
     counts = StoryCounts()
     for year in range(start.year, end.year + 1):
         lo, hi = max(start, date(year, 1, 1)), min(end, date(year, 12, 31))

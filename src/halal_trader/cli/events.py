@@ -223,22 +223,31 @@ def stories_build_cmd(start: Any, end: Any, force: bool) -> None:
     console.print(f"{written} story(ies) stored for {start:%Y-%m-%d}..{end:%Y-%m-%d}")
     console.print("items read: " + ", ".join(f"{k} {v}" for k, v in sorted(counters.items())))
     console.print("pins: " + ", ".join(f"{k} {v}" for k, v in pinned.items()))
+    if force:
+        console.print(
+            "forced: the range is not marked complete, so `events stories counts` refuses it"
+        )
 
 
 @stories_group.command("counts")
 @click.option("--start", type=click.DateTime(["%Y-%m-%d"]), default="2016-10-03")
 @click.option("--end", type=click.DateTime(["%Y-%m-%d"]), default="2024-12-31")
 def stories_counts_cmd(start: Any, end: Any) -> None:
-    """Stories by close type and NSN, per year and window: all, PRIMARY, Technology."""
+    """Stories by close type and NSN, per year and window: all, PRIMARY, Technology.
+
+    Only over sessions a complete `events stories build` covers."""
+    from halal_trader.events.stories import StoriesNotReady, counts_table
 
     async def _run(engine: Any, settings: Any) -> Any:
         from halal_trader.events.stories import count_stories
 
         return await count_stories(engine, start=start.date(), end=end.date())
 
-    from halal_trader.events.stories import counts_table
-
-    for line in counts_table(run_db(_run), start=start.date(), end=end.date()):
+    try:
+        counts = run_db(_run)
+    except StoriesNotReady as e:
+        fail(str(e))
+    for line in counts_table(counts, start=start.date(), end=end.date()):
         console.print(line, markup=False, highlight=False)
 
 
