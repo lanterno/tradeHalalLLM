@@ -37,8 +37,13 @@ a fragment glued to the token before it (the "1" of "Q1", the "-$1.85" of
 $6.80-$7.30 vs. $7.17 Est", "(Prior $8.00) Vs."). Its figure is re-read as
 the last dollar figure between its metric and its estimate that is neither
 glued nor introduced by From/Prior/Previous/Was ("From $80M To $75M" gives
-the $75M). When none qualifies the fact keeps its action with no figure and
-no surprise, so "Lowers" and "Cuts" still count as guidance down. A range
+the $75M; Prior and Previous may name it in a few words first, "Versus Prior
+Guidance Of $13.20-$13.60") nor inside a parenthetical opening with Prior,
+From or Previous ("(From $8.80 To $8.90)"). Guidance kept as it was (Sees,
+Affirms, Reaffirms, Maintains, Reiterates) may state its range with a "from"
+no "to" follows ("PPL Reaffirms FY2017 EPS Guidance from $1.92-2.12 vs $2.16
+Est"). When none qualifies the fact keeps its action with no figure and no
+surprise, so "Lowers" and "Cuts" still count as guidance down. A range
 states its unit once: "$643-$684M" is $643M to $684M.
 
 A headline is read segment by segment (split on ``;``). The first template
@@ -155,22 +160,42 @@ _BASIS_WORD = re.compile(r"\b(?:Non-GAAP|GAAP|Adjusted|Adj|Ajd|Core|Operating)\b
 # reads stays unread (GUIDE_UNPARSED: guidance unknown).
 _TOLERANCE_GAP = re.compile(r"\+/-|±")
 # A guided figure GUIDE_V4's read is re-read from: a dollar amount not glued
-# to the token before it nor stating a change ("By $0.05 To $5.60-$5.75"),
-# alone or as a range ("$0.70 - $0.76", "$1.23 to $1.27"). A "to" never joins
-# a figure to the start of another range, and a lone figure is not the start
-# of a range it cannot complete ("$6.70-0$7.50").
+# to the token before it (the "$0.57)" of "($0.57)" is no figure, and the
+# typo "$($0.57)" reads whole, as -0.57) nor stating a change ("By $0.05 To
+# $5.60-$5.75", though "Group $3.2B" is a figure), alone or as a range ("$0.70
+# - $0.76", "$1.23 to $1.27", "To 3.22-$3.31"). A "to" never joins a figure to
+# the start of another range, and a lone figure is not the start of a range it
+# cannot complete ("$6.70-0$7.50").
 _FIGURE = re.compile(
-    r"(?<![\w.,$-])(?<!By )(?<!Up )(?<!Down )"
-    r"(?P<low>\(?-?\$\(?-?[\d,]*\.?\d+\)?[KMB]?)(?![\w.%$])"
+    r"(?<![\w.,$(-])(?<!\bBy )(?<!\bUp )(?<!\bDown )"
+    r"(?P<low>(?:\$\()?\(?-?\$\(?-?[\d,]*\.?\d+\)?[KMB]?"
+    r"|(?<=\bTo )\d[\d,]*(?:\.\d+)?(?=\s?-\s?\$))(?![\w.%$])"
     rf"(?:(?P<join>\s?-\s?|\s+to\s+)(?P<high>{_NUM})(?![\w.%$])(?!\s?-\s?\(?-?\$?\d)|(?!\s?-))",
     re.I,
 )
 # The words that introduce the guidance a figure replaces ("From $6.80-$7.30",
 # "(Prior View: $8.00)"); "Will Range From" introduces the guidance itself.
+# Prior and Previous(ly) may name it in up to three words first ("Versus Prior
+# Guidance Of $13.20-$13.60", "Previously-Issued Range $2.11-$2.16"), none a
+# figure, a "To" or a "Now", and no clause break.
 _OLD = re.compile(
-    r"\b(?:(?<!Range )From|Prior(?:\s+View)?|Previous(?:ly)?|Was)\s*:?\s*\(?\s*~?\s*$", re.I
+    r"\b(?:(?<!Range )From|Was|"
+    r"(?:Prior|Previous(?:ly)?)(?:[\s-]+(?!(?:To|Now)\b)[^\s$;(),]+){0,3})"
+    r"\s*:?\s*\(?\s*~?\s*$",
+    re.I,
 )
 _FROM = re.compile(r"\bFrom\s*:?\s*\(?\s*~?\s*$", re.I)
+# How far before a figure _OLD looks for the words that introduce it.
+OLD_WINDOW: Final = 40
+# Guidance kept as it was: a "from" before its first figure introduces the
+# range itself when no "to" follows ("PPL Reaffirms FY2017 EPS Guidance from
+# $1.92-2.12 vs $2.16 Est"); after one, the range replaced ("Atkore Sees FY
+# Adj. EPS $1.37-$1.45 from $1.55-$1.65 vs $1.57 Est.").
+KEEP_ACTIONS: Final = frozenset({"sees", "affirms", "reaffirms", "maintains", "reiterates"})
+_TO = re.compile(r"\bto\b", re.I)
+# A parenthetical stating the guidance replaced: no figure in it is the guidance
+# ("Sees Adj. EPS To $9.00 (From $8.80 To $8.90) Vs $8.87 Est.").
+_OLD_PAREN = re.compile(r"\(\s*(?:Prior|From|Previous(?:ly)?)\b", re.I)
 # The verbs of a forecast: a result template never reads a statement they precede.
 _FORWARD = re.compile(r"\b(?:Sees|Expects|Guides|Forecasts|Projects)\b", re.I)
 # A figure stated in thousands, millions or billions.
@@ -317,20 +342,41 @@ def _eps_result(m: re.Match[str], segment: str, *, verdict: str, estimated: bool
     return EarningsFacts("result", _with_sales(fields, segment, m.end()))
 
 
+def _in_old_paren(segment: str, at: int) -> bool:
+    """Whether ``segment[at]`` sits in a parenthetical stating the guidance replaced."""
+    opened = segment.rfind("(", 0, at)
+    return (
+        opened >= 0
+        and ")" not in segment[opened:at]
+        and _OLD_PAREN.match(segment, opened) is not None
+    )
+
+
 def _guided_figure(segment: str, g: re.Match[str]) -> tuple[str | None, str | None]:
     """The figure a ``GUIDE_V4`` read guides to, as (low, high) texts, high None
     for a single figure; (None, None) when no figure qualifies.
 
     It is the last dollar figure between the read's metric and its estimate
     that is not glued to the token before it and not introduced as the
-    guidance being replaced; of "From $80M To $75M" the "To" figure counts.
+    guidance being replaced, by the words before it (after the metric) or a
+    parenthetical; of "From $80M To $75M" the "To" figure counts. Guidance
+    kept as it was (:data:`KEEP_ACTIONS`) may state its range with a "from"
+    that no "to" follows, as its first figure.
     """
     end = g.end("high") if g["high"] else g.end("low")
+    kept = g["action"].lower() in KEEP_ACTIONS
     found: tuple[str | None, str | None] = (None, None)
-    pos = g.end("metric")
+    pos = floor = g.end("metric")
     while (f := _FIGURE.search(segment, pos, end)) is not None:
-        before = max(0, f.start() - 30)
-        if _OLD.search(segment, before, f.start()) is None:
+        before = max(floor, f.start() - OLD_WINDOW)
+        if _in_old_paren(segment, f.start()):
+            pos = f.end()
+        elif _OLD.search(segment, before, f.start()) is None or (
+            kept
+            and found == (None, None)
+            and _FROM.search(segment, before, f.start())
+            and not _TO.search(segment, f.start(), end)
+        ):
             found, pos = (f["low"], f["high"]), f.end()
         elif (
             f["high"]
@@ -489,10 +535,14 @@ def sources() -> dict[str, str]:
         "_SUFFIXED": _SUFFIXED,
         "_METRIC_WORD": _METRIC_WORD,
         "_CLOSING_FLAG": _CLOSING_FLAG,
+        "_OLD_PAREN": _OLD_PAREN,
+        "_TO": _TO,
     }
     return {name: rx.pattern for name, rx in patterns.items()} | {
         "PARSE_ORDER": ",".join(PARSE_ORDER),
         "UNIT_RATIO": repr(UNIT_RATIO),
+        "OLD_WINDOW": repr(OLD_WINDOW),
+        "KEEP_ACTIONS": ",".join(sorted(KEEP_ACTIONS)),
         "EXTRACTOR": EXTRACTOR,
     }
 
