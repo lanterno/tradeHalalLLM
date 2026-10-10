@@ -727,6 +727,17 @@ def test_a_sales_figure_after_a_forecast_verb_is_not_the_results() -> None:
         # Constructed: a segment naming a metric flags only its own statements.
         ("Acme Q1 EPS $1.00 Beats $0.90 Estimate, Sales $5.0B Beat $4.9B Estimate; Sales May Not "
          "Compare", False, False),
+        # Constructed: a segment flagging the headline names the estimates, consensus,
+        # a forecast or guidance, or is a BZ NOTE ...
+        ("Acme Q1 EPS $1.00 Beats $0.90 Estimate, Sales $5.0B Beat $4.9B Estimate; Consensus "
+         "May Not Compare", True, True),
+        ("Acme Q1 EPS $1.00 Beats $0.90 Estimate, Sales $5.0B Beat $4.9B Estimate; BZ NOTE: "
+         "Figures Not Comparable", True, True),
+        # ... a note about last year leaves the beats theirs.
+        ("Acme Q1 EPS $1.00 Beats $0.90 Estimate, Sales $5.0B Beat $4.9B Estimate; Results Not "
+         "Comparable To Prior Year", False, False),
+        ("Acme Q1 EPS $1.00 Beats $0.90 Estimate, Sales $5.0B Beat $4.9B Estimate; Prior Year "
+         "Not Comparable Due To Spin-Off", False, False),
     ],
 )  # fmt: skip
 def test_may_not_compare_with_or_without_to(headline: str, eps: bool, sales: bool) -> None:
@@ -904,6 +915,7 @@ def test_parser_sha_pins_every_pattern() -> None:
         "_SUFFIXED",
         "_METRIC_WORD",
         "_CLOSING_FLAG",
+        "_FLAG_SUBJECT",
         "_OLD_PAREN",
         "_TO",
         "_TO_END",
