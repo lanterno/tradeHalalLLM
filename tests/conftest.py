@@ -293,8 +293,11 @@ async def engine(database_url: str) -> AsyncIterator[AsyncEngine]:
 
 @pytest.fixture
 def small_map(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Two old tickers of one company (OLDA, then OLDB) instead of the real renames:
-    OLDA names NEWA to 2016-02-10, OLDB from the next session to 2016-03-04."""
+    """Two old tickers of one company (OLDA, then OLDB) instead of the real renames.
+
+    OLDA names NEWA to 2016-02-10, OLDB from the next session to 2016-03-04;
+    with the grace sessions their news windows end 2016-02-18 and 2016-03-11.
+    """
     from datetime import date
 
     from halal_trader.events import renames
@@ -304,4 +307,4 @@ def small_map(monkeypatch: pytest.MonkeyPatch) -> None:
         "TICKER_RENAMES",
         {"OLDA": ("NEWA", date(2016, 2, 10)), "OLDB": ("NEWA", date(2016, 3, 4))},
     )
-    monkeypatch.setattr(renames, "FIRST_SESSIONS", {})
+    monkeypatch.setattr(renames, "HELD_SINCE", {})

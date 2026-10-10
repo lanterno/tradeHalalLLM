@@ -154,6 +154,42 @@ async def test_slots_are_learned_from_single_symbol_articles_in_the_window(
     }
 
 
+async def test_slots_are_learned_only_from_rows_that_are_their_symbols_own(
+    engine: AsyncEngine,
+) -> None:
+    def at(day: date) -> datetime:
+        return datetime(day.year, day.month, day.day, 15, tzinfo=UTC)
+
+    pandora, everpure = date(2017, 5, 1), date(2026, 5, 4)
+    await _news(
+        engine,
+        [
+            # Pandora held P: its articles teach P nothing ...
+            *((n, "P", at(pandora), "Pandora Q1 EPS $(0.20) Misses", ["P"]) for n in (1, 2, 3)),
+            # ... Pure Storage's, copied from PSTG or after the switch, do
+            *((n, "P", at(pandora), "Pure Storage Q4 EPS $0.10 Beats", ["PSTG"]) for n in (4, 5)),
+            (6, "P", at(everpure), "Everpure Q4 EPS $0.40 Beats", ["P"]),
+            # the old IAC's own rows count once, under PPLI (the copy), not under IAC
+            *(
+                (n, s, at(date(2021, 5, 4)), "IAC Q1 EPS $1.00 Beats", ["IAC"])
+                for n, s in ((7, "IAC"), (7, "PPLI"))
+            ),
+            # Ingersoll-Rand's IR is Trane's now; Gardner Denver's IR from 2020-03-02
+            (8, "IR", at(date(2019, 5, 1)), "Ingersoll-Rand Q1 EPS $1.30 Beats", ["IR"]),
+            (8, "TT", at(date(2019, 5, 1)), "Ingersoll-Rand Q1 EPS $1.30 Beats", ["IR"]),
+            (9, "IR", at(date(2021, 5, 4)), "Ingersoll Rand Q1 EPS $0.40 Beats", ["IR"]),
+            # a metaverse ETF held META before Facebook took it
+            (10, "META", at(date(2021, 11, 1)), "Roundhill Upgrades Metaverse to Buy", ["META"]),
+        ],
+    )
+    assert await learn_slots(engine) == {
+        "P": Counter({"Pure Storage": 2, "Everpure": 1}),
+        "PPLI": Counter({"IAC": 1}),
+        "TT": Counter({"Ingersoll-Rand": 1}),
+        "IR": Counter({"Ingersoll Rand": 1}),
+    }
+
+
 # ── the matcher ───────────────────────────────────────────────
 
 
