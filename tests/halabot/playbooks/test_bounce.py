@@ -28,6 +28,7 @@ from halabot.playbooks.clock import SIP_DELAYED
 from halabot.playbooks.playbook import PlaybookFactory
 from halabot.playbooks.records import StoryOutcome, TradeRecord
 from halabot.playbooks.types import SetTimer, SimConfig, SpyData, Submit
+from halal_trader.db.repos.quant_trials import config_hash
 from tests.halabot.playbooks._bounce import (
     BASE_LEVELS,
     BASE_ROWS,
@@ -37,17 +38,21 @@ from tests.halabot.playbooks._bounce import (
     IN_SPY,
     SPY_ROWS,
     A,
+    AtlasStory,
     TStory,
     bars,
     base_bars,
     base_story,
     eligibility,
+    late_reclaim,
     pre_event,
     r_expected,
     run,
     spy,
+    titems,
     transitions,
     tstory,
+    tue_story,
 )
 from tests.halabot.playbooks._support import (
     HALF,
@@ -159,21 +164,43 @@ def check_facts(
 # ── the rule's constants and the factory ──
 
 
+# Spec §G.14's PREREG["playbook"], literally.
+PREREG_PLAYBOOK: dict[str, object] = {
+    "k_sigma": 2.0,
+    "floor": 0.03,
+    "quiet_min": 20,
+    "entry_start_min": 20,
+    "entry_cutoff_min": 60,
+    "max_retrace_at_entry": 0.25,
+    "target_retrace": 0.5,
+    "market_break": -0.02,
+    "flatten_min": 5,
+    "reclaim": "close > AVWAP from anchor",
+    "stop": "bar close < L*",
+    "abort": "structural item",
+    "priority": ["abort", "stop", "target"],
+    "compliance_exit": True,
+}
+
+
 def test_params_are_the_spec_constants() -> None:
     p = BounceParams()
-    assert p.as_config() == {
-        "k_sigma": 2.0,
-        "floor": 0.03,
-        "quiet_min": 20.0,
-        "entry_start_min": 20.0,
-        "entry_cutoff_min": 60.0,
-        "max_retrace_at_entry": 0.25,
-        "target_retrace": 0.5,
-        "market_break": -0.02,
-        "flatten_min": 5.0,
-        "hold_sessions": 1,
-        "require_family": True,
+    config = p.as_config()
+    assert config == PREREG_PLAYBOOK
+    # Equal is not enough for the hash: 20 == 20.0, but json.dumps writes them apart.
+    assert [type(v) for v in config.values()] == [type(v) for v in PREREG_PLAYBOOK.values()]
+    assert list(config) == list(PREREG_PLAYBOOK)
+    assert config_hash({"playbook": config}) == config_hash({"playbook": PREREG_PLAYBOOK})
+    # The hold is the cell's and the family switch the atlas's: neither is in the block.
+    for other in (BounceParams(hold_sessions=3), BounceParams(require_family=False)):
+        assert other.as_config() == config
+    assert p.run_config() == {"hold_sessions": 1, "variant": "ID", "require_family": True}
+    assert BounceParams(hold_sessions=3, require_family=False).run_config() == {
+        "hold_sessions": 3,
+        "variant": "MD3",
+        "require_family": False,
     }
+    assert BounceParams(quiet=timedelta(seconds=90)).as_config()["quiet_min"] == 1.5
     assert (p.variant, BounceParams(hold_sessions=3).variant) == ("ID", "MD3")
     with pytest.raises(ValueError):
         BounceParams(flatten_before_close=timedelta(minutes=10))
@@ -232,6 +259,19 @@ def test_target() -> None:
     assert timer == SetTimer(et(MON, 15, 0), CUTOFF_TIMER)
     buy = next(i for _, i in out.intents if isinstance(i, Submit) and i.side == "buy")
     assert buy.facts is not None and buy.facts.low_star == 94.0 and buy.facts.target == 97.0
+
+
+@pytest.mark.parametrize("reason", ["ok", "rank"])
+def test_each_transition_starts_where_the_last_ended(reason: str) -> None:
+    """The simulator labels each transition with the state before it: the first from DETECTED
+    (it reads the state before calling ``start``, which already leaves it)."""
+    out = one(base_story(), [MON], [base_bars()], elig=eligibility(reason=reason))
+    froms = [f for _, f, _, _ in out.transitions]
+    tos = [t for _, _, t, _ in out.transitions]
+    assert froms[0] == "DETECTED"
+    assert froms[1:] == tos[:-1]
+    if reason != "ok":
+        assert out.transitions == ((et(MON, 9, 30), "DETECTED", "DISMISSED", reason),)
 
 
 def test_stop() -> None:
@@ -381,9 +421,11 @@ def test_structural_abort() -> None:
     ]
 
 
-def test_unclear_veto_before_entry() -> None:
-    """An unclear negative (legal_adverse) usable at 10:00:30 vetoes the armed-to-be story."""
-    st = base_story(MON, (et(MON, 9, 50, 30), "legal_adverse"))
+@pytest.mark.parametrize("itype", ["legal_adverse", "dilution"])
+def test_a_veto_before_entry(itype: str) -> None:
+    """An unclear negative (legal_adverse) or a structural one (dilution) usable at 10:00:30
+    vetoes the armed-to-be story (spec §B.1: both veto before the entry)."""
+    st = base_story(MON, (et(MON, 9, 50, 30), itype))
     out = one(st, [MON], [base_bars()])
     assert out.trade is None and out.entry_decided_at is None
     assert (out.terminal_state, out.reason) == ("EXPIRED", "veto")
@@ -476,6 +518,27 @@ def test_in_session_news_before_any_bar_takes_the_previous_closes() -> None:
     )
     check_facts(t)
     assert t.start_case == "in"
+
+
+def test_in_session_news_before_the_stocks_first_bar_takes_both_previous_closes() -> None:
+    """News public at 09:50 on a stock that first prints at 10:00, while SPY has traded at 204
+    since the open. No stock bar closed before the news, so P0 is the previous close 100, and
+    SPY0 SPY's previous close 200, not its 09:49 close 204: both legs of D start from the same
+    baseline. The base path, 30 minutes later: D at 10:00 = -0.04 - 0.02, entered at 10:36:05."""
+    st = tstory(A, MON, (et(MON, 9, 50), "analyst_downgrade"))
+    levels = [(nxt(hm, 30), price) for hm, price in BASE_LEVELS]
+    rows = {nxt(hm, 30): row for hm, row in BASE_ROWS.items()}
+    day = bars(MON, levels, rows, first=(10, 0))
+    out = one(st, [MON], [day], spy_rows={}, spy_price=204.0)
+    assert (out.start_at, out.triggered_at) == (et(MON, 10, 0), et(MON, 10, 1, 5))
+    t = out.trade
+    assert t is not None and t.start_case == "in"
+    assert (t.entry_decided_at, t.entry_bar_ts, t.entry_px) == (
+        et(MON, 10, 36, 5),
+        et(MON, 10, 37),
+        95.45,
+    )
+    check_facts(t, anchor=et(MON, 10, 0))
 
 
 def test_md3_overnight_gap_through_the_low() -> None:
@@ -677,6 +740,59 @@ def test_an_entry_unfilled_at_the_close_expires(sessions: int) -> None:
     assert transitions(out)[-1] == (when, "EXPIRED", "entry_unfilled")
 
 
+def test_a_buy_the_simulator_rejects_expires_with_its_reason() -> None:
+    """S's screen says not halal (the eligibility, built elsewhere, said ok): the buy decided
+    at 10:06:05 is refused at once, and the story ends ``entry_rejected:not_halal``."""
+    out = one(base_story(), [MON], [base_bars()], ctx=Context(verdicts={(A, MON): "not_halal"}))
+    assert out.trade is None and out.entry_decided_at is None and not out.entered
+    assert (out.terminal_state, out.reason) == ("EXPIRED", "entry_rejected:not_halal")
+    assert transitions(out)[-2:] == [
+        (et(MON, 10, 6, 5), "ENTERING", "entry"),
+        (et(MON, 10, 6, 5), "EXPIRED", "entry_rejected:not_halal"),
+    ]
+
+
+@pytest.mark.parametrize("sessions", [1, 3])
+def test_a_buy_filled_at_the_deadlines_flatten_goes_straight_to_the_time_stop(
+    sessions: int,
+) -> None:
+    """The 14:58 bar reclaims (decided 14:59:05); nothing prints until the 15:54 bar, which fills
+    the buy at its open, 95, at 15:55:00: the exchange runs before the flatten marker of that
+    instant, so the simulator's flatten sells it while the playbook is still ENTERING. On the fill
+    (15:55:01) the ID playbook goes straight to EXITING (time_stop) and judges no exit: the fill
+    bar's close of 93.2 < L* is not a stop. On MD3 the deadline is WED, so it is one."""
+    rows: dict[tuple[int, int], Row] = {
+        (9, 30): BASE_ROWS[(9, 30)],
+        (9, 45): BASE_ROWS[(9, 45)],
+        (14, 58): (94.8, 95.5, 94.7, 95.4, 1_000.0, 95.2),
+        (15, 54): (95.0, 95.1, 93.0, 93.2, 1_000.0, 94.0),
+        (15, 56): (93.2, 93.4, 93.1, 93.3, 1_000.0, 93.25),
+    }
+    skip = [(14, 59)] + [(15, m) for m in range(54)]
+    levels = [((9, 30), 96.0), ((9, 46), 94.8), ((15, 55), 93.2)]
+    days = [MON, TUE, WED][:sessions]
+    later = [bars(d, [((9, 30), 93.2)]) for d in (TUE, WED)]
+    out = one(base_story(), days, [bars(MON, levels, rows, skip=skip), *later][:sessions])
+    t = out.trade
+    assert t is not None and (t.entry_decided_at, t.entry_bar_ts, t.entry_px) == (
+        et(MON, 14, 59, 5),
+        et(MON, 15, 54),
+        95.0,
+    )
+    assert (t.exit_bar_ts, t.exit_px) == (et(MON, 15, 56), 93.25)
+    if sessions == 3:
+        assert (t.exit_reason, t.exit_decided_at) == ("stop", et(MON, 15, 55, 5))
+        return
+    assert (t.exit_reason, t.exit_decided_at) == ("time_stop", et(MON, 15, 55))
+    assert transitions(out)[-4:] == [
+        (et(MON, 14, 59, 5), "ENTERING", "entry"),
+        (et(MON, 15, 55, 1), "ENTERED", "filled"),
+        (et(MON, 15, 55, 1), "EXITING", "time_stop"),
+        (et(MON, 15, 57, 1), "EXITED", "time_stop"),
+    ]
+    assert not [i for _, i in out.intents if isinstance(i, Submit) and i.side == "sell"]
+
+
 def test_close_fallback() -> None:
     """No print after 15:50: the time stop at 15:55 fills at the official close, 95.7."""
     ctx = Context(daily={(A, MON): daily(95.7), ("SPY", MON): daily(200.4)})
@@ -856,23 +972,73 @@ def test_a_structural_item_while_entering_aborts_at_the_fill() -> None:
     )
 
 
-def test_another_storys_structural_item_known_before_entry_aborts_at_the_fill() -> None:
-    """A dilution usable at 14:35 MON belongs to TUE's story (after 14:30). It reaches MON's
-    armed playbook as news; E5 reads MON's own card, so MON still enters at 14:46:05, and X3
-    (any structural item known by now) aborts at the fill. Spec-literal; see the module notes."""
-    a = base_story()
-    b = tstory(A, TUE, (et(MON, 14, 25), "dilution"), (et(TUE, 7, 0), "analyst_downgrade"))
-    rows: dict[tuple[int, int], Row] = {
-        (9, 30): BASE_ROWS[(9, 30)],
-        (9, 45): BASE_ROWS[(9, 45)],
-        (14, 45): (94.8, 95.5, 94.7, 95.4, 1_000.0, 95.2),
-    }
-    mon = bars(MON, [((9, 30), 96.0), ((9, 46), 94.8), ((14, 46), 95.4)], rows)
-    assert b.nsn_at(et(TUE, 15, 0)) is None  # TUE's story never starts: it only carries news
-    paths = {a.story_id: path(a.story_id, A, [MON], [mon])}
-    (first,) = run([a, b], paths, spy([MON]), {a.story_id: (pre_event(MON), eligibility())})
-    t = first.trade
-    assert t is not None and t.entry_decided_at == et(MON, 14, 46, 5)
+def with_tue(
+    *items: tuple[datetime, str],
+    rows: dict[tuple[int, int], Row] | None = None,
+    params: BounceParams | None = None,
+    stage_a: bool = False,
+) -> StoryOutcome:
+    """MON's base story on ``_bounce.late_reclaim``, beside TUE's story carrying ``items``."""
+    a, b = base_story(), tue_story(*items)
+    assert b.nsn_at(et(TUE, 15, 0)) is None  # it never starts: it only carries news
+    paths = {a.story_id: path(a.story_id, A, [MON], [late_reclaim(rows)])}
+    (out,) = run(
+        [a, b],
+        paths,
+        spy([MON]),
+        {a.story_id: (pre_event(MON), eligibility())},
+        params=params,
+        stop_at="entry" if stage_a else "end",
+        assume_full_hold=stage_a,
+    )
+    return out
+
+
+@pytest.mark.parametrize("stage_a", [False, True])
+@pytest.mark.parametrize("watching", [False, True])
+def test_another_storys_structural_item_vetoes_a_waiting_story(
+    watching: bool, stage_a: bool
+) -> None:
+    """Spec §B.1's "veto before entry" holds for every story of the symbol. A dilution public at
+    14:25 MON belongs to TUE's story (usable at 14:35, after 14:30) and reaches MON's playbook
+    as news: armed since 10:06:05 (or watching again after a new low at 14:30), it ends EXPIRED
+    (``veto``) at 14:35. It never enters at 14:46:05, so Stage A counts no entry."""
+    rows: dict[tuple[int, int], Row] | None = None
+    last = (et(MON, 10, 6, 5), "ARMED", "quiet")
+    if watching:
+        rows = {(14, 30): (94.8, 94.8, 93.9, 94.2, 1_000.0, 94.3)}
+        last = (et(MON, 14, 31, 5), "WATCHING", "new_low")
+    out = with_tue((et(MON, 14, 25), "dilution"), rows=rows, stage_a=stage_a)
+    assert out.trade is None and out.entry_decided_at is None and not out.entered
+    assert (out.terminal_state, out.reason) == ("EXPIRED", "veto")
+    assert transitions(out)[-2:] == [last, (et(MON, 14, 35), "EXPIRED", "veto")]
+
+
+def test_another_storys_structural_item_at_the_decision_instant_vetoes_it() -> None:
+    """Usable at 14:46:05, the instant the 14:45 bar decides the entry: the bar comes first, then
+    the news. The story's own item would have failed E5 at that instant, so this one vetoes as
+    well: the ``Finish`` cancels the buy before it works (14:46:08), and nothing fills."""
+    out = with_tue((et(MON, 14, 36, 5), "dilution"))
+    assert out.trade is None and out.entry_bar_ts is None and not out.entered
+    assert out.entry_decided_at == et(MON, 14, 46, 5)
+    assert (out.terminal_state, out.reason) == ("EXPIRED", "veto")
+    assert transitions(out)[-2:] == [
+        (et(MON, 14, 46, 5), "ENTERING", "entry"),
+        (et(MON, 14, 46, 5), "EXPIRED", "veto"),
+    ]
+
+
+@pytest.mark.parametrize("require_family", [True, False])
+def test_another_storys_structural_item_after_the_decision_aborts_at_the_fill(
+    require_family: bool,
+) -> None:
+    """Usable at 14:46:30, after the decision (14:46:05) and before the fill (14:48:01): X3 at
+    the fill, under H1 and in the atlas alike."""
+    params = BounceParams(require_family=require_family)
+    out = with_tue((et(MON, 14, 36, 30), "dilution"), params=params)
+    t = out.trade
+    assert t is not None
+    assert (t.entry_decided_at, t.entry_bar_ts) == (et(MON, 14, 46, 5), et(MON, 14, 47))
     assert (t.exit_reason, t.exit_decided_at, t.exit_bar_ts) == (
         "abort",
         et(MON, 14, 48, 1),
@@ -900,18 +1066,7 @@ def test_an_eligible_story_without_a_pre_event_is_dismissed() -> None:
 
 def test_without_the_family_check_the_rule_runs_on_other_negative_types() -> None:
     """The atlas's mode: a price-target cut (never NSN) is watched and traded, in its own cell."""
-
-    class Detected(TStory):
-        """The atlas's view: detected at its first item (not the simulator's NSN start)."""
-
-        def nsn_at(self, cutoff):  # type: ignore[no-untyped-def]
-            first = min(i.available_at for i in self.items)
-            return first if first <= cutoff else None
-
-        def at_news(self):  # type: ignore[no-untyped-def]
-            return min(i.at for i in self.items)
-
-    st = Detected(A, MON, list(tstory(A, MON, (et(MON, 7, 0), "analyst_pt_cut")).items))
+    st = AtlasStory(A, MON, titems((et(MON, 7, 0), "analyst_pt_cut")))
     assert st.card_at(et(MON, 10, 0)).family is None
     pd = path(st.story_id, A, [MON], [base_bars()])
     context = {st.story_id: (pre_event(MON), eligibility())}
@@ -932,6 +1087,83 @@ def test_without_the_family_check_the_rule_runs_on_other_negative_types() -> Non
         reason="target",
     )
     assert (t.family_type, t.cell) == ("analyst_pt_cut", "analyst_pt_cut/ID")
+
+
+@pytest.mark.parametrize(
+    ("public", "itype", "reason", "decided"),
+    [
+        (et(MON, 10, 10), "restatement", "abort", et(MON, 10, 20)),  # usable after the fill
+        (et(MON, 9, 56, 30), "restatement", "abort", et(MON, 10, 8, 1)),  # entering: at the fill
+        (et(MON, 9, 56, 5), "restatement", "target", et(MON, 10, 31, 5)),  # at the decision
+        (et(MON, 9, 50, 30), "restatement", "target", et(MON, 10, 31, 5)),  # before it
+        (et(MON, 10, 10), "dilution", "target", et(MON, 10, 31, 5)),  # its own type again
+        (et(MON, 10, 10), "legal_adverse", "target", et(MON, 10, 31, 5)),  # unclear
+    ],
+)
+def test_the_atlas_aborts_on_a_structural_type_its_story_gains_after_the_decision(
+    public: datetime, itype: str, reason: str, decided: datetime
+) -> None:
+    """The atlas runs a dilution story (structural from its first item) on the base path. What
+    the card held at the decision (10:06:05) never aborts; an item adding a structural type the
+    card lacked (a restatement) aborts once it is usable after the decision; nothing else does."""
+    st = AtlasStory(A, MON, titems((et(MON, 7, 0), "dilution"), (public, itype)))
+    out = one(st, [MON], [base_bars()], params=BounceParams(require_family=False))
+    t = out.trade
+    assert t is not None and t.entry_decided_at == et(MON, 10, 6, 5)
+    assert (t.family_type, t.cell) == ("dilution", "dilution/ID")
+    assert (t.exit_reason, t.exit_decided_at) == (reason, decided)
+
+
+@pytest.mark.parametrize(
+    ("later", "reason"),
+    [(None, "time_stop"), ("restatement", "abort"), ("analyst_pt_cut", "abort")],
+)
+def test_the_atlas_aborts_on_another_storys_structural_item_after_the_decision(
+    later: str | None, reason: str
+) -> None:
+    """The atlas has no vetoes: TUE's dilution usable at 14:35 neither stops MON's entry
+    (14:46:05) nor aborts it, being known at the decision. A later item of that story, usable at
+    14:50, aborts: every item of another story counts once that story is structural, not only
+    its first (its items reach MON's playbook only to abort it, spec §D.10)."""
+    items = [(et(MON, 14, 25), "dilution")]
+    if later is not None:
+        items.append((et(MON, 14, 40), later))
+    out = with_tue(*items, params=BounceParams(require_family=False))
+    t = out.trade
+    assert t is not None and t.entry_decided_at == et(MON, 14, 46, 5)
+    assert t.exit_reason == reason
+    if later is not None:
+        assert (t.exit_decided_at, t.exit_bar_ts) == (et(MON, 14, 50), et(MON, 14, 51))
+
+
+@pytest.mark.parametrize("full_hold", [False, True])
+def test_stage_a_stops_at_the_fill_and_may_hold_the_symbol(full_hold: bool) -> None:
+    """Stage A (spec §G.9: ``stop_at="entry"``): MON's MD3 story stops at its fill, with no exit
+    judged and no trade record. With ``assume_full_hold`` the symbol stays taken through WED, so
+    TUE's story is ``blocked_open``; without it, TUE's story runs."""
+    a, b = base_story(), tstory(A, TUE, (et(TUE, 7, 0), "analyst_downgrade"))
+    flat = {d: bars(d, [((9, 30), 96.0)]) for d in (TUE, WED, THU)}
+    paths = {
+        a.story_id: path(a.story_id, A, [MON, TUE, WED], [base_bars(), flat[TUE], flat[WED]]),
+        b.story_id: path(b.story_id, A, [TUE, WED, THU], [flat[TUE], flat[WED], flat[THU]]),
+    }
+    context = {s.story_id: (pre_event(s.session), eligibility()) for s in (a, b)}
+    first, second = run(
+        [a, b],
+        paths,
+        spy([MON, TUE, WED, THU], {MON: SPY_ROWS}),
+        context,
+        params=BounceParams(hold_sessions=3),
+        stop_at="entry",
+        assume_full_hold=full_hold,
+    )
+    assert first.trade is None and first.entered
+    assert (first.entry_decided_at, first.entry_bar_ts) == (et(MON, 10, 6, 5), et(MON, 10, 7))
+    assert (first.terminal_state, first.reason) == ("ENTERED", "filled")
+    assert transitions(first)[-1] == (et(MON, 10, 8, 1), "ENTERED", "filled")
+    assert second.start_at == et(TUE, 9, 30)
+    blocked = (second.terminal_state, second.reason) == ("DISMISSED", "blocked_open")
+    assert blocked is full_hold
 
 
 def test_states_and_liveness() -> None:

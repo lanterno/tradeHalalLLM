@@ -32,7 +32,7 @@ import numpy as np
 
 from halabot.playbooks.bounce import BounceFactory, BounceParams
 from halabot.playbooks.records import StoryOutcome
-from halabot.playbooks.sim import simulate_symbol
+from halabot.playbooks.sim import StopAt, simulate_symbol
 from halabot.playbooks.types import PathData, Session, SimConfig, SpyData
 from halal_trader.data.minutes import BarArrays
 from halal_trader.events.context import Eligibility, PreEvent
@@ -41,6 +41,7 @@ from halal_trader.events.taxonomy import FAMILY, REACTIVE, StoryCard, resolve
 from halal_trader.market_hours import next_trading_day, previous_trading_day
 from tests.halabot.playbooks._support import (
     MON,
+    TUE,
     Context,
     Item,
     Row,
@@ -131,18 +132,36 @@ class TStory:
         return [i.available_at for i in self.items]
 
     def before(self, t: datetime) -> TStory:
-        return TStory(
+        return type(self)(
             self.symbol, self.session, [i for i in self.items if i.available_at <= t], self.parent
         )
+
+
+class AtlasStory(TStory):
+    """The atlas's view (spec §F): detected at its first item, whatever its type.
+
+    The simulator starts only stories that become NSN; the atlas wraps the
+    others so that ``nsn_at`` and ``at_news`` come from the first item.
+    """
+
+    def nsn_at(self, cutoff: datetime) -> datetime | None:
+        first = min((i.available_at for i in self.items), default=None)
+        return first if first is not None and first <= cutoff else None
+
+    def at_news(self) -> datetime | None:
+        return min((i.at for i in self.items), default=None)
 
 
 def tstory(
     symbol: str, session: date, *items: tuple[datetime, str], parent: bool = False
 ) -> TStory:
     """A story of ``(at, itype)`` items, event ids in the order given."""
-    return TStory(
-        symbol, session, [TItem(n + 1, at, itype) for n, (at, itype) in enumerate(items)], parent
-    )
+    return TStory(symbol, session, titems(*items), parent)
+
+
+def titems(*items: tuple[datetime, str]) -> list[TItem]:
+    """``(at, itype)`` items, event ids in the order given."""
+    return [TItem(n + 1, at, itype) for n, (at, itype) in enumerate(items)]
 
 
 # ── context ──
@@ -288,6 +307,25 @@ def base_bars(
     return bars(MON, levels, merged, skip=skip, last=last)
 
 
+def late_reclaim(rows: Mapping[tuple[int, int], Row] | None = None) -> BarArrays:
+    """MON's base path reclaiming only on the 14:45 bar: armed from 10:06:05, the entry is
+    decided at 14:46:05 and fills on the 14:47 bar at 95.4 (FillIn 14:48:01); no target."""
+    opening: dict[tuple[int, int], Row] = {
+        (9, 30): BASE_ROWS[(9, 30)],
+        (9, 45): BASE_ROWS[(9, 45)],
+        (14, 45): (94.8, 95.5, 94.7, 95.4, 1_000.0, 95.2),
+    }
+    levels = [((9, 30), 96.0), ((9, 46), 94.8), ((14, 46), 95.4)]
+    return bars(MON, levels, opening | dict(rows or {}))
+
+
+def tue_story(*items: tuple[datetime, str]) -> TStory:
+    """TUE's story: ``items`` (public on MON after 14:20, so usable after 14:30: S + 1's), then
+    a downgrade at 07:00 TUE. A structural item keeps it from ever being NSN, so it never starts
+    and only carries news to MON's playbook."""
+    return tstory(A, TUE, *items, (et(TUE, 7, 0), "analyst_downgrade"))
+
+
 # ── running ──
 
 
@@ -301,6 +339,8 @@ def run(
     params: BounceParams | None = None,
     cfg: SimConfig | None = None,
     keep: bool = True,
+    stop_at: StopAt = "end",
+    assume_full_hold: bool = False,
 ) -> list[StoryOutcome]:
     """Every story of one symbol through the bounce, in the simulator."""
     params = params or BounceParams()
@@ -315,6 +355,8 @@ def run(
         ctx or Context(),
         cfg or SimConfig(),
         keep_transitions=keep,
+        stop_at=stop_at,
+        assume_full_hold=assume_full_hold,
     )
 
 
@@ -477,6 +519,7 @@ __all__ = [
     "TARGET_LEVELS",
     "TARGET_ROWS",
     "A",
+    "AtlasStory",
     "TItem",
     "TStory",
     "bars",
@@ -484,10 +527,13 @@ __all__ = [
     "base_story",
     "bounce_market",
     "eligibility",
+    "late_reclaim",
     "pre_event",
     "r_expected",
     "run",
     "spy",
+    "titems",
     "transitions",
     "tstory",
+    "tue_story",
 ]

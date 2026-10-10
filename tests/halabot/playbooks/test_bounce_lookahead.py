@@ -42,15 +42,19 @@ from tests.halabot.playbooks._bounce import (
     IN_SPY,
     SPY_ROWS,
     A,
+    AtlasStory,
     TStory,
     bars,
     base_bars,
     base_story,
     bounce_market,
     eligibility,
+    late_reclaim,
     pre_event,
     spy,
+    titems,
     tstory,
+    tue_story,
 )
 from tests.halabot.playbooks._seed import seed_calendar, seed_market
 from tests.halabot.playbooks._support import MON, THU, TUE, WED, Context, Story, et, path
@@ -198,6 +202,23 @@ def _scenarios() -> dict[str, tuple[list[TStory], dict[str, PathData], SpyData, 
         Context(),
         3,
     )
+
+    def beside_tue(
+        *items: tuple[datetime, str],
+    ) -> tuple[list[TStory], dict[str, PathData], SpyData, Context, int]:
+        """MON's story on the late reclaim, TUE's story (never started) carrying ``items``."""
+        a, b = base_story(), tue_story(*items)
+        return (
+            [a, b],
+            {a.story_id: path(a.story_id, A, [MON], [late_reclaim()])},
+            spy([MON]),
+            Context(),
+            1,
+        )
+
+    atlas_own = AtlasStory(
+        A, MON, titems((et(MON, 7, 0), "dilution"), (et(MON, 10, 10), "restatement"))
+    )
     return {
         "target": one(base_story(), [MON], [base_bars()]),
         "abort": one(base_story(MON, (et(MON, 10, 5, 30), "dilution")), [MON], [base_bars()]),
@@ -231,18 +252,26 @@ def _scenarios() -> dict[str, tuple[list[TStory], dict[str, PathData], SpyData, 
             ctx=Context(verdicts={(A, TUE): "not_halal"}),
         ),
         "blocked, then aborted": blocked,
+        "vetoed by another story": beside_tue((et(MON, 14, 25), "dilution")),
+        "another story at the decision": beside_tue((et(MON, 14, 36, 5), "dilution")),
+        "atlas, aborted by its own story": one(atlas_own, [MON], [base_bars()]),
+        "atlas, aborted by another story": beside_tue(
+            (et(MON, 14, 25), "dilution"), (et(MON, 14, 40), "restatement")
+        ),
     }
 
 
 @pytest.mark.parametrize("feed", [SIP_RT, SIP_DELAYED])
 @pytest.mark.parametrize("name", list(_scenarios()))
 def test_the_hand_built_paths_are_invariant_too(name: str, feed: FeedProfile) -> None:
-    """The known-answer paths, replayed at every decision and every item's last second."""
+    """The known-answer paths, replayed at every decision and every item's last second
+    (``atlas`` ones without the family check)."""
     stories, paths, spy_data, ctx, sessions = _scenarios()[name]
     context = {s.story_id: (pre_event(s.session), eligibility()) for s in stories}
     if name == "late detection":
         context = {s.story_id: (pre_event(s.session, sigma=0.01), eligibility()) for s in stories}
-    fac = BounceFactory(context, BounceParams(hold_sessions=sessions))
+    params = BounceParams(hold_sessions=sessions, require_family=not name.startswith("atlas"))
+    fac = BounceFactory(context, params)
     rng = np.random.default_rng(4000)
     checked, base = _invariant(
         A, stories, paths, spy_data, ctx, fac, SimConfig(feed=feed), rng, random_t=10
