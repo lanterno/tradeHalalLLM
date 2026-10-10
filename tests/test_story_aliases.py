@@ -18,6 +18,7 @@ from halal_trader.events.aliases import (
     alias_rows,
     alias_sha,
     build_aliases,
+    collapse_initials,
     learn_slots,
     learned_aliases,
     load_aliases,
@@ -51,8 +52,16 @@ from tests._renames import mark_renamed_news_done
         ("X Financial Corp", ["X Financial"]),
         ("Abc De Fgh", ["Abc De Fgh", "Abc De"]),
         ("Ab Cd Ef", ["Ab Cd Ef"]),
-        # dots, commas and brackets split words before the suffixes go
-        ("J.B. Hunt Transport Services, Inc.", ["J B Hunt Transport Services"]),
+        # dots, commas and brackets split words before the suffixes go; dotted
+        # initials count spaced and as one word, which the first two words keep
+        (
+            "J.B. Hunt Transport Services, Inc.",
+            ["J B Hunt Transport Services", "JB Hunt Transport Services", "JB Hunt"],
+        ),
+        ("A. O. Smith Corporation", ["A O Smith", "AO Smith"]),
+        ("C.H. Robinson Worldwide, Inc.", ["C H Robinson", "CH Robinson"]),
+        ("e.l.f. Beauty, Inc.", ["e l f Beauty", "elf Beauty"]),
+        ("T. Rowe Price Group, Inc.", ["T Rowe Price"]),  # one initial stays a letter
         (
             "Commerce.com, Inc. Series 1 Common Stock",
             ["Commerce com Series 1", "Commerce com", "Commerce"],
@@ -63,6 +72,38 @@ from tests._renames import mark_renamed_news_done
 )
 def test_names_are_cleaned_as_the_prototype_did(name: str, aliases: list[str]) -> None:
     assert name_aliases(name) == aliases
+
+
+@pytest.mark.parametrize(
+    ("name", "collapsed"),
+    [
+        ("J.B. Hunt", "JB Hunt"),
+        ("A. O. Smith Corporation", "AO Smith Corporation"),
+        ("U.S.Steel", "US Steel"),
+        ("Banco Santander, S.A.", "Banco Santander, SA "),
+        # one initial, a word's last letter, or a two-letter word: no initials
+        ("T. Rowe Price", "T. Rowe Price"),
+        ("Commerce.com, Inc.", "Commerce.com, Inc."),
+        ("Dr. Pepper Snapple", "Dr. Pepper Snapple"),
+    ],
+)
+def test_dotted_initials_collapse_into_one_word(name: str, collapsed: str) -> None:
+    assert collapse_initials(name) == collapsed
+
+
+@pytest.mark.parametrize(
+    ("name", "headline"),
+    [
+        ("J.B. Hunt Transport Services, Inc.", "JB Hunt Reports Q3 EPS $1.49"),
+        ("J.B. Hunt Transport Services, Inc.", "J.B. Hunt Shares Slide"),
+        ("A. O. Smith Corporation", "A. O. Smith Sees FY19 EPS $2.69-$2.75"),
+        ("A. O. Smith Corporation", "A O Smith Stock Surges On Q3 Beat"),
+        ("A. O. Smith Corporation", "AO Smith Adds 3M Shares To Buyback"),
+        ("C.H. Robinson Worldwide, Inc.", "Wall Street To C.H. Robinson: What Happened?"),
+    ],
+)
+def test_headlines_name_initialled_companies_either_way(name: str, headline: str) -> None:
+    assert AliasMatcher("X", tuple(name_aliases(name))).matches(headline)
 
 
 # ── source (b): Benzinga's slot ───────────────────────────────
