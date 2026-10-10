@@ -18,6 +18,7 @@ SPY trades flat at 200 through March. Every price is synthetic.
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from datetime import date, timedelta
 
 import numpy as np
@@ -28,7 +29,7 @@ from halal_trader.data.minutes import BarArrays
 from halal_trader.db.repos.quant_trials import QuantTrialRepoImpl
 from halal_trader.events.h1 import NAME as H1_NAME
 from halal_trader.events.h1 import STAGE_A_FAIL
-from halal_trader.events.stories import build_range
+from halal_trader.events.stories import build_range, pins
 from halal_trader.market_hours import is_trading_day
 from tests._renames import mark_renamed_news_done
 from tests._stories import add_aliases, news_row, ny, store
@@ -222,21 +223,31 @@ async def seed_stories(engine: AsyncEngine) -> None:
 CONFIG = {"hypothesis": "news.h1.overreaction_bounce", "version": 1, "test": True}
 
 
-async def register_h1(engine: AsyncEngine, *, closing: str | None = "verdict") -> int:
-    """The H1 registration; ``closing`` "verdict", "stage-a" (insufficient events) or None."""
+async def register_h1(
+    engine: AsyncEngine,
+    *,
+    closing: str | None = "verdict",
+    pins: Mapping[str, str] | None = None,
+) -> int:
+    """The H1 registration; ``closing`` "verdict", "stage-a" (insufficient events) or None.
+
+    With ``pins`` the configuration records them, as H1's PREREG does.
+    """
+    config = CONFIG if pins is None else {**CONFIG, "pins": dict(pins)}
     repo = QuantTrialRepoImpl(engine)
-    reg = await repo.record_trial(name=H1_NAME, kind="preregistration", config=CONFIG)
+    reg = await repo.record_trial(name=H1_NAME, kind="preregistration", config=config)
     if closing == "verdict":
-        await repo.record_trial(name=H1_NAME, kind="verdict", config=CONFIG, verdict="fail")
+        await repo.record_trial(name=H1_NAME, kind="verdict", config=config, verdict="fail")
     elif closing == "stage-a":
-        await repo.record_trial(name=H1_NAME, kind="stage-a", config=CONFIG, verdict=STAGE_A_FAIL)
+        await repo.record_trial(name=H1_NAME, kind="stage-a", config=config, verdict=STAGE_A_FAIL)
     return reg
 
 
 async def seed_world(engine: AsyncEngine) -> int:
-    """Everything the atlas reads, H1 closed by a verdict; returns the registration id."""
+    """Everything the atlas reads, H1 closed by a verdict under the story pins in force;
+    returns the registration id."""
     await seed_daily(engine)
     await seed_universe_and_screen(engine)
     await seed_minutes(engine)
     await seed_stories(engine)
-    return await register_h1(engine)
+    return await register_h1(engine, pins=await pins(engine))

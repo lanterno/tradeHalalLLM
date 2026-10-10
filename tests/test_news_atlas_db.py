@@ -31,9 +31,9 @@ from halal_trader.events.atlas import (
 )
 from halal_trader.events.h1 import NAME as H1_NAME
 from halal_trader.events.h1 import STAGE_A_FAIL
-from halal_trader.events.stories import build_range
+from halal_trader.events.stories import StoriesNotReady, build_range, pins
 from tests._atlas import CONFIG, END, S1, S2, START, daily_closes, register_h1, seed_world
-from tests._stories import news_row, ny, store
+from tests._stories import add_aliases, news_row, ny, store
 
 COST = 7.0 / 1e4  # study.cost_bps for a rank below 300, one way
 
@@ -93,6 +93,43 @@ async def test_a_range_past_the_train_window_is_refused_before_the_database(
         await run_atlas(engine, start=START, end=date(2021, 12, 27))
     with pytest.raises(ValueError, match="starts on 2016-10-03"):
         await run_atlas(engine, start=date(2016, 9, 30), end=END)
+
+
+# ── the stories it may describe ───────────────────────────────
+
+
+async def test_the_atlas_refuses_story_pins_h1_did_not_register(
+    engine: AsyncEngine, small_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    reg = await seed_world(engine)
+    assert (await h1_closed(engine)).pins == await pins(engine)
+    # A new alias changes alias_sha: these are not the stories H1 ran on.
+    await add_aliases(engine, [("ALFA", "Alfa Holdings", "name")])
+
+    async def never(*args: object, **kwargs: object) -> None:
+        raise AssertionError("read stories before the pins were checked")
+
+    monkeypatch.setattr(atlas, "candidates", never)
+    with pytest.raises(AtlasLocked, match=f"pins changed since .* registration {reg}: alias_sha"):
+        await run_atlas(engine, start=START, end=END)
+
+
+async def test_a_registration_without_pins_is_refused(engine: AsyncEngine, small_map: None) -> None:
+    await seed_world(engine)
+    await register_h1(engine)  # newer, closed, and without pins
+    with pytest.raises(AtlasLocked, match="alias_sha, builder_version"):
+        await run_atlas(engine, start=START, end=END)
+
+
+def test_changed_pins_names_every_difference() -> None:
+    assert atlas.changed_pins({"a": "1", "b": "2"}, {"a": "1", "b": "3", "c": "4"}) == ["b", "c"]
+    assert atlas.changed_pins({"a": "1"}, {"a": "1"}) == []
+
+
+async def test_a_range_without_stories_is_refused(engine: AsyncEngine, small_map: None) -> None:
+    await seed_world(engine)
+    with pytest.raises(StoriesNotReady, match="no stories-v1 stories with S in 2017-04-03"):
+        await run_atlas(engine, start=date(2017, 4, 3), end=date(2017, 4, 3))
 
 
 # ── a seeded week ─────────────────────────────────────────────
@@ -359,6 +396,16 @@ def test_the_command_refuses_before_h1s_verdict(database_url: str) -> None:
 def test_the_command_refuses_a_range_past_train() -> None:
     result = CliRunner().invoke(cli, ["events", "atlas", "--end", "2022-03-01"])
     assert result.exit_code == 1 and "ends by 2021-12-23" in result.output
+
+
+@pytest.mark.usefixtures("small_map")
+def test_the_command_refuses_a_range_without_stories(database_url: str) -> None:
+    _run(database_url, seed_world)
+    result = CliRunner().invoke(
+        cli, ["events", "atlas", "--start", "2017-04-03", "--end", "2017-04-03"]
+    )
+    assert result.exit_code == 1
+    assert "no stories-v1 stories" in result.output and "Traceback" not in result.output
 
 
 def test_the_command_refuses_an_end_that_is_not_a_session() -> None:
