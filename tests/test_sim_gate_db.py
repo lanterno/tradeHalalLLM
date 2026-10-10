@@ -244,7 +244,7 @@ async def test_the_reactor_gates_run_on_the_pinned_set_and_write_three_rows(
     # world's, not the recorded ones, so it fails (and says what it found).
     checks = r0.metrics["checks"]
     assert not r0.passed and checks["headlines"]["got"] == 39 and checks["strong_n"]["got"] == 6
-    assert checks["strong_headlines"] == {"got": 7, "want": 7_932, "ok": False}
+    assert checks["strong_headlines"] == {"got": 7, "want": 7_931, "ok": False}
     # R1: the simulator reproduces every headline the study kept, and drops the same.
     assert r1.passed, r1.metrics
     assert r1.metrics["compared"] == 12 and r1.metrics["max_abs_diff"] <= 1e-10

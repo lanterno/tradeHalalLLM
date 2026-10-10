@@ -511,13 +511,14 @@ def test_r0_reproduces_the_recorded_numbers(monkeypatch: pytest.MonkeyPatch) -> 
 
 
 def test_r0_s_real_expectations_are_the_recorded_ones() -> None:
+    """The 2026-10-09 record, except the two numbers its unordered read made unreproducible."""
     assert sim_gate.R0_EXPECTED == {
         "headlines": 30_614,
-        "strong_headlines": 7_932,
+        "strong_headlines": 7_931,  # recorded 7,932
         "strong_n": 7_922,
         "strong_mean_pct": -0.30,
         "strong_t": -12.1,
-        "control_mean_pct": -0.28,
+        "control_mean_pct": -0.30,  # recorded -0.28 (a different random sample)
         "negative_mean_pct": -0.40,
     }
 
