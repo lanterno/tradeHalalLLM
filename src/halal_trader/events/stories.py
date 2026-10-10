@@ -89,7 +89,11 @@ unit :func:`build_unit`) only once every batch is written. The mark names
 the inputs the build read (:func:`inputs_sha`: every pin, the stored
 aliases' among them, and the extractor); counts refuse a range no complete
 build from today's inputs covers, so a range built before the aliases, a
-pin or the extractor changed is rebuilt before it is counted.
+pin or the extractor changed is rebuilt before it is counted. The event rows
+are not hashed: an 8-K's retime (``history.write_times``) withdraws every
+mark from the first session it moves the filing from or to
+(:func:`withdraw_marks`), since a story's change reaches its symbol's later
+stories through the parent rule.
 
 The builder's own constants are pinned by :data:`STORIES_SHA`;
 :func:`pins` gathers it with the other pins of the pre-registration. A
@@ -183,6 +187,7 @@ __all__ = [
     "fact_keys",
     "federal_holidays",
     "filing_public_at",
+    "filing_session",
     "has_analyst_slot",
     "inputs_sha",
     "jaccard",
@@ -197,6 +202,7 @@ __all__ = [
     "uncovered_sessions",
     "untimed_filings",
     "window_of",
+    "withdraw_marks",
 ]
 
 # ── constants (spec §A.1) ──────────────────────────────────────
@@ -575,6 +581,11 @@ def reaction_session(available_at: datetime) -> date:
     if is_trading_day(day) and available_at <= session_bounds(day)[1] - REACT_CUTOFF:
         return day
     return next_trading_day(day)
+
+
+def filing_session(accepted: datetime) -> date:
+    """The reaction session of an 8-K stored at ``accepted`` (as :func:`admit` reads it)."""
+    return reaction_session(filing_public_at(accepted) + NEWS_LAG)
 
 
 # ── text (spec §A.4) ───────────────────────────────────────────
@@ -1142,36 +1153,43 @@ def uncovered_sessions(
     return out
 
 
-async def _unmark(engine: AsyncEngine, start: date, end: date) -> None:
-    """Withdraw the complete marks over [start, end] before it is rebuilt.
+async def withdraw_marks(conn: AsyncConnection, start: date, end: date | None = None) -> None:
+    """Withdraw the complete marks over [start, end] (every session from
+    ``start`` on, without ``end``), on ``conn``: in the caller's transaction.
 
     A mark reaching past the range keeps its parts outside it (with their
     stories counted, and the inputs they were built from), so rebuilding a
     month leaves the rest of a complete build complete -- or, when the inputs
-    have changed since, still refused by the counts; a build that stops
-    before its own mark leaves [start, end] unmarked.
+    have changed since, still refused by the counts.
     """
-    async with engine.begin() as conn:
-        keep: dict[str, int] = {}
-        for m in await _marks(conn):
-            if m.end < start or m.start > end:
-                continue
-            await conn.execute(
-                text("DELETE FROM backfill_progress WHERE task = :t AND unit = :u"),
-                {"t": TASK, "u": m.unit},
+    keep: dict[str, int] = {}
+    for m in await _marks(conn):
+        if m.end < start or (end is not None and m.start > end):
+            continue
+        await conn.execute(
+            text("DELETE FROM backfill_progress WHERE task = :t AND unit = :u"),
+            {"t": TASK, "u": m.unit},
+        )
+        parts = [(m.start, start - timedelta(days=1))] if m.start < start else []
+        parts += [(end + timedelta(days=1), m.end)] if end is not None and m.end > end else []
+        for lo, hi in parts:
+            n = await conn.scalar(
+                text(
+                    "SELECT count(*) FROM news_stories WHERE builder_version = :v "
+                    "AND session >= :a AND session <= :b"
+                ),
+                {"v": BUILDER_VERSION, "a": lo, "b": hi},
             )
-            parts = [(m.start, start - timedelta(days=1))] if m.start < start else []
-            parts += [(end + timedelta(days=1), m.end)] if m.end > end else []
-            for lo, hi in parts:
-                n = await conn.scalar(
-                    text(
-                        "SELECT count(*) FROM news_stories WHERE builder_version = :v "
-                        "AND session >= :a AND session <= :b"
-                    ),
-                    {"v": BUILDER_VERSION, "a": lo, "b": hi},
-                )
-                keep[build_unit(lo, hi, m.inputs)] = int(n or 0)
-        await mark_units(engine, TASK, keep, conn=conn)
+            keep[build_unit(lo, hi, m.inputs)] = int(n or 0)
+    await mark_units(conn.engine, TASK, keep, conn=conn)
+
+
+async def _unmark(engine: AsyncEngine, start: date, end: date) -> None:
+    """Withdraw the complete marks over [start, end] before it is rebuilt
+    (:func:`withdraw_marks`): a build that stops before its own mark leaves
+    [start, end] unmarked."""
+    async with engine.begin() as conn:
+        await withdraw_marks(conn, start, end)
 
 
 async def build_range(
@@ -1514,7 +1532,8 @@ async def inputs_sha(engine: AsyncEngine) -> str:
     The event rows are not hashed: an 8-K's corrected time (``events filings
     fix-times``), or a row stored in a range after its build, changes the
     stories and not this hash. :func:`build_range` therefore refuses while an
-    8-K it reads is not at its header's time (:func:`untimed_filings`).
+    8-K it reads is not at its header's time (:func:`untimed_filings`), and a
+    retime withdraws the marks it makes stale (``history.write_times``).
 
     A complete build's mark records the hash (:func:`build_unit`), and
     :func:`count_stories` accepts only the marks recording today's. A change to

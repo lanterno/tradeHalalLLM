@@ -422,9 +422,37 @@ async def header_times(engine: AsyncEngine, accessions: Iterable[str]) -> dict[s
         return {r.source_id: r.at for r in rows}
 
 
+async def _unmark_stories(conn: AsyncConnection, times: dict[str, datetime]) -> None:
+    """Withdraw the stories' complete marks a retime to ``times`` makes stale.
+
+    Every 8-K row that moves changes the story it leaves and the one it
+    joins, and a story's change reaches its symbol's later stories through
+    the parent rule: every mark from the earliest of those sessions on is
+    withdrawn, its part before kept (``stories.withdraw_marks``).
+    """
+    from halal_trader.events import stories
+
+    rows = await conn.execute(
+        text(
+            "SELECT source_id, published_at FROM events "
+            "WHERE source = 'sec' AND kind = ANY(:kinds) AND source_id = ANY(:ids)"
+        ),
+        {"kinds": sorted(stories.STORY_KINDS - {"news"}), "ids": sorted(times)},
+    )
+    moved = [
+        min(r.published_at, times[r.source_id])
+        for r in rows
+        if r.published_at != times[r.source_id]
+    ]
+    if moved:
+        await stories.withdraw_marks(conn, stories.filing_session(min(moved)))
+
+
 async def _retime(conn: AsyncConnection, times: dict[str, datetime]) -> None:
-    """Stamp every row of each accession, under every symbol, at its header time."""
+    """Stamp every row of each accession, under every symbol, at its header time,
+    and withdraw the stories' marks that makes stale (:func:`_unmark_stories`)."""
     if times:
+        await _unmark_stories(conn, times)
         await conn.execute(
             text(
                 "UPDATE events SET published_at = :t, seen_at = :t, "
@@ -445,7 +473,9 @@ async def write_times(
     """Stamp every row of each accession in ``fixes`` (header time, stored minus
     header in seconds) at that time, under every symbol it is stored under, and
     mark the units done, with ``missing`` in ``filing-times-missing``; in one
-    transaction: a unit is done only with its rows written."""
+    transaction: a unit is done only with its rows written. The stories'
+    complete marks over the sessions an 8-K moves from or to, and every later
+    one, are withdrawn in it too (:func:`_unmark_stories`)."""
     async with engine.begin() as conn:
         await _retime(conn, {acc: t for acc, (t, _) in fixes.items()})
         read = {acc: d for acc, (_, d) in fixes.items()}
