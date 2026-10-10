@@ -201,23 +201,38 @@ class AlpacaMarketData:
         self, symbol: str, *, start: datetime, end: datetime
     ) -> list[dict[str, Any]]:
         """Raw SIP minute bars of one symbol in [start, end], as Alpaca returns them."""
-        out: list[dict[str, Any]] = []
-        params: dict[str, Any] = {
-            "symbols": symbol,
-            "timeframe": "1Min",
-            "start": iso_z(start),
-            "end": iso_z(min(end, datetime.now(UTC) - SIP_EMBARGO)),
-            "feed": "sip",
-            "adjustment": "raw",
-            "limit": _PAGE_LIMIT,
-        }
-        while True:
-            payload = await self._get(f"{DATA_URL}/v2/stocks/bars", params)
-            out += (payload.get("bars") or {}).get(symbol) or []
-            token = payload.get("next_page_token")
-            if not token:
-                return out
-            params["page_token"] = token
+        return (await self.minute_bars_many([symbol], start=start, end=end)).get(symbol, [])
+
+    async def minute_bars_many(
+        self, symbols: Iterable[str], *, start: datetime, end: datetime
+    ) -> dict[str, list[dict[str, Any]]]:
+        """Raw SIP minute bars of several symbols in [start, end], by symbol.
+
+        One request carries up to ``_SYMBOLS_PER_REQUEST`` symbols and a page
+        holds ``_PAGE_LIMIT`` bars across them, so a session of a hundred names
+        takes about four requests instead of a hundred.
+        """
+        wanted = sorted({s.upper() for s in symbols})
+        out: dict[str, list[dict[str, Any]]] = {}
+        for i in range(0, len(wanted), _SYMBOLS_PER_REQUEST):
+            params: dict[str, Any] = {
+                "symbols": ",".join(wanted[i : i + _SYMBOLS_PER_REQUEST]),
+                "timeframe": "1Min",
+                "start": iso_z(start),
+                "end": iso_z(min(end, datetime.now(UTC) - SIP_EMBARGO)),
+                "feed": "sip",
+                "adjustment": "raw",
+                "limit": _PAGE_LIMIT,
+            }
+            while True:
+                payload = await self._get(f"{DATA_URL}/v2/stocks/bars", params)
+                for sym, rows in (payload.get("bars") or {}).items():
+                    out.setdefault(sym, []).extend(rows or [])
+                token = payload.get("next_page_token")
+                if not token:
+                    break
+                params["page_token"] = token
+        return out
 
     async def cash_dividends(
         self, symbols: Iterable[str], *, start: date, end: date

@@ -59,6 +59,13 @@ async def _done(engine: AsyncEngine, task: str) -> set[str]:
 
 
 async def _mark(engine: AsyncEngine, task: str, unit: str, items: int) -> None:
+    await mark_units(engine, task, {unit: items})
+
+
+async def mark_units(engine: AsyncEngine, task: str, items: dict[str, int]) -> None:
+    """Record each unit (with its item count) as done, in one transaction."""
+    if not items:
+        return
     async with engine.begin() as conn:
         await conn.execute(
             text(
@@ -66,7 +73,7 @@ async def _mark(engine: AsyncEngine, task: str, unit: str, items: int) -> None:
                 "VALUES (:t, :u, :n, now()) ON CONFLICT (task, unit) "
                 "DO UPDATE SET items = EXCLUDED.items, done_at = EXCLUDED.done_at"
             ),
-            {"t": task, "u": unit, "n": items},
+            [{"t": task, "u": u, "n": n} for u, n in items.items()],
         )
 
 

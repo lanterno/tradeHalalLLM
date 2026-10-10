@@ -12,8 +12,8 @@ symbol and day (09:30-15:30 New York, leaving time to trade):
   daily close one and five sessions later, paying the cost again;
 * **abnormal** against SPY over the same timestamps.
 
-Minute bars are stored in ``minute_bars`` (raw, regular session) and
-fetched once per (symbol, day).
+Minute bars are stored in ``minute_bars`` (data/minutes.py: raw, regular
+session) and fetched once per (symbol, day).
 """
 
 from __future__ import annotations
@@ -77,48 +77,15 @@ def selection(headlines: list[Headline], seed: int = 11) -> list[Headline]:
     return strong + random.Random(seed).sample(rest, min(CONTROL_SAMPLE, len(rest)))
 
 
-async def _stored(engine: AsyncEngine, symbol: str, day: date) -> list[Any]:
-    lo = datetime.combine(day, MARKET_OPEN, MARKET_TZ)
-    async with engine.connect() as conn:
-        return (
-            await conn.execute(
-                text(
-                    "SELECT ts, close, vwap, open FROM minute_bars WHERE symbol = :s "
-                    "AND ts >= :lo AND ts < :hi ORDER BY ts"
-                ),
-                {"s": symbol, "lo": lo, "hi": lo + timedelta(hours=6, minutes=30)},
-            )
-        ).all()
-
-
 async def minute_series(engine: AsyncEngine, market: Any, symbol: str, day: date) -> list[Any]:
-    rows = await _stored(engine, symbol, day)
-    if rows:
-        return rows
-    lo = datetime.combine(day, MARKET_OPEN, MARKET_TZ)
-    raw = await market.minute_bars(symbol, start=lo, end=lo + timedelta(hours=6, minutes=30))
-    if raw:
-        async with engine.begin() as conn:
-            await conn.execute(
-                text(
-                    "INSERT INTO minute_bars (symbol, ts, open, high, low, close, volume, vwap) "
-                    "VALUES (:s, :t, :o, :h, :l, :c, :v, :vw) ON CONFLICT DO NOTHING"
-                ),
-                [
-                    {
-                        "s": symbol,
-                        "t": datetime.fromisoformat(b["t"].replace("Z", "+00:00")),
-                        "o": b["o"],
-                        "h": b["h"],
-                        "l": b["l"],
-                        "c": b["c"],
-                        "v": b["v"],
-                        "vw": b.get("vw"),
-                    }
-                    for b in raw
-                ],
-            )
-    return await _stored(engine, symbol, day)
+    """``symbol``'s regular-session bars on ``day``, fetched once and stored."""
+    from halal_trader.data import minutes
+
+    rows = await minutes.read(engine, symbol, day)
+    if not rows:
+        await minutes.backfill(engine, market, [(symbol, day)])
+        rows = await minutes.read(engine, symbol, day)
+    return rows
 
 
 def entry_and_close(rows: list[Any], at: datetime) -> tuple[float, float] | None:
