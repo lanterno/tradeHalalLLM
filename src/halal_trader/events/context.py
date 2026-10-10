@@ -36,11 +36,15 @@ it, every comparison strict:
 * **Descriptives** (ATR, dollar volume, momentum, levels) use sessions up to
   S−1, and are NaN where their bars are missing; they gate nothing. The 20-
   and 252-session levels are NaN unless the calendar holds that many
-  sessions through S−1 and the name's first raw daily bar is on or before
-  the window's first session: a level never silently covers fewer
-  sessions. That first bar is read over the whole table, not the loaded
+  sessions through S−1, the name's first raw daily bar is on or before the
+  window's first session, and the name has a real bar on at least nine in
+  ten of the window's sessions: a level never silently covers fewer. The
+  last rule is for recycled tickers, whose first bar is the earlier
+  company's (13 names on 2026-10-10, each with a hole of over 200
+  sessions). That first bar is read over the whole table, not the loaded
   range, so where a load starts cannot move a level; it is used only as
-  "on or before a day before S", which is known at S.
+  "on or before a day before S", which is known at S. The window lies
+  inside the loaded bars, so the count cannot move a level either.
   **Facts** are the earnings facts published strictly before ``at``.
 
 Loading reads each source once per run: the screens in one query, the
@@ -117,6 +121,10 @@ ATR_PERIOD: Final = 14
 ATR_SESSIONS: Final = 60  # bars Wilder's ATR runs over: fixed, so loaded history cannot move it
 ADV_SESSIONS: Final = 20
 LEVEL_SESSIONS: Final = (20, 252)
+# A level needs a real bar on at least this share of its sessions: 18 of 20,
+# 227 of 252. On 2026-10-10 the daily bars have no hole of 1 to 25 sessions;
+# the longer ones are one halt (26 to 50) and recycled tickers (over 200).
+LEVEL_MIN_SHARE: Final = 0.9
 # Daily bars are read from LOOKBACK_DAYS before the first session (252
 # sessions for the 52-week levels, with holidays to spare) to LOOKAHEAD_DAYS
 # after the last, which covers a 3-session path's closes and A-ratios.
@@ -605,13 +613,26 @@ def _levels(
 ) -> tuple[float, float]:
     """Highest high and lowest low of the ``n`` sessions through ``p``, in S units.
 
-    NaN when those ``n`` sessions do not all exist for the name: the calendar
-    holds fewer than ``n`` through ``p`` (daily bars start on 2016-01-04), or
-    the name's first raw bar (``series.listed``, read over the whole table)
-    is after the window's first session: listed later. It is not judged
-    from the loaded bars, so the load's start cannot decide it: a name
-    halted from before the load through the window's first session was
-    still listed. Missing bars inside the window (halts) are skipped.
+    NaN unless the name traded through most of those ``n`` sessions:
+
+    * the calendar holds ``n`` sessions through ``p`` (daily bars start on
+      2016-01-04);
+    * the name's first raw bar (``series.listed``, read over the whole
+      table) is on or before the window's first session. It is not judged
+      from the loaded bars, so the load's start cannot decide it: a name
+      halted from before the load through the window's first session was
+      still listed;
+    * the name has a real bar on at least ``LEVEL_MIN_SHARE`` of the ``n``
+      sessions. ``listed`` alone would pass a recycled ticker, whose first
+      bar is the earlier company's: the new company's level would then cover
+      only the few sessions it has traded. The window always lies inside the
+      loaded bars, so this count does not depend on the load's start either.
+
+    Missing bars inside the window (halts) are skipped, so a level covers at
+    least nine in ten of the sessions it names. A recycled ticker whose new
+    company has traded that long gets the new company's level; a window that
+    mixes two companies needs a hole of at most a tenth of it, which live
+    daily bars do not have.
     """
     first = p - n + 1
     if first < 0 or series.listed is None or series.listed > sessions[first]:
@@ -622,10 +643,10 @@ def _levels(
         a = d[_AC, window] / d[_RC, window]
         highs = d[_RH, window] * a / a_s
         lows = d[_RL, window] * a / a_s
-    highs, lows = highs[np.isfinite(highs)], lows[np.isfinite(lows)]
-    if not highs.size or not lows.size:
+    real = np.isfinite(highs) & np.isfinite(lows)
+    if int(real.sum()) < LEVEL_MIN_SHARE * n:
         return math.nan, math.nan
-    return float(highs.max()), float(lows.min())
+    return float(highs[real].max()), float(lows[real].min())
 
 
 async def _screens(engine: AsyncEngine) -> dict[date, dict[str, ScreenRow]]:
