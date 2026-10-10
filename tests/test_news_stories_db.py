@@ -1,0 +1,261 @@
+"""The story builder against the database: loading items, building a range,
+persisting, and counting.
+
+The renamed tickers are the two of ``small_map`` (OLDA, then OLDB, of NEWA),
+with every month of their news marked fetched where a build needs it.
+"""
+
+from __future__ import annotations
+
+import json
+from collections import Counter
+from datetime import UTC, date, datetime
+from typing import Any
+
+import pytest
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncEngine
+
+from halal_trader.events.aliases import AliasMatcher, load_aliases
+from halal_trader.events.earnings_parse import EXTRACTOR, EXTRACTOR_V3, parse_headline
+from halal_trader.events.stories import (
+    RawItem,
+    StoriesNotReady,
+    build,
+    build_range,
+    count_stories,
+    load_items,
+    persist,
+    story_row,
+)
+from tests._renames import mark_renamed_news_done
+from tests._stories import (
+    ALIAS_ROWS,
+    DOWNGRADE,
+    FRI,
+    MISS,
+    MON,
+    THU,
+    TUE,
+    WED,
+    WEEK,
+    add_aliases,
+    fake_context,
+    filing_row,
+    headline_row,
+    news_row,
+    ny,
+    seed_week,
+    store,
+    stored_rows,
+)
+
+APPLE = {"AAPL": AliasMatcher("AAPL", ("Apple",), ("AAPL",))}
+
+
+async def collect(engine: AsyncEngine, **kwargs: Any) -> list[RawItem]:
+    return [item async for item in load_items(engine, **kwargs)]
+
+
+def raw_news(n: int, at: datetime, headline: str) -> RawItem:
+    facts = tuple(parse_headline(headline))
+    return RawItem(n, f"alpaca:{n}", "news", "AAPL", at.astimezone(UTC), at, headline, 1, (), facts)
+
+
+@pytest.fixture
+async def ready(engine: AsyncEngine, small_map: None) -> AsyncEngine:
+    await seed_week(engine)
+    return engine
+
+
+# ── loading ───────────────────────────────────────────────────
+
+
+async def test_items_come_with_their_v4_facts_and_filing_items(engine: AsyncEngine) -> None:
+    rows = [
+        news_row(1, "AAPL", ny(TUE, 8), MISS),
+        headline_row(2, "AAPL", ny(TUE, 9), "Apple Unveils Mac", ["AAPL", "MSFT", "GOOG", "AMZN"]),
+        headline_row(3, "AAPL", ny(TUE, 10), "Apple Unveils Watch"),  # a live row: no symbols
+        filing_row("acc-1", "AAPL", ny(TUE, 16, 5), ["2.02", "9.01"]),
+        filing_row("acc-2", "AAPL", ny(TUE, 16, 6), ["5.02"], kind="8-k/a"),
+        filing_row("acc-3", "AAPL", ny(TUE, 16, 7), [], kind="10-q"),
+        news_row(4, "AAPL", ny(MON, 23, 59), "Apple Unveils iPad"),  # the day before
+        news_row(5, "AAPL", ny(WED, 0, 0), "Apple Unveils Vision"),  # the day after
+    ]
+    ids = await store(engine, rows)
+    async with engine.begin() as conn:  # other extractors' rows and 'none' are not read
+        await conn.execute(
+            text(
+                "INSERT INTO event_facts (event_id, extractor, kind, fields) VALUES "
+                "(:e, :v3, 'result', '{\"eps\": 9}'), (:e2, :x, 'none', '{}')"
+            ),
+            {"e": ids["alpaca:1"], "e2": ids["alpaca:2"], "v3": EXTRACTOR_V3, "x": EXTRACTOR},
+        )
+    items = await collect(engine, start=TUE, end=TUE, symbols=["AAPL"])
+    assert [i.source_id for i in items] == ["alpaca:1", "alpaca:2", "alpaca:3", "acc-1", "acc-2"]
+    miss, roundup, live, f1, f2 = items
+    assert miss.facts == tuple(parse_headline(MISS)) and miss.n_symbols == 1
+    assert miss.published_at == ny(TUE, 8) and miss.headline == MISS
+    assert roundup.n_symbols == 4 and roundup.facts == ()
+    assert live.n_symbols is None
+    assert (f1.kind, f1.items_8k, f1.headline, f1.facts) == ("8-k", ("2.02", "9.01"), "", ())
+    assert (f2.kind, f2.items_8k) == ("8-k/a", ("5.02",))
+
+
+@pytest.mark.usefixtures("small_map")
+async def test_news_rows_that_are_not_their_symbols_own_are_dropped(engine: AsyncEngine) -> None:
+    # OLDA named NEWA to 2016-02-10 (news window to 02-18); NEWA's own ticker from 03-05.
+    day = date(2016, 1, 15)
+    rows = [
+        headline_row(1, "OLDA", ny(day, 10), "Old Co Unveils A", ["OLDA"]),  # copied under NEWA
+        headline_row(1, "NEWA", ny(day, 10), "Old Co Unveils A", ["OLDA"]),  # the copy: kept
+        headline_row(2, "NEWA", ny(day, 11), "Someone Else Unveils B", ["NEWA"]),  # before NEWA's
+        headline_row(3, "NEWA", ny(date(2016, 3, 10), 11), "New Co Unveils C", ["NEWA"]),
+        headline_row(4, "NEWA", ny(date(2016, 3, 11), 11), "New Co Unveils D"),  # live: kept
+        filing_row("acc-1", "OLDA", ny(day, 12), ["8.01"]),  # filings are kept as they are
+    ]
+    await store(engine, rows, facts=False)
+    c: Counter[str] = Counter()
+    items = await collect(
+        engine, start=date(2016, 1, 1), end=date(2016, 3, 31), symbols=["OLDA", "NEWA"], counters=c
+    )
+    assert [(i.symbol, i.source_id) for i in items] == [
+        ("NEWA", "alpaca:1"),
+        ("NEWA", "alpaca:3"),
+        ("NEWA", "alpaca:4"),
+        ("OLDA", "acc-1"),
+    ]
+    assert c["owner"] == 2
+
+
+# ── building a range ──────────────────────────────────────────
+
+
+async def test_a_build_waits_for_the_renamed_news_and_the_aliases(
+    engine: AsyncEngine, small_map: None
+) -> None:
+    await store(engine, WEEK)
+    with pytest.raises(StoriesNotReady, match="renamed-ticker news"):
+        await build_range(engine, start=MON, end=FRI)
+    await mark_renamed_news_done(engine)
+    with pytest.raises(StoriesNotReady, match="no story aliases"):
+        await build_range(engine, start=MON, end=FRI)
+    assert await build_range(engine, start=MON, end=FRI, force=True) > 0
+    await add_aliases(engine, ALIAS_ROWS)
+    assert await build_range(engine, start=MON, end=FRI) > 0
+    with pytest.raises(ValueError):
+        await build_range(engine, start=FRI, end=MON)
+
+
+async def test_a_built_range_round_trips_through_the_table(ready: AsyncEngine) -> None:
+    c: Counter[str] = Counter()
+    written = await build_range(ready, start=MON, end=FRI, counters=c)
+    items = await collect(ready, start=date(2016, 1, 1), end=FRI, symbols=["AAPL", "MSFT"])
+    expected = [story_row(s) for s in build(items, await load_aliases(ready))]
+    assert written == len(expected) == 7
+    assert await stored_rows(ready) == sorted(expected, key=lambda r: r["story_id"])
+    assert c["kind"] == 1 and c["entity"] == 1 and c["admitted"] == 9
+    by_id = {r["story_id"]: r for r in expected}
+    for day in ("07", "08", "09"):
+        row = by_id[f"AAPL:2024-05-{day}"]
+        assert row["parent"] == "AAPL:2024-05-06" and row["follower_close"] is True
+    assert by_id["AAPL:2024-05-09"]["family_ever"] is None  # a downgrade, but a follower
+    friday = by_id["AAPL:2024-05-10"]
+    assert friday["parent"] is None and friday["family_ever"] == "NSN_CORE"
+    assert [i["itype"] for i in friday["items"]] == ["earnings_8k", "earnings_fact"]
+    msft = by_id["MSFT:2024-05-09"]
+    assert msft["parent"] == "MSFT:2024-05-07" and msft["family_ever"] == "NSN_CORE"
+
+
+async def test_the_same_stories_whether_the_range_is_built_whole_or_in_parts(
+    ready: AsyncEngine,
+) -> None:
+    await build_range(ready, start=MON, end=FRI)
+    whole = await stored_rows(ready)
+    async with ready.begin() as conn:
+        await conn.execute(text("DELETE FROM news_stories"))
+    await build_range(ready, start=WED, end=FRI)  # parents on Mon and Tue come from history
+    await build_range(ready, start=MON, end=TUE)
+    assert await stored_rows(ready) == whole
+    await build_range(ready, start=MON, end=FRI)  # and a rebuild changes nothing
+    assert await stored_rows(ready) == whole
+
+
+async def test_a_build_replaces_its_range_only(ready: AsyncEngine) -> None:
+    await build_range(ready, start=MON, end=FRI)
+    row = (await stored_rows(ready))[0]
+    stale = row | {"story_id": "ZZZ:2024-05-08", "symbol": "ZZZ", "session": WED}
+    outside = row | {"story_id": "ZZZ:2024-06-03", "symbol": "ZZZ", "session": date(2024, 6, 3)}
+    async with ready.begin() as conn:
+        for r in (stale, outside):
+            await conn.execute(
+                text(
+                    "INSERT INTO news_stories VALUES (:builder_version, :story_id, :symbol, "
+                    ":session, :start_case, :detect_at, :nsn_at, :at_news, :type_detect, "
+                    ":type_close, :family_ever, :follower_close, :parent, :n_items, :n_distinct, "
+                    "CAST(:items AS JSONB), CAST(:flags AS JSONB))"
+                ),
+                r | {"items": json.dumps(r["items"]), "flags": json.dumps(r["flags"])},
+            )
+    await build_range(ready, start=TUE, end=WED)
+    ids = {r["story_id"] for r in await stored_rows(ready)}
+    assert "ZZZ:2024-05-08" not in ids and "ZZZ:2024-06-03" in ids
+    assert "AAPL:2024-05-06" in ids and "AAPL:2024-05-08" in ids
+
+
+async def test_persist_upserts_a_story(engine: AsyncEngine) -> None:
+    raw = raw_news(1, ny(TUE, 8), DOWNGRADE)
+    story = build([raw], APPLE)[0]
+    assert await persist(engine, [story]) == 1
+    later = build([raw, raw_news(2, ny(TUE, 9), MISS)], APPLE)
+    assert await persist(engine, later) == 1
+    rows = await stored_rows(engine)
+    assert len(rows) == 1 and rows[0]["n_items"] == 2
+    assert rows[0]["detect_at"] == ny(TUE, 8, 10) and rows[0]["detect_at"].tzinfo is not None
+
+
+# ── counts ────────────────────────────────────────────────────
+
+
+async def test_counts_split_types_and_nsn_by_universe(
+    ready: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    loads, made = fake_context(monkeypatch)
+    await build_range(ready, start=MON, end=FRI)
+    counts = await count_stories(ready, start=date(2024, 1, 2), end=date(2024, 12, 31))
+    assert loads == [(["AAPL", "MSFT"], date(2024, 1, 2), date(2024, 12, 31))]
+    assert counts.types[("all", "fraud_probe", 2024, "validation")] == 1
+    assert counts.types[("all", "analyst_downgrade", 2024, "validation")] == 3
+    assert counts.types[("primary", "analyst_downgrade", 2024, "validation")] == 2  # no MSFT
+    assert counts.types[("tech", "earnings_miss", 2024, "validation")] == 1
+    assert sum(n for (u, *_), n in counts.types.items() if u == "all") == 7
+    assert sum(n for (u, *_), n in counts.types.items() if u == "primary") == 5
+    v = "validation"
+    assert counts.nsn == Counter(
+        {("all", 2024, v): 2, ("primary", 2024, v): 1, ("tech", 2024, v): 1}
+    )
+    assert counts.reasons == Counter(
+        {("all", "ok"): 5, ("all", "rank"): 2, ("nsn", "ok"): 1, ("nsn", "rank"): 1}
+    )
+    asked = {(s, d): at for s, d, at in made[0].asked}
+    assert asked[("AAPL", FRI)] == ny(FRI, 7)  # the NSN item's own time, not the 8-K's
+    assert asked[("MSFT", THU)] == ny(THU, 10)
+    assert asked[("AAPL", THU)] == ny(THU, 8)  # no NSN: the first item's time
+
+
+async def test_counts_load_one_year_at_a_time(
+    engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    loads, _ = fake_context(monkeypatch)
+    raws = [
+        raw_news(1, ny(date(2021, 12, 30), 8), DOWNGRADE),
+        raw_news(2, ny(date(2022, 1, 3), 8), MISS),
+    ]
+    await persist(engine, build(raws, APPLE))
+    counts = await count_stories(engine, start=date(2021, 6, 1), end=date(2022, 6, 30))
+    assert loads == [
+        (["AAPL"], date(2021, 6, 1), date(2021, 12, 31)),
+        (["AAPL"], date(2022, 1, 1), date(2022, 6, 30)),
+    ]
+    assert counts.nsn[("primary", 2021, "train")] == 1
+    assert counts.nsn[("primary", 2022, "validation")] == 1
