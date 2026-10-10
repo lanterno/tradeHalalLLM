@@ -33,6 +33,7 @@ from halabot.playbooks.legacy import (
     daily_config,
     r1_dropped,
     r1_set_aside,
+    r1_units_not_done,
     reactor_config,
     reactor_plausible,
     reactor_story,
@@ -363,6 +364,24 @@ def test_r1_needs_its_run_its_trades_and_h_to_be_one_set() -> None:
     partial = _summary(ids, dropped={"b": "bad_bars", "c": "no_spy"}, skip_ids={"bad_bars": ("b",)})
     out = check(partial, [trades[0], nospy], {"c"})
     assert out.identical and out.kept == ("a",) and out.set_aside == {"b": ("bad_bars",)}
+
+
+def test_r1_lists_every_unit_of_h_not_done() -> None:
+    """Each headline's stock and SPY on its day, sessions only; R1 runs when none is missing."""
+    good_friday = date(2016, 3, 25)
+    heads = {
+        "a": ("AAA", MON),
+        "b": ("BBB", MON),
+        "c": ("CCC", TUE),
+        "h": ("HHH", good_friday),  # no session: nothing is read
+    }
+    done = {"AAA:2016-03-07", "BBB:2016-03-07", "SPY:2016-03-07", "CCC:2016-03-08"}
+    assert r1_units_not_done(heads, done) == ("SPY:2016-03-08",)
+    assert r1_units_not_done(heads, done - {"BBB:2016-03-07"}) == (
+        "BBB:2016-03-07",
+        "SPY:2016-03-08",
+    )
+    assert r1_units_not_done(heads, {*done, "SPY:2016-03-08"}) == ()
 
 
 # ── S1: the daily-bar study through the simulator ──
