@@ -66,6 +66,7 @@ from __future__ import annotations
 
 import asyncio
 import bisect
+import hashlib
 import logging
 import math
 import multiprocessing
@@ -73,7 +74,7 @@ import sys
 import warnings
 import zlib
 from collections import Counter
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from concurrent.futures import ProcessPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
 from dataclasses import dataclass, field, replace
@@ -1252,6 +1253,12 @@ def drop_reason(outcome: StoryOutcome, stop_at: StopAt = "end") -> str | None:
     return NO_SPY if "no_spy" in t.flags else NO_RETURN
 
 
+def id_set_sha(ids: Iterable[str]) -> str:
+    """sha256 of the distinct story ids, sorted, one per line: an explicit set's fingerprint
+    (:attr:`RunSummary.expected_sha`)."""
+    return hashlib.sha256("\n".join(sorted(set(ids))).encode()).hexdigest()
+
+
 @dataclass(frozen=True, slots=True)
 class RunSummary:
     """What a run did, by count, and the story ids its data rules touched.
@@ -1266,10 +1273,12 @@ class RunSummary:
       apart from ``bar_drop_ids``, and a story can be in both;
     * ``spare_drop_ids``: stories whose spare session (``PathData.spare``,
       read only by a ``no_market`` exit) lost bars to the rule;
-    * ``expected`` and ``dropped``: under ``run(expected=...)``, the size of
-      the explicit set and, for each of its ids without a usable result,
-      the reason (:func:`drop_reason`, or ``no_story``, ``no_session``,
-      ``not_started`` for an id never simulated). Otherwise 0 and empty.
+    * ``expected``, ``expected_sha`` and ``dropped``: under
+      ``run(expected=...)``, the size of the explicit set, the sha256 of its
+      ids (:func:`id_set_sha`, so a reader can tell which set ran, not only
+      how many) and, for each of its ids without a usable result, the reason
+      (:func:`drop_reason`, or ``no_story``, ``no_session``, ``not_started``
+      for an id never simulated). Otherwise 0, "" and empty.
 
     ``legacy.r1_set_aside`` reads these lists for the reactor gate R1.
     """
@@ -1289,6 +1298,7 @@ class RunSummary:
     spy_drop_days: dict[str, int] = field(default_factory=dict)
     spare_drop_ids: tuple[str, ...] = ()  # sorted
     expected: int = 0
+    expected_sha: str = ""  # id_set_sha of the explicit set's ids
     dropped: dict[str, str] = field(default_factory=dict)  # story id -> reason
 
     def as_dict(self) -> dict[str, object]:
@@ -1308,6 +1318,7 @@ class RunSummary:
             "spy_drop_days": dict(sorted(self.spy_drop_days.items())),
             "spare_drop_ids": list(self.spare_drop_ids),
             "expected": self.expected,
+            "expected_sha": self.expected_sha,
             "dropped": dict(sorted(self.dropped.items())),
         }
 
@@ -1545,7 +1556,8 @@ async def run(
     session), e.g. R1's pinned headlines): every story given must be in it,
     once, with that symbol and session (else ``ValueError``); a story whose
     session is not a trading day is not simulated; and the summary accounts
-    for every id of the set (:attr:`RunSummary.dropped`).
+    for every id of the set (:attr:`RunSummary.dropped`) and names the set
+    (:attr:`RunSummary.expected_sha`).
 
     **Nothing is written until the run may proceed:** the explicit set is
     checked, the unlock is verified against the ledger, the calendar is
@@ -1726,6 +1738,7 @@ async def run(
         spy_drop_days={d.isoformat(): n for d, n in sorted(loader.spy_dropped.items())},
         spare_drop_ids=tuple(sorted(spare_drop_ids)),
         expected=len(expected) if expected is not None else 0,
+        expected_sha=id_set_sha(expected) if expected is not None else "",
         dropped=dict(sorted(dropped.items())),
     )
     await sink.finish(summary.as_dict())
@@ -1759,6 +1772,7 @@ __all__ = [
     "StopAt",
     "SymbolState",
     "drop_reason",
+    "id_set_sha",
     "news_items",
     "pool_method",
     "run",

@@ -28,7 +28,13 @@ no SPY bar starts at or after its decision, or when the move is
 implausible; the simulator gives each id of H without a finite return its
 reason in ``RunSummary.dropped`` (``no_session``, ``entry_unfilled`` for a
 decision with no stock bar after it, ``no_spy`` for one with no SPY bar
-after it, ``halted_all_day``, ...). Then:
+after it, ``halted_all_day``, ...). :func:`r1_dropped` first checks that
+its inputs are that one run over H, else ``ValueError``: the run's
+explicit set is H by size and by sha256 (``RunSummary.expected_sha``), every
+trade is that run's (``run_id``) and for an id of H, at most one per id, and
+every id of H the run neither dropped nor set aside has its trade, with a
+finite return. So R1 cannot pass on headlines it never compared (a run over
+another set of the same size, another run's trades, a missing trade). Then:
 
 1. **Set aside** (:func:`r1_set_aside`, on both sides) the headlines the
    loader treated by rules the study never had (:data:`R1_SET_ASIDE`):
@@ -106,7 +112,7 @@ from halabot.playbooks.exchange import FallbackFill, first_eligible
 from halabot.playbooks.interfaces import CardView, StoryView
 from halabot.playbooks.playbook import TRIGGERED, Ctx
 from halabot.playbooks.records import StoryOutcome, TradeRecord
-from halabot.playbooks.sim import RunSummary, simulate_symbol
+from halabot.playbooks.sim import RunSummary, id_set_sha, simulate_symbol
 from halabot.playbooks.types import (
     BarSeries,
     Execution,
@@ -422,7 +428,13 @@ def r1_dropped(
     ``headlines`` are H's ids, ``summary`` the explicit-set run over them
     (``sim.run(..., expected=H)``), ``trades`` its trade records, and
     ``study_dropped`` the ids ``intraday.run`` returned no outcome for.
-    Raises ``ValueError`` when the run was not over H or an id is not H's.
+
+    Raises ``ValueError`` unless these are one run over H: the run's set is
+    H (its size and its ``expected_sha``); every trade has the run's
+    ``run_id`` and an id of H, at most one trade per id; every id of H that
+    the run neither dropped nor set aside has its trade, with a finite
+    ``r_net_abn`` (so every kept id was compared); and every dropped id is
+    H's.
     """
     ids = set(headlines)
     if summary.expected != len(ids):
@@ -430,15 +442,40 @@ def r1_dropped(
             f"the run accounted for {summary.expected} headlines, not H's {len(ids)}: "
             f"run it with expected=H"
         )
-    study = set(study_dropped)
-    sim = dict(summary.dropped)
+    want = id_set_sha(ids)
+    if summary.expected_sha != want:
+        raise ValueError(
+            f"the run's set has sha {summary.expected_sha[:12] or '(none)'}, not H's "
+            f"{want[:12]}: run it with expected=H"
+        )
+    by_id: dict[str, TradeRecord] = {}
     for t in trades:
-        if t.story_id not in sim and not reactor_plausible(t):
-            sim[t.story_id] = IMPLAUSIBLE
-    stray = sorted((study | set(sim)) - ids)
+        if t.run_id != summary.run_id:
+            raise ValueError(f"trade {t.story_id} is from run {t.run_id}, not {summary.run_id}")
+        if t.story_id not in ids:
+            raise ValueError(f"trade {t.story_id} is not in H")
+        if t.story_id in by_id:
+            raise ValueError(f"trade {t.story_id} is given twice")
+        by_id[t.story_id] = t
+    study = set(study_dropped)
+    stray = sorted((study | set(summary.dropped)) - ids)
     if stray:
         raise ValueError(f"{len(stray)} dropped ids are not in H: {', '.join(stray[:5])}")
     aside = r1_set_aside(summary)
+    untraded = sorted(
+        sid
+        for sid in ids - set(summary.dropped) - set(aside)
+        if sid not in by_id or not math.isfinite(by_id[sid].r_net_abn)
+    )
+    if untraded:
+        raise ValueError(
+            f"{len(untraded)} ids of H the run kept have no trade of it with a finite return: "
+            f"{', '.join(untraded[:5])}"
+        )
+    sim = dict(summary.dropped)
+    for sid, t in sorted(by_id.items()):
+        if sid not in sim and not reactor_plausible(t):
+            sim[sid] = IMPLAUSIBLE
     return R1Dropped(
         headlines=len(ids),
         set_aside=aside,
