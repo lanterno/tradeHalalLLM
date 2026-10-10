@@ -185,6 +185,60 @@ def aliases_build_cmd(force: bool) -> None:
     console.print(f"{rows} alias row(s) stored; alias_sha {sha}")
 
 
+@events.group("stories")
+def stories_group() -> None:
+    """The news engine's stories: one symbol's news and 8-Ks of one reaction session."""
+
+
+@stories_group.command("build")
+@click.option("--start", type=click.DateTime(["%Y-%m-%d"]), required=True)
+@click.option("--end", type=click.DateTime(["%Y-%m-%d"]), required=True)
+@click.option(
+    "--force",
+    is_flag=True,
+    help="Build even though renamed-ticker news is missing or no alias is stored.",
+)
+def stories_build_cmd(start: Any, end: Any, force: bool) -> None:
+    """Build every story with its reaction session in [start, end] (replaces those rows)."""
+    from halal_trader.events.stories import StoriesNotReady
+
+    async def _run(engine: Any, settings: Any) -> tuple[int, dict[str, int], dict[str, str]]:
+        from collections import Counter
+
+        from halal_trader.events.stories import build_range, pins
+
+        counters: Counter[str] = Counter()
+        written = await build_range(
+            engine, start=start.date(), end=end.date(), force=force, counters=counters
+        )
+        return written, dict(counters), await pins(engine)
+
+    try:
+        written, counters, pinned = run_db(_run)
+    except StoriesNotReady as e:
+        fail(f"{e} (or pass --force)")
+    console.print(f"{written} story(ies) stored for {start:%Y-%m-%d}..{end:%Y-%m-%d}")
+    console.print("items read: " + ", ".join(f"{k} {v}" for k, v in sorted(counters.items())))
+    console.print("pins: " + ", ".join(f"{k} {v}" for k, v in pinned.items()))
+
+
+@stories_group.command("counts")
+@click.option("--start", type=click.DateTime(["%Y-%m-%d"]), default="2016-10-03")
+@click.option("--end", type=click.DateTime(["%Y-%m-%d"]), default="2024-12-31")
+def stories_counts_cmd(start: Any, end: Any) -> None:
+    """Stories by close type and NSN, per year and window: all, PRIMARY, Technology."""
+
+    async def _run(engine: Any, settings: Any) -> Any:
+        from halal_trader.events.stories import count_stories
+
+        return await count_stories(engine, start=start.date(), end=end.date())
+
+    from halal_trader.events.stories import counts_table
+
+    for line in counts_table(run_db(_run), start=start.date(), end=end.date()):
+        console.print(line, markup=False, highlight=False)
+
+
 @events.command("extract")
 def extract_cmd() -> None:
     """Read earnings results and guidance vs consensus out of stored headlines."""
