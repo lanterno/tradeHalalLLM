@@ -15,9 +15,15 @@ it, every comparison strict:
 * **Liquidity.** The 0-based index in ``universe_at(S, top_n=3000)``, which
   ranks on the months before S's month; eligible below 1000.
 * **Share class.** Among the names admitted at S (screen and rank) that share
-  the screen row's CIK, only the most liquid is kept. The winner is chosen
-  before any bar is read: when it then fails daily bars, price or σ, the
-  other classes stay out as ``share_class`` rather than step up.
+  the screen row's CIK, only the most liquid is kept, except that a former
+  ticker never wins over a later ticker of its company
+  (``renames.later_tickers``). A screen can hold a renamed company under
+  both (IAC and PPLI, DWDP and DD) with the same bars, so either can rank
+  first (on a tie, the universe's symbol order), while the story builder
+  files the company's news under the later one (``renames.owner``). The
+  winner is chosen before any bar is read: when it then fails daily bars,
+  price or σ, the other classes stay out as ``share_class`` rather than
+  step up.
 * **Price.** ``prev_close_s >= 5``: the previous session's raw close in
   session-S units, ``close_raw(S−1) · A(S−1)/A(S)`` with
   ``A(d) = close_all(d)/close_raw(d)``. The ratio holds exactly the corporate
@@ -68,6 +74,15 @@ pre-registration to cite:
   the screen and rank admit (Share class above). When the most liquid class
   then fails daily bars, price or σ, the spec would admit the next class;
   the code keeps it out as ``share_class``. Stage A's counts differ.
+* **A renamed company's later ticker wins its CIK, whatever the ranks.**
+  The spec keeps the lowest rank per CIK. Where the screen and rank admit a
+  former ticker and a later one of the same company (``TICKER_RENAMES``,
+  directly or through a chain), the code keeps the later one, under which
+  the stories are filed (Share class above); the lowest rank would keep a
+  name that has none. On 2026-10-11 this moves two CIKs in 2016-10 to
+  2024-12: DD over DWDP (2018-04 to 2018-08), PPLI over IAC (2019-10 to
+  2020-06 and 2022-10 to 2023-09; in BROAD also 2021-10 to 2022-09, when
+  an index veto alone fails PPLI, so PRIMARY keeps IAC).
 * **``no_daily`` reads S's own bar.** A(S) needs S's raw and all-adjusted
   closes (Price above), so a name with no bar on S is ``no_daily``: S-dated
   information, where the spec's price rule says "known before the open".
@@ -112,6 +127,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from halal_trader.data.minutes import session_bounds
 from halal_trader.events.earnings_parse import EarningsFacts
+from halal_trader.events.renames import later_tickers
 from halal_trader.events.study import BENCHMARK, cost_bps
 from halal_trader.halal.sector_limits import TECHNOLOGY, cap_sector
 from halal_trader.halal.strict import ScreenRow, all_screens
@@ -537,20 +553,20 @@ class PitContext:
         return "unmapped" if unmapped else "not_halal"
 
     def _class_winners(self, as_of: date, month: date, universe: Universe) -> dict[int, str]:
-        """CIK -> its most liquid admitted symbol, for one screen and month."""
+        """CIK -> the admitted symbol it keeps, for one screen and month (see
+        :func:`_class_winner`)."""
         key = (as_of, month, universe)
         if key not in self._winners:
             ranks = self._ranks[month]
-            best: dict[int, tuple[int, str]] = {}
+            admitted: dict[int, list[tuple[int, str]]] = {}
             for symbol, row in self._screens[as_of].items():
                 rank = ranks.get(symbol)
                 if row.cik is None or rank is None or rank >= MAX_RANK:
                     continue
                 if self._refused(symbol, row, universe) is not None:
                     continue
-                if row.cik not in best or rank < best[row.cik][0]:
-                    best[row.cik] = (rank, symbol)
-            self._winners[key] = {cik: symbol for cik, (_, symbol) in best.items()}
+                admitted.setdefault(row.cik, []).append((rank, symbol))
+            self._winners[key] = {cik: _class_winner(names) for cik, names in admitted.items()}
         return self._winners[key]
 
     def _news_index(self, j: int, at_news: datetime) -> int:
@@ -602,6 +618,18 @@ class PitContext:
             return math.nan
         c, m = series.data[_AC], self._spy.data[_AC]
         return float((c[p] / c[p - n] - 1.0) - (m[p] / m[p - n] - 1.0))
+
+
+def _class_winner(names: Sequence[tuple[int, str]]) -> str:
+    """The symbol one CIK keeps among its admitted (rank, symbol) pairs.
+
+    The lowest rank, but a former ticker never wins while a later ticker of
+    its company is admitted too (``renames.later_tickers``): the stories are
+    filed under the later one (``renames.owner``). Ranks are distinct
+    indices, so the symbol never decides.
+    """
+    present = {symbol for _, symbol in names}
+    return min(names, key=lambda n: (not present.isdisjoint(later_tickers(n[1])), n))[1]
 
 
 def _through(p: int, n: int) -> slice:

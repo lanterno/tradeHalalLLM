@@ -163,6 +163,27 @@ def old_tickers(symbol: str) -> tuple[str, ...]:
     return tuple(old for _, old in sorted(olds))
 
 
+def later_tickers(symbol: str) -> tuple[str, ...]:
+    """The tickers the company trading as ``symbol`` took after it, in order:
+    its current symbol in ``TICKER_RENAMES``, then on while that is itself an
+    old ticker the company left later (a chain). Empty for no old ticker.
+
+    A link counts only when its ticker was given up after the previous one,
+    since a ticker taken over at once was another company's: Gardner Denver's
+    GDI became IR at the close the old IR (Ingersoll-Rand plc) became TT, so
+    GDI's later tickers are IR alone. The last sessions grow along a chain,
+    so it ends.
+    """
+    out: list[str] = []
+    entry = TICKER_RENAMES.get(symbol)
+    while entry is not None:
+        current, last = entry
+        out.append(current)
+        nxt = TICKER_RENAMES.get(current)
+        entry = nxt if nxt is not None and nxt[1] > last else None
+    return tuple(out)
+
+
 def window(old: str) -> tuple[date, date]:
     """The sessions [first, last] the old ticker named its company, from NEWS_FROM."""
     current, last = TICKER_RENAMES[old]
