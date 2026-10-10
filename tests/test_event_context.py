@@ -534,6 +534,53 @@ async def test_beta_is_clipped_to_half_and_two(engine: AsyncEngine) -> None:
     assert (high.beta, low.beta) == (2.0, 0.5)
 
 
+async def test_levels_cover_every_session_they_name_or_are_nan(engine: AsyncEngine) -> None:
+    world = await _world(engine)
+    i = _i(PREV)
+    window = SESSIONS[i - 251 : i + 1]
+    await _clone(engine, "UNM", "EXACT", cik=991)  # first bar on the window's first session
+    await _drop(engine, "EXACT", set(SESSIONS[: i - 251]))
+    await _clone(engine, "UNM", "LATE", cik=992)  # first bar one session later
+    await _drop(engine, "LATE", set(SESSIONS[: i - 250]))
+    await _clone(engine, "UNM", "HOLE", cik=993)  # listed before, halted inside the window
+    hole = set(SESSIONS[i - 200 : i - 195])
+    await _drop(engine, "HOLE", hole)
+    ctx = await _load(engine, [*SYMBOLS, "EXACT", "LATE", "HOLE"])
+
+    exact, late, gap = (ctx.pre_event(s, S, PRE_OPEN) for s in ("EXACT", "LATE", "HOLE"))
+
+    assert exact is not None and late is not None and gap is not None
+    highs, lows = world.highs["UNM"], world.lows["UNM"]  # A(S) = 1: adjusted = S units
+    assert exact.hi252_s == pytest.approx(max(highs[d] for d in window), rel=1e-12)
+    assert exact.lo252_s == pytest.approx(min(lows[d] for d in window), rel=1e-12)
+    assert math.isnan(late.hi252_s) and math.isnan(late.lo252_s)
+    assert late.hi20_s == exact.hi20_s and late.lo20_s == exact.lo20_s
+    kept = [d for d in window if d not in hole]
+    assert gap.hi252_s == pytest.approx(max(highs[d] for d in kept), rel=1e-12)
+    assert gap.lo252_s == pytest.approx(min(lows[d] for d in kept), rel=1e-12)
+
+
+async def test_levels_are_nan_when_the_calendar_is_shorter_than_their_window(
+    engine: AsyncEngine,
+) -> None:
+    world = await _world(engine)
+    story = date(2023, 3, 15)  # about 110 sessions after the first daily bar
+    ctx = await PitContext.load(
+        engine, symbols=["AAA"], start=date(2023, 3, 1), end=date(2023, 3, 31)
+    )
+
+    pe = ctx.pre_event("AAA", story, et(story, 8))
+
+    assert pe is not None
+    assert ctx.sessions[0] == FIRST
+    assert math.isnan(pe.hi252_s) and math.isnan(pe.lo252_s)
+    p = _i(story) - 1
+    window20 = SESSIONS[p - 19 : p + 1]
+    # A(d) = A(story) = 0.98 here: S units are raw, the adjusted high / 0.98.
+    assert pe.hi20_s == pytest.approx(max(world.highs["AAA"][d] for d in window20) / 0.98)
+    assert pe.lo20_s == pytest.approx(min(world.lows["AAA"][d] for d in window20) / 0.98)
+
+
 # ── look-ahead ───────────────────────────────────────────────────
 
 
