@@ -487,7 +487,9 @@ def _segment_fact(segment: str, prior: Sequence[EarningsFacts]) -> EarningsFacts
             g, segment, prior, basis=_basis(g["basis"]), previous=g["old"], figure=figure
         )
     g = GUIDE_V4.search(segment)
-    if g is not None and _TOLERANCE_GAP.search(segment, g.end("metric"), g.start("low")):
+    # Up to the read's first character: in "$3.8B +/-$300M" its figure starts
+    # at the tolerance's own "-".
+    if g is not None and _TOLERANCE_GAP.search(segment, g.end("metric"), g.start("low") + 1):
         g = None
     if g is not None:
         word = _BASIS_WORD.search(segment, g.end("action"), g.start("metric"))
