@@ -27,7 +27,8 @@ builder version in ``story_aliases`` so the set the pre-registration pins
   rule over the slots of the old ticker's own articles, a pool of its own,
   so a long history under the new name cannot drown the old one
   ("Priceline", "Coach", "Quintiles"); the old ticker's asset names when
-  those slots confirm them; and ``FORMER_NAME_OVERRIDES``.
+  no other company trades under it today and those slots confirm them;
+  and ``FORMER_NAME_OVERRIDES``.
 
 Names are not dated: a former name matches the company's headlines of any
 day, also when another company has taken it since. Trane's (TT) "Ingersoll
@@ -306,15 +307,24 @@ def former_aliases(
     ``pools`` holds the slots of each (symbol, old ticker)'s own articles
     (``learn_former_slots``), judged by the learned rule within that pool
     alone: Priceline's two years cannot reach a tenth of Booking's eight.
-    An asset name the old ticker has in ``names`` counts only when its
-    cleaned name matches ``LEARN_MIN_COUNT`` of those slots: Alpaca lists
-    the old ticker's current holder, when it lists it at all (PCLN is a
-    Pictet ETF, Q is Qnity, IR is Gardner Denver's Ingersoll Rand).
+
+    Alpaca lists an old ticker under the company that holds it today, when
+    it lists it at all, so an asset name the old ticker has in ``names``
+    counts only when:
+
+    * no company the renames know of trades under the old ticker today
+      (``renames.held_since`` is None). IR is Gardner Denver's and Q is
+      Qnity's: their names are skipped, also where the slots name them
+      (Gardner Denver took Ingersoll Rand's name with the ticker); and
+    * its cleaned name matches ``LEARN_MIN_COUNT`` of those slots, for the
+      holders the renames do not know (PCLN is a Pictet ETF).
     """
     out: dict[str, set[str]] = defaultdict(set)
     for old, (symbol, _) in renames.TICKER_RENAMES.items():
         seen = pools.get((symbol, old), Counter())
         out[symbol] |= _kept(seen)
+        if renames.held_since(old) is not None:
+            continue  # its listed names are its holder's today
         for name in names.get(old, ()):
             candidates = name_aliases(name)
             if not candidates:
