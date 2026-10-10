@@ -487,6 +487,11 @@ def test_a_guided_figure_is_never_a_fragment_nor_the_guidance_it_replaces(
          "sees", 4.15, 4.20, 4.30),
         ("Trane Technologies Raises FY23 Outlook, Sees Adj. EPS To $9.00 (From $8.80 To $8.90) "
          "Vs $8.87 Est.", "raises", 9.00, 9.00, 8.87),
+        # Constructed: before any figure, the parenthetical states the old and the new.
+        ("Acme Updates FY EPS Guidance (From $1.00 To $0.90) Vs $1.05 Est", "updates",
+         0.90, 0.90, 1.05),
+        ("Acme Raises FY EPS Guidance (From $1.00 To $1.10) Vs $1.05 Est", "raises",
+         1.10, 1.10, 1.05),
         # Guidance kept as it was: "from" introduces its range when no "to" follows.
         ("PPL Reaffirms FY2017 EPS Guidance from $1.92-2.12 vs $2.16 Est", "reaffirms",
          1.92, 2.12, 2.16),
