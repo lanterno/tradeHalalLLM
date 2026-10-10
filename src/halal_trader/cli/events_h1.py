@@ -44,13 +44,24 @@ def register_cmd(dry_run: bool, no_scan: bool) -> None:
     if no_scan and not dry_run:
         fail("--no-scan is for dry runs: a registration needs every check")
 
+    from halal_trader.events.h1 import REPORTED_CHECKS
+
     async def _run(engine: Any, settings: Any) -> tuple[Any, str | None, int | None]:
         from halal_trader.events import h1 as trial
 
         existing = await trial.existing_registration(engine)
         if existing is not None and not dry_run:
             return None, f"H1 is registered already (quant_trials {existing})", None
-        report = await trial.preconditions(engine, scan=not no_scan)
+        market = None
+        if settings.alpaca.api_key and settings.alpaca.secret_key:  # D7 and D8 ask Alpaca
+            from halal_trader.data.alpaca_market import AlpacaMarketData
+
+            market = AlpacaMarketData.from_settings(settings)
+        try:
+            report = await trial.preconditions(engine, scan=not no_scan, market=market)
+        finally:
+            if market is not None:
+                await market.aclose()
         if dry_run or not report.ok:
             return report, None, None
         try:
@@ -61,7 +72,10 @@ def register_cmd(dry_run: bool, no_scan: bool) -> None:
     report, error, trial_id = run_db(_run)
     if report is not None:
         for check in report.checks:
-            mark = "[green]ok  [/green]" if check.ok else "[red]FAIL[/red]"
+            if check.id in REPORTED_CHECKS:
+                mark = "[cyan]info[/cyan]"
+            else:
+                mark = "[green]ok  [/green]" if check.ok else "[red]FAIL[/red]"
             console.print(f"{mark} {check.id:<3} {check.detail}")
         for missing in report.missing:
             console.print(f"[yellow]--  [/yellow] {missing:<3} not run")

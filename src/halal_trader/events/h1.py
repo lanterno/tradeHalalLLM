@@ -16,8 +16,8 @@ is on the ledger (``quant_trials``):
 1. :func:`register` writes the pre-registration (``kind="preregistration"``,
    ``config=PREREG``) once the Phase 0 gate rows all pass and the data
    preconditions D1-D6 hold (:func:`preconditions`), with D9's counts, D2/D3's
-   residuals, the code pins and the git state in its metrics. It refuses a
-   second registration of the same configuration.
+   residuals, D7/D8's measurements, the code pins and the git state in its
+   metrics. It refuses a second registration of the same configuration.
 2. :func:`stage_a` counts entries without computing an exit or a return
    (``stop_at="entry"``, ``assume_full_hold=True``) in both windows and
    decides which cells are eligible; data skips above 2% of the eligible NSN
@@ -64,11 +64,19 @@ counted). None of them but the backtests carries ``active_sr_period``.
   the registration's hash. It also lists the sensitivities, the pins under
   one ``pins`` key, the context's stated deviations from §C, and the
   simulator's constants (``SimConfig().as_config()``) under ``fills``.
-* Gate rows are matched by family: ``g1``/``lookahead``, ``g2``/``reactor``,
-  ``g3``/``sue`` (a prefix before ``.``, ``:``, ``-``, ``_`` or ``/`` counts);
-  every gate id's latest row must pass and each family must have one.
+* Gate rows are matched by their exact id (:data:`REQUIRED_GATES`: each of
+  G1-G3's sub-gates); every required id must have a row, and every gate
+  id's latest row must pass.
+* D2's unmapped and pending counts cover the screens of D2's span only, and
+  D6 needs the facts of the news published 2016-01-01..2024-12-31 only:
+  nothing H1 never reads can block the registration.
 * D5's full scan reads every done unit of plan H through
-  ``minutes.read_windows``, and ``minutes.read`` on a seeded sample of 200.
+  ``minutes.read_windows``; on a seeded sample of 200 units, ``minutes.read``
+  reads the unit and ``minutes.read_sessions`` the unit with its symbol's
+  done sessions within a week (a multi-session range scan).
+* D7 and D8 are measured at registration through Alpaca (the CLI passes a
+  client when its keys are set) and recorded; without a client, or when the
+  probe fails, they are recorded as not measured. Neither gates.
 * D3 judges a quarter on the names PIT-halal and rank < 1000 at its first
   session; "admitted news" is a news event among a story's items.
 * A ``window`` summary row is added (the verdict reads it), and an
@@ -94,10 +102,9 @@ import importlib.util
 import logging
 import math
 import random
-import re
 import subprocess
 from collections import Counter, defaultdict
-from collections.abc import AsyncIterator, Collection, Mapping, Sequence
+from collections.abc import AsyncIterator, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -112,6 +119,7 @@ from halabot.playbooks.bounce import BounceFactory, BounceParams
 from halabot.playbooks.clock import SIP_DELAYED
 from halabot.playbooks.interfaces import CardView, StoryView
 from halabot.playbooks.loader import (
+    SPY,
     WINDOW_LAST,
     WINDOW_START,
     CalendarMismatch,
@@ -238,15 +246,23 @@ NEWS_LAGS: Final = {
 }
 PARTICIPATION_MAX: Final = 0.10
 
-# What the context computes differently from spec §C (events/context.py, stated there).
+# What the context computes differently from spec §C: the deviations section of
+# events/context.py's docstring, item for item, whitespace normalised (a test holds
+# the two equal, so the PREREG cites what the context says it does).
 CONTEXT_DEVIATIONS: Final = (
-    "eligibility takes the news time (at_news): sigma is judged there, on pre_event's window",
-    "a news time outside (S-2's close, S's close) is refused by eligibility and pre_event",
-    "BROAD admits an unmapped name with no ticker_ciks row (not known as a fund)",
-    "daily bars load from 380 days before the first session; levels need the first raw bar",
-    "no_daily also covers a name without a daily bar on S itself (S-dated, stated)",
-    "the share-class winner is chosen before bars are read; the others stay share_class",
-    "stories_before is not built",
+    "**The news time is required.** ``eligibility(symbol, session, *, at_news, "
+    'universe="primary")``; the spec\'s signature has no ``at_news``. σ is judged at that '
+    "time, on the window :meth:`PitContext.pre_event` uses, and a time outside (S−2's close, "
+    "S's close) is refused by both.",
+    "**BROAD admits an unmapped name with no ``ticker_ciks`` row** (see Screen above); the "
+    "spec's ``status != 'fund'`` would drop it as NULL.",
+    "**History is loaded from 380 days before the first session**, not 100: daily bars over "
+    "[start − 380 d, end + 7 d], because the 252-session levels need a year of bars (380 days "
+    "hold at least 257 sessions in 2017-2027). With each name's first raw bar day "
+    "(Descriptives), no answer depends on where a load starts.",
+    "``stories_before`` is not built yet (contracts.md); ``sessions`` and ``daily`` are added "
+    "for the simulator. ``adj``, ``daily`` and ``facts_before`` raise outside the loaded "
+    "range rather than answer None or nothing.",
 )
 
 CRITERION: Final = (
@@ -573,6 +589,8 @@ class Check:
 
 
 REQUIRED_CHECKS: Final = ("C0", "G", "D1", "D2", "D3", "D4", "D5", "D6", "D9")
+# Measured and recorded in the registration, never gating (spec §E.0).
+REPORTED_CHECKS: Final = ("D7", "D8")
 
 
 @dataclass(frozen=True, slots=True)
@@ -589,7 +607,7 @@ class Preconditions:
 
     @property
     def failures(self) -> list[Check]:
-        return [c for c in self.checks if not c.ok]
+        return [c for c in self.checks if not c.ok and c.id not in REPORTED_CHECKS]
 
     @property
     def ok(self) -> bool:
@@ -699,36 +717,41 @@ def check_code(code: CodeState) -> Check:
     return Check("C0", True, f"HEAD {code.commit[:12]} tagged {TAG}, clean", data)
 
 
-# The Phase 0 gate families (spec §E): a gate row's id counts for a family when
-# it is one of these names, or starts with one before a separator.
-REQUIRED_GATES: Final[dict[str, tuple[str, ...]]] = {
-    "G1": ("g1", "lookahead"),
-    "G2": ("g2", "reactor"),
-    "G3": ("g3", "sue"),
-}
-_GATE_HEAD: Final = re.compile(r"[.:/_\-\s]")
-
-
-def gate_family(gate_id: str) -> str | None:
-    head = _GATE_HEAD.split(gate_id.strip().lower(), maxsplit=1)[0]
-    for family, names in REQUIRED_GATES.items():
-        if head in names:
-            return family
-    return None
+# The Phase 0 gate ids (spec §E; events/sim_gate.py writes one row per id under
+# GATE_NAME, config {"gate": <id>, ...}): G1's look-ahead, synthetic and
+# determinism checks, G2's R0-R2, G3's S0, S1, the calibration and S2-S3.
+REQUIRED_GATES: Final[tuple[str, ...]] = (
+    "g1-lookahead",
+    "g1-synthetic",
+    "g1-determinism",
+    "r0",
+    "r1",
+    "r2",
+    "s0",
+    "s1",
+    "s1-calib",
+    "s2",
+    "s3",
+)
 
 
 def judge_gates(rows: Sequence[tuple[str, int, str | None]]) -> Check:
-    """G: the latest row of every gate id passes, and every family has one.
+    """G: every required gate id has a row, and every gate id's latest row passes.
 
-    ``rows`` are (gate id, row id, verdict), any order.
+    ``rows`` are (gate id, row id, verdict), any order. An id outside
+    :data:`REQUIRED_GATES` gates nothing by being absent, but its latest row
+    must pass too (a failure recorded under the gate name is never ignored).
     """
     latest: dict[str, tuple[int, str | None]] = {}
     for gate, row_id, verdict_ in rows:
         if gate not in latest or row_id > latest[gate][0]:
             latest[gate] = (row_id, verdict_)
     failed = sorted(g for g, (_, v) in latest.items() if v != "pass")
-    missing = [f for f in REQUIRED_GATES if not any(gate_family(g) == f for g in latest)]
-    data = {"gates": {g: {"id": i, "verdict": v} for g, (i, v) in sorted(latest.items())}}
+    missing = [g for g in REQUIRED_GATES if g not in latest]
+    data = {
+        "required": list(REQUIRED_GATES),
+        "gates": {g: {"id": i, "verdict": v} for g, (i, v) in sorted(latest.items())},
+    }
     if failed or missing:
         parts = []
         if missing:
@@ -736,7 +759,9 @@ def judge_gates(rows: Sequence[tuple[str, int, str | None]]) -> Check:
         if failed:
             parts.append(f"latest row not passed: {', '.join(failed)}")
         return Check("G", False, "; ".join(parts), data)
-    return Check("G", True, f"{len(latest)} gate id(s), every latest row passed", data)
+    return Check(
+        "G", True, f"{len(REQUIRED_GATES)} required gate(s), every latest row passed", data
+    )
 
 
 async def gate_rows(engine: AsyncEngine) -> list[tuple[str, int, str | None]]:
@@ -758,6 +783,13 @@ D3_SPAN: Final = (date(2016, 10, 1), date(2024, 12, 31))
 D3_MAX: Final = 0.02
 D4_MIN: Final = 0.99
 D5_SAMPLE: Final = 200
+READ_SESSIONS_SPAN_DAYS: Final = 7  # read_sessions scans sessions this close in one range
+D6_SPAN: Final = (date(2016, 1, 1), date(2024, 12, 31))  # news published (NY days)
+D7_FROM: Final = date(2026, 10, 8)  # live rows from here on
+D7_SAMPLE: Final = 100
+D7_WINDOW: Final = timedelta(hours=1)  # the refetch asks for the article's hour around it
+D8_UNITS: Final = 20
+D8_YEAR: Final = 2024
 SCAN_CHUNK: Final = 1000
 SEED: Final = 20261010
 
@@ -772,25 +804,31 @@ async def check_calendar_d1(engine: AsyncEngine) -> Check:
 
 
 async def check_screens_d2(engine: AsyncEngine) -> Check:
-    """D2: the unmapped tickers were mapped and re-screened; each screen's residual <= 3%."""
+    """D2: the unmapped tickers were mapped and re-screened; each screen's residual <= 3%.
+
+    Every count is over the screens H1 reads (``D2_SPAN``): a nightly screen
+    after 2024 never reaches the trial, so it cannot block the registration.
+    """
     from halal_trader.compliance.runner import UNMAPPED
 
+    span = {"a": D2_SPAN[0], "b": D2_SPAN[1]}
     async with engine.connect() as conn:
         unmatched = await conn.scalar(
             text(
                 "SELECT count(DISTINCT r.symbol) FROM halal_screen_current r "
                 "LEFT JOIN ticker_ciks t ON t.symbol = r.symbol "
-                "WHERE r.sic_description = :u AND t.symbol IS NULL"
+                "WHERE r.sic_description = :u AND t.symbol IS NULL "
+                "AND r.as_of BETWEEN :a AND :b"
             ),
-            {"u": UNMAPPED},
+            {"u": UNMAPPED, **span},
         )
         pending = await conn.scalar(
             text(
                 "SELECT count(*) FROM halal_screen_current r "
                 "JOIN ticker_ciks t ON t.symbol = r.symbol AND t.status = 'mapped' "
-                "WHERE r.sic_description = :u"
+                "WHERE r.sic_description = :u AND r.as_of BETWEEN :a AND :b"
             ),
-            {"u": UNMAPPED},
+            {"u": UNMAPPED, **span},
         )
         rows = (
             await conn.execute(
@@ -802,7 +840,7 @@ async def check_screens_d2(engine: AsyncEngine) -> Check:
                     "FROM halal_screen_current r LEFT JOIN ticker_ciks t ON t.symbol = r.symbol "
                     "WHERE r.as_of BETWEEN :a AND :b GROUP BY r.as_of ORDER BY r.as_of"
                 ),
-                {"a": D2_SPAN[0], "b": D2_SPAN[1]},
+                span,
             )
         ).all()
     residual = {
@@ -946,8 +984,11 @@ async def check_readers_d5(
 ) -> Check:
     """D5: no reader returns a bar outside [open, effective close).
 
-    Every done unit through ``read_windows``; a seeded sample through ``read``
-    (``read_sessions``).
+    Every done unit through ``read_windows``. A seeded sample of
+    :data:`D5_SAMPLE` units through ``read`` (one session), and each sampled
+    unit with its symbol's other done sessions within a week of it through
+    ``read_sessions``, so its multi-session range scan (which reads the
+    nights and pre-markets between the sessions) is exercised too.
     """
     todo = sorted(u for u in set(units) if minutes.unit(*u) in done)
     outside = bars = 0
@@ -957,35 +998,65 @@ async def check_readers_d5(
             lo, hi = (int(t.timestamp()) for t in minutes.session_bounds(day))
             outside += int(np.count_nonzero((arrays.ts < lo) | (arrays.ts >= hi)))
             bars += len(arrays)
+    by_symbol: dict[str, list[date]] = defaultdict(list)
+    for symbol, day in todo:
+        by_symbol[symbol].append(day)
     sample = random.Random(SEED).sample(todo, min(D5_SAMPLE, len(todo)))
-    outside_read = 0
+    outside_read = outside_sessions = multi = 0
     for symbol, day in sample:
         lo_t, hi_t = minutes.session_bounds(day)
         outside_read += sum(
             1 for b in await minutes.read(engine, symbol, day) if not lo_t <= b.ts < hi_t
         )
+        near = [d for d in by_symbol[symbol] if abs((d - day).days) <= READ_SESSIONS_SPAN_DAYS]
+        multi += len(near) > 1
+        for d, got_bars in (await minutes.read_sessions(engine, symbol, near)).items():
+            lo_d, hi_d = minutes.session_bounds(d)
+            outside_sessions += sum(1 for b in got_bars if not lo_d <= b.ts < hi_d)
     data = {
         "units": len(todo),
         "bars": bars,
         "outside_read_windows": outside,
         "sampled_read": len(sample),
         "outside_read": outside_read,
+        "sampled_read_sessions_multi": multi,
+        "outside_read_sessions": outside_sessions,
     }
-    if outside or outside_read:
-        return Check("D5", False, f"{outside + outside_read} bar(s) outside the session", data)
-    return Check("D5", True, f"{len(todo)} units, {bars} bars, none outside the session", data)
+    total = outside + outside_read + outside_sessions
+    if total:
+        return Check("D5", False, f"{total} bar(s) outside the session", data)
+    return Check(
+        "D5",
+        True,
+        f"{len(todo)} units, {bars} bars, none outside the session "
+        f"({multi} multi-session read_sessions scans)",
+        data,
+    )
+
+
+def _ny_midnight(day: date) -> datetime:
+    return datetime.combine(day, datetime.min.time(), MARKET_TZ)
 
 
 async def check_facts_d6(engine: AsyncEngine) -> Check:
-    """D6: every news event read by the current extractor; the 2.02 parse rate on train."""
+    """D6: every news event H1 can read has the current extractor's facts; the 2.02 rate.
+
+    "Every" is the news published in ``D6_SPAN`` (NY days): news ingested
+    live after the nightly extraction never reaches the trial.
+    """
     first, end = window_span("train")
     async with engine.connect() as conn:
         unread = await conn.scalar(
             text(
-                "SELECT count(*) FROM events e WHERE e.kind = 'news' AND NOT EXISTS ("
+                "SELECT count(*) FROM events e WHERE e.kind = 'news' "
+                "AND e.published_at >= :a AND e.published_at < :b AND NOT EXISTS ("
                 "SELECT 1 FROM event_facts f WHERE f.event_id = e.id AND f.extractor = :x)"
             ),
-            {"x": EXTRACTOR},
+            {
+                "x": EXTRACTOR,
+                "a": _ny_midnight(D6_SPAN[0]),
+                "b": _ny_midnight(D6_SPAN[1] + timedelta(days=1)),
+            },
         )
         row = (
             await conn.execute(
@@ -1006,15 +1077,151 @@ async def check_facts_d6(engine: AsyncEngine) -> Check:
     n, unparsed = int(row.n), int(row.unparsed)
     data = {
         "extractor": EXTRACTOR,
+        "span": [D6_SPAN[0].isoformat(), D6_SPAN[1].isoformat()],
         "news_unread": int(unread or 0),
         "stories_202": n,
         "stories_202_unparsed": unparsed,
         "unparsed_share": unparsed / n if n else None,
     }
     rate = f"{unparsed}/{n} 2.02 stories left earnings_unparsed (train)"
+    span = f"{D6_SPAN[0]}..{D6_SPAN[1]}"
     if unread:
-        return Check("D6", False, f"{unread} news event(s) not read by {EXTRACTOR}; {rate}", data)
-    return Check("D6", True, f"every news event read by {EXTRACTOR}; {rate}", data)
+        return Check(
+            "D6", False, f"{unread} news event(s) of {span} not read by {EXTRACTOR}; {rate}", data
+        )
+    return Check("D6", True, f"every news event of {span} read by {EXTRACTOR}; {rate}", data)
+
+
+class MarketProbe(Protocol):
+    """What D7 and D8 ask of ``data.alpaca_market.AlpacaMarketData``."""
+
+    async def news(
+        self,
+        symbols: Iterable[str] | None,
+        *,
+        start: datetime,
+        end: datetime | None = ...,
+        max_pages: int = ...,
+    ) -> Sequence[Any]: ...
+
+    async def minute_bars_many(
+        self,
+        symbols: Iterable[str],
+        *,
+        start: datetime,
+        end: datetime,
+        feed: Literal["sip", "iex"] = ...,
+    ) -> Mapping[str, Sequence[Any]]: ...
+
+
+def _not_measured(check_id: str, why: str) -> Check:
+    return Check(check_id, True, f"not measured: {why} (reported, not gating)", {"measured": False})
+
+
+async def check_edits_d7(engine: AsyncEngine, market: MarketProbe | None) -> Check:
+    """D7 (reported, never gating): how often a live headline differs from Alpaca's copy now.
+
+    A seeded sample of :data:`D7_SAMPLE` live ``alpaca`` news rows seen from
+    :data:`D7_FROM` on is refetched by id (the row's symbol, an hour either
+    side of its publication time). ``edited``: the stored headline differs
+    from the refetched one (whitespace stripped); ``missing``: the id is not
+    returned. A probe that cannot run is recorded as not measured.
+    """
+    if market is None:
+        return _not_measured("D7", "no Alpaca client")
+    async with engine.connect() as conn:
+        rows = (
+            await conn.execute(
+                text(
+                    "SELECT id, symbol, source_id, published_at, payload->>'headline' AS headline "
+                    "FROM events WHERE kind = 'news' AND source = 'alpaca' AND seen_at >= :t "
+                    "ORDER BY id"
+                ),
+                {"t": _ny_midnight(D7_FROM)},
+            )
+        ).all()
+    sample = random.Random(SEED).sample(rows, min(D7_SAMPLE, len(rows)))
+    found = edited = missing = 0
+    examples: list[dict[str, Any]] = []
+    try:
+        for r in sample:
+            article_id = str(r.source_id).removeprefix("alpaca:")
+            got = await market.news(
+                [r.symbol],
+                start=r.published_at - D7_WINDOW,
+                end=r.published_at + D7_WINDOW,
+                max_pages=5,
+            )
+            match = next((a for a in got if str(a.id) == article_id), None)
+            if match is None:
+                missing += 1
+                continue
+            found += 1
+            if str(match.headline).strip() != str(r.headline or "").strip():
+                edited += 1
+                if len(examples) < 20:
+                    examples.append({"event": r.id, "stored": r.headline, "now": match.headline})
+    except Exception as exc:  # reported only: a probe that fails is recorded, never fatal
+        return _not_measured("D7", f"the refetch failed ({exc!s})")
+    data = {
+        "measured": True,
+        "since": D7_FROM.isoformat(),
+        "rows": len(rows),
+        "sampled": len(sample),
+        "found": found,
+        "missing": missing,
+        "edited": edited,
+        "edit_rate": edited / found if found else None,
+        "examples": examples,
+    }
+    detail = (
+        f"{edited}/{found} refetched live headlines edited, {missing} not found "
+        "(reported, not gating)"
+    )
+    return Check("D7", True, detail, data)
+
+
+async def probe_iex_d8(
+    engine: AsyncEngine,
+    market: MarketProbe | None,
+    units: Collection[tuple[str, date]] | None,
+) -> Check:
+    """D8 (recorded, never gating): IEX history for :data:`D8_UNITS` plan-H units of 2024.
+
+    A seeded sample of the plan's non-SPY units in :data:`D8_YEAR`, each
+    asked of Alpaca with ``feed=iex``; the bar count is recorded beside the
+    stored SIP count. IEX bars are never stored or fed to H1 (spec §G.13).
+    """
+    if market is None:
+        return _not_measured("D8", "no Alpaca client")
+    if units is None:
+        return _not_measured("D8", "plan H is not available")
+    pool = sorted(u for u in set(units) if u[0] != SPY and u[1].year == D8_YEAR)
+    sample = sorted(random.Random(SEED).sample(pool, min(D8_UNITS, len(pool))))
+    stored = await bar_counts(engine, sample)
+    probes: list[dict[str, Any]] = []
+    try:
+        for symbol, day in sample:
+            lo, hi = minutes.session_bounds(day)
+            got = await market.minute_bars_many([symbol], start=lo, end=hi, feed="iex")
+            probes.append(
+                {
+                    "unit": minutes.unit(symbol, day),
+                    "iex_bars": len(got.get(symbol, ())),
+                    "sip_bars": stored.get((symbol, day), 0),
+                }
+            )
+    except Exception as exc:  # recorded only: a probe that fails is recorded, never fatal
+        return _not_measured("D8", f"the IEX request failed ({exc!s})")
+    available = sum(1 for p in probes if p["iex_bars"])
+    data = {"measured": True, "year": D8_YEAR, "units": probes, "available": available}
+    return Check(
+        "D8",
+        True,
+        f"IEX history: {available}/{len(probes)} sampled {D8_YEAR} units have bars "
+        "(recorded, not gating)",
+        data,
+    )
 
 
 async def story_counts_d9(engine: AsyncEngine) -> Check:
@@ -1038,11 +1245,14 @@ async def preconditions(
     code: CodeState | None = None,
     plan: UnitPlanLike | None = None,
     scan: bool = True,
+    market: MarketProbe | None = None,
 ) -> Preconditions:
     """Every check the registration needs: C0 (code), G (gates), D1-D6, D9 (counts).
 
-    ``plan`` defaults to ``units.h1_plan(engine)``; ``scan=False`` leaves D5
-    out (a dry run only: the registration then refuses).
+    D7 and D8 are measured through ``market`` (Alpaca) and recorded, never
+    gating; without it they are recorded as not measured. ``plan`` defaults
+    to ``units.h1_plan(engine)``; ``scan=False`` leaves D5 out (a dry run
+    only: the registration then refuses).
     """
     checks: list[Check] = [check_code(code if code is not None else code_state())]
     checks.append(judge_gates(await gate_rows(engine)))
@@ -1058,13 +1268,16 @@ async def preconditions(
             plan = None
         else:
             plan = await h1_plan(engine)
+    units: set[tuple[str, date]] | None = None
     if plan is not None:
         done = await minutes.done_units(engine)
         checks.append(await check_units_d4(engine, plan, done))
+        units = {u for part in plan.parts.values() for u in part}
         if scan:
-            units = {u for part in plan.parts.values() for u in part}
             checks.append(await check_readers_d5(engine, units, done))
     checks.append(await check_facts_d6(engine))
+    checks.append(await check_edits_d7(engine, market))
+    checks.append(await probe_iex_d8(engine, market, units))
     checks.append(await story_counts_d9(engine))
     return Preconditions(tuple(checks))
 
@@ -2396,9 +2609,11 @@ async def implementability(
 __all__ = [
     "BENCHMARK_LABEL",
     "CELLS",
+    "CONTEXT_DEVIATIONS",
     "COUNT_RULE",
     "CRITERION",
     "NAME",
+    "REPORTED_CHECKS",
     "REQUIRED_CHECKS",
     "REQUIRED_GATES",
     "SENSITIVITIES",
@@ -2410,6 +2625,7 @@ __all__ = [
     "CodeState",
     "CountRule",
     "H1Locked",
+    "MarketProbe",
     "Preconditions",
     "Registration",
     "RegistrationRefused",
@@ -2421,13 +2637,13 @@ __all__ = [
     "build_prereg",
     "cell_eligible",
     "check_code",
+    "check_edits_d7",
     "clean",
     "code_state",
     "count_outcomes",
     "decide",
     "existing_registration",
     "file_shas",
-    "gate_family",
     "implementability",
     "judge_gates",
     "judge_window",
@@ -2435,6 +2651,7 @@ __all__ = [
     "load_window",
     "preconditions",
     "prereg",
+    "probe_iex_d8",
     "register",
     "registration",
     "relag",
