@@ -115,6 +115,17 @@ SPY: Final = "SPY"
 CUTOFF_TIMER: Final = "bounce.cutoff"
 NO_PRE_EVENT: Final = "no_pre_event"
 NO_AT_NEWS: Final = "no_at_news"
+# The rule's words in the pre-registration's ``playbook`` block (spec §G.14).
+RECLAIM: Final = "close > AVWAP from anchor"
+STOP: Final = "bar close < L*"
+ABORT: Final = "structural item"
+PRIORITY: Final = ("abort", "stop", "target")
+
+
+def _minutes(d: timedelta) -> int | float:
+    """A span in minutes: an int when whole (the pre-registration writes ``20``, not ``20.0``)."""
+    whole, rest = divmod(d, timedelta(minutes=1))
+    return whole if not rest else d.total_seconds() / 60.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,6 +136,10 @@ class BounceParams:
     types (no E5, no veto expiry). The entry window must lie inside the
     simulator's admission window and the flatten must be the simulator's:
     both are enforced there (``rules.admit_buy``, ``sim``), not here.
+
+    :meth:`as_config` is the pre-registration's ``playbook`` block;
+    :meth:`run_config` holds what a run sets beside it (the hold, which the
+    cell names, and the atlas's family switch).
     """
 
     k_sigma: float = 2.0
@@ -156,22 +171,33 @@ class BounceParams:
         return "ID" if self.hold_sessions == 1 else f"MD{self.hold_sessions}"
 
     def as_config(self) -> dict[str, object]:
-        """The constants under the pre-registration's ``playbook`` keys (minutes for spans)."""
+        """The pre-registration's ``playbook`` block (spec §G.14), key for key and type for type.
 
-        def minutes(d: timedelta) -> float:
-            return d.total_seconds() / 60.0
-
+        Spans are in whole minutes as ints, so ``config_hash`` of a PREREG
+        built from it equals the spec's literal one.
+        """
         return {
             "k_sigma": self.k_sigma,
             "floor": self.floor,
-            "quiet_min": minutes(self.quiet),
-            "entry_start_min": minutes(self.entry_start_after_open),
-            "entry_cutoff_min": minutes(self.entry_cutoff_before_close),
+            "quiet_min": _minutes(self.quiet),
+            "entry_start_min": _minutes(self.entry_start_after_open),
+            "entry_cutoff_min": _minutes(self.entry_cutoff_before_close),
             "max_retrace_at_entry": self.max_retrace_at_entry,
             "target_retrace": self.target_retrace,
             "market_break": self.market_break,
-            "flatten_min": minutes(self.flatten_before_close),
+            "flatten_min": _minutes(self.flatten_before_close),
+            "reclaim": RECLAIM,
+            "stop": STOP,
+            "abort": ABORT,
+            "priority": list(PRIORITY),
+            "compliance_exit": True,
+        }
+
+    def run_config(self) -> dict[str, object]:
+        """What a run sets beside :meth:`as_config`: the hold and the family check."""
+        return {
             "hold_sessions": self.hold_sessions,
+            "variant": self.variant,
             "require_family": self.require_family,
         }
 
@@ -598,12 +624,16 @@ class BounceFactory:
 
 
 __all__ = [
+    "ABORT",
     "CUTOFF_TIMER",
     "FAMILY",
     "LIVE",
     "NAME",
     "NO_AT_NEWS",
     "NO_PRE_EVENT",
+    "PRIORITY",
+    "RECLAIM",
+    "STOP",
     "VERSION",
     "BounceFactory",
     "BounceParams",
