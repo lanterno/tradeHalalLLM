@@ -231,10 +231,14 @@ logs-snapshot:
 #   eps_facts, annual_fundamentals, etf_holdings         -> `events backfill eps`,
 #     `data fundamentals`, `compliance etf-history`
 #   news_stories                                         -> `events stories build`
+#   hb_playbook_run, hb_playbook_story, hb_playbook_trade -> simulations (mode sim)
+#     are recomputed from code and data
 # event_scores goes with events (it references them). What cannot be rebuilt --
 # the live reactor's headlines with the time it saw them, and every score
 # (the post-cutoff LLM evidence) -- is exported to live_events.jsonl.gz, keyed by
-# (source, source_id, symbol), which a rebuilt event store shares.
+# (source, source_id, symbol), which a rebuilt event store shares. The playbook
+# runs that are not simulations (shadow, paper, live) are exported to
+# playbook_runs.jsonl.gz, one run per line with its stories and trades.
 # Every dump is checked with pg_restore --list; on the 1st of each month it is
 # also fully restored into a scratch database (restore-drill). Outcomes land in
 # the heartbeats table (backup.nightly, backup.restore_drill) for the digest.
@@ -245,7 +249,7 @@ backup dest:
     set -euo pipefail
     pg() { docker exec halal-trader-pg psql -U trader -d halal_trader -tAq "$@"; }
     excluded=""
-    for t in daily_bars market_assets monthly_bars minute_bars events event_facts event_labels event_scores eps_facts annual_fundamentals etf_holdings news_stories; do
+    for t in daily_bars market_assets monthly_bars minute_bars events event_facts event_labels event_scores eps_facts annual_fundamentals etf_holdings news_stories hb_playbook_run hb_playbook_story hb_playbook_trade; do
         excluded="$excluded --exclude-table-data=$t"
     done
     docker exec halal-trader-pg pg_dump -U trader -d halal_trader -Fc $excluded -f /tmp/backup.dump
@@ -260,10 +264,24 @@ backup dest:
              FROM events e LEFT JOIN event_scores s ON s.event_id = e.id
              WHERE e.payload->>'backfill' IS NULL OR s.id IS NOT NULL
              GROUP BY e.id) t" | gzip > "{{dest}}/live_events.jsonl.gz"
+    # The shadow engine creates the playbook tables itself: a database it has
+    # not run against yet has none, and the export is then empty. jsonb_agg,
+    # not json_agg: json_agg puts a line break between the rows it collects.
+    runs="SELECT row_to_json(t) FROM (
+            SELECT r.*,
+                   coalesce((SELECT jsonb_agg(s ORDER BY s.story_id) FROM hb_playbook_story s
+                             WHERE s.run_id = r.run_id), '[]') AS stories,
+                   coalesce((SELECT jsonb_agg(x ORDER BY x.story_id) FROM hb_playbook_trade x
+                             WHERE x.run_id = r.run_id), '[]') AS trades
+            FROM hb_playbook_run r WHERE r.mode <> 'sim' ORDER BY r.created_at) t"
+    if [ "$(pg -c "SELECT to_regclass('hb_playbook_run') IS NOT NULL")" = t ]; then
+        pg -c "$runs"
+    fi | gzip > "{{dest}}/playbook_runs.jsonl.gz"
     size=$(du -m "{{dest}}/halal_trader.dump" | cut -f1)
     live=$(du -k "{{dest}}/live_events.jsonl.gz" | cut -f1)
-    pg -c "INSERT INTO heartbeats (component, beat_at, detail) VALUES ('backup.nightly', now(), '{\"dump_mb\": $size, \"live_events_kb\": $live}') ON CONFLICT (component) DO UPDATE SET beat_at = EXCLUDED.beat_at, detail = EXCLUDED.detail"
-    echo "halal_trader.dump: ${size} MB, live_events.jsonl.gz: ${live} kB"
+    playbooks=$(du -k "{{dest}}/playbook_runs.jsonl.gz" | cut -f1)
+    pg -c "INSERT INTO heartbeats (component, beat_at, detail) VALUES ('backup.nightly', now(), '{\"dump_mb\": $size, \"live_events_kb\": $live, \"playbook_runs_kb\": $playbooks}') ON CONFLICT (component) DO UPDATE SET beat_at = EXCLUDED.beat_at, detail = EXCLUDED.detail"
+    echo "halal_trader.dump: ${size} MB, live_events.jsonl.gz: ${live} kB, playbook_runs.jsonl.gz: ${playbooks} kB"
     if [ "$(date -u +%d)" = "01" ]; then
         just restore-drill "{{dest}}/halal_trader.dump"
         pg -c "INSERT INTO heartbeats (component, beat_at, detail) VALUES ('backup.restore_drill', now(), '{\"ok\": true}') ON CONFLICT (component) DO UPDATE SET beat_at = EXCLUDED.beat_at, detail = EXCLUDED.detail"

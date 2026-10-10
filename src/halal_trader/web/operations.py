@@ -51,8 +51,10 @@ PROCESSES: tuple[tuple[str, str, str], ...] = (
 # The host's backup timer (infra/server/systemd/halabot-backup.timer).
 BACKUP_AT_UTC = time(7, 0)
 # Tables `just backup` dumps without their rows: market data a run re-fetches,
-# and what is derived from it (the justfile's backup recipe;
-# tests/test_operations.py keeps the two equal).
+# what is derived from it, and the playbook simulations (the justfile's backup
+# recipe; tests/test_operations.py keeps the two equal). Of these, the live
+# events with every score, and the playbook runs that are not simulations,
+# are exported beside the dump instead.
 NOT_DUMPED = frozenset(
     {
         "daily_bars",
@@ -67,6 +69,9 @@ NOT_DUMPED = frozenset(
         "annual_fundamentals",
         "etf_holdings",
         "news_stories",
+        "hb_playbook_run",
+        "hb_playbook_story",
+        "hb_playbook_trade",
     }
 )
 BIGGEST = 8
