@@ -678,6 +678,7 @@ def atlas_cmd(start: Any, end: Any, workers: int) -> None:
     Writes data/research/news_atlas-stories-v1.json and prints the tables.
     """
     from halal_trader.events.atlas import AtlasLocked, check_range, tables
+    from halal_trader.events.stories import StoriesNotReady
 
     try:
         check_range(start.date(), end.date())
@@ -692,7 +693,7 @@ def atlas_cmd(start: Any, end: Any, workers: int) -> None:
 
     try:
         result, path = run_db(_run)
-    except AtlasLocked as e:
+    except (AtlasLocked, StoriesNotReady) as e:
         fail(str(e))
     for line in tables(result.cells):
         console.print(line, markup=False, highlight=False)

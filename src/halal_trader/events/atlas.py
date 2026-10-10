@@ -10,8 +10,13 @@ registered trial, fitted on train and tested once on validation.
 **When it may run** (:func:`h1_closed`, checked before anything else is
 read). The newest ``research.news.h1`` preregistration must have, under its
 config hash, a ``verdict`` row or a ``stage-a`` row recording
-``fail: insufficient events``; otherwise :class:`AtlasLocked`. Minute bars
-are read through the simulator's loader under that registration
+``fail: insufficient events``; otherwise :class:`AtlasLocked`. The story
+pins in force (``stories.pins``) must be the ones that registration
+recorded: the atlas describes the stories H1 ran on, so a changed pin is
+:class:`AtlasLocked` too, naming the pins (rebuild the stories as
+registered, or register a new trial). A range without any persisted story
+is ``stories.StoriesNotReady`` (build them first), not an empty atlas.
+Minute bars are read through the simulator's loader under that registration
 (``WindowUnlock``), window ``train``, ending :data:`DATA_END`: no minute or
 daily bar after 2021-12-31 is read. The last session is :data:`ATLAS_END`,
 2021-12-23, the last whose five-session continuation ends by 2021-12-31.
@@ -239,6 +244,7 @@ class Registration:
     config_hash: str
     closed_by: int
     closing: str  # "<kind>: <verdict>"
+    pins: Mapping[str, str] = field(default_factory=dict)  # the story pins it recorded
 
 
 @dataclass(frozen=True, slots=True)
@@ -457,7 +463,7 @@ async def h1_closed(engine: AsyncEngine) -> Registration:
         reg = (
             await conn.execute(
                 text(
-                    "SELECT id, config_hash FROM quant_trials "
+                    "SELECT id, config_hash, config FROM quant_trials "
                     "WHERE kind = 'preregistration' AND name = :n ORDER BY id DESC LIMIT 1"
                 ),
                 {"n": h1.NAME},
@@ -480,9 +486,19 @@ async def h1_closed(engine: AsyncEngine) -> Registration:
             f"{h1.NAME} registration {reg.id} has no verdict and no Stage-A "
             f"'{h1.STAGE_A_FAIL}' row yet: the atlas runs after H1's verdict"
         )
+    pins = dict((reg.config or {}).get("pins") or {})
     return Registration(
-        int(reg.id), str(reg.config_hash), int(closing.id), f"{closing.kind}: {closing.verdict}"
+        int(reg.id),
+        str(reg.config_hash),
+        int(closing.id),
+        f"{closing.kind}: {closing.verdict}",
+        {str(k): str(v) for k, v in sorted(pins.items())},
     )
+
+
+def changed_pins(registered: Mapping[str, str], current: Mapping[str, str]) -> list[str]:
+    """The pins whose value differs between H1's registration and the stories now."""
+    return sorted(k for k in set(registered) | set(current) if registered.get(k) != current.get(k))
 
 
 def check_range(start: date, end: date) -> None:
@@ -1356,7 +1372,9 @@ async def run_atlas(
 ) -> Atlas:
     """Every unit's row and every table's cells, with what the run read (``meta``).
 
-    Refuses (:class:`AtlasLocked`) before H1's verdict, and (``ValueError``,
+    Refuses (:class:`AtlasLocked`) before H1's verdict or when the story pins
+    are not the registration's, (``StoriesNotReady``) a range without a
+    persisted story, and (``ValueError``,
     before anything is read) a range outside [:data:`ATLAS_START`,
     :data:`ATLAS_END`] or an ``end`` that is not a session. Symbols go in
     batches of ``batch_symbols``: stories rebuilt, paths measured, then the
@@ -1364,13 +1382,26 @@ async def run_atlas(
     """
     check_range(start, end)
     reg = await h1_closed(engine)
+    pins = await builder.pins(engine)
+    changed = changed_pins(reg.pins, pins)
+    if changed:
+        raise AtlasLocked(
+            f"the story pins changed since {h1.NAME} registration {reg.id}: "
+            f"{', '.join(changed)}; the atlas describes the stories H1 ran on "
+            "(rebuild them as registered, or register a new trial)"
+        )
     unlock = WindowUnlock(prereg_id=reg.id, config_hash=reg.config_hash)
     counts: Counter[str] = Counter()
     chosen = await candidates(engine, start, end, counts)
+    if not counts["stories"]:
+        raise builder.StoriesNotReady(
+            f"no {builder.BUILDER_VERSION} stories with S in {start}..{end}: "
+            "run `halal-trader events stories build` first"
+        )
     symbols = sorted({p.symbol for p in chosen.values()})
     meta: dict[str, Any] = {
         "builder_version": builder.BUILDER_VERSION,
-        "pins": await builder.pins(engine),
+        "pins": pins,
         "start": start,
         "end": end,
         "data_end": DATA_END,
@@ -1472,6 +1503,7 @@ __all__ = [
     "bucket",
     "build_atlas",
     "candidates",
+    "changed_pins",
     "cell_stats",
     "cells_of",
     "check_range",
