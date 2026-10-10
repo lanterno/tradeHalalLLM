@@ -17,6 +17,10 @@ A pass means: after allowing for how many things were tried, the
 probability that the strategy's true active Sharpe beats the best a
 no-skill search would have found is at least 95%. Only point-in-time runs
 are recorded; a backtest with look-ahead in it is not evidence.
+
+A run measured against another benchmark series (the news trials' SPY legs,
+matched to the book's exposure) says so with ``benchmark_label``: the
+row's window and criterion name the benchmark it was actually judged by.
 """
 
 from __future__ import annotations
@@ -44,7 +48,14 @@ FloatArray = NDArray[np.float64]
 PREFIX = "research."
 BENCHMARK = "SPUS"
 MIN_DSR = 0.95
-CRITERION = f"DSR of active returns vs {BENCHMARK} >= {MIN_DSR} across all research trials"
+
+
+def criterion_for(benchmark_label: str) -> str:
+    """The pass criterion of a run judged against ``benchmark_label``."""
+    return f"DSR of active returns vs {benchmark_label} >= {MIN_DSR} across all research trials"
+
+
+CRITERION = criterion_for(BENCHMARK)
 _TRADING_DAYS = 252
 
 
@@ -88,8 +99,13 @@ async def record_backtest(
     returns: FloatArray,
     benchmark: FloatArray,
     extra: dict[str, Any] | None = None,
+    benchmark_label: str = BENCHMARK,
 ) -> Assessment | None:
-    """Record one run and judge it; None when the active series is degenerate."""
+    """Record one run and judge it; None when the active series is degenerate.
+
+    ``benchmark_label`` names the series ``benchmark`` holds, in the row's
+    window (``"<first>..<last> vs <label>"``) and criterion.
+    """
     active = np.asarray(returns, dtype=float) - np.asarray(benchmark, dtype=float)
     moments = _sharpe_and_moments(active)
     if moments is None:
@@ -130,9 +146,9 @@ async def record_backtest(
         name=PREFIX + strategy,
         kind="backtest",
         config=config,
-        window=f"{days[0]}..{days[-1]} vs {BENCHMARK}",
+        window=f"{days[0]}..{days[-1]} vs {benchmark_label}",
         metrics=metrics,
-        criterion=CRITERION,
+        criterion=criterion_for(benchmark_label),
         verdict=verdict,
     )
     return Assessment(
