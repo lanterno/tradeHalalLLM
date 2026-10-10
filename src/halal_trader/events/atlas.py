@@ -901,6 +901,21 @@ class _Persisted:
 _LABELS: Final = ("type_detect", "type_close", "family_ever", "detect_at", "nsn_at", "at_news")
 
 
+# The persisted labels and whether an item's type is outside TRAIN_SKIP_TYPES
+# (as units.read_stories asks it): the items themselves are not read.
+_CANDIDATES_SQL: Final = text(
+    """
+    SELECT s.story_id, s.symbol, s.session, s.type_detect, s.type_close, s.family_ever,
+           s.detect_at, s.nsn_at, s.at_news,
+           EXISTS (SELECT 1 FROM jsonb_array_elements(s.items) x
+                   WHERE NOT (x->>'itype' = ANY(CAST(:skip AS text[])))) AS substantive
+    FROM news_stories s
+    WHERE s.builder_version = :v AND s.session >= :a AND s.session <= :b
+    ORDER BY s.symbol, s.session
+    """
+)
+
+
 async def candidates(
     engine: AsyncEngine, start: date, end: date, counts: Counter[str]
 ) -> dict[str, _Persisted]:
@@ -912,17 +927,17 @@ async def candidates(
         async with engine.connect() as conn:
             rows = (
                 await conn.execute(
-                    text(
-                        "SELECT story_id, symbol, session, type_detect, type_close, family_ever, "
-                        "detect_at, nsn_at, at_news, items FROM news_stories "
-                        "WHERE builder_version = :v AND session >= :a AND session <= :b "
-                        "ORDER BY symbol, session"
-                    ),
-                    {"v": builder.BUILDER_VERSION, "a": lo, "b": hi},
+                    _CANDIDATES_SQL,
+                    {
+                        "v": builder.BUILDER_VERSION,
+                        "a": lo,
+                        "b": hi,
+                        "skip": sorted(TRAIN_SKIP_TYPES),
+                    },
                 )
             ).all()
         counts["stories"] += len(rows)
-        kept = [r for r in rows if substantive(i.get("itype", "") for i in r.items or ())]
+        kept = [r for r in rows if r.substantive]
         counts["substantive"] += len(kept)
         if not kept:
             continue
