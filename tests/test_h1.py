@@ -147,13 +147,11 @@ def test_the_prereg_cites_the_contexts_deviations_item_for_item() -> None:
     from halal_trader.events import context
 
     doc = context.__doc__ or ""
-    for item in h1.CONTEXT_DEVIATIONS:
-        assert _squash(item) in _squash(doc), item
-    head = "pre-registration to cite:"
-    assert head in _squash(doc)
+    assert "pre-registration to cite:" in _squash(doc)
     section = doc[doc.index("pre-registration") :]
     bullets = [_squash(b) for b in re.split(r"\n\s*\* ", section)[1:]]
-    assert bullets == [_squash(i) for i in h1.CONTEXT_DEVIATIONS]  # none added, none dropped
+    assert len(bullets) >= 4
+    assert [_squash(i) for i in h1.CONTEXT_DEVIATIONS] == bullets  # none added, none dropped
     assert build_prereg(PINS)["universe"]["context_deviations"] == list(h1.CONTEXT_DEVIATIONS)
 
 
