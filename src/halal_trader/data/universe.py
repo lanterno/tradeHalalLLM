@@ -82,6 +82,7 @@ async def universe_at(
     twelve months before ``as_of``'s month (known at ``as_of``).
 
     A name needs six of those months, and a mean close of ``min_price``.
+    Equal dollar volumes rank by symbol, so every read gives the same order.
     """
     first_of_month = as_of.replace(day=1)
     async with engine.connect() as conn:
@@ -92,7 +93,7 @@ async def universe_at(
                 WHERE month < :m AND month >= :since
                 GROUP BY symbol
                 HAVING count(*) >= :min_months AND avg(close) >= :min_price
-                ORDER BY avg(coalesce(vwap, close) * volume) DESC
+                ORDER BY avg(coalesce(vwap, close) * volume) DESC, symbol
                 LIMIT :n
                 """
             ),
