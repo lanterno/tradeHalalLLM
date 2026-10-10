@@ -44,7 +44,8 @@ deadline session.
 
 **Determinism.** Symbols are independent, so they are split over workers by
 ``crc32(symbol) % workers`` and the records are identical for any worker
-count (``records.outcomes_sha256``).
+count (``records.outcomes_sha256``). :func:`run` keeps no module state:
+two runs may share an event loop.
 """
 
 from __future__ import annotations
@@ -54,6 +55,7 @@ import bisect
 import logging
 import math
 import multiprocessing
+import sys
 import warnings
 import zlib
 from collections import Counter
@@ -61,7 +63,7 @@ from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime
-from typing import Any, Literal
+from typing import Any, Final, Literal
 
 import numpy as np
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -118,7 +120,13 @@ from halal_trader.data.minutes import BarArrays
 
 logger = logging.getLogger(__name__)
 
+# Structured progress events (``extra={"event": ...}``, the core/events.py pattern).
+SIM_RUN_START: Final[str] = "playbooks.sim.run.start"
+SIM_RUN_BATCH: Final[str] = "playbooks.sim.run.batch"
+SIM_RUN_DONE: Final[str] = "playbooks.sim.run.done"
+
 StopAt = Literal["entry", "end"]
+Parallel = bool | Literal["fork", "spawn"] | None
 MakePlaybook = Callable[[StoryView], Playbook]
 
 # Heap payload kinds.
@@ -1213,7 +1221,12 @@ class RunSummary:
 
 @dataclass(slots=True)
 class _Shared:
-    """What every worker needs and inherits once (fork), never pickled per task."""
+    """What every worker needs for a whole run, passed explicitly (never module state).
+
+    The serial path hands it to :func:`_work`; a process pool gives it to each
+    worker once, through the pool's initializer (inherited under fork,
+    unpickled once per worker under spawn), never per task.
+    """
 
     by_id: dict[str, StoryView]
     carriers: dict[str, list[StoryView]]
@@ -1226,8 +1239,6 @@ class _Shared:
     run_id: str
 
 
-_SHARED: _Shared | None = None
-
 _Job = tuple[
     list[tuple[str, list[str]]],  # (symbol, story ids) in order
     dict[str, PathData | PathSkip],
@@ -1236,9 +1247,7 @@ _Job = tuple[
 ]
 
 
-def _work(job: _Job) -> tuple[list[StoryOutcome], dict[str, SymbolState]]:
-    shared = _SHARED
-    assert shared is not None, "worker started without the shared run state"
+def _work(shared: _Shared, job: _Job) -> tuple[list[StoryOutcome], dict[str, SymbolState]]:
     symbols, paths, spy, states = job
     out: list[StoryOutcome] = []
     for symbol, ids in symbols:
@@ -1260,24 +1269,74 @@ def _work(job: _Job) -> tuple[list[StoryOutcome], dict[str, SymbolState]]:
     return out, states
 
 
+# A pool worker's run state: set once by its initializer, read by its tasks. Each run
+# has its own pool, so a worker serves one run; the parent process never sets it.
+_WORKER_STATE: _Shared | None = None
+
+
+def _init_worker(shared: _Shared) -> None:
+    global _WORKER_STATE
+    _WORKER_STATE = shared
+
+
+def _work_in_worker(job: _Job) -> tuple[list[StoryOutcome], dict[str, SymbolState]]:
+    shared = _WORKER_STATE
+    if shared is None:
+        raise RuntimeError("a pool worker without its run's state (its initializer did not run)")
+    return _work(shared, job)
+
+
 def _noop() -> None:
     return None
 
 
-def _pool(workers: int) -> ProcessPoolExecutor | None:
-    """A pool of forked workers that inherit ``_SHARED``, or None where fork is unavailable.
+def pool_method(parallel: Parallel, workers: int) -> Literal["fork", "spawn"] | None:
+    """The start method of a run's process pool, or None to simulate in this process.
 
-    Fork (not spawn or forkserver) is what lets the workers share the run's
-    context, stories and playbook factory without pickling them (a factory is
-    usually a closure). All workers are forked at once, by the first submit,
-    before the pool's own manager thread starts. The parent may still have
-    idle threads (asyncio's resolver, the engine's pool), which is what
-    Python's fork warning is about; the workers never touch them or the
-    database: they only simulate and return records.
+    * ``None`` (the default): a fork pool when ``workers > 1`` on Linux, and
+      **serial on macOS**: forking a process that already runs asyncio and
+      the database driver's threads is unsafe there (Python says so), and
+      the fleet runs on a Mac until the server move;
+    * ``False``: serial. ``True``: a pool by the platform's safe method
+      (fork on Linux, spawn on macOS);
+    * ``"fork"`` or ``"spawn"``: that method; fork is refused on macOS.
+
+    Under spawn each worker unpickles the run's state once, so the factory,
+    the stories and the context must pickle: a module-level factory, not a
+    closure. The records are identical whichever is used.
     """
-    if workers <= 1 or "fork" not in multiprocessing.get_all_start_methods():
+    if parallel is False or workers <= 1:
         return None
-    pool = ProcessPoolExecutor(max_workers=workers, mp_context=multiprocessing.get_context("fork"))
+    darwin = sys.platform == "darwin"
+    methods = multiprocessing.get_all_start_methods()
+    if parallel is None:
+        return "fork" if not darwin and "fork" in methods else None
+    if parallel is True:
+        return "fork" if not darwin and "fork" in methods else "spawn"
+    if parallel == "fork" and darwin:
+        raise ValueError(
+            "a fork pool is unsafe on macOS: use parallel='spawn' (a picklable factory)"
+        )
+    if parallel not in methods:
+        raise ValueError(f"process start method {parallel!r} is not available here")
+    return parallel
+
+
+def _pool(workers: int, method: Literal["fork", "spawn"], shared: _Shared) -> ProcessPoolExecutor:
+    """A pool whose workers each hold ``shared`` from their start (``_init_worker``).
+
+    Under fork all workers start at once, by the first submit, before the
+    pool's own manager thread exists. The parent may still have idle threads
+    (asyncio's resolver, the engine's pool), which is what Python's fork
+    warning is about; the workers never touch them or the database: they
+    only simulate and return records.
+    """
+    pool = ProcessPoolExecutor(
+        max_workers=workers,
+        mp_context=multiprocessing.get_context(method),
+        initializer=_init_worker,
+        initargs=(shared,),
+    )
     with warnings.catch_warnings():
         warnings.filterwarnings(
             "ignore", message=r".*fork\(\) may lead to deadlocks", category=DeprecationWarning
@@ -1302,24 +1361,36 @@ async def run(
     assume_full_hold: bool = False,
     keep_transitions: bool = False,
     batch_paths: int = 250,
-    parallel: bool | None = None,
+    parallel: Parallel = None,
 ) -> RunSummary:
     """Load paths behind the window guard, simulate every started story, write the outcomes.
 
     ``stories`` are every story of the symbols concerned (the ones that never
     start still bring their news to a live playbook). ``make_playbook`` gives
     the paths' length (``path_sessions``) and the playbook's name and version
-    for the run row, and builds one playbook per story that runs. Batches are
-    simulated in session order; inside a batch the symbols are split over
-    ``workers`` processes (``parallel``; default: when ``workers > 1`` and
-    ``fork`` exists), and each symbol's blocking state carries from batch to
-    batch.
+    for the run row, and builds one playbook per story that runs.
+
+    **Nothing is written until the run may proceed:** the unlock is verified
+    against the ledger, the calendar is checked, and every day of every
+    requested path is checked against the window guard (a path crossing
+    ``window_end`` raises ``loader.WindowLocked`` here), all before
+    ``sink.begin``.
+
+    Batches are simulated in session order; inside a batch the symbols are
+    split over ``workers`` (:func:`pool_method` chooses processes or this
+    one), and each symbol's blocking state carries from batch to batch. The
+    run keeps no module state, so several runs may share an event loop.
     """
-    global _SHARED
+    method = pool_method(parallel, workers)
     by_symbol = _group(stories)
     started = [s for s in stories if start_time(s) is not None]
     n_sessions = make_playbook.path_sessions
     requests = [PathRequest(s.story_id, s.symbol, s.session, n_sessions) for s in started]
+    loader = MinuteBarLoader(
+        engine, window=window, window_end=window_end, unlock=unlock, batch_paths=batch_paths
+    )
+    await loader.prepare()
+    loader.check(requests)
     run_id = await sink.begin(
         RunInfo(
             window=str(window),
@@ -1331,8 +1402,19 @@ async def run(
             sim=cfg.as_config(),
         )
     )
-    loader = MinuteBarLoader(
-        engine, window=window, window_end=window_end, unlock=unlock, batch_paths=batch_paths
+    logger.info(
+        "sim run %s: %d stories, %d paths",
+        run_id,
+        len(stories),
+        len(requests),
+        extra={
+            "event": SIM_RUN_START,
+            "run_id": run_id,
+            "window": str(window),
+            "stories": len(stories),
+            "paths": len(requests),
+            "pool": method or "serial",
+        },
     )
     shared = _Shared(
         by_id={s.story_id: s for s in stories},
@@ -1345,14 +1427,12 @@ async def run(
         keep_transitions=keep_transitions,
         run_id=run_id,
     )
-    _SHARED = shared
-    use_pool = parallel if parallel is not None else workers > 1
-    pool = _pool(workers) if use_pool else None
+    pool = _pool(workers, method, shared) if method is not None else None
     spy_all = await loader.spy()
     states: dict[str, SymbolState] = {}
     terminal: Counter[str] = Counter()
     skips: Counter[str] = Counter()
-    n_out = entries = trades = 0
+    n_out = entries = trades = n_batches = 0
     loop = asyncio.get_running_loop()
     try:
         async for batch in loader.batches(requests, context):
@@ -1383,10 +1463,10 @@ async def run(
                 )
             if pool is not None:
                 results = await asyncio.gather(
-                    *(loop.run_in_executor(pool, _work, j) for j in jobs)
+                    *(loop.run_in_executor(pool, _work_in_worker, j) for j in jobs)
                 )
             else:
-                results = [_work(j) for j in jobs]
+                results = [_work(shared, j) for j in jobs]
             outcomes: list[StoryOutcome] = []
             for out, new_states in results:
                 outcomes += out
@@ -1400,10 +1480,23 @@ async def run(
                 trades += o.trade is not None
             n_out += len(outcomes)
             await sink.write(outcomes)
+            n_batches += 1
+            logger.info(
+                "sim run %s: batch %d, %d outcomes so far",
+                run_id,
+                n_batches,
+                n_out,
+                extra={
+                    "event": SIM_RUN_BATCH,
+                    "run_id": run_id,
+                    "batch": n_batches,
+                    "outcomes": n_out,
+                    "trades": trades,
+                },
+            )
     finally:
         if pool is not None:
             pool.shutdown(cancel_futures=True)
-        _SHARED = None
     summary = RunSummary(
         run_id=run_id,
         stories=len(stories),
@@ -1416,17 +1509,35 @@ async def run(
         loader=dict(loader.counts),
     )
     await sink.finish(summary.as_dict())
+    logger.info(
+        "sim run %s: %d outcomes, %d trades",
+        run_id,
+        n_out,
+        trades,
+        extra={
+            "event": SIM_RUN_DONE,
+            "run_id": run_id,
+            "outcomes": n_out,
+            "entries": entries,
+            "trades": trades,
+        },
+    )
     return summary
 
 
 __all__ = [
+    "SIM_RUN_BATCH",
+    "SIM_RUN_DONE",
+    "SIM_RUN_START",
     "MakePlaybook",
+    "Parallel",
     "PitStory",
     "RunSummary",
     "SimConfig",
     "StopAt",
     "SymbolState",
     "news_items",
+    "pool_method",
     "run",
     "simulate_many",
     "simulate_symbol",
