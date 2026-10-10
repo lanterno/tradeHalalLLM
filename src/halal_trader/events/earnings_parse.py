@@ -245,10 +245,10 @@ _CLOSING_FLAG = re.compile(
 )
 # What a segment flagging its whole headline names: the estimates or what is
 # compared with them ("Estimates May Not Compare", "BZ NOTE: Forecast Likely
-# Does Not Compare"), never only the results ("Results Not Comparable To Prior
-# Year" compares with last year).
+# Does Not Compare", "Outlook May Not Compare"), never only the results
+# ("Results Not Comparable To Prior Year" compares with last year).
 _FLAG_SUBJECT = re.compile(
-    r"\b(?:Estimates?|Est\b|Consensus|Forecasts?|Guidance)|\bBZ\s+NOTE\b", re.I
+    r"\b(?:Estimates?|Est\b|Consensus|Forecasts?|Guidance|Outlook)|\bBZ\s+NOTE\b", re.I
 )
 # A figure's K/M/B suffix.
 SCALE: Final[Mapping[str, float]] = MappingProxyType({"K": 1e3, "M": 1e6, "B": 1e9})
