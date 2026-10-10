@@ -36,14 +36,18 @@ it, every comparison strict:
 * **Descriptives** (ATR, dollar volume, momentum, levels) use sessions up to
   S−1, and are NaN where their bars are missing; they gate nothing. The 20-
   and 252-session levels are NaN unless the calendar holds that many
-  sessions through S−1 and the name has a bar on or before the window's
-  first session: a level never silently covers fewer sessions.
+  sessions through S−1 and the name's first raw daily bar is on or before
+  the window's first session: a level never silently covers fewer
+  sessions. That first bar is read over the whole table, not the loaded
+  range, so where a load starts cannot move a level; it is used only as
+  "on or before a day before S", which is known at S.
   **Facts** are the earnings facts published strictly before ``at``.
 
 Loading reads each source once per run: the screens in one query, the
 universe once per month, daily bars (raw and all-adjusted) streamed in
-batches of 100 symbols, SPY always. Not point in time, and stated: the SIC
-description behind the sector, and the restated SEC facts behind a screen.
+batches of 100 symbols with each one's first raw bar day, SPY always. Not
+point in time, and stated: the SIC description behind the sector, and the
+restated SEC facts behind a screen.
 """
 
 from __future__ import annotations
@@ -164,12 +168,14 @@ class DailyPoint:
 
 
 class _Series:
-    """One symbol's daily bars aligned to the context's sessions."""
+    """One symbol's daily bars aligned to the context's sessions, and the day
+    of its first raw daily bar in the whole table (None when unknown)."""
 
-    __slots__ = ("data",)
+    __slots__ = ("data", "listed")
 
-    def __init__(self, sessions: int) -> None:
+    def __init__(self, sessions: int, listed: date | None = None) -> None:
         self.data: NDArray[np.float64] = np.full((8, sessions), np.nan)
+        self.listed = listed
 
     def adj(self, j: int) -> float | None:
         raw, adjusted = float(self.data[_RC, j]), float(self.data[_AC, j])
@@ -359,8 +365,8 @@ class PitContext:
         if a_s is None:  # _prev_close_s already needed it
             return None
         d = series.data
-        hi20, lo20 = _levels(series, p, LEVEL_SESSIONS[0], a_s)
-        hi252, lo252 = _levels(series, p, LEVEL_SESSIONS[1], a_s)
+        hi20, lo20 = _levels(series, self.sessions, p, LEVEL_SESSIONS[0], a_s)
+        hi252, lo252 = _levels(series, self.sessions, p, LEVEL_SESSIONS[1], a_s)
         return PreEvent(
             session=session,
             prev_session=self.sessions[p],
@@ -575,18 +581,23 @@ def _atr_pct(series: _Series, p: int) -> float:
     return atr(h[ok], lo[ok], c[ok], ATR_PERIOD) / float(series.data[_AC, p])
 
 
-def _levels(series: _Series, p: int, n: int, a_s: float) -> tuple[float, float]:
+def _levels(
+    series: _Series, sessions: Sequence[date], p: int, n: int, a_s: float
+) -> tuple[float, float]:
     """Highest high and lowest low of the ``n`` sessions through ``p``, in S units.
 
     NaN when those ``n`` sessions do not all exist for the name: the calendar
     holds fewer than ``n`` through ``p`` (daily bars start on 2016-01-04), or
-    the name has no bar on or before the window's first session (listed, or
-    loaded, later). Missing bars inside the window (halts) are skipped.
+    the name's first raw bar (``series.listed``, read over the whole table)
+    is after the window's first session: listed later. It is not judged
+    from the loaded bars, so the load's start cannot decide it: a name
+    halted from before the load through the window's first session was
+    still listed. Missing bars inside the window (halts) are skipped.
     """
     first = p - n + 1
-    d = series.data
-    if first < 0 or not np.isfinite(d[_RC, : first + 1]).any():
+    if first < 0 or series.listed is None or series.listed > sessions[first]:
         return math.nan, math.nan
+    d = series.data
     window = slice(first, p + 1)
     with np.errstate(divide="ignore", invalid="ignore"):
         a = d[_AC, window] / d[_RC, window]
@@ -626,7 +637,8 @@ async def _sessions(engine: AsyncEngine, lo: date, hi: date) -> list[date]:
 async def _bars(
     engine: AsyncEngine, symbols: Sequence[str], sessions: Sequence[date], lo: date, hi: date
 ) -> _Loaded:
-    """Raw and all-adjusted daily bars of ``symbols`` in [lo, hi], aligned to ``sessions``."""
+    """Raw and all-adjusted daily bars of ``symbols`` in [lo, hi], aligned to
+    ``sessions``, each with the day of its first raw bar in the whole table."""
     index = {d: j for j, d in enumerate(sessions)}
     out = _Loaded({})
     async with engine.connect() as conn:
@@ -650,6 +662,16 @@ async def _bars(
                 series.data[_RO : _RV + 1, j] = (r.open, r.high, r.low, r.close, r.volume)
             else:
                 series.data[_AH : _AC + 1, j] = (r.high, r.low, r.close)
+        firsts = await conn.execute(
+            text(
+                "SELECT symbol, min(day) AS first FROM daily_bars "
+                "WHERE adjustment = 'raw' AND symbol = ANY(:s) GROUP BY symbol"
+            ),
+            {"s": list(symbols)},
+        )
+        for r in firsts:
+            if (series := out.series.get(r.symbol)) is not None:
+                series.listed = r.first
     return out
 
 
