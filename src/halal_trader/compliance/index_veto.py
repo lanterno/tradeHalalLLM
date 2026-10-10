@@ -135,8 +135,11 @@ async def views_at(engine: AsyncEngine, as_of: date) -> list[IndexView]:
                 names.add(key)
             periods.add(r.period_end)
     # One filing reports one period (true of every stored filing on 2026-10-11).
+    # One that reports several cannot say which period a holding is of, so it
+    # counts no old ticker rather than date every holding by the latest (IAC
+    # would then count for PPLI in holdings of before 2020-07-01).
     return [
-        IndexView(etf, filed, frozenset(t), frozenset(n), max(p))
+        IndexView(etf, filed, frozenset(t), frozenset(n), next(iter(p)) if len(p) == 1 else None)
         for (etf, filed), (t, n, p) in sorted(grouped.items())
     ]
 
