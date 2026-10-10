@@ -75,6 +75,7 @@ import zlib
 from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures.process import BrokenProcessPool
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime
 from typing import Any, Final, Literal
@@ -1448,35 +1449,24 @@ def pool_method(parallel: Parallel, workers: int) -> Literal["fork", "spawn"] | 
     return parallel
 
 
-def check_picklable(shared: _Shared) -> None:
-    """Raise ``ValueError`` unless the run's state pickles, as a spawn pool needs.
-
-    Under spawn each worker unpickles the factory, the context, the config
-    and the stories; :func:`run` checks this before it writes anything, and
-    names the part that fails.
-    """
+def _unpicklable(shared: _Shared) -> list[str]:
+    """The parts of a run's state that do not pickle (the factory, the context, the
+    config, the stories); asked only after a spawn pool failed to start."""
     from multiprocessing.reduction import ForkingPickler
 
-    try:
-        ForkingPickler.dumps(shared)
-    except Exception as exc:
-        parts: dict[str, object] = {
-            "make_playbook": shared.make_playbook,
-            "context": shared.ctx,
-            "cfg": shared.cfg,
-            "stories": list(shared.by_id.values()),
-        }
-        bad = []
-        for name, obj in parts.items():
-            try:
-                ForkingPickler.dumps(obj)
-            except Exception:
-                bad.append(name)
-        raise ValueError(
-            f"a spawn pool pickles the run's state for each worker, and "
-            f"{', '.join(bad) or 'it'} cannot be pickled ({exc!s}): use module-level "
-            f"classes, not closures, or run serially (parallel=False)"
-        ) from exc
+    parts: dict[str, object] = {
+        "make_playbook": shared.make_playbook,
+        "context": shared.ctx,
+        "cfg": shared.cfg,
+        "stories": list(shared.by_id.values()),
+    }
+    bad = []
+    for name, obj in parts.items():
+        try:
+            ForkingPickler.dumps(obj)
+        except Exception:
+            bad.append(name)
+    return bad
 
 
 def _pool(workers: int, method: Literal["fork", "spawn"], shared: _Shared) -> ProcessPoolExecutor:
@@ -1486,9 +1476,15 @@ def _pool(workers: int, method: Literal["fork", "spawn"], shared: _Shared) -> Pr
     pool's own manager thread exists. The parent may still have idle threads
     (asyncio's resolver, the engine's pool), which is what Python's fork
     warning is about; the workers never touch them or the database: they
-    only simulate and return records. Under spawn the first submit starts a
-    worker, which unpickles ``shared``: a state that does not load there
-    breaks the pool here, before the caller writes anything.
+    only simulate and return records.
+
+    Under spawn the first submit starts a worker: this process pickles
+    ``shared`` for it and the worker unpickles it. A state that does not
+    pickle fails that submit, and only then are its parts pickled one by
+    one, for a ``ValueError`` naming those that fail (a run that ships its
+    state pays for no extra pickling); a state that pickles but does not
+    load breaks the pool (``BrokenProcessPool``). Either way it fails here,
+    before the caller writes anything.
     """
     pool = ProcessPoolExecutor(
         max_workers=workers,
@@ -1502,8 +1498,19 @@ def _pool(workers: int, method: Literal["fork", "spawn"], shared: _Shared) -> Pr
                 "ignore", message=r".*fork\(\) may lead to deadlocks", category=DeprecationWarning
             )
             pool.submit(_noop).result()
-    except BaseException:
+    except BaseException as exc:
         pool.shutdown(cancel_futures=True)
+        if (
+            method == "spawn"
+            and isinstance(exc, Exception)
+            and not isinstance(exc, BrokenProcessPool)
+            and (bad := _unpicklable(shared))
+        ):
+            raise ValueError(
+                f"a spawn pool pickles the run's state for each worker, and "
+                f"{', '.join(bad)} cannot be pickled ({exc!s}): use module-level "
+                f"classes, not closures, or run serially (parallel=False)"
+            ) from exc
         raise
     return pool
 
@@ -1546,9 +1553,9 @@ async def run(
     window guard (a path crossing ``window_end`` raises
     ``loader.WindowLocked`` here), and a process pool is started, all before
     ``sink.begin``; under spawn the run's state (the factory, the context,
-    the config and the stories) must pickle (:func:`check_picklable`, a
-    ``ValueError`` naming the part that does not) and load in a worker. A
-    gate-only fill model (``legacy.py``) needs a gate unlock.
+    the config and the stories) must pickle (a ``ValueError`` naming the
+    part that does not) and load in a worker (else ``BrokenProcessPool``).
+    A gate-only fill model (``legacy.py``) needs a gate unlock.
 
     Batches are simulated in session order; inside a batch the symbols are
     split over ``workers`` (:func:`pool_method` chooses processes or this
@@ -1587,8 +1594,6 @@ async def run(
         assume_full_hold=assume_full_hold,
         keep_transitions=keep_transitions,
     )
-    if method == "spawn":
-        check_picklable(shared)
     pool = _pool(workers, method, shared) if method is not None else None
     states: dict[str, SymbolState] = {}
     terminal: Counter[str] = Counter()
