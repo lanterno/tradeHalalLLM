@@ -345,6 +345,73 @@ def test_the_reaction_session(available: datetime, session: date) -> None:
     assert reaction_session(available) == session
 
 
+def utc(y: int, mo: int, d: int, hh: int, mm: int = 0, ss: int = 0) -> datetime:
+    return datetime(y, mo, d, hh, mm, ss, tzinfo=UTC)
+
+
+# The clocks change on Sunday 2024-03-10 (EST -> EDT) and Sunday 2024-11-03 (back).
+@pytest.mark.parametrize(
+    ("available", "session"),
+    [
+        (utc(2024, 3, 8, 19, 30), date(2024, 3, 8)),  # Friday 14:30 EST: the cutoff
+        (utc(2024, 3, 8, 19, 30, 1), date(2024, 3, 11)),
+        (utc(2024, 3, 11, 18, 30), date(2024, 3, 11)),  # Monday 14:30 EDT: an hour earlier
+        (utc(2024, 3, 11, 18, 30, 1), date(2024, 3, 12)),
+        (utc(2024, 3, 11, 19, 30), date(2024, 3, 12)),  # the winter cutoff is too late now
+        (utc(2024, 3, 10, 7, 30), date(2024, 3, 11)),  # 03:30 EDT, just after the change
+        (utc(2024, 11, 1, 18, 30), date(2024, 11, 1)),  # Friday 14:30 EDT
+        (utc(2024, 11, 1, 19, 30), date(2024, 11, 4)),
+        (utc(2024, 11, 4, 19, 30), date(2024, 11, 4)),  # Monday 14:30 EST
+        (utc(2024, 11, 4, 19, 30, 1), date(2024, 11, 5)),
+        (utc(2024, 11, 3, 5, 30), date(2024, 11, 4)),  # 01:30 EDT, the first of two
+        (utc(2024, 11, 3, 6, 30), date(2024, 11, 4)),  # 01:30 EST, the second
+    ],
+)
+def test_the_reaction_session_across_a_clock_change(available: datetime, session: date) -> None:
+    assert reaction_session(available) == session
+
+
+@pytest.mark.parametrize(
+    ("accepted", "public"),
+    [
+        # Friday after 17:30 EST: Monday 06:00 EDT, which is 10:00 UTC, not 11:00.
+        (utc(2024, 3, 8, 23), utc(2024, 3, 11, 10)),
+        (utc(2024, 3, 10, 7, 30), utc(2024, 3, 11, 10)),  # Sunday, after the change
+        (utc(2024, 3, 11, 9, 59), utc(2024, 3, 11, 10)),  # Monday 05:59 EDT
+        (utc(2024, 3, 11, 21, 29), utc(2024, 3, 11, 21, 29)),  # Monday 17:29 EDT
+        (utc(2024, 3, 11, 21, 30), utc(2024, 3, 12, 10)),
+        # Friday after 17:30 EDT: Monday 06:00 EST, 11:00 UTC.
+        (utc(2024, 11, 1, 22), utc(2024, 11, 4, 11)),
+        (utc(2024, 11, 3, 6, 30), utc(2024, 11, 4, 11)),  # the repeated 01:30
+        (utc(2024, 11, 4, 22, 29), utc(2024, 11, 4, 22, 29)),  # Monday 17:29 EST
+    ],
+)
+def test_filings_become_public_across_a_clock_change(accepted: datetime, public: datetime) -> None:
+    assert filing_public_at(accepted) == public
+
+
+def test_a_story_across_a_clock_change() -> None:
+    rows = [
+        news("AAPL", utc(2024, 3, 9, 17), "Apple Unveils New Mac"),  # Saturday, EST
+        news("AAPL", utc(2024, 3, 10, 16), "Apple Unveils New iPad"),  # Sunday, EDT
+        filing("AAPL", utc(2024, 3, 8, 23), ("8.01",)),  # Friday evening: Monday 06:00 EDT
+        news("AAPL", utc(2024, 3, 11, 13, 25), DOWNGRADE),  # 09:25 EDT: before the open
+        news("INTC", utc(2024, 3, 11, 13, 30), "Barclays Downgrades Intel"),  # 09:30 EDT
+    ]
+    built = by_id(build(rows, ALIASES))
+    apple, intel = built["AAPL:2024-03-11"], built["INTC:2024-03-11"]
+    assert len(apple.items) == 4 and set(built) == {"AAPL:2024-03-11", "INTC:2024-03-11"}
+    assert [i.at for i in apple.items] == [
+        utc(2024, 3, 9, 17),
+        utc(2024, 3, 10, 16),
+        utc(2024, 3, 11, 10),  # the filing: Monday 06:00 EDT
+        utc(2024, 3, 11, 13, 25),
+    ]
+    assert session_bounds(date(2024, 3, 11)) == (utc(2024, 3, 11, 13, 30), utc(2024, 3, 11, 20))
+    assert apple.start_case() == "out" and intel.start_case() == "in"
+    assert apple.close == utc(2024, 3, 11, 20) and intel.nsn_at(intel.close) is not None
+
+
 def test_items_are_usable_ten_minutes_after_they_are_public() -> None:
     built = by_id(
         build(
@@ -597,6 +664,81 @@ def test_no_item_after_t_changes_the_card_at_t() -> None:
         assert full.follower_at(t) == (truncated.follower_at(t) if truncated else False)
     assert full.card_at(ny(TUE, 11, 9)).structural is False
     assert full.card_at(ny(TUE, 11, 10)).structural is True
+
+
+_POOL = {
+    "AAPL": [
+        DOWNGRADE,
+        "Jefferies Downgrades Apple to Hold",
+        "Goldman Sachs Maintains Neutral on Apple, Lowers Price Target to $140",
+        "UBS Upgrades Apple to Buy",
+        MISS,
+        "Apple Q2 Adj. EPS $1.60 Beats $1.50 Estimate",
+        "CORRECTION: Apple Q2 Adj. EPS $1.60 Beats $1.50 Estimate",
+        "Apple Sees Q3 Sales $80.000B-$82.000B vs $85.000B Est",
+        "Apple Faces SEC Probe Into App Store Disclosures",
+        "Apple Unveils New Mac",
+        "Why Apple Shares Are Trading Lower",
+        "Apple Earnings Preview: What To Expect",
+        "Rosen Law Firm Investigates Apple",
+        "Samsung Unveils New Phone",  # fails the entity check
+    ],
+    "INTC": [
+        "Barclays Downgrades Intel",
+        "Barclays Downgrades Intel, Upgrades AMD",
+        "Citi Maintains Buy on Intel, Lowers Price Target to $40",
+        "Intel Q1 EPS $0.10 Misses $0.20 Estimate",
+        "Intel Shares Are Trading Lower",
+        "Intel Unveils New Chip",
+    ],
+}
+
+
+def _random_items(rng: random.Random) -> list[RawItem]:
+    """News and 8-Ks of two symbols over two weeks, at any hour (weekends too)."""
+    out: list[RawItem] = []
+    first = date(2024, 5, 3)  # a Friday: S-3..S-1 reach back over a weekend
+    for _ in range(rng.randint(8, 18)):
+        symbol = rng.choice(["AAPL", "INTC"])
+        at = datetime.combine(first + timedelta(days=rng.randrange(12)), time(), MARKET_TZ)
+        at += timedelta(minutes=rng.randrange(24 * 60))
+        if rng.random() < 0.15:
+            items = rng.choice([("2.02", "9.01"), ("8.01",), ("4.02",), ("5.02",)])
+            out.append(filing(symbol, at, items))
+        else:
+            out.append(news(symbol, at, rng.choice(_POOL[symbol])))
+    return out
+
+
+def test_no_item_after_t_changes_any_story_known_at_t() -> None:
+    # Many sessions, parents and followers: delete every item after T and rebuild.
+    rng = random.Random(20261010)
+    seen: Counter[str] = Counter()
+    for _ in range(40):
+        rows = _random_items(rng)
+        full = build(rows, ALIASES)
+        times = sorted({i.available_at for s in full for i in s.items})
+        probes = [t + d for t in times for d in (-timedelta(seconds=1), timedelta(0))]
+        for t in rng.sample(probes, min(10, len(probes))):
+            truncated = by_id(build([r for r in rows if _available(r) <= t], ALIASES))
+            started = {s.story_id: s for s in full if s.items[0].available_at <= t}
+            assert set(truncated) == set(started), t
+            for sid, story in started.items():
+                cut = truncated[sid]
+                assert (cut.parent, cut.parent_type_close) == (
+                    story.parent,
+                    story.parent_type_close,
+                ), (sid, t)
+                assert cut.card_at(t) == story.card_at(t), (sid, t)
+                assert cut.follower_at(t) == story.follower_at(t), (sid, t)
+                assert cut.nsn_at(t) == story.nsn_at(t), (sid, t)
+                if story.nsn_at(t) is not None:
+                    assert cut.at_news() == story.at_news(), (sid, t)
+                seen["parent"] += story.parent is not None
+                seen["follower"] += story.follower_at(t)
+                seen["nsn"] += story.nsn_at(t) is not None
+                seen["structural"] += story.card_at(t).structural
+    assert min(seen[k] for k in ("parent", "follower", "nsn", "structural")) >= 20, seen
 
 
 def _available(raw: RawItem) -> datetime:

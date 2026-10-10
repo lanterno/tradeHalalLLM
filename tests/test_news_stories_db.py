@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from halal_trader.events import earnings_parse, stories
 from halal_trader.events.aliases import AliasMatcher, load_aliases
+from halal_trader.events.context import PitContext
 from halal_trader.events.earnings_parse import (
     EXTRACTOR,
     EXTRACTOR_V3,
@@ -60,6 +61,7 @@ from tests._stories import (
     store,
     stored_rows,
 )
+from tests.test_event_context import NEXT, PREV, S, _world, et
 
 APPLE = {"AAPL": AliasMatcher("AAPL", ("Apple",), ("AAPL",))}
 
@@ -279,6 +281,20 @@ async def test_persist_upserts_a_story(engine: AsyncEngine) -> None:
     assert rows[0]["detect_at"] == ny(TUE, 8, 10) and rows[0]["detect_at"].tzinfo is not None
 
 
+async def test_a_noise_only_story_is_stored_with_no_detection(engine: AsyncEngine) -> None:
+    raws = [
+        raw_news(1, ny(TUE, 8), "Why Apple Shares Are Trading Lower"),
+        raw_news(2, ny(TUE, 9), "Rosen Law Firm Investigates Apple"),
+    ]
+    (story,) = build(raws, APPLE)
+    assert await persist(engine, [story]) == 1
+    (row,) = await stored_rows(engine)
+    assert row == story_row(story)
+    assert (row["type_close"], row["type_detect"]) == ("noise_only", "noise_only")
+    assert row["detect_at"] is None and row["nsn_at"] is None and row["at_news"] is None
+    assert row["family_ever"] is None and row["start_case"] == "out"
+
+
 # ── complete builds ───────────────────────────────────────────
 
 
@@ -408,3 +424,54 @@ async def test_counts_load_one_year_at_a_time(
     ]
     assert counts.nsn[("primary", 2021, "train")] == 1
     assert counts.nsn[("primary", 2022, "validation")] == 1
+
+
+def _news_at(n: int, symbol: str, at: datetime, headline: str) -> RawItem:
+    return RawItem(n, f"a:{n}", "news", symbol, at.astimezone(UTC), at, headline, 1, (), ())
+
+
+async def test_counts_judge_eligibility_through_the_real_context(engine: AsyncEngine) -> None:
+    # The point-in-time world of test_event_context: S = 2024-03-19, screens dated
+    # 2024-03-08 (seen at S) and S itself (seen from the session after).
+    await _world(engine)
+    named = ["AAA", "AAB", "CHEAP", "GAP", "HALT", "SPLIT", "THIN", "VET"]
+    aliases = {s: AliasMatcher(s, (), (s,)) for s in [*named, "BETA3"]}
+    raws = [
+        _news_at(n, s, et(S, 8), f"Morgan Stanley Downgrades {s} to Equal-Weight")
+        for n, s in enumerate(named, 1)
+    ]
+    raws += [
+        # The evening before S: judged at its own time, sigma through S-1.
+        _news_at(20, "BETA3", et(PREV, 18), "Morgan Stanley Downgrades BETA3 to Equal-Weight"),
+        # The day after: the screen dated S now counts for AAA; a product story, no NSN.
+        _news_at(21, "AAA", et(NEXT, 8), "AAA Unveils New Product"),
+    ]
+    built = build(raws, aliases)
+    await persist(engine, built)
+    await mark_built(engine, S, NEXT, len(built))
+
+    counts = await count_stories(engine, start=S, end=NEXT)
+
+    ctx = await PitContext.load(engine, symbols=[*named, "BETA3"], start=S, end=NEXT)
+    want = Counter(
+        ("all", ctx.eligibility(st.symbol, st.session, at_news=st.items[0].at).reason)
+        for st in built
+    )
+    assert want == Counter(
+        {
+            ("all", "ok"): 3,  # AAA, SPLIT and BETA3 at S
+            ("all", "share_class"): 1,
+            ("all", "price"): 1,
+            ("all", "no_daily"): 1,
+            ("all", "no_sigma"): 1,
+            ("all", "rank"): 1,
+            ("all", "not_halal"): 2,  # VET at S, AAA at NEXT
+        }
+    )
+    assert Counter({k: n for k, n in counts.reasons.items() if k[0] == "all"}) == want
+    assert counts.reasons[("nsn", "ok")] == 3
+    assert counts.nsn[("all", 2024, "validation")] == 9
+    assert counts.nsn[("primary", 2024, "validation")] == 3
+    assert counts.nsn[("tech", 2024, "validation")] == 3  # software and semis
+    assert counts.types[("primary", "analyst_downgrade", 2024, "validation")] == 3
+    assert counts.types[("all", "product", 2024, "validation")] == 1
