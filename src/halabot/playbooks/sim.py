@@ -1233,13 +1233,14 @@ class RunSummary:
         }
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class _Shared:
     """What every worker needs for a whole run, passed explicitly (never module state).
 
     The serial path hands it to :func:`_work`; a process pool gives it to each
     worker once, through the pool's initializer (inherited under fork,
-    unpickled once per worker under spawn), never per task.
+    unpickled once per worker under spawn), never per task. It holds no
+    run id, so the pool can start before the run row is written.
     """
 
     by_id: dict[str, StoryView]
@@ -1250,10 +1251,10 @@ class _Shared:
     stop_at: StopAt
     assume_full_hold: bool
     keep_transitions: bool
-    run_id: str
 
 
 _Job = tuple[
+    str,  # the run id
     list[tuple[str, list[str]]],  # (symbol, story ids) in order
     dict[str, PathData | PathSkip],
     SpyData,
@@ -1262,7 +1263,7 @@ _Job = tuple[
 
 
 def _work(shared: _Shared, job: _Job) -> tuple[list[StoryOutcome], dict[str, SymbolState]]:
-    symbols, paths, spy, states = job
+    run_id, symbols, paths, spy, states = job
     out: list[StoryOutcome] = []
     for symbol, ids in symbols:
         out += simulate_symbol(
@@ -1278,7 +1279,7 @@ def _work(shared: _Shared, job: _Job) -> tuple[list[StoryOutcome], dict[str, Sym
             keep_transitions=shared.keep_transitions,
             news_from=shared.carriers[symbol],
             state=states.setdefault(symbol, SymbolState()),
-            run_id=shared.run_id,
+            run_id=run_id,
         )
     return out, states
 
@@ -1336,6 +1337,37 @@ def pool_method(parallel: Parallel, workers: int) -> Literal["fork", "spawn"] | 
     return parallel
 
 
+def check_picklable(shared: _Shared) -> None:
+    """Raise ``ValueError`` unless the run's state pickles, as a spawn pool needs.
+
+    Under spawn each worker unpickles the factory, the context, the config
+    and the stories; :func:`run` checks this before it writes anything, and
+    names the part that fails.
+    """
+    from multiprocessing.reduction import ForkingPickler
+
+    try:
+        ForkingPickler.dumps(shared)
+    except Exception as exc:
+        parts: dict[str, object] = {
+            "make_playbook": shared.make_playbook,
+            "context": shared.ctx,
+            "cfg": shared.cfg,
+            "stories": list(shared.by_id.values()),
+        }
+        bad = []
+        for name, obj in parts.items():
+            try:
+                ForkingPickler.dumps(obj)
+            except Exception:
+                bad.append(name)
+        raise ValueError(
+            f"a spawn pool pickles the run's state for each worker, and "
+            f"{', '.join(bad) or 'it'} cannot be pickled ({exc!s}): use module-level "
+            f"classes, not closures, or run serially (parallel=False)"
+        ) from exc
+
+
 def _pool(workers: int, method: Literal["fork", "spawn"], shared: _Shared) -> ProcessPoolExecutor:
     """A pool whose workers each hold ``shared`` from their start (``_init_worker``).
 
@@ -1343,7 +1375,9 @@ def _pool(workers: int, method: Literal["fork", "spawn"], shared: _Shared) -> Pr
     pool's own manager thread exists. The parent may still have idle threads
     (asyncio's resolver, the engine's pool), which is what Python's fork
     warning is about; the workers never touch them or the database: they
-    only simulate and return records.
+    only simulate and return records. Under spawn the first submit starts a
+    worker, which unpickles ``shared``: a state that does not load there
+    breaks the pool here, before the caller writes anything.
     """
     pool = ProcessPoolExecutor(
         max_workers=workers,
@@ -1351,11 +1385,15 @@ def _pool(workers: int, method: Literal["fork", "spawn"], shared: _Shared) -> Pr
         initializer=_init_worker,
         initargs=(shared,),
     )
-    with warnings.catch_warnings():
-        warnings.filterwarnings(
-            "ignore", message=r".*fork\(\) may lead to deadlocks", category=DeprecationWarning
-        )
-        pool.submit(_noop).result()
+    try:
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore", message=r".*fork\(\) may lead to deadlocks", category=DeprecationWarning
+            )
+            pool.submit(_noop).result()
+    except BaseException:
+        pool.shutdown(cancel_futures=True)
+        raise
     return pool
 
 
@@ -1387,8 +1425,12 @@ async def run(
     **Nothing is written until the run may proceed:** the unlock is verified
     against the ledger, the calendar is checked, and every day of every
     requested path is checked against the window guard (a path crossing
-    ``window_end`` raises ``loader.WindowLocked`` here), all before
-    ``sink.begin``. A gate-only fill model (``legacy.py``) needs a gate unlock.
+    ``window_end`` raises ``loader.WindowLocked`` here), and a process pool
+    is started, all before ``sink.begin``; under spawn the run's state (the
+    factory, the context, the config and the stories) must pickle
+    (:func:`check_picklable`, a ``ValueError`` naming the part that does
+    not) and load in a worker. A gate-only fill model (``legacy.py``) needs
+    a gate unlock.
 
     Batches are simulated in session order; inside a batch the symbols are
     split over ``workers`` (:func:`pool_method` chooses processes or this
@@ -1408,31 +1450,6 @@ async def run(
     )
     await loader.prepare()
     loader.check(requests)
-    run_id = await sink.begin(
-        RunInfo(
-            window=str(window),
-            window_end=window_end,
-            feed=cfg.feed.name,
-            stop_at=stop_at,
-            playbook=make_playbook.name,
-            playbook_version=make_playbook.version,
-            sim=cfg.as_config(),
-        )
-    )
-    logger.info(
-        "sim run %s: %d stories, %d paths",
-        run_id,
-        len(stories),
-        len(requests),
-        extra={
-            "event": events.SIM_RUN_START,
-            "run_id": run_id,
-            "window": str(window),
-            "stories": len(stories),
-            "paths": len(requests),
-            "pool": method or "serial",
-        },
-    )
     shared = _Shared(
         by_id={s.story_id: s for s in stories},
         carriers=by_symbol,
@@ -1442,16 +1459,42 @@ async def run(
         stop_at=stop_at,
         assume_full_hold=assume_full_hold,
         keep_transitions=keep_transitions,
-        run_id=run_id,
     )
+    if method == "spawn":
+        check_picklable(shared)
     pool = _pool(workers, method, shared) if method is not None else None
-    spy_all = await loader.spy()
     states: dict[str, SymbolState] = {}
     terminal: Counter[str] = Counter()
     skips: Counter[str] = Counter()
     n_out = entries = trades = n_batches = 0
     loop = asyncio.get_running_loop()
     try:
+        run_id = await sink.begin(
+            RunInfo(
+                window=str(window),
+                window_end=window_end,
+                feed=cfg.feed.name,
+                stop_at=stop_at,
+                playbook=make_playbook.name,
+                playbook_version=make_playbook.version,
+                sim=cfg.as_config(),
+            )
+        )
+        logger.info(
+            "sim run %s: %d stories, %d paths",
+            run_id,
+            len(stories),
+            len(requests),
+            extra={
+                "event": events.SIM_RUN_START,
+                "run_id": run_id,
+                "window": str(window),
+                "stories": len(stories),
+                "paths": len(requests),
+                "pool": method or "serial",
+            },
+        )
+        spy_all = await loader.spy()
         async for batch in loader.batches(requests, context):
             items = {x.story_id: x for x in batch}
             ids_by_symbol: dict[str, list[str]] = {}
@@ -1472,6 +1515,7 @@ async def run(
                 spy = spy_all.subset(days)
                 jobs.append(
                     (
+                        run_id,
                         [(s, ids_by_symbol[s]) for s in symbols],
                         {i: items[i] for i in ids},
                         spy,
