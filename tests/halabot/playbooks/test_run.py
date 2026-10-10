@@ -7,7 +7,7 @@ import logging
 import sys
 import threading
 from concurrent.futures.process import BrokenProcessPool
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 from sqlalchemy import text
@@ -24,18 +24,28 @@ from halabot.playbooks.loader import (
 )
 from halabot.playbooks.playbook import Factory, PlaybookFactory
 from halabot.playbooks.records import MemorySink, PgOutcomeSink, outcomes_sha256
-from halabot.playbooks.sim import pool_method, run
+from halabot.playbooks.sim import DATA_SKIPS, pool_method, run
 from halabot.playbooks.types import SimConfig
 from halal_trader.core import events
-from tests.halabot.playbooks._seed import mark_done, seed_bars, seed_calendar, seed_market
+from halal_trader.market_hours import is_trading_day
+from tests.halabot.playbooks._seed import (
+    mark_done,
+    seed_bars,
+    seed_calendar,
+    seed_daily,
+    seed_market,
+)
 from tests.halabot.playbooks._support import (
     FACTS,
     MON,
+    TUE,
     Context,
     Toy,
     ToyFactory,
+    downgrade,
     et,
     session_bars,
+    story,
 )
 from tests.halabot.playbooks._synth import WEEK, Market, random_market
 
@@ -188,6 +198,67 @@ async def test_a_run_logs_its_start_batches_and_end(
     assert names.count(events.SIM_RUN_BATCH) == len(names) - 2 >= 2
     assert {r.run_id for r in records} == {summary.run_id}  # type: ignore[attr-defined]
     assert records[-1].trades == summary.trades  # type: ignore[attr-defined]
+
+
+async def test_a_run_lists_the_stories_its_data_rules_set_apart(engine: AsyncEngine) -> None:
+    """bad_bars and adjust_defect skips, and paths whose bars (or SPY's) the sanity rule cut."""
+    await seed_calendar(engine, date(2016, 1, 4), END)
+    insane = (10.0, 9.0, 8.0, 9.5, 1.0, 9.5)  # h < max(o, c)
+    await seed_bars(engine, "SPY", session_bars(MON, price=200.0))
+    await seed_bars(engine, "SPY", session_bars(TUE, price=200.0, rows={(11, 0): insane}))
+    await seed_bars(engine, "OK", session_bars(MON))
+    await seed_bars(engine, "BAD", session_bars(MON, rows={(9, 30 + i): insane for i in range(6)}))
+    await seed_bars(engine, "TWO", session_bars(MON, rows={(9, 31): insane, (9, 32): insane}))
+    await seed_bars(engine, "SPYCUT", session_bars(TUE))  # its own bars clean, SPY's cut
+    await seed_bars(engine, "DEFECT", session_bars(MON))
+    days = [(s, MON) for s in ("OK", "BAD", "TWO", "DEFECT")] + [("SPYCUT", TUE)]
+    await mark_done(engine, [*days, ("SPY", MON), ("SPY", TUE)])
+    # DEFECT's adjusted series halves on 2016-02-01 while raw / adjusted holds still (stale).
+    closes = {
+        d: (100.0 if d < date(2016, 2, 1) else 50.0)
+        for d in (date(2016, 1, 4) + timedelta(days=i) for i in range(70))
+        if is_trading_day(d) and d <= MON
+    }
+    await seed_daily(engine, "DEFECT", closes, adjusted=closes)
+    stories = [story(s, d, downgrade(d)) for s, d in days]
+    sink = MemorySink()
+    summary = await run(
+        engine,
+        stories,
+        ToyFactory(sessions=1, target=0.005),
+        context=Context(),
+        window=Window.GATE,
+        window_end=END,
+        cfg=SimConfig(),
+        unlock=WindowUnlock(),
+        sink=sink,
+        workers=2,
+    )
+    assert summary.skip_ids == {
+        "bad_bars": ("BAD:2016-03-07",),
+        "adjust_defect": ("DEFECT:2016-03-07",),
+    }
+    assert summary.bar_drop_ids == ("SPYCUT:2016-03-08", "TWO:2016-03-07")
+    assert summary.data_filtered() == {
+        "BAD:2016-03-07",
+        "DEFECT:2016-03-07",
+        "SPYCUT:2016-03-08",
+        "TWO:2016-03-07",
+    }
+    assert summary.skips == {"bad_bars": 1, "adjust_defect": 1}
+    assert summary.loader["dropped_bars"] == 2 and summary.loader["spy_dropped_bars"] == 1
+    assert sink.summary is not None
+    assert sink.summary["skip_ids"] == {
+        "adjust_defect": ["DEFECT:2016-03-07"],
+        "bad_bars": ["BAD:2016-03-07"],
+    }
+    assert sink.summary["bar_drop_ids"] == ["SPYCUT:2016-03-08", "TWO:2016-03-07"]
+    assert {o.story_id for o in sink.outcomes if o.skip is None} == {
+        "OK:2016-03-07",
+        "TWO:2016-03-07",
+        "SPYCUT:2016-03-08",
+    }
+    assert DATA_SKIPS == ("adjust_defect", "bad_bars")
 
 
 def _fail_to_load() -> Context:
