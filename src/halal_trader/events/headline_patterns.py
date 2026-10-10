@@ -18,11 +18,19 @@ ANALYST_ACTION: Final = re.compile(
 )
 
 # The company an analyst wire is about: "<Firm> Downgrades <Co> to ...",
-# "<Firm> Maintains <Rating> on <Co>, Lowers Price Target to $X".
+# "<Firm> Maintains <Rating> on <Co>, Lowers Price Target to $X" (or "On
+# <Co>", the 2016-2020 "UPDATE:" wires), "<Firm> Initiates <Co> With Buy".
+# A bare "Initiates" names a company only before "With" and a rating: "Lilly
+# Initiates Phase 3 Trial ... With ..." and "Initiates Coverage With ..." are
+# no slot.
 ANALYST_SLOT: Final = re.compile(
     r"\b(?:Downgrades|Upgrades|Initiates Coverage On|Assumes|Resumes|Reinstates)\s+(?P<a>.+?)"
     r"(?:\s+(?:to|To|With|with|At|at)\b|,|$)"
-    r"|\b(?:Maintains|Reiterates)\s+.{1,40}?\s+on\s+(?P<b>.+?)(?:,|$)"
+    r"|\b(?:Maintains|Reiterates)\s+.{1,40}?\s+(?:on|On)\s+(?P<b>.+?)(?:,|$)"
+    r"|\bInitiates\s+(?!Coverage\b)(?P<c>.+?)\s+(?:With|with)\s+(?:An?\s+)?['\"]?"
+    r"(?:(?:Strong|Speculative)\s+)?(?:Buy|Sell|Hold|Neutral|Accumulate|Reduce|Overweight|"
+    r"Underweight|Equal[- ]?[Ww]eight|In-?[Ll]ine|(?:Market|Sector) Weight|"
+    r"(?:Market |Sector |Peer )?(?:Outperform|Underperform|Perform))\b"
 )
 
 # The company slot of an earnings wire ("Apple Q3 Adj. EPS $1.40 Beats ...")

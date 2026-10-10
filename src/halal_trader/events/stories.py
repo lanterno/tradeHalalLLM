@@ -562,10 +562,11 @@ def _clauses(headline: str) -> list[tuple[int, int]]:
 
 
 def _slot(clause: str) -> str | None:
+    """The clause's ``ANALYST_SLOT`` company (the first alternative that matched)."""
     m = ANALYST_SLOT.search(clause)
     if m is None:
         return None
-    return m["a"] or m["b"]
+    return next((g for g in m.groups() if g), None)
 
 
 def analyst_clause(headline: str, matcher: AliasMatcher) -> str | None:
