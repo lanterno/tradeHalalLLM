@@ -37,12 +37,15 @@ exclusion stands here as well.
   trading under it today only from the day that company took it
   (``renames.held_since``): IR in a 2019 holding is Ingersoll-Rand plc
   (Trane today), not Gardner Denver. An undated view is dated by its
-  filing, which its holdings precede. A ticker recovered from a CUSIP is
-  the newest any filing reports for that security, so it counts for the
-  company trading under it today at any date, but never as an old ticker
-  (``held_as``). SPUS's ticker-less filings of 2021-22 hold Meta and
-  Revvity only through their CUSIPs, recovered as META and RVTY; Gardner
-  Denver's CUSIP, recovered as IR in a 2019 holding, is not Trane's IR.
+  filing, which its holdings precede.
+* **A ticker recovered from a CUSIP** comes from the newest filing that
+  reports one for the security, and names the company of that filing's
+  day (``renames.owner``), by its symbol today: Fortune Brands' CUSIP,
+  last reported as FBHS in 2022, is FBIN's; Gap's, last reported as GPS
+  in 2020, is GAP's. A CUSIP is one security for life, so that symbol
+  counts at any date, but never as an old ticker (``held_as``): Gardner
+  Denver's CUSIP, recovered as IR, is never Trane's IR. SPUS's ticker-less
+  filings of 2021-22 hold Meta and Revvity only through their CUSIPs.
 """
 
 from __future__ import annotations
@@ -83,7 +86,8 @@ class IndexView:
     # The day the holdings are as of (N-PORT's period end). Without it an
     # old ticker cannot be dated, and none counts.
     period_end: date | None = None
-    # Tickers recovered from a holding's CUSIP where the filing gave none.
+    # Today's symbols of the holdings the filing gives no ticker for,
+    # recovered from their CUSIP.
     recovered: frozenset[str] = frozenset()
 
 
@@ -132,17 +136,20 @@ def held(view: IndexView, symbol: str, title: str) -> bool:
 async def views_at(engine: AsyncEngine, as_of: date) -> list[IndexView]:
     """Each ETF's newest holdings filed on or before ``as_of`` and not older than MAX_AGE."""
     async with engine.connect() as conn:
-        # CUSIP -> ticker from every filing that carries both (a CUSIP names
-        # one security for life; only reuse after a delisting could mislead,
-        # and then towards "held", which a veto treats as no exclusion).
+        # CUSIP -> today's symbol of the security: the company the newest
+        # filing reporting a ticker for it names on its day (a CUSIP names one
+        # security for life; only reuse after a delisting could mislead, and
+        # then towards "held", which a veto treats as no exclusion).
+        history = ticker_history()
         known = {
-            r.cusip: str(r.ticker).upper()
+            r.cusip: symbol
             for r in await conn.execute(
                 text(
-                    "SELECT DISTINCT ON (cusip) cusip, ticker FROM etf_holdings "
+                    "SELECT DISTINCT ON (cusip) cusip, ticker, period_end FROM etf_holdings "
                     "WHERE ticker IS NOT NULL AND cusip <> '' ORDER BY cusip, filed DESC"
                 )
             )
+            if (symbol := history.owner(str(r.ticker).upper(), r.period_end, None)) is not None
         }
         rows = await conn.execute(
             text(
