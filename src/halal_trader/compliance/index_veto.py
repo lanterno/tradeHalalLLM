@@ -139,14 +139,18 @@ async def views_at(engine: AsyncEngine, as_of: date) -> list[IndexView]:
         # CUSIP -> today's symbol of the security: the company the newest
         # filing reporting a ticker for it names on its day (a CUSIP names one
         # security for life; only reuse after a delisting could mislead, and
-        # then towards "held", which a veto treats as no exclusion).
+        # then towards "held", which a veto treats as no exclusion). Only a
+        # real CUSIP: both ETFs' filings since 2022 write "N/A" for some
+        # foreign-registered names, and that placeholder would give every
+        # such line without a ticker one arbitrary ticker of the others.
         history = ticker_history()
         known = {
             r.cusip: symbol
             for r in await conn.execute(
                 text(
                     "SELECT DISTINCT ON (cusip) cusip, ticker, period_end FROM etf_holdings "
-                    "WHERE ticker IS NOT NULL AND cusip <> '' ORDER BY cusip, filed DESC"
+                    "WHERE ticker IS NOT NULL AND cusip ~ '^[0-9A-Z]{9}$' "
+                    "ORDER BY cusip, filed DESC, period_end DESC, ticker"
                 )
             )
             if (symbol := history.owner(str(r.ticker).upper(), r.period_end, None)) is not None
