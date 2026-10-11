@@ -75,6 +75,24 @@ supersedes), and a gate counts only when its latest row passed on its gate's cur
 - **8-K times:** EDGAR's submissions feed stamps about a third of filings 4-5 hours late (exactly the
   UTC offset); every 8-K since 2016 is restamped from its filing header (`events filings fix-times`).
 - **Earnings facts:** parser v4, label `benzinga-earnings-v4+<PARSER_SHA>`.
+- **Halal screen v13:** the index veto now recognises a renamed company that a Shariah ETF holds under
+  its old ticker (on that ticker's days), and a partial re-screen sizes the veto with the date's other
+  rows. The full 2016-2026 history was re-screened (v12 kept beside it): 37 verdicts moved from halal to
+  not halal (MXIM, XLNX, CXO, GWPH, IAC, KSU, RTN, TIF, VAR, ALXN, CERN, GME, FDS in 2020-2023, which an
+  earlier partial re-screen had left without the veto) and none the other way.
+- **Story aliases:** renamed companies' former names (Priceline, Coach, Dr Pepper Snapple, Quintiles,
+  Ingersoll-Rand...) and dotted initials ("JB Hunt") pass the entity check; D3 found their old-name
+  news failing it. When a company is screened under both its old and current ticker, the current one
+  carries its stories from the day it named the company.
+- **Determinism:** the liquidity rank averages in exact decimals (identical histories of a renamed
+  company no longer swap places between reads), and the reactor study reads its headlines in a fixed
+  order (R0's control reference moved, see Gates below).
+
+Data preconditions at registration: D1 calendar = SPY sessions; D2 unmapped at most 0.62% of a screen;
+D3 halal names with no admitted news at most 1.88% of a quarter (companies with no bar in the quarter
+left out); D4 164,041 minute units fetched; D5 no bar outside its session; D6 every 2016-2024 news event
+read by the registered parser; D9 6,004 PRIMARY NSN_CORE stories (train 2016-10..2021, validation
+2022-24). D7 (0 of 98 live headlines edited since) and D8 (IEX minute history exists) are recorded only.
 
 ## Deviations from PHASE01_SPEC.md (decided during the build, before registration)
 
@@ -131,4 +149,6 @@ study read its headlines in no fixed order, so its seeded sample of 1,500 contro
 −0.28%) and one same-timestamp first headline (7,932 strong headlines recorded) cannot be reproduced.
 With the order fixed, the pinned set has 7,931 strong headlines and the controls (n = 1,483, as
 recorded) are at −0.30%; the strong group (n = 7,922, −0.30%, t −12.1) and the negative group
-(−0.40%), which take every headline, reproduce exactly.
+(−0.40%), which take every headline, reproduce exactly. Gate unit sets are pinned in the ledger; G1's was
+re-pinned once, with its reason logged, when the alias fix above changed plan H's G1 selection, and
+every gate was run again on the rebuilt data before registering (all 11 pass).
