@@ -102,7 +102,14 @@ counted). None of them but the backtests carries ``active_sr_period``.
   trailing-twelve-month universe still ranks companies acquired before the
   quarter, and those have no news because they no longer exist; each
   quarter lists them (``not_trading``). A name that traded on even one
-  session is judged. "Admitted news" is a news event among a story's items.
+  session is judged. "Admitted news" is a news event among a story's items,
+  under the name or under a later ticker of its company
+  (``renames.later_tickers``) that the same screen gives the name's CIK: the
+  story builder files a renamed company's news under its later ticker
+  (``renames.owner``), so the screen's DWDP is heard through DD and its IAC
+  through PPLI. Without the CIK the screen's IR (Gardner Denver) would be
+  heard through TT, Ingersoll-Rand plc's later ticker. Each quarter lists
+  the names heard only that way (``heard_as``).
 * A ``window`` summary row is added (the verdict reads it), and an
   ``amendment`` row precedes any re-run of a window, any step on changed
   code or data, and a window or implementability run after an unfinished
@@ -985,10 +992,15 @@ async def check_news_d3(engine: AsyncEngine) -> Check:
     most 2%.
 
     The names with no bar in the quarter (acquired before it, still ranked on
-    their trailing year) are left out and listed (``not_trading``).
+    their trailing year) are left out and listed (``not_trading``). A name's
+    news counts under the name or under a later ticker of its company
+    (``renames.later_tickers``) that the same screen gives the name's CIK, where
+    the story builder files a renamed company's news (DWDP's under DD, IAC's
+    under PPLI); the names heard only that way are listed with the ticker
+    (``heard_as``).
     """
     from halal_trader.data.universe import universe_at
-    from halal_trader.events.renames import missing_units
+    from halal_trader.events.renames import later_tickers, missing_units
     from halal_trader.halal.strict import all_screens
 
     missing = await missing_units(engine)
@@ -1006,13 +1018,19 @@ async def check_news_d3(engine: AsyncEngine) -> Check:
                 "share": 1.0,
                 "screen": None,
                 "not_trading": [],
+                "heard_as": {},
             }
             continue
+        ciks = {r.symbol: r.cik for r in screens[as_of]}
         halal = {r.symbol for r in screens[as_of] if r.verdict == "halal" and r.cik is not None}
         ranked = (await universe_at(engine, first, top_n=pit.TOP_N))[: pit.MAX_RANK]
         candidates = sorted(halal & set(ranked))
         traded = await traded_in(engine, candidates, sessions_between(first, q_end))
         names = [s for s in candidates if s in traded]
+        # A later ticker counts only as the same company: the screen's IR is
+        # Gardner Denver's, and IR's later ticker TT is Ingersoll-Rand plc's.
+        later = {s: [t for t in later_tickers(s) if ciks.get(t) == ciks[s]] for s in names}
+        carriers = sorted({*names, *(t for ts in later.values() for t in ts)})
         async with engine.connect() as conn:
             rows = await conn.execute(
                 text(
@@ -1022,16 +1040,22 @@ async def check_news_d3(engine: AsyncEngine) -> Check:
                     "WHERE s.builder_version = :v AND s.session BETWEEN :a AND :b "
                     "AND s.symbol = ANY(:names) AND e.kind = 'news'"
                 ),
-                {"v": st.BUILDER_VERSION, "a": first, "b": q_end, "names": names},
+                {"v": st.BUILDER_VERSION, "a": first, "b": q_end, "names": carriers},
             )
             heard = {str(r.symbol) for r in rows}
-        silent = [s for s in names if s not in heard]
+        heard_as = {
+            s: next(t for t in later[s] if t in heard)
+            for s in names
+            if s not in heard and not heard.isdisjoint(later[s])
+        }
+        silent = [s for s in names if s not in heard and s not in heard_as]
         residual[q.isoformat()] = {
             "names": len(names),
             "silent": silent,
             "share": len(silent) / len(names) if names else 1.0,
             "screen": as_of.isoformat(),
             "not_trading": [s for s in candidates if s not in traded],
+            "heard_as": heard_as,
         }
     over = sorted(q for q, r in residual.items() if r["share"] > D3_MAX)
     data = {"renamed_months_missing": missing, "quarters": residual}
@@ -1044,11 +1068,13 @@ async def check_news_d3(engine: AsyncEngine) -> Check:
         return Check("D3", False, "; ".join(problems), data)
     worst = max((r["share"] for r in residual.values()), default=0.0)
     gone = sum(len(r["not_trading"]) for r in residual.values())
+    renamed = sum(len(r["heard_as"]) for r in residual.values())
     return Check(
         "D3",
         True,
         f"{len(residual)} quarters, silent names at most {worst:.2%} "
-        f"({gone} name-quarter(s) with no bar in the quarter left out)",
+        f"({gone} name-quarter(s) with no bar in the quarter left out, "
+        f"{renamed} heard under a later ticker)",
         data,
     )
 
