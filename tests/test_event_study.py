@@ -104,3 +104,23 @@ def test_an_implausible_move_is_not_an_outcome() -> None:
         close={"X": {SESSIONS[1]: 40.0}, "SPY": {SESSIONS[1]: 50.0}},
     )
     assert outcome(bars, "X", (0, "open"), 2, 0.0) is None
+
+
+def test_a_sue_is_dated_by_the_last_earnings_8k_before_its_report() -> None:
+    """A preliminary 2.02 8-K weeks before the results must not date the EPS."""
+    from datetime import UTC, datetime
+
+    from halal_trader.compliance.sec import filed_at
+    from halal_trader.events.sue import release_time
+
+    q = Quarter(date(2021, 3, 31), 0.5, date(2021, 5, 7))
+    preliminary = datetime(2021, 4, 12, 20, 0, tzinfo=UTC)
+    release = datetime(2021, 5, 6, 20, 5, tzinfo=UTC)
+    before = datetime(2021, 3, 1, 21, 0, tzinfo=UTC)  # last quarter's release
+    after = datetime(2021, 5, 20, 12, 0, tzinfo=UTC)  # past the report's window
+    assert release_time([before, preliminary, release, after], q) == release
+    assert release_time([before, preliminary], q) == preliminary
+    assert release_time([before, after], q) == filed_at(q.filed)  # no 2.02 in the window
+    assert release_time([], q) == filed_at(q.filed)
+    on_the_next_day = datetime(2021, 5, 8, 23, 0, tzinfo=UTC)
+    assert release_time([release, on_the_next_day], q) == on_the_next_day
