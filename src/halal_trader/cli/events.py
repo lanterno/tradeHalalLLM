@@ -687,6 +687,12 @@ def exit_test_cmd() -> None:
             )
 
 
+def _repin_reason(_ctx: click.Context, _param: click.Parameter, value: str | None) -> str | None:
+    if value is not None and not value.strip():
+        raise click.BadParameter("a re-pin needs a reason")
+    return value.strip() if value is not None else None
+
+
 @events.command("sim-gate")
 @click.argument("group", type=click.Choice(["lookahead", "reactor", "sue", "all"]))
 @click.option(
@@ -695,18 +701,30 @@ def exit_test_cmd() -> None:
     show_default=True,
     help="G1's determinism check: the records of 1 and of this many workers must agree.",
 )
-def sim_gate_cmd(group: str, workers: int) -> None:
+@click.option(
+    "--repin",
+    metavar="REASON",
+    default=None,
+    callback=_repin_reason,
+    help=(
+        "Why a gate's unit set may change (an upstream data fix: aliases, stories): a gate "
+        "whose selection is no longer its pin re-pins in a logged ledger row and runs."
+    ),
+)
+def sim_gate_cmd(group: str, workers: int, repin: str | None) -> None:
     """The Phase 0 gates: run a group, one quant_trials row per gate (spec §E).
 
     lookahead: g1-synthetic, g1-lookahead, g1-determinism; reactor: r0, r1,
     r2; sue: s0, s1, s1-calib, s2, s3. A gate whose minute units are not all
-    done is refused (no row). Exits 1 when a gate fails or is refused.
+    done is refused (no row), and so is a gate whose selection is no longer
+    the set it pinned, unless --repin gives the reason. Exits 1 when a gate
+    fails or is refused.
     """
 
     async def _run(engine: Any, settings: Any) -> Any:
         from halal_trader.events.sim_gate import run_gates
 
-        return await run_gates(engine, group, workers=workers)  # type: ignore[arg-type]
+        return await run_gates(engine, group, workers=workers, repin=repin)  # type: ignore[arg-type]
 
     from halal_trader.events.sim_gate import describe
 
