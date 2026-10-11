@@ -82,7 +82,11 @@ counted). None of them but the backtests carries ``active_sr_period``.
   simulator's constants (``SimConfig().as_config()``) under ``fills``.
 * Gate rows are matched by their exact id (:data:`REQUIRED_GATES`: each of
   G1-G3's sub-gates); every required id must have a row, and every gate
-  id's latest row must pass.
+  id's latest row must pass. A gate that reads a pinned unit set
+  (:data:`GATE_PINS`) counts only if that row also ran on the set's current
+  pin (``loader.gate_pin``): an upstream data fix that changed a selection
+  re-pins the gate (``events sim-gate <group> --repin <reason>``), and the
+  rows that ran on the superseded pin, or that record none, are stale.
 * D2's unmapped and pending counts cover the screens of D2's span only, and
   D6 needs the facts of the news published 2016-01-01..2024-12-31 only:
   nothing H1 never reads can block the registration.
@@ -155,8 +159,10 @@ from halabot.playbooks.loader import (
     WINDOW_START,
     CalendarMismatch,
     Window,
+    WindowLocked,
     WindowUnlock,
     check_calendar,
+    gate_pin,
 )
 from halabot.playbooks.records import (
     DailyBook,
@@ -764,46 +770,96 @@ REQUIRED_GATES: Final[tuple[str, ...]] = (
     "s3",
 )
 
+# The pinned unit set each gate id reads (events/sim_gate.GATE_PINS; the loader's gate
+# whose pin it is): its latest row must record that gate's current pin (config
+# "units_sha"). g1-synthetic, s0 and s1 read no pinned set.
+GATE_PINS: Final[dict[str, str]] = {
+    "g1-lookahead": "g1",
+    "g1-determinism": "g1",
+    "r0": "reactor",
+    "r1": "reactor",
+    "r2": "reactor",
+    "s1-calib": "calib",
+    "s2": "sue",
+    "s3": "sue",
+}
 
-def judge_gates(rows: Sequence[tuple[str, int, str | None]]) -> Check:
-    """G: every required gate id has a row, and every gate id's latest row passes.
+# (gate id, row id, verdict, the pin it ran on: config "units_sha", None when unrecorded)
+GateRow = tuple[str, int, str | None, str | None]
 
-    ``rows`` are (gate id, row id, verdict), any order. An id outside
+
+def judge_gates(rows: Sequence[GateRow], pins: Mapping[str, str | None]) -> Check:
+    """G: every required gate id has a row, every gate id's latest row passes, and the
+    latest row of a gate that reads a pinned set ran on that set's current pin.
+
+    ``rows`` are (gate id, row id, verdict, units sha), any order; ``pins``
+    maps each of the loader's gates to its current pin (None, or absent, when
+    nothing is pinned or its pins conflict). An id outside
     :data:`REQUIRED_GATES` gates nothing by being absent, but its latest row
     must pass too (a failure recorded under the gate name is never ignored).
+    A :data:`GATE_PINS` id whose latest row records no pin, or a pin other
+    than its gate's current one, is stale (fail closed): the gate was
+    re-pinned after the row ran, so it must run again on the new set.
     """
-    latest: dict[str, tuple[int, str | None]] = {}
-    for gate, row_id, verdict_ in rows:
+    latest: dict[str, tuple[int, str | None, str | None]] = {}
+    for gate, row_id, verdict_, sha in rows:
         if gate not in latest or row_id > latest[gate][0]:
-            latest[gate] = (row_id, verdict_)
-    failed = sorted(g for g, (_, v) in latest.items() if v != "pass")
+            latest[gate] = (row_id, verdict_, sha)
+    failed = sorted(g for g, (_, v, _) in latest.items() if v != "pass")
     missing = [g for g in REQUIRED_GATES if g not in latest]
-    data = {
-        "required": list(REQUIRED_GATES),
-        "gates": {g: {"id": i, "verdict": v} for g, (i, v) in sorted(latest.items())},
-    }
-    if failed or missing:
+    stale = sorted(
+        g
+        for g, (_, _, sha) in latest.items()
+        if g in GATE_PINS and (sha is None or sha != pins.get(GATE_PINS[g]))
+    )
+    gates: dict[str, dict[str, Any]] = {}
+    for g, (i, v, sha) in sorted(latest.items()):
+        gates[g] = {"id": i, "verdict": v}
+        if g in GATE_PINS:
+            gates[g] |= {"units_sha": sha, "pin": pins.get(GATE_PINS[g])}
+    data = {"required": list(REQUIRED_GATES), "gates": gates, "pins": dict(sorted(pins.items()))}
+    if failed or missing or stale:
         parts = []
         if missing:
             parts.append(f"no row for {', '.join(missing)}")
         if failed:
             parts.append(f"latest row not passed: {', '.join(failed)}")
+        if stale:
+            parts.append(
+                "stale, latest row not run on its gate's current pin (run the gate again): "
+                + ", ".join(stale)
+            )
         return Check("G", False, "; ".join(parts), data)
     return Check(
-        "G", True, f"{len(REQUIRED_GATES)} required gate(s), every latest row passed", data
+        "G",
+        True,
+        f"{len(REQUIRED_GATES)} required gate(s), every latest row passed on the current pins",
+        data,
     )
 
 
-async def gate_rows(engine: AsyncEngine) -> list[tuple[str, int, str | None]]:
+async def gate_rows(engine: AsyncEngine) -> list[GateRow]:
     async with engine.connect() as conn:
         rows = await conn.execute(
             text(
-                "SELECT config->>'gate' AS gate, id, verdict FROM quant_trials "
+                "SELECT config->>'gate' AS gate, id, verdict, config->>'units_sha' AS sha "
+                "FROM quant_trials "
                 "WHERE name = :n AND kind = 'gate' AND config->>'gate' IS NOT NULL"
             ),
             {"n": GATE_NAME},
         )
-        return [(str(r.gate), int(r.id), r.verdict) for r in rows]
+        return [(str(r.gate), int(r.id), r.verdict, r.sha) for r in rows]
+
+
+async def current_pins(engine: AsyncEngine) -> dict[str, str | None]:
+    """Each pinned gate's current pin (``loader.gate_pin``); None when its pins conflict."""
+    out: dict[str, str | None] = {}
+    for gate in sorted(set(GATE_PINS.values())):
+        try:
+            out[gate] = await gate_pin(engine, gate)
+        except WindowLocked:
+            out[gate] = None  # no set opens, so no row ran on a valid pin
+    return out
 
 
 D1_SPAN: Final = (date(2016, 1, 4), date(2026, 10, 9))
@@ -1329,7 +1385,7 @@ async def preconditions(
     only: the registration then refuses).
     """
     checks: list[Check] = [check_code(code if code is not None else code_state())]
-    checks.append(judge_gates(await gate_rows(engine)))
+    checks.append(judge_gates(await gate_rows(engine), await current_pins(engine)))
     checks.append(await check_calendar_d1(engine))
     checks.append(await check_screens_d2(engine))
     checks.append(await check_news_d3(engine))
@@ -3104,6 +3160,8 @@ __all__ = [
     "NAME",
     "REPORTED_CHECKS",
     "REQUIRED_CHECKS",
+    "GATE_PINS",
+    "GateRow",
     "REQUIRED_GATES",
     "SENSITIVITIES",
     "STAGE_A_FAIL",
@@ -3143,6 +3201,7 @@ __all__ = [
     "existing_registration",
     "file_shas",
     "implementability",
+    "current_pins",
     "judge_gates",
     "judge_window",
     "last_session",
