@@ -148,7 +148,9 @@ MAX_FAILED_SHARE = 0.02
 #      (restaurants, grocers, convenience, variety and warehouse stores, drug
 #      stores, grocery wholesale, food manufacturing) a pass needs a Shariah
 #      index's inclusion, else it is doubtful.
-METHOD = "aaoifi-sec-v12"
+# v13: the index veto counts a renamed company held under its old ticker, on that
+#      ticker's days; partial rescreens pass the day's other rows as peers.
+METHOD = "aaoifi-sec-v13"
 UNMAPPED = "not an SEC registrant (or ticker not mapped)"
 _MIN_MONTHS = 12
 
