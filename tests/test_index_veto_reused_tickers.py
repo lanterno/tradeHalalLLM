@@ -208,3 +208,22 @@ async def test_a_recovered_ticker_names_its_company_as_of_the_filing_it_came_fro
     assert held(spus, "FBIN", "Fortune Brands Innovations, Inc.")
     assert held_by_ticker(spus, "TT") and not held(spus, "IR", TITLES["IR"])
     assert not held(spus, "PPLI", "People Inc.")
+
+
+async def test_a_placeholder_cusip_recovers_no_ticker(engine: AsyncEngine) -> None:
+    # Both ETFs write "N/A" as the CUSIP of some foreign-registered names.
+    # SPUS's line for Abiomed (acquired, no ticker) must not take one of
+    # HLAL's: SPUS never held Smurfit Westrock.
+    hlal = ("HLAL", date(2026, 7, 30), date(2026, 5, 31))
+    await _holdings(
+        engine,
+        ("SPUS", date(2026, 7, 29), date(2026, 5, 31), None, "ABIOMED INC", "N/A"),
+        ("SPUS", date(2026, 7, 29), date(2026, 5, 31), "MDT", "Medtronic PLC", "N/A"),
+        (*hlal, "SW", "Smurfit Westrock PLC", "N/A"),
+        (*hlal, "APTV", "Aptiv PLC", "N/A"),
+    )
+    views = {v.etf: v for v in await views_at(engine, date(2026, 9, 30))}
+    assert views["SPUS"].tickers == frozenset({"MDT"})
+    assert views["SPUS"].recovered == frozenset()
+    assert not held(views["SPUS"], "SW", "Smurfit Westrock plc")
+    assert held(views["HLAL"], "SW", "Smurfit Westrock plc")
