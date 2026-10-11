@@ -165,3 +165,46 @@ async def test_views_keep_the_tickers_recovered_from_cusips_apart(engine: AsyncE
     assert spus.recovered == frozenset({"META", "RVTY"})
     assert held(spus, "META", TITLES["META"]) and held(spus, "RVTY", TITLES["RVTY"])
     assert held(spus, "IR", TITLES["IR"])  # reported, and Gardner Denver's since 2020-02-29
+
+
+async def _holdings(
+    engine: AsyncEngine, *rows: tuple[str, date, date, str | None, str, str]
+) -> None:
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO etf_holdings (etf, filed, period_end, ticker, name, cusip, "
+                "weight_pct) VALUES (:e, :f, :p, :t, :n, :c, 1.0)"
+            ),
+            [dict(zip("efptnc", r, strict=True)) for r in rows],
+        )
+
+
+async def test_a_recovered_ticker_names_its_company_as_of_the_filing_it_came_from(
+    engine: AsyncEngine,
+) -> None:
+    spus_2021 = ("SPUS", date(2021, 10, 28), date(2021, 8, 31))
+    hlal_2020 = ("HLAL", date(2020, 7, 7), date(2020, 5, 31))
+    await _holdings(
+        engine,
+        # SPUS's 2021 lines without a ticker.
+        (*spus_2021, None, "Fortune Brands Home & Security Inc", "34964C106"),
+        (*spus_2021, None, "Gap Inc/The", "364760108"),
+        (*spus_2021, None, "IAC/InterActiveCorp", "44919P508"),
+        (*spus_2021, None, "Trane Technologies PLC", "G47791101"),
+        # The newest lines that carry a ticker for those CUSIPs. Fortune Brands
+        # (FBIN from 2022-12-15) and Gap (GAP from 2024-08-22) were last
+        # reported under their old tickers.
+        ("HLAL", date(2022, 10, 24), date(2022, 8, 31), "FBHS", "Fortune Brands", "34964C106"),
+        (*hlal_2020, "GPS", "Gap Inc/The", "364760108"),
+        # IAC was the old IAC (Match Group today) until 2020-06-30.
+        (*hlal_2020, "IAC", "IAC/InterActiveCorp", "44919P508"),
+        # Ingersoll-Rand plc, Trane today, as a filing of 2019 would carry it.
+        ("HLAL", date(2020, 1, 27), date(2019, 11, 30), "IR", "Ingersoll-Rand PLC", "G47791101"),
+    )
+    (spus,) = await views_at(engine, date(2021, 12, 31))
+    assert spus.tickers == frozenset()
+    assert spus.recovered == frozenset({"FBIN", "GAP", "TT"})  # the old IAC is nobody today
+    assert held(spus, "FBIN", "Fortune Brands Innovations, Inc.")
+    assert held_by_ticker(spus, "TT") and not held(spus, "IR", TITLES["IR"])
+    assert not held(spus, "PPLI", "People Inc.")
