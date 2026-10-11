@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import logging
 import math
 from datetime import UTC, date, datetime, timedelta
+from typing import Any
 
 import pytest
 from sqlalchemy import text
@@ -15,6 +17,7 @@ from halabot.playbooks.loader import (
     SUE_FIRST,
     SUE_MAX_HORIZON,
     CalendarMismatch,
+    GatePin,
     MinuteBarLoader,
     PathRequest,
     Window,
@@ -24,6 +27,8 @@ from halabot.playbooks.loader import (
     batches_of,
     check_calendar,
     check_gate_units,
+    current_pin,
+    gate_pin,
     gate_pins,
     register_gate_units,
     sane,
@@ -31,6 +36,7 @@ from halabot.playbooks.loader import (
     unit_set_sha,
 )
 from halabot.playbooks.types import DATA_SKIPS, PathData, PathSkip
+from halal_trader.core.events import GATE_UNITS_REPINNED
 from halal_trader.db.repos.quant_trials import QuantTrialRepoImpl, config_hash
 from halal_trader.events import study
 from halal_trader.market_hours import MARKET_TZ, is_trading_day
@@ -315,11 +321,152 @@ async def test_two_pins_for_one_gate_open_neither(engine: AsyncEngine) -> None:
     assert await gate_pins(engine, "reactor") == {unit_set_sha(a), unit_set_sha(b)}
     for units in (a, b):
         guard = _gate("reactor", units)
-        with pytest.raises(WindowLocked, match="2 pinned unit sets"):
+        with pytest.raises(WindowLocked, match="without superseding"):
             await guard.verify(engine)
         assert not guard.allows(*next(iter(units)))
-        with pytest.raises(WindowLocked, match="already pinned"):
+        with pytest.raises(WindowLocked, match="without superseding"):
             await register_gate_units(engine, "reactor", units)
+    with pytest.raises(WindowLocked, match="without superseding"):
+        await gate_pin(engine, "reactor")
+
+
+# ── re-pins ──
+
+
+async def _pin_rows(engine: AsyncEngine, gate: str) -> list[Any]:
+    async with engine.connect() as conn:
+        rows = await conn.execute(
+            text(
+                "SELECT id, config, metrics FROM quant_trials WHERE name = :n "
+                "AND config->>'gate' = :g ORDER BY id"
+            ),
+            {"n": GATE_UNITS_NAME, "g": gate},
+        )
+        return list(rows.all())
+
+
+async def test_a_repin_with_a_reason_writes_a_row_and_opens_only_the_new_set(
+    engine: AsyncEngine, caplog: pytest.LogCaptureFixture
+) -> None:
+    """An upstream data fix changed the selection: the logged re-pin supersedes the old set."""
+    old = frozenset({("AAA", date(2016, 3, 7)), ("BBB", date(2016, 3, 8))})
+    new = old | {("CCC", date(2016, 4, 1))}
+    first = await register_gate_units(engine, "g1", old)
+    reason = "aliases rebuilt: former names (2026-10-11)"
+    with caplog.at_level(logging.WARNING, logger="halabot.playbooks.loader"):
+        sha = await register_gate_units(
+            engine, "g1", new, expected_sha=unit_set_sha(new), supersede=f"  {reason} "
+        )
+    assert sha == unit_set_sha(new) != first
+    pins = await _pin_rows(engine, "g1")
+    assert [r.config for r in pins] == [
+        {"gate": "g1", "units_sha": first},
+        {"gate": "g1", "units_sha": sha, "supersedes": first, "reason": reason},
+    ]
+    (logged,) = [r for r in caplog.records if getattr(r, "event", None) == GATE_UNITS_REPINNED]
+    assert (logged.gate, logged.supersedes, logged.reason) == ("g1", first, reason)  # type: ignore[attr-defined]
+    assert logged.trial_id == pins[1].id  # type: ignore[attr-defined]
+    assert pins[1].metrics == {"units": 3}
+    assert await gate_pin(engine, "g1") == sha and await gate_pins(engine, "g1") == {first, sha}
+    guard = _gate("g1", new)
+    await guard.verify(engine)
+    assert guard.allows("CCC", date(2016, 4, 1))
+    stale = _gate("g1", old)
+    with pytest.raises(WindowLocked, match=f"{first[:12]} was superseded; the gate's pin is"):
+        await stale.verify(engine)
+    assert not stale.allows("AAA", date(2016, 3, 7))
+    # The new set is the gate's pin: registering it again is a no-op, with or without a reason.
+    assert await register_gate_units(engine, "g1", new) == sha
+    assert await register_gate_units(engine, "g1", new, supersede="again") == sha
+    # Going back to the old set is itself a re-pin, refused without a reason.
+    with pytest.raises(WindowLocked, match=f"already pinned to {sha[:12]}"):
+        await register_gate_units(engine, "g1", old)
+    assert len(await _pin_rows(engine, "g1")) == 2
+
+
+async def test_a_repin_without_a_reason_is_refused(engine: AsyncEngine) -> None:
+    old = frozenset({("AAA", date(2017, 5, 1))})
+    new = frozenset({("AAA", date(2017, 5, 1)), ("BBB", date(2018, 2, 1))})
+    first = await register_gate_units(engine, "sue", old)
+    with pytest.raises(WindowLocked, match="a re-pin needs a reason"):
+        await register_gate_units(engine, "sue", new)
+    for blank in ("", "   "):
+        with pytest.raises(WindowLocked, match="a re-pin needs a reason"):
+            await register_gate_units(engine, "sue", new, supersede=blank)
+    # A re-pin is still checked like a pin: the plan's sha and the gate's dates.
+    with pytest.raises(WindowLocked, match="not the expected"):
+        await register_gate_units(engine, "sue", new, expected_sha=first, supersede="fix")
+    with pytest.raises(WindowLocked, match="outside"):
+        await register_gate_units(engine, "sue", [("AAA", date(2021, 5, 3))], supersede="fix")
+    assert [r.config for r in await _pin_rows(engine, "sue")] == [
+        {"gate": "sue", "units_sha": first}
+    ]
+    await _gate("sue", old).verify(engine)
+    with pytest.raises(WindowLocked, match="not pinned"):
+        await _gate("sue", new).verify(engine)
+
+
+async def test_a_first_pin_given_a_reason_supersedes_nothing(engine: AsyncEngine) -> None:
+    units = frozenset({("AAA", date(2016, 3, 7))})
+    sha = await register_gate_units(engine, "calib", units, supersede="first run")
+    assert [r.config for r in await _pin_rows(engine, "calib")] == [
+        {"gate": "calib", "units_sha": sha}
+    ]
+
+
+async def test_two_repins_of_one_pin_shut_the_gate_until_a_later_repin(
+    engine: AsyncEngine,
+) -> None:
+    """Two re-pins that both read the old pin (a race) leave a change nobody sanctioned."""
+    a = frozenset({("AAA", date(2025, 12, 4))})
+    b = frozenset({("BBB", date(2025, 12, 5))})
+    c = frozenset({("CCC", date(2025, 12, 8))})
+    sha_a = await register_gate_units(engine, "reactor", a)
+    repo = QuantTrialRepoImpl(engine)
+    for units in (b, c):
+        await repo.record_trial(
+            name=GATE_UNITS_NAME,
+            kind="gate-units",
+            config={
+                "gate": "reactor",
+                "units_sha": unit_set_sha(units),
+                "supersedes": sha_a,
+                "reason": "race",
+            },
+        )
+    for units in (a, b, c):
+        with pytest.raises(WindowLocked, match="without superseding"):
+            await _gate("reactor", units).verify(engine)
+    with pytest.raises(WindowLocked, match="without superseding"):
+        await register_gate_units(engine, "reactor", b)  # no reason: still shut
+    # A re-pin of the latest row settles it, here back to c itself.
+    sha_c = await register_gate_units(engine, "reactor", c, supersede="settle the race")
+    assert (await _pin_rows(engine, "reactor"))[-1].config["supersedes"] == sha_c
+    assert await gate_pin(engine, "reactor") == sha_c
+    await _gate("reactor", c).verify(engine)
+    with pytest.raises(WindowLocked, match="superseded"):
+        await _gate("reactor", b).verify(engine)
+
+
+def test_the_current_pin_follows_only_sanctioned_changes() -> None:
+    a, b, c = "a" * 64, "b" * 64, "c" * 64
+    assert current_pin("g1", []) is None
+    assert current_pin("g1", [GatePin(1, a)]) == a
+    assert current_pin("g1", [GatePin(1, a), GatePin(2, a)]) == a  # a duplicate pin
+    assert current_pin("g1", [GatePin(2, b, a, "fix"), GatePin(1, a)]) == b  # by row id
+    assert current_pin("g1", [GatePin(1, a), GatePin(2, b, a, "x"), GatePin(3, b)]) == b
+    chain = [GatePin(1, a), GatePin(2, b, a, "x"), GatePin(3, a, b, "back")]
+    assert current_pin("g1", chain) == a
+    unsanctioned = (
+        [GatePin(1, a), GatePin(2, b)],  # a race of two first pins
+        [GatePin(1, a), GatePin(2, b, a, "x"), GatePin(3, c, a, "y")],  # two re-pins of a
+        [GatePin(1, a), GatePin(2, b, c, "x")],  # supersedes a pin that is not the latest
+        [GatePin(1, a), GatePin(2, b, a, "x"), GatePin(3, a)],  # a stale first pin raced in
+    )
+    for rows in unsanctioned:
+        with pytest.raises(WindowLocked, match="without superseding"):
+            current_pin("g1", rows)
+    assert current_pin("g1", [GatePin(1, a), GatePin(2, b), GatePin(3, b, b, "settle")]) == b
 
 
 # ── the calendar ──
