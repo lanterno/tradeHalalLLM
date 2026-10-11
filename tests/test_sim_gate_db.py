@@ -30,11 +30,11 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from halabot.playbooks.bounce import OverreactionBounce
-from halabot.playbooks.loader import GATE_UNITS_NAME, WindowLocked, gate_pins
+from halabot.playbooks.loader import GATE_UNITS_NAME, WindowLocked, gate_pin, gate_pins
 from halabot.playbooks.types import Submit
 from halal_trader.data import minutes
 from halal_trader.data.minutes import BarArrays
-from halal_trader.db.repos.quant_trials import config_hash
+from halal_trader.db.repos.quant_trials import QuantTrialRepoImpl, config_hash
 from halal_trader.events import h1, intraday, sim_gate, units
 from halal_trader.events.intraday import Headline
 from halal_trader.events.sim_gate import (
@@ -50,6 +50,7 @@ from halal_trader.events.sim_gate import (
     record_gate,
     require_done,
     run_determinism,
+    run_gates,
     run_lookahead,
     run_reactor,
     run_sue,
@@ -186,6 +187,59 @@ async def test_units_are_pinned_checked_done_and_read_behind_the_guard(
     assert pins == 1 and await gate_rows(engine) == []  # a pin is not a gate row
 
 
+async def test_a_changed_selection_repins_only_with_a_reason(engine: AsyncEngine) -> None:
+    """After an upstream data fix the gate's set changed: a reason re-pins it, logged."""
+    day = CALIB_DAY
+    old = frozenset({("AAA", day)})
+    new = frozenset({("AAA", day), ("BBB", day)})
+    before, after = units.UnitPlan({"gate_calib": old}), units.UnitPlan({"gate_calib": new})
+    sha = await pin_units(engine, "calib", "gate_calib", old, before)
+    other = after.sha("gate_calib")
+    with pytest.raises(GateRefused, match="--repin <reason>"):
+        await pin_units(engine, "calib", "gate_calib", new, after)
+    assert await gate_pin(engine, "calib") == sha
+    assert await pin_units(engine, "calib", "gate_calib", new, after, repin="aliases") == other
+    assert await gate_pin(engine, "calib") == other and await gate_pins(engine, "calib") == {
+        sha,
+        other,
+    }
+    async with engine.connect() as conn:
+        config = await conn.scalar(
+            text("SELECT config FROM quant_trials WHERE name = :n ORDER BY id DESC LIMIT 1"),
+            {"n": GATE_UNITS_NAME},
+        )
+    assert config == {"gate": "calib", "units_sha": other, "supersedes": sha, "reason": "aliases"}
+    # The new set is the pin: the same set again is a no-op, the old one is refused.
+    assert await pin_units(engine, "calib", "gate_calib", new, after) == other
+    with pytest.raises(GateRefused, match=f"pinned to {other}, but .* hashes to {sha}"):
+        await pin_units(engine, "calib", "gate_calib", old, before)
+    with pytest.raises(WindowLocked, match="superseded"):
+        await read_gate_bars(engine, "calib", old, sha, date(2016, 9, 30))
+
+
+async def test_conflicting_pins_refuse_the_gate_until_a_repin(engine: AsyncEngine) -> None:
+    """Two pins nobody sanctioned (a race) refuse the run, never crash it."""
+    a, b = frozenset({("AAA", CALIB_DAY)}), frozenset({("BBB", CALIB_DAY)})
+    repo = QuantTrialRepoImpl(engine)
+    for unit_set in (a, b):
+        sha = units.UnitPlan({"gate_calib": unit_set}).sha("gate_calib")
+        await repo.record_trial(
+            name=GATE_UNITS_NAME, kind="gate-units", config={"gate": "calib", "units_sha": sha}
+        )
+    plan = units.UnitPlan({"gate_calib": b})
+    with pytest.raises(GateRefused, match="without superseding"):
+        await pin_units(engine, "calib", "gate_calib", b, plan)
+    sha_b = await pin_units(engine, "calib", "gate_calib", b, plan, repin="settle the race")
+    assert await gate_pin(engine, "calib") == sha_b
+
+
+async def test_a_repin_needs_a_reason_before_any_gate_runs(engine: AsyncEngine) -> None:
+    for blank in ("", "  "):
+        with pytest.raises(ValueError, match="a re-pin needs a reason"):
+            await run_gates(engine, "all", repin=blank)
+    assert await gate_rows(engine) == []
+
+
 # ── G2: the reactor ──
 
 R_DAYS = (date(2026, 3, 2), date(2026, 3, 3), date(2026, 3, 4))
@@ -303,6 +357,41 @@ async def test_the_reactor_gates_refuse_a_set_other_than_the_pinned_one(
     assert both in out.refused["r1"]
     assert await gate_pins(reactor_world, "reactor") == {pinned}
     assert await gate_rows(reactor_world) == []
+    assert "--repin <reason>" in out.refused["r1"]
+
+
+async def test_the_reactor_gates_repin_a_changed_set_given_a_reason(
+    reactor_world: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The selection changed after a data fix: the reason re-pins it and every gate reruns."""
+    first = await run_reactor(reactor_world)
+    assert not first.refused
+    pinned = await gate_pin(reactor_world, "reactor")
+    old_units = units.reactor_units(reactor_headlines())
+    fewer = [h for h in reactor_headlines() if h.symbol != "DDD"]
+
+    async def chosen(engine: AsyncEngine) -> list[Headline]:
+        return list(fewer)
+
+    monkeypatch.setattr(units, "reactor_headlines", chosen)
+    changed = units.UnitPlan({"gate_reactor": units.reactor_units(fewer)}).sha("gate_reactor")
+    out = await run_gates(reactor_world, "reactor", repin="aliases rebuilt (2026-10-11)")
+    assert not out.refused and [r.gate for r in out.results] == ["r0", "r1", "r2"]
+    assert all(r.config["units_sha"] == changed for r in out.results)
+    rows = await gate_rows(reactor_world)
+    assert [r.config["units_sha"] for r in rows] == [pinned] * 3 + [changed] * 3
+    assert await gate_pin(reactor_world, "reactor") == changed
+    assert await gate_pins(reactor_world, "reactor") == {pinned, changed}
+    with pytest.raises(WindowLocked, match="superseded"):
+        await read_gate_bars(reactor_world, "reactor", old_units, str(pinned), date(2026, 10, 9))
+    # The same set with the reason again: no new pin, the gates rerun on it.
+    again = await run_reactor(reactor_world, repin="aliases rebuilt (2026-10-11)")
+    assert not again.refused
+    async with reactor_world.connect() as conn:
+        pins = await conn.scalar(
+            text("SELECT count(*) FROM quant_trials WHERE name = :n"), {"n": GATE_UNITS_NAME}
+        )
+    assert pins == 2
 
 
 async def test_the_reactor_gates_refuse_a_set_plan_h_did_not_select(
