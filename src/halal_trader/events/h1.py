@@ -98,12 +98,11 @@ counted). None of them but the backtests carries ``active_sr_period``.
   client when its keys are set) and recorded; without a client, or when the
   probe fails, they are recorded as not measured. Neither gates.
 * D3 judges a quarter on the names PIT-halal and rank < 1000 at its first
-  session that traded in it: a raw daily bar on at least half of its
-  sessions (:data:`D3_MIN_TRADED`). The trailing-twelve-month universe still
-  ranks companies acquired before or early in the quarter, and those have no
-  news because they no longer exist; each quarter lists them
-  (``not_trading``, with the sessions each traded). "Admitted news" is a news
-  event among a story's items.
+  session that traded in it: a raw daily bar on any of its sessions. The
+  trailing-twelve-month universe still ranks companies acquired before the
+  quarter, and those have no news because they no longer exist; each
+  quarter lists them (``not_trading``). A name that traded on even one
+  session is judged. "Admitted news" is a news event among a story's items.
 * A ``window`` summary row is added (the verdict reads it), and an
   ``amendment`` row precedes any re-run of a window, any step on changed
   code or data, and a window or implementability run after an unfinished
@@ -867,7 +866,6 @@ D2_SPAN: Final = (date(2016, 9, 30), date(2024, 12, 31))
 D2_MAX: Final = 0.03
 D3_SPAN: Final = (date(2016, 10, 1), date(2024, 12, 31))
 D3_MAX: Final = 0.02
-D3_MIN_TRADED: Final = 0.5  # share of a quarter's sessions a name must trade (a raw bar) on
 D4_MIN: Final = 0.99
 D5_SAMPLE: Final = 200
 READ_SESSIONS_SPAN_DAYS: Final = 7  # read_sessions scans sessions this close in one range
@@ -964,32 +962,30 @@ def quarter_starts(first: date, last: date) -> list[date]:
     return out
 
 
-async def sessions_traded(
-    engine: AsyncEngine, symbols: Sequence[str], sessions: Sequence[date]
-) -> dict[str, int]:
-    """How many of ``sessions`` each symbol has a raw daily bar on (0 when none)."""
-    out = dict.fromkeys(symbols, 0)
-    if not out or not sessions:
-        return out
+async def traded_in(
+    engine: AsyncEngine, symbols: Collection[str], sessions: Sequence[date]
+) -> set[str]:
+    """The symbols with a raw daily bar on any of ``sessions``."""
+    if not symbols or not sessions:
+        return set()
     async with engine.connect() as conn:
         rows = await conn.execute(
             text(
-                "SELECT symbol, count(*) AS n FROM daily_bars WHERE adjustment = 'raw' "
-                "AND symbol = ANY(:s) AND day = ANY(:d) GROUP BY symbol"
+                "SELECT DISTINCT symbol FROM daily_bars WHERE adjustment = 'raw' "
+                "AND symbol = ANY(:s) AND day = ANY(:d)"
             ),
-            {"s": list(out), "d": list(sessions)},
+            {"s": sorted(symbols), "d": list(sessions)},
         )
-        out.update({str(r.symbol): int(r.n) for r in rows})
-    return out
+        return {str(r.symbol) for r in rows}
 
 
 async def check_news_d3(engine: AsyncEngine) -> Check:
     """D3: renamed tickers' news fetched; per quarter, PIT-halal rank<1000 names that
-    traded in it (raw bars on half its sessions) with no admitted news item are at most 2%.
+    traded in it (a raw bar on any of its sessions) with no admitted news item are at
+    most 2%.
 
-    The names that did not trade (acquired before or early in the quarter, still
-    ranked on their trailing year) are left out and listed with the sessions each
-    traded (``not_trading``).
+    The names with no bar in the quarter (acquired before it, still ranked on
+    their trailing year) are left out and listed (``not_trading``).
     """
     from halal_trader.data.universe import universe_at
     from halal_trader.events.renames import missing_units
@@ -1002,7 +998,6 @@ async def check_news_d3(engine: AsyncEngine) -> Check:
     for q in quarter_starts(*D3_SPAN):
         q_end = date(q.year + (q.month + 2) // 12, (q.month + 2) % 12 + 1, 1) - timedelta(days=1)
         first = q if is_trading_day(q) else next_trading_day(q)
-        sessions = sessions_between(first, q_end)
         as_of = max((d for d in dates if d < first), default=None)
         if as_of is None:
             residual[q.isoformat()] = {
@@ -1010,15 +1005,14 @@ async def check_news_d3(engine: AsyncEngine) -> Check:
                 "silent": [],
                 "share": 1.0,
                 "screen": None,
-                "sessions": len(sessions),
-                "not_trading": {},
+                "not_trading": [],
             }
             continue
         halal = {r.symbol for r in screens[as_of] if r.verdict == "halal" and r.cik is not None}
         ranked = (await universe_at(engine, first, top_n=pit.TOP_N))[: pit.MAX_RANK]
-        traded = await sessions_traded(engine, sorted(halal & set(ranked)), sessions)
-        names = [s for s, n in traded.items() if n >= D3_MIN_TRADED * len(sessions)]
-        kept = set(names)
+        candidates = sorted(halal & set(ranked))
+        traded = await traded_in(engine, candidates, sessions_between(first, q_end))
+        names = [s for s in candidates if s in traded]
         async with engine.connect() as conn:
             rows = await conn.execute(
                 text(
@@ -1031,14 +1025,13 @@ async def check_news_d3(engine: AsyncEngine) -> Check:
                 {"v": st.BUILDER_VERSION, "a": first, "b": q_end, "names": names},
             )
             heard = {str(r.symbol) for r in rows}
-        silent = sorted(kept - heard)
+        silent = [s for s in names if s not in heard]
         residual[q.isoformat()] = {
             "names": len(names),
             "silent": silent,
             "share": len(silent) / len(names) if names else 1.0,
             "screen": as_of.isoformat(),
-            "sessions": len(sessions),
-            "not_trading": {s: n for s, n in traded.items() if s not in kept},
+            "not_trading": [s for s in candidates if s not in traded],
         }
     over = sorted(q for q, r in residual.items() if r["share"] > D3_MAX)
     data = {"renamed_months_missing": missing, "quarters": residual}
@@ -1055,7 +1048,7 @@ async def check_news_d3(engine: AsyncEngine) -> Check:
         "D3",
         True,
         f"{len(residual)} quarters, silent names at most {worst:.2%} "
-        f"({gone} name-quarter(s) that no longer traded left out)",
+        f"({gone} name-quarter(s) with no bar in the quarter left out)",
         data,
     )
 
