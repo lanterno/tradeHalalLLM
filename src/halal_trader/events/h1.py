@@ -794,7 +794,11 @@ GATE_PINS: Final[dict[str, str]] = {
 GateRow = tuple[str, int, str | None, str | None]
 
 
-def judge_gates(rows: Sequence[GateRow], pins: Mapping[str, str | None]) -> Check:
+def judge_gates(
+    rows: Sequence[GateRow],
+    pins: Mapping[str, str | None],
+    selection: Mapping[str, str | None] | None = None,
+) -> Check:
     """G: every required gate id has a row, every gate id's latest row passes, and the
     latest row of a gate that reads a pinned set ran on that set's current pin.
 
@@ -806,6 +810,13 @@ def judge_gates(rows: Sequence[GateRow], pins: Mapping[str, str | None]) -> Chec
     A :data:`GATE_PINS` id whose latest row records no pin, or a pin other
     than its gate's current one, is stale (fail closed): the gate was
     re-pinned after the row ran, so it must run again on the new set.
+
+    ``selection`` maps each pinned gate to plan H's current selection for it
+    (``units.h1_plan``'s part sha, None when plan H is refused). With it, a
+    gate whose pin is not plan H's selection fails too: the stories or the
+    universe changed after the gate was pinned, so it must be re-pinned
+    (``events sim-gate <group> --repin "<reason>"``) and run again. Without it
+    (a caller with no plan) the pins are taken as they are.
     """
     latest: dict[str, tuple[int, str | None, str | None]] = {}
     for gate, row_id, verdict_, sha in rows:
@@ -818,13 +829,24 @@ def judge_gates(rows: Sequence[GateRow], pins: Mapping[str, str | None]) -> Chec
         for g, (_, _, sha) in latest.items()
         if g in GATE_PINS and (sha is None or sha != pins.get(GATE_PINS[g]))
     )
+    unselected = sorted(
+        gate
+        for gate in {*GATE_PINS.values()}
+        if selection is not None
+        and (pins.get(gate) is None or pins.get(gate) != selection.get(gate))
+    )
     gates: dict[str, dict[str, Any]] = {}
     for g, (i, v, sha) in sorted(latest.items()):
         gates[g] = {"id": i, "verdict": v}
         if g in GATE_PINS:
             gates[g] |= {"units_sha": sha, "pin": pins.get(GATE_PINS[g])}
-    data = {"required": list(REQUIRED_GATES), "gates": gates, "pins": dict(sorted(pins.items()))}
-    if failed or missing or stale:
+    data = {
+        "required": list(REQUIRED_GATES),
+        "gates": gates,
+        "pins": dict(sorted(pins.items())),
+        "selection": dict(sorted(selection.items())) if selection is not None else None,
+    }
+    if failed or missing or stale or unselected:
         parts = []
         if missing:
             parts.append(f"no row for {', '.join(missing)}")
@@ -834,6 +856,11 @@ def judge_gates(rows: Sequence[GateRow], pins: Mapping[str, str | None]) -> Chec
             parts.append(
                 "stale, latest row not run on its gate's current pin (run the gate again): "
                 + ", ".join(stale)
+            )
+        if unselected:
+            parts.append(
+                "pinned set is not plan H's current selection (re-pin with a reason and run "
+                "again): " + ", ".join(unselected)
             )
         return Check("G", False, "; ".join(parts), data)
     return Check(
@@ -1404,24 +1431,38 @@ async def preconditions(
     only: the registration then refuses).
     """
     checks: list[Check] = [check_code(code if code is not None else code_state())]
-    checks.append(judge_gates(await gate_rows(engine), await current_pins(engine)))
-    checks.append(await check_calendar_d1(engine))
-    checks.append(await check_screens_d2(engine))
-    checks.append(await check_news_d3(engine))
+    later: list[Check] = []  # D4/D5 refusals, placed after D1-D3 as before
     if plan is None:
         try:
             from halal_trader.events.units import PlanError, h1_plan
         except ImportError as exc:
-            checks.append(Check("D4", False, f"plan H is not available: {exc}"))
-            checks.append(Check("D5", False, "plan H is not available"))
+            later.append(Check("D4", False, f"plan H is not available: {exc}"))
+            later.append(Check("D5", False, "plan H is not available"))
             plan = None
         else:
             try:
                 plan = await h1_plan(engine)
             except PlanError as exc:  # stories not built, a gate set out of range...
-                checks.append(Check("D4", False, f"plan H refused: {exc}"))
-                checks.append(Check("D5", False, "plan H refused"))
+                later.append(Check("D4", False, f"plan H refused: {exc}"))
+                later.append(Check("D5", False, "plan H refused"))
                 plan = None
+    # The gates judged against plan H's selection: a gate pinned on a set plan H no
+    # longer selects (the stories or universe changed) is stale until re-pinned.
+    selection = dict.fromkeys({*GATE_PINS.values()})
+    if plan is not None:
+        from halabot.playbooks.loader import unit_set_sha
+        from halal_trader.events.units import GATE_OF_PART
+
+        selection |= {
+            g: unit_set_sha(plan.parts[part])
+            for part, g in GATE_OF_PART.items()
+            if part in plan.parts
+        }
+    checks.append(judge_gates(await gate_rows(engine), await current_pins(engine), selection))
+    checks.append(await check_calendar_d1(engine))
+    checks.append(await check_screens_d2(engine))
+    checks.append(await check_news_d3(engine))
+    checks.extend(later)
     units: set[tuple[str, date]] | None = None
     if plan is not None:
         done = await minutes.done_units(engine)
