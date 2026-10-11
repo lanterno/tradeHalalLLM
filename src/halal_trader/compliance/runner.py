@@ -150,7 +150,9 @@ MAX_FAILED_SHARE = 0.02
 #      index's inclusion, else it is doubtful.
 # v13: the index veto counts a renamed company held under its old ticker, on that
 #      ticker's days; partial rescreens pass the day's other rows as peers.
-METHOD = "aaoifi-sec-v13"
+# v14: the index veto counts a reused ticker for its current holder only from the
+#      day it took it.
+METHOD = "aaoifi-sec-v14"
 UNMAPPED = "not an SEC registrant (or ticker not mapped)"
 _MIN_MONTHS = 12
 
