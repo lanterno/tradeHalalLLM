@@ -270,6 +270,21 @@ def test_a_gate_whose_latest_row_ran_on_a_superseded_pin_is_stale() -> None:
     assert not old.ok and old.detail.endswith(": s3")
 
 
+def test_a_gate_pinned_on_a_set_plan_h_no_longer_selects_fails() -> None:
+    """The stories changed after g1 and sue were pinned: their rows ran on the pins,
+    but the pins are not plan H's selection any more, so G fails until a re-pin."""
+    assert judge_gates(_gates(), PINS, dict(PINS)).ok
+    moved = {**PINS, "g1": "x" * 64, "sue": "y" * 64}
+    check = judge_gates(_gates(), PINS, moved)
+    assert not check.ok
+    assert check.detail == (
+        "pinned set is not plan H's current selection (re-pin with a reason and run again): g1, sue"
+    )
+    assert check.data["selection"]["g1"] == "x" * 64
+    refused = judge_gates(_gates(), PINS, dict.fromkeys(PINS))  # plan H refused
+    assert not refused.ok and "calib, g1, reactor, sue" in refused.detail
+
+
 def test_a_pinned_gate_without_a_recorded_or_valid_pin_fails_closed() -> None:
     unrecorded = [(g, i, v, None if g == "r1" else sha) for g, i, v, sha in _gates()]
     check = judge_gates(unrecorded, PINS)
