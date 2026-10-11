@@ -67,20 +67,25 @@ class Inputs:
     def caps(self, t: int, firms: Mapping[int, Firm]) -> FloatArray:
         """Market cap per column. A company listed in several share classes
         (GOOG, GOOGL) reports one share count for all of them, so each class
-        gets an equal part of the company's cap rather than all of it."""
-        close = self.prices.close
-        out = np.full(close.shape[1], np.nan)
-        classes: dict[int, int] = {}
-        for f in firms.values():
-            if f.cik is not None:
-                classes[f.cik] = classes.get(f.cik, 0) + 1
+        gets an equal part of the company's cap rather than all of it: the
+        core's rule (portfolio/strict_core.split_share_classes), which counts
+        only the classes with a cap at ``t``. A class without a price then
+        leaves the company's whole cap to the one that has one."""
+        from halal_trader.portfolio.strict_core import split_share_classes
+
+        close, symbols = self.prices.close, self.prices.symbols
+        whole: dict[str, float] = {}
         for j, f in firms.items():
             then = self._row_on_or_before(f.screened)
             if f.cap is None or then is None:
                 continue
             ratio = close[t, j] / close[then, j]
             if np.isfinite(ratio) and ratio > 0:
-                out[j] = f.cap * ratio / (classes.get(f.cik, 1) if f.cik is not None else 1)
+                whole[symbols[j]] = f.cap * float(ratio)
+        ciks = {symbols[j]: f.cik for j, f in firms.items()}
+        out = np.full(close.shape[1], np.nan)
+        for s, cap in split_share_classes(whole, ciks).items():
+            out[self._col[s]] = cap
         return out
 
     def composite(self, t: int, firms: Mapping[int, Firm]) -> FloatArray:
@@ -168,7 +173,7 @@ def core_strict(inputs: Inputs, top_n: int = 100, sector: str | None = None) -> 
         firms = inputs.firms(t)
         if sector is not None:
             firms = {j: f for j, f in firms.items() if cap_sector(symbols[j], f.sic) == sector}
-        caps = inputs.caps(t, firms)  # already split across share classes
+        caps = inputs.caps(t, firms)  # already split across the priced share classes
         chosen = targets({symbols[j]: float(caps[j]) for j in firms if np.isfinite(caps[j])}, top_n)
         out = np.zeros(len(symbols))
         for s, w in chosen.items():
