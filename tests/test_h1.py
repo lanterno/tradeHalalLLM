@@ -71,6 +71,7 @@ from halal_trader.events.h1 import (
     window_span,
     window_stats,
 )
+from halal_trader.events.renames import later_tickers
 from halal_trader.events.stories import NEWS_LAG, RawItem, Story, build
 from halal_trader.events.taxonomy import FAMILY
 from halal_trader.market_hours import MARKET_TZ, is_trading_day, next_trading_day
@@ -905,6 +906,7 @@ async def test_d3_needs_the_renamed_news_and_news_for_every_halal_name(
         "share": 0.5,
         "screen": "2016-12-30",
         "not_trading": [],
+        "heard_as": {},
     }
     await mark_renamed_news_done(engine)
     ids = await store(
@@ -962,6 +964,7 @@ async def test_d3_leaves_out_only_the_names_with_no_bar_in_the_quarter(
             "share": 0.5,
             "screen": "2016-12-30",
             "not_trading": ["GONE"],
+            "heard_as": {},
         },
         "2017-04-01": {
             "names": 1,
@@ -969,6 +972,7 @@ async def test_d3_leaves_out_only_the_names_with_no_bar_in_the_quarter(
             "share": 0.0,
             "screen": "2016-12-30",
             "not_trading": ["GONE", "ONE"],
+            "heard_as": {},
         },
     }
     ids = await store(engine, [news_row(3, "ONE", ny(q1[0], 8), "One news")], facts=False)
@@ -977,7 +981,65 @@ async def test_d3_leaves_out_only_the_names_with_no_bar_in_the_quarter(
     assert ok.ok, ok.detail
     assert ok.detail == (
         "2 quarters, silent names at most 0.00% (3 name-quarter(s) with no bar in the "
-        "quarter left out)"
+        "quarter left out, 0 heard under a later ticker)"
+    )
+
+
+async def test_d3_hears_a_renamed_name_under_its_later_ticker_of_the_same_cik(
+    engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The real renames: DWDP became DD (one company), while IR's later ticker
+    # TT is Ingersoll-Rand plc's, not the Gardner Denver the screen calls IR.
+    assert (later_tickers("DWDP"), later_tickers("IR")) == (("DD",), ("TT",))
+    monkeypatch.setattr(h1, "D3_SPAN", (date(2019, 4, 1), date(2019, 6, 30)))
+    await mark_renamed_news_done(engine)
+    as_of = date(2019, 3, 29)
+    await _screen(
+        engine, as_of, [("AAA", 1, "X"), ("DWDP", 7, "X"), ("IR", 8, "X"), ("TT", 9, "X")]
+    )
+    async with engine.begin() as conn:  # DD: the same CIK as DWDP, and not halal
+        await conn.execute(
+            text(
+                "INSERT INTO halal_screen_results (as_of, symbol, cik, sic_description, verdict, "
+                "reasons, metrics, method, screened_at) VALUES (:a, 'DD', 7, 'X', 'not_halal', "
+                "'[]', '{}', 'v12', now())"
+            ),
+            {"a": as_of},
+        )
+    names = ["AAA", "DWDP", "IR", "TT"]
+    await _monthly(engine, names, date(2018, 1, 1), date(2019, 6, 1))
+    q2 = h1.sessions_between(date(2019, 4, 1), date(2019, 6, 30))
+    for symbol in names:
+        await _raw_days(engine, symbol, q2)
+    ids = await store(
+        engine,
+        [
+            news_row(1, "AAA", ny(q2[3], 8), "Acme news"),
+            news_row(2, "DD", ny(q2[4], 8), "DowDuPont news"),
+            news_row(3, "TT", ny(q2[5], 8), "Ingersoll-Rand news"),
+        ],
+        facts=False,
+    )
+    await _story_row(engine, "AAA", q2[3], [ids["alpaca:1"]])
+    await _story_row(engine, "DD", q2[4], [ids["alpaca:2"]])
+    await _story_row(engine, "TT", q2[5], [ids["alpaca:3"]])
+    bad = await h1.check_news_d3(engine)
+    assert not bad.ok
+    assert bad.data["quarters"]["2019-04-01"] == {
+        "names": 4,  # DD is not halal, so it is not judged; it only carries DWDP's news
+        "silent": ["IR"],  # TT's news is another company's
+        "share": 0.25,
+        "screen": "2019-03-29",
+        "not_trading": [],
+        "heard_as": {"DWDP": "DD"},
+    }
+    ids = await store(engine, [news_row(4, "IR", ny(q2[9], 8), "Gardner Denver news")], facts=False)
+    await _story_row(engine, "IR", q2[9], [ids["alpaca:4"]])
+    ok = await h1.check_news_d3(engine)
+    assert ok.ok, ok.detail
+    assert ok.detail == (
+        "1 quarters, silent names at most 0.00% (0 name-quarter(s) with no bar in the "
+        "quarter left out, 1 heard under a later ticker)"
     )
 
 
