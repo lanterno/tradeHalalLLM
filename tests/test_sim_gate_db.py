@@ -132,7 +132,7 @@ async def test_a_gate_row_carries_the_constants_the_rule_and_the_numbers(
     assert row.config == {**sim_gate.gate_config("r1"), "units_sha": "ab"}
     assert row.config_hash == config_hash(row.config)
     assert row.metrics == {"x": None, "d": "2026-03-02"}
-    assert await h1.gate_rows(engine) == [("r1", row_id, "pass")]  # what the H1 runner reads
+    assert await h1.gate_rows(engine) == [("r1", row_id, "pass", "ab")]  # what H1 reads
     await record_gate(engine, GateResult("r1", False, {}))
     assert [r.verdict for r in await gate_rows(engine)] == ["pass", "fail"]
 

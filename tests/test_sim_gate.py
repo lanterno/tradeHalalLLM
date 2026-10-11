@@ -42,6 +42,7 @@ from halal_trader.events.intraday import Headline, Outcome
 from halal_trader.events.sim_gate import (
     CRITERIA,
     GATE_IDS,
+    GATE_PINS,
     GROUPS,
     FlattenHoldFactory,
     G1Factory,
@@ -127,6 +128,7 @@ def test_gate_ids_groups_and_criteria_are_exactly_the_h1_runners() -> None:
     )
     assert sorted(g for ids in GROUPS.values() for g in ids) == sorted(GATE_IDS)
     assert set(CRITERIA) == set(GATE_IDS)
+    assert GATE_PINS == h1.GATE_PINS  # the pin each gate's rows record, as H1 checks it
 
 
 def test_the_config_pins_the_simulator_constants_the_gate_and_the_seed() -> None:

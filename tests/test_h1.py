@@ -13,6 +13,7 @@ import math
 import re
 import subprocess
 import sys
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
@@ -25,7 +26,14 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from halabot.playbooks import bounce
 from halabot.playbooks.bounce import BounceParams
-from halabot.playbooks.loader import WINDOW_LAST, WINDOW_START, Window
+from halabot.playbooks.loader import (
+    GATE_UNITS_NAME,
+    WINDOW_LAST,
+    WINDOW_START,
+    Window,
+    register_gate_units,
+    unit_set_sha,
+)
 from halabot.playbooks.records import Leg, StoryOutcome, TradeRecord
 from halabot.playbooks.sim import start_time
 from halabot.playbooks.types import Session, SimConfig
@@ -168,9 +176,17 @@ def test_a_changed_pin_is_a_new_configuration_and_both_windows_share_a_trial() -
 # ── gates and the code ───────────────────────────────────────
 
 
-def _gates(**verdicts: str) -> list[tuple[str, int, str | None]]:
-    """A row for every required gate, passing unless ``verdicts`` says otherwise."""
-    return [(g, i, verdicts.get(g, "pass")) for i, g in enumerate(h1.REQUIRED_GATES, 1)]
+# Each pinned gate's current pin, and a row for every required gate run on it.
+PINS: dict[str, str | None] = {g: g[0] * 64 for g in ("g1", "calib", "reactor", "sue")}
+
+
+def _gates(**verdicts: str) -> list[h1.GateRow]:
+    """A row for every required gate, passing unless ``verdicts`` says otherwise, each
+    pinned gate's on its current pin (:data:`PINS`)."""
+    return [
+        (g, i, verdicts.get(g, "pass"), PINS[h1.GATE_PINS[g]] if g in h1.GATE_PINS else None)
+        for i, g in enumerate(h1.REQUIRED_GATES, 1)
+    ]
 
 
 def test_the_gate_ids_are_every_sub_gate_of_g1_to_g3() -> None:
@@ -190,21 +206,80 @@ def test_the_gate_ids_are_every_sub_gate_of_g1_to_g3() -> None:
 
 
 def test_every_required_gate_needs_a_row_and_every_latest_row_must_pass() -> None:
-    ok = judge_gates(_gates())
+    ok = judge_gates(_gates(), PINS)
     assert ok.ok and set(ok.data["gates"]) == set(h1.REQUIRED_GATES)
     for gate in h1.REQUIRED_GATES:  # one sub-gate never recorded fails G (no family stands in)
-        missing = judge_gates([r for r in _gates() if r[0] != gate])
+        missing = judge_gates([r for r in _gates() if r[0] != gate], PINS)
         assert not missing.ok and f"no row for {gate}" in missing.detail
-    family_only = judge_gates([("g1", 1, "pass"), ("reactor", 2, "pass"), ("sue", 3, "pass")])
+    family_only = judge_gates(
+        [("g1", 1, "pass", None), ("reactor", 2, "pass", None), ("sue", 3, "pass", None)], PINS
+    )
     assert not family_only.ok
-    failed = judge_gates(_gates(s1="fail"))
+    failed = judge_gates(_gates(s1="fail"), PINS)
     assert not failed.ok and "s1" in failed.detail and "no row" not in failed.detail
-    extra = judge_gates([*_gates(), ("calib-extra", 99, "fail")])
+    extra = judge_gates([*_gates(), ("calib-extra", 99, "fail", None)], PINS)
     assert not extra.ok and "calib-extra" in extra.detail  # a recorded failure is never ignored
-    fixed = judge_gates([*_gates(r2="fail"), ("r2", 50, "pass")])
+    fixed = judge_gates([*_gates(r2="fail"), ("r2", 50, "pass", PINS["reactor"])], PINS)
     assert fixed.ok  # a rerun after a fix replaces the failed row
-    broke = judge_gates([*_gates(), ("r2", 50, "fail")])
+    broke = judge_gates([*_gates(), ("r2", 50, "fail", PINS["reactor"])], PINS)
     assert not broke.ok
+
+
+def test_the_pinned_gates_are_every_gate_that_reads_minute_units() -> None:
+    assert h1.GATE_PINS == {
+        "g1-lookahead": "g1",
+        "g1-determinism": "g1",
+        "r0": "reactor",
+        "r1": "reactor",
+        "r2": "reactor",
+        "s1-calib": "calib",
+        "s2": "sue",
+        "s3": "sue",
+    }
+    assert set(h1.REQUIRED_GATES) - set(h1.GATE_PINS) == {"g1-synthetic", "s0", "s1"}
+
+
+def test_a_gate_whose_latest_row_ran_on_a_superseded_pin_is_stale() -> None:
+    """A data fix re-pinned g1 and sue: their old rows no longer count until rerun."""
+    repinned = {**PINS, "g1": "n" * 64, "sue": "m" * 64}
+    stale = judge_gates(_gates(), repinned)
+    assert not stale.ok and "no row" not in stale.detail and "not passed" not in stale.detail
+    names = "g1-determinism, g1-lookahead, s2, s3"
+    assert stale.detail == (
+        f"stale, latest row not run on its gate's current pin (run the gate again): {names}"
+    )
+    assert stale.data["gates"]["s2"] == {
+        "id": 10,
+        "verdict": "pass",
+        "units_sha": PINS["sue"],
+        "pin": "m" * 64,
+    }
+    assert "units_sha" not in stale.data["gates"]["s0"]  # s0 reads no pinned set
+    assert stale.data["pins"]["g1"] == "n" * 64
+    rerun = [
+        ("g1-lookahead", 20, "pass", "n" * 64),
+        ("g1-determinism", 21, "pass", "n" * 64),
+        ("s2", 22, "pass", "m" * 64),
+    ]
+    still = judge_gates([*_gates(), *rerun], repinned)
+    assert not still.ok and still.detail.endswith("(run the gate again): s3")
+    assert judge_gates([*_gates(), *rerun, ("s3", 23, "pass", "m" * 64)], repinned).ok
+    # A passing rerun on the superseded pin does not count either.
+    old = judge_gates([*_gates(), *rerun, ("s3", 23, "pass", PINS["sue"])], repinned)
+    assert not old.ok and old.detail.endswith(": s3")
+
+
+def test_a_pinned_gate_without_a_recorded_or_valid_pin_fails_closed() -> None:
+    unrecorded = [(g, i, v, None if g == "r1" else sha) for g, i, v, sha in _gates()]
+    check = judge_gates(unrecorded, PINS)
+    assert not check.ok and check.detail.endswith("(run the gate again): r1")
+    for pins in ({**PINS, "calib": None}, {g: p for g, p in PINS.items() if g != "calib"}):
+        check = judge_gates(_gates(), pins)  # nothing pinned, or conflicting pins
+        assert not check.ok and check.detail.endswith(": s1-calib")
+    # A gate that reads no pinned set is judged by its verdict alone.
+    assert judge_gates(
+        [(g, i, v, None) if g == "s0" else (g, i, v, s) for g, i, v, s in _gates()], PINS
+    ).ok
 
 
 def test_the_code_must_be_tagged_and_clean() -> None:
@@ -1231,17 +1306,62 @@ async def test_a_refused_plan_h_fails_d4_and_d5_and_raises_nothing(
     assert d5 is not None and not d5.ok and not report.ok
 
 
-async def test_gate_rows_are_read_from_the_ledger(engine: AsyncEngine) -> None:
+# A unit set inside each pinned gate's dates (loader.GATE_RANGES).
+GATE_SETS: dict[str, frozenset[tuple[str, date]]] = {
+    "g1": frozenset({("AAA", date(2016, 3, 7))}),
+    "calib": frozenset({("AAA", date(2016, 3, 8))}),
+    "reactor": frozenset({("AAA", date(2026, 3, 2))}),
+    "sue": frozenset({("AAA", date(2017, 5, 1))}),
+}
+
+
+async def _record_gates(
+    engine: AsyncEngine, gates: Sequence[tuple[str, str]], shas: Mapping[str, str | None]
+) -> None:
+    """A gate row per (gate id, verdict), a pinned gate's recording ``shas``' pin."""
     repo = QuantTrialRepoImpl(engine)
+    for gate, verdict in gates:
+        config: dict[str, Any] = {"sim": {}, "gate": gate}
+        if gate in h1.GATE_PINS:
+            config["units_sha"] = shas[h1.GATE_PINS[gate]]
+        await repo.record_trial(name=h1.GATE_NAME, kind="gate", config=config, verdict=verdict)
+
+
+async def test_gate_rows_are_read_from_the_ledger(engine: AsyncEngine) -> None:
+    shas = {g: await register_gate_units(engine, g, s) for g, s in GATE_SETS.items()}  # type: ignore[arg-type]
     recorded = [(g, "pass") for g in h1.REQUIRED_GATES if g != "r1"]
     recorded += [("r1", "fail"), ("r1", "pass")]
-    for gate, verdict in recorded:
-        await repo.record_trial(
-            name=h1.GATE_NAME, kind="gate", config={"sim": {}, "gate": gate}, verdict=verdict
-        )
-    await repo.record_trial(
-        name="research.news.sim-gate.units", kind="gate-units", config={"gate": "g1"}
-    )
+    await _record_gates(engine, recorded, shas)
     rows = await h1.gate_rows(engine)
-    assert sorted(g for g, _, _ in rows) == sorted(g for g, _ in recorded)
-    assert judge_gates(rows).ok
+    assert sorted(g for g, _, _, _ in rows) == sorted(g for g, _ in recorded)
+    assert {g: sha for g, _, _, sha in rows if g in ("s0", "s2")} == {"s0": None, "s2": shas["sue"]}
+    assert await h1.current_pins(engine) == shas
+    assert judge_gates(rows, await h1.current_pins(engine)).ok
+
+
+async def test_h1_refuses_a_gate_whose_latest_row_ran_on_a_superseded_pin(
+    engine: AsyncEngine,
+) -> None:
+    """The aliases were rebuilt and g1's set changed: its passing rows tested the old set."""
+    shas = {g: await register_gate_units(engine, g, s) for g, s in GATE_SETS.items()}  # type: ignore[arg-type]
+    await _record_gates(engine, [(g, "pass") for g in h1.REQUIRED_GATES], shas)
+    assert judge_gates(await h1.gate_rows(engine), await h1.current_pins(engine)).ok
+    new_g1 = GATE_SETS["g1"] | {("BBB", date(2016, 4, 1))}
+    repinned = await register_gate_units(engine, "g1", new_g1, supersede="aliases rebuilt")
+    assert repinned == unit_set_sha(new_g1)
+    pins = await h1.current_pins(engine)
+    assert pins == {**shas, "g1": repinned}
+    stale = judge_gates(await h1.gate_rows(engine), pins)
+    assert not stale.ok and stale.detail.endswith(
+        "(run the gate again): g1-determinism, g1-lookahead"
+    )
+    # The gates run again on the new pin: H1's gate check passes.
+    await _record_gates(engine, [("g1-lookahead", "pass"), ("g1-determinism", "pass")], pins)
+    assert judge_gates(await h1.gate_rows(engine), await h1.current_pins(engine)).ok
+    # Conflicting pins (a race nobody sanctioned) fail closed whatever the rows say.
+    await QuantTrialRepoImpl(engine).record_trial(
+        name=GATE_UNITS_NAME, kind="gate-units", config={"gate": "g1", "units_sha": "f" * 64}
+    )
+    assert (await h1.current_pins(engine))["g1"] is None
+    shut = judge_gates(await h1.gate_rows(engine), await h1.current_pins(engine))
+    assert not shut.ok and shut.detail.endswith(": g1-determinism, g1-lookahead")
