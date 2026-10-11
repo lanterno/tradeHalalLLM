@@ -10,15 +10,19 @@ Point in time:
   comparatives restate; the original is what the market saw);
 * fiscal Q4 is rarely tagged on its own: it is the annual value minus the
   three quarters inside that fiscal year, known when the 10-K is filed;
-* the event time is the earnings release, the **8-K with item 2.02**
+* the event time is the earnings release, the **last 8-K with item 2.02**
   accepted between the quarter's end and the report's filing (the press
   release states the same EPS); without one, the report's filing date at
-  17:00 New York.
+  17:00 New York. The last, not the first: a company that files an earlier
+  2.02 8-K in that window (a preliminary update, a trends report weeks
+  before its results) has not yet published the EPS, so dating the SUE
+  there would read it early. The last one is the release or later, never
+  before it.
 """
 
 from __future__ import annotations
 
-from bisect import bisect_left
+from bisect import bisect_right
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
@@ -106,6 +110,16 @@ def sue_values(series: list[Quarter]) -> list[tuple[Quarter, float]]:
     return out
 
 
+def release_time(times: list[datetime], q: Quarter) -> datetime:
+    """When quarter ``q``'s EPS was public: the last 2.02 8-K (``times``, sorted)
+    from the quarter's end through the day after its report was filed, else the
+    report's filing date at 17:00 New York."""
+    lo = datetime.combine(q.end, time(0), UTC)
+    hi = datetime.combine(q.filed + timedelta(days=1), time(23, 59), UTC)
+    i = bisect_right(times, hi) - 1
+    return times[i] if i >= 0 and times[i] >= lo else filed_at(q.filed)
+
+
 async def sue_observations(engine: AsyncEngine, companies: dict[int, str]) -> list[SueObs]:
     """Every SUE the stored EPS facts allow, dated by its earnings release."""
     facts: dict[int, list[tuple[str, date, date, float, date]]] = defaultdict(list)
@@ -129,9 +143,5 @@ async def sue_observations(engine: AsyncEngine, companies: dict[int, str]) -> li
             continue
         times = sorted(releases.get(symbol, []))
         for q, sue in sue_values(quarterly_series(rows)):
-            lo = datetime.combine(q.end, time(0), UTC)
-            hi = datetime.combine(q.filed + timedelta(days=1), time(23, 59), UTC)
-            i = bisect_left(times, lo)
-            announced = times[i] if i < len(times) and times[i] <= hi else filed_at(q.filed)
-            out.append(SueObs(cik, symbol, q.end, announced, sue, q.eps))
+            out.append(SueObs(cik, symbol, q.end, release_time(times, q), sue, q.eps))
     return out
