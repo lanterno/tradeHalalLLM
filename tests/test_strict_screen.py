@@ -137,7 +137,7 @@ async def test_a_missing_ticker_is_recovered_from_the_same_cusip(engine: AsyncEn
             ],
         )
     views = {v.etf: v for v in await views_at(engine, date(2025, 4, 1))}
-    assert "CSCO" in views["SPUS"].tickers
+    assert "CSCO" in views["SPUS"].recovered and views["SPUS"].tickers == frozenset()
     assert await views_at(engine, date(2026, 1, 1)) == []  # older than MAX_AGE: no opinion
 
 
