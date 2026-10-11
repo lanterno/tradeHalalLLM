@@ -100,3 +100,47 @@ async def test_a_report_the_screen_already_read_does_not_bring_the_next_one_forw
     sec = FakeSec({1: [("10-Q", "2026-10-02")], 2: [("6-K", "2026-10-03")]})
 
     assert await _holdings_reported(engine, sec, SCREENED_AT) == ["OLDQ"]
+
+
+async def test_a_held_second_share_class_counts_through_its_company(
+    engine: AsyncEngine,
+) -> None:
+    """The core holds GOOGL; the company's filings are covered under GOOG (more screens)."""
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO halal_screen_results (as_of, symbol, cik, sic_description, verdict, "
+                "reasons, metrics, method, screened_at) VALUES (:a, :s, 7, '', 'halal', '[]', "
+                "'{}', 'test', now())"
+            ),
+            [
+                {"a": d, "s": s}
+                for s, days in (("GOOG", (date(2026, 9, 30), SCREENED)), ("GOOGL", (SCREENED,)))
+                for d in days
+            ],
+        )
+        await conn.execute(
+            text(
+                "INSERT INTO forward_books (name, strategy, params, created_at) "
+                "VALUES ('core', 'core-strict-cap', '{}', now())"
+            )
+        )
+        await conn.execute(
+            text(
+                "INSERT INTO forward_book_days (book, day, nav, day_return, turnover, weights, "
+                "rebalance_next, recorded_at) VALUES ('core', :d, 1.0, 0, 0, CAST(:w AS JSONB), "
+                "false, now())"
+            ),
+            {"d": SCREENED, "w": json.dumps({"GOOGL": 1.0})},
+        )
+    sec = FakeSec({7: [("10-Q", "2026-10-04")]})
+
+    assert await _holdings_reported(engine, sec, SCREENED_AT) == ["GOOGL"]
+    assert sec.asked == [7]
+    async with engine.connect() as conn:  # recorded under the company's covered symbol
+        symbols = (
+            (await conn.execute(text("SELECT DISTINCT symbol FROM events WHERE source = 'sec'")))
+            .scalars()
+            .all()
+        )
+    assert symbols == ["GOOG"]
