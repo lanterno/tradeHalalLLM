@@ -522,6 +522,63 @@ async def test_a_chain_of_renames_keeps_the_last_ticker_and_a_recycled_one_is_no
     }
 
 
+async def test_before_the_old_ticker_named_the_company_the_rank_decides(
+    engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # As live 2019-10..2020-06: on S the old ticker still named another company
+    # (window("IAC") starts after S), so the rename link must not decide.
+    monkeypatch.setattr(renames, "HELD_SINCE", {("IAC", "PPLI"): date(2024, 4, 1)})
+    assert renames.window("IAC")[0] > S
+    await _world(engine)
+    for symbol in ("IAC", "PPLI"):
+        await _clone(engine, "UNM", symbol, cik=1800227)
+    ctx = await _load(engine, [*SYMBOLS, "IAC", "PPLI"])
+    assert context_module._class_winner([(12, "IAC"), (13, "PPLI")], S) == "IAC"
+    got = {s: ctx.eligibility(s, S, at_news=PRE_OPEN).reason for s in ("IAC", "PPLI")}
+    # The rank decides, and keeps IAC; on S IAC (and its bars) were another
+    # company's while PPLI holds its CIK, so IAC is refused too. PPLI, priced
+    # on the same bars, does not step up.
+    assert got == {"IAC": "other_company", "PPLI": "share_class"}
+    broad = {s: ctx.eligibility(s, S, at_news=PRE_OPEN, universe="broad") for s in ("IAC", "PPLI")}
+    assert (broad["IAC"].reason, broad["PPLI"].reason) == ("other_company", "share_class")
+
+
+async def test_a_window_starting_mid_month_moves_the_class_on_its_first_session(
+    engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # IAC names the company from S: on PREV, in the same month and screen,
+    # the rank still decides. The winner is picked per session, not per month.
+    monkeypatch.setattr(renames, "HELD_SINCE", {("IAC", "PPLI"): S})
+    assert renames.window("IAC")[0] == S and PREV.replace(day=1) == S.replace(day=1)
+    await _world(engine)
+    for symbol in ("IAC", "PPLI"):
+        await _clone(engine, "UNM", symbol, cik=1800227)
+    ctx = await _load(engine, [*SYMBOLS, "IAC", "PPLI"])
+
+    def reasons(session: date) -> dict[str, str]:
+        at = et(session, 8)
+        return {s: ctx.eligibility(s, session, at_news=at).reason for s in ("IAC", "PPLI")}
+
+    assert reasons(S) == {"IAC": "share_class", "PPLI": "ok"}
+    assert reasons(PREV) == {"IAC": "other_company", "PPLI": "share_class"}
+    assert reasons(S) == {"IAC": "share_class", "PPLI": "ok"}  # nothing kept from PREV
+
+
+async def test_an_old_ticker_before_its_window_is_refused_only_beside_its_later_ticker(
+    engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(renames, "HELD_SINCE", {("IAC", "PPLI"): date(2024, 4, 1)})
+    await _world(engine)
+    await _clone(engine, "UNM", "IAC", cik=1800227)
+    await _clone(engine, "UNM", "PPLI", cik=1800228)  # PPLI under another CIK
+    ctx = await _load(engine, [*SYMBOLS, "IAC", "PPLI"])
+
+    got = {s: ctx.eligibility(s, S, at_news=PRE_OPEN).reason for s in ("IAC", "PPLI")}
+
+    # Nothing ties IAC's row to the company PPLI names: each keeps its own CIK.
+    assert got == {"IAC": "ok", "PPLI": "ok"}
+
+
 async def test_broad_counts_a_name_without_a_ticker_ciks_row_as_no_fund(
     engine: AsyncEngine,
 ) -> None:

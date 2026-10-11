@@ -114,6 +114,39 @@ def test_later_tickers_follow_a_company_through_its_renames(
     assert later_tickers("OLDB") == ("MIDB",)
 
 
+def test_later_tickers_on_a_session_count_each_link_from_its_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # IAC was the old IAC (now Match Group) to 2020-06-30: not yet PPLI's company.
+    assert later_tickers("IAC", on=date(2020, 6, 30)) == ()
+    assert later_tickers("IAC", on=date(2020, 7, 1)) == ("PPLI",)
+    assert later_tickers("IAC", on=date(2026, 7, 1)) == ("PPLI",)  # after the window too
+    assert later_tickers("DWDP", on=date(2017, 8, 31)) == ()  # before DowDuPont's first session
+    assert later_tickers("DWDP", on=date(2017, 9, 1)) == ("DD",)
+    assert later_tickers("AAXN", on=date(2017, 4, 5)) == ()  # TASR to that close: mid-month
+    assert later_tickers("AAXN", on=date(2017, 4, 6)) == ("AXON",)
+    assert later_tickers("PPLI", on=date(2024, 1, 2)) == ()
+    assert later_tickers("AAPL", on=date(2024, 1, 2)) == ()
+    monkeypatch.setattr(
+        renames,
+        "TICKER_RENAMES",
+        {
+            "OLDA": ("MIDA", date(2016, 2, 10)),  # OLDA -> MIDA -> NEWA, one company
+            "MIDA": ("NEWA", date(2016, 3, 4)),
+        },
+    )
+    monkeypatch.setattr(
+        renames,
+        "HELD_SINCE",
+        {("OLDA", "MIDA"): date(2016, 1, 20), ("MIDA", "NEWA"): date(2016, 2, 11)},
+    )
+    assert later_tickers("OLDA", on=date(2016, 1, 19)) == ()
+    assert later_tickers("OLDA", on=date(2016, 1, 20)) == ("MIDA",)  # MIDA's link not yet
+    assert later_tickers("OLDA", on=date(2016, 2, 11)) == ("MIDA", "NEWA")
+    assert later_tickers("MIDA", on=date(2016, 2, 10)) == ()
+    assert later_tickers("OLDA") == ("MIDA", "NEWA")  # without a session, every link
+
+
 def test_a_ticker_another_company_held_first_starts_when_this_one_took_it() -> None:
     assert window("IAC") == (date(2020, 7, 1), date(2026, 6, 3))  # not the old IAC (Match)
     assert window("BTX") == (date(2021, 3, 26), date(2022, 10, 14))  # not BioTime
