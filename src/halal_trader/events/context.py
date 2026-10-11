@@ -17,13 +17,20 @@ it, every comparison strict:
 * **Share class.** Among the names admitted at S (screen and rank) that share
   the screen row's CIK, only the most liquid is kept, except that a former
   ticker never wins over a later ticker of its company
-  (``renames.later_tickers``). A screen can hold a renamed company under
-  both (IAC and PPLI, DWDP and DD) with the same bars, so either can rank
-  first (on a tie, the universe's symbol order), while the story builder
-  files the company's news under the later one (``renames.owner``). The
-  winner is chosen before any bar is read: when it then fails daily bars,
-  price or σ, the other classes stay out as ``share_class`` rather than
-  step up.
+  (``renames.later_tickers``) from the former ticker's ``renames.window``
+  start on, the first session it named the company. A screen can hold a
+  renamed company under both (IAC and PPLI, DWDP and DD) with the same
+  bars, so either can rank first (on a tie, the universe's symbol order),
+  while the story builder files the company's news under the later one
+  (``renames.owner``). Before that start the former ticker was another
+  company's, or nobody's: the rank decides, and a former ticker it keeps
+  is refused as ``other_company`` where a later ticker holds its CIK in
+  the same screen (IAC to 2020-06-30 was the old IAC, now Match Group, and
+  its bars are under IAC and PPLI alike). A window can start mid-month
+  (AAXN's on 2017-04-06), so the winner is picked per session from the
+  month's admitted names. It is chosen before any bar is read: when it is
+  then refused, or fails daily bars, price or σ, the other classes stay
+  out as ``share_class`` rather than step up.
 * **Price.** ``prev_close_s >= 5``: the previous session's raw close in
   session-S units, ``close_raw(S−1) · A(S−1)/A(S)`` with
   ``A(d) = close_all(d)/close_raw(d)``. The ratio holds exactly the corporate
@@ -74,15 +81,22 @@ pre-registration to cite:
   the screen and rank admit (Share class above). When the most liquid class
   then fails daily bars, price or σ, the spec would admit the next class;
   the code keeps it out as ``share_class``. Stage A's counts differ.
-* **A renamed company's later ticker wins its CIK, whatever the ranks.**
-  The spec keeps the lowest rank per CIK. Where the screen and rank admit a
-  former ticker and a later one of the same company (``TICKER_RENAMES``,
-  directly or through a chain), the code keeps the later one, under which
+* **A renamed company's later ticker wins its CIK, whatever the ranks,
+  once the former ticker named the company.** The spec keeps the lowest
+  rank per CIK. Where the screen and rank admit a former ticker and a later
+  one of the same company (``TICKER_RENAMES``, directly or through a chain),
+  the code keeps the later one on the sessions from the former ticker's
+  ``renames.window`` start (each link of a chain from its own), under which
   the stories are filed (Share class above); the lowest rank would keep a
-  name that has none. On 2026-10-11 this moves two CIKs in 2016-10 to
-  2024-12: DD over DWDP (2018-04 to 2018-08), PPLI over IAC (2019-10 to
-  2020-06 and 2022-10 to 2023-09; in BROAD also 2021-10 to 2022-09, when
-  an index veto alone fails PPLI, so PRIMARY keeps IAC).
+  name that has none. Before that start the rank decides, and a former
+  ticker that wins is refused as ``other_company``, a reason the spec does
+  not have, where a later ticker holds its CIK in the same screen: the
+  ticker, and any bars under it, were another company's. On 2026-10-11 this moves
+  two CIKs in 2016-10 to 2024-12: DD over DWDP (2018-04 to 2018-08), PPLI
+  over IAC (2022-10 to 2023-09; in BROAD also 2021-10 to 2022-09, when an
+  index veto alone fails PPLI, so PRIMARY keeps IAC); and IAC, which wins
+  2019-10 to 2020-06 on the rank, is refused there (PPLI, with the same
+  bars, stays out as ``share_class``).
 * **``no_daily`` reads S's own bar.** A(S) needs S's raw and all-adjusted
   closes (Price above), so a name with no bar on S is ``no_daily``: S-dated
   information, where the spec's price rule says "known before the open".
@@ -152,6 +166,7 @@ Reason = Literal[
     "rank",
     "price",
     "share_class",
+    "other_company",
     "no_daily",
     "no_sigma",
 ]
@@ -298,7 +313,7 @@ class PitContext:
         self._fact_times = {s: [t for t, _ in rows] for s, rows in facts.items()}
         self._facts = {s: [f for _, f in rows] for s, rows in facts.items()}
         self._facts_from, self._facts_to = facts_from, facts_to
-        self._winners: dict[tuple[date, date, Universe], dict[int, str]] = {}
+        self._admitted: dict[tuple[date, date, Universe], dict[int, list[tuple[int, str]]]] = {}
 
     @classmethod
     async def load(
@@ -369,7 +384,8 @@ class PitContext:
         for a story whose news came at ``at_news``.
 
         The first failing rule names the reason, in the order screen, CIK,
-        rank, share class, daily bars, price, σ. σ is judged at ``at_news``
+        rank, share class, a former ticker before it named the company
+        (``other_company``), daily bars, price, σ. σ is judged at ``at_news``
         (C.1), the window :meth:`pre_event` uses, so a story is never counted
         eligible on one σ window and traded on another. ``no_daily`` also
         covers a name with no bar on S itself (see the module docstring).
@@ -405,8 +421,11 @@ class PitContext:
         if rank is None or rank >= MAX_RANK:
             return result("rank")
         if row is not None and row.cik is not None:
-            if self._class_winners(as_of, month, universe).get(row.cik) != symbol:
+            names = self._class_names(as_of, month, universe).get(row.cik, [])
+            if _class_winner(names, session) != symbol:
                 return result("share_class")
+            if self._before_its_company(symbol, session, as_of, row.cik):
+                return result("other_company")
         prev_close = _prev_close_s(series, j) if series is not None else None
         if prev_close is None:
             return result("no_daily")
@@ -552,13 +571,18 @@ class PitContext:
             return None
         return "unmapped" if unmapped else "not_halal"
 
-    def _class_winners(self, as_of: date, month: date, universe: Universe) -> dict[int, str]:
-        """CIK -> the admitted symbol it keeps, for one screen and month (see
-        :func:`_class_winner`)."""
+    def _class_names(
+        self, as_of: date, month: date, universe: Universe
+    ) -> dict[int, list[tuple[int, str]]]:
+        """CIK -> the (rank, symbol) pairs the screen dated ``as_of`` and the
+        ranks of ``month`` admit to ``universe``, memoised. The class kept is
+        picked from them per session (:func:`_class_winner`): a former
+        ticker's window can start mid-month."""
         key = (as_of, month, universe)
-        if key not in self._winners:
+        admitted = self._admitted.get(key)
+        if admitted is None:
             ranks = self._ranks[month]
-            admitted: dict[int, list[tuple[int, str]]] = {}
+            admitted = {}
             for symbol, row in self._screens[as_of].items():
                 rank = ranks.get(symbol)
                 if row.cik is None or rank is None or rank >= MAX_RANK:
@@ -566,8 +590,20 @@ class PitContext:
                 if self._refused(symbol, row, universe) is not None:
                     continue
                 admitted.setdefault(row.cik, []).append((rank, symbol))
-            self._winners[key] = {cik: _class_winner(names) for cik, names in admitted.items()}
-        return self._winners[key]
+            self._admitted[key] = admitted
+        return admitted
+
+    def _before_its_company(self, symbol: str, session: date, as_of: date, cik: int) -> bool:
+        """Whether ``symbol`` is a former ticker on a session before its
+        ``renames.window`` starts while a later ticker of its company holds
+        the same CIK in the screen dated ``as_of``: the screen row is the
+        later company's, but the ticker (and its bars) were another
+        company's, or nobody's, on that session."""
+        later = later_tickers(symbol)
+        if not later or later_tickers(symbol, on=session):
+            return False
+        rows = self._screens[as_of]
+        return any((r := rows.get(t)) is not None and r.cik == cik for t in later)
 
     def _news_index(self, j: int, at_news: datetime) -> int:
         """k, the number of sessions closed strictly before ``at_news``, for a
@@ -620,16 +656,26 @@ class PitContext:
         return float((c[p] / c[p - n] - 1.0) - (m[p] / m[p - n] - 1.0))
 
 
-def _class_winner(names: Sequence[tuple[int, str]]) -> str:
-    """The symbol one CIK keeps among its admitted (rank, symbol) pairs.
+def _class_winner(names: Sequence[tuple[int, str]], session: date) -> str | None:
+    """The symbol one CIK keeps at ``session`` among its admitted (rank,
+    symbol) pairs; None when it has none.
 
     The lowest rank, but a former ticker never wins while a later ticker of
-    its company is admitted too (``renames.later_tickers``): the stories are
-    filed under the later one (``renames.owner``). Ranks are distinct
-    indices, so the symbol never decides.
+    its company is admitted too, from the session the former ticker named
+    the company (``renames.later_tickers`` on ``session``, every link of a
+    chain checked): the stories are filed under the later one
+    (``renames.owner``). Before that session the former ticker was another
+    company's, so the rank decides. Ranks are distinct indices, so the
+    symbol never decides.
     """
+    if len(names) <= 1:
+        return names[0][1] if names else None
     present = {symbol for _, symbol in names}
-    return min(names, key=lambda n: (not present.isdisjoint(later_tickers(n[1])), n))[1]
+
+    def key(n: tuple[int, str]) -> tuple[bool, tuple[int, str]]:
+        return not present.isdisjoint(later_tickers(n[1], on=session)), n
+
+    return min(names, key=key)[1]
 
 
 def _through(p: int, n: int) -> slice:
