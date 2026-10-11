@@ -134,6 +134,40 @@ def test_share_classes_split_the_company_cap_and_t5_holds_one_of_them() -> None:
     assert (held[:2] > 0).sum() == 1
 
 
+@pytest.mark.parametrize(
+    ("googl_priced", "weights"),
+    [
+        (True, {"GOOG": 0.25, "GOOGL": 0.25, "OTHER": 0.5}),
+        (False, {"GOOG": 0.5, "GOOGL": 0.0, "OTHER": 0.5}),  # Alphabet keeps its whole cap
+    ],
+)
+def test_research_splits_share_classes_among_the_priced_ones_as_the_core_does(
+    googl_priced: bool, weights: dict[str, float]
+) -> None:
+    from halal_trader.portfolio.strict_core import split_share_classes
+    from halal_trader.research.strategies import core_strict
+
+    flat = {"GOOG": 0.0, "GOOGL": 0.0, "OTHER": 0.0}
+    p = _prices(3, flat, noise=flat)  # constant prices: caps stay at the screen's
+    if not googl_priced:
+        p.close[2, 1] = np.nan  # no GOOGL bar on the session the targets are set
+    firms = {
+        "GOOG": Firm(7, 2e12, p.days[0]),
+        "GOOGL": Firm(7, 2e12, p.days[0]),
+        "OTHER": Firm(8, 2e12, p.days[0]),
+    }
+    inputs = Inputs(p, {p.days[0]: firms}, {})
+    caps = inputs.caps(2, inputs.firms(2))
+    research = {s: float(caps[j]) for j, s in enumerate(p.symbols) if np.isfinite(caps[j])}
+    # The core (portfolio/core_executor.plan) caps only the names it could price.
+    priced = [s for j, s in enumerate(p.symbols) if np.isfinite(p.close[2, j])]
+    core = split_share_classes(dict.fromkeys(priced, 2e12), {s: firms[s].cik for s in priced})
+    assert research == pytest.approx(core)
+    assert research["GOOG"] == pytest.approx(1e12 if googl_priced else 2e12)
+    held = dict(zip(p.symbols, core_strict(inputs, 100)(2), strict=True))
+    assert held == pytest.approx(weights)
+
+
 def test_the_core_can_hold_one_sector_as_each_screen_classed_it() -> None:
     from halal_trader.halal.sector_limits import TECHNOLOGY
     from halal_trader.research.strategies import core_strict
