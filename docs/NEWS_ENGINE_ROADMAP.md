@@ -1,6 +1,7 @@
 # News decision engine: roadmap
 
-*Started 2026-10-10. Owner: the operator. Status: proposal, nothing built yet.*
+*Started 2026-10-10. Owner: the operator. Status (2026-10-11): Phase 0 complete, Phase 1 failed its
+gate, so the playbook line is shelved before any LLM work (see "Outcome" at the end).*
 
 The news reactor today does one thing: a positively scored headline plus a
 rising price buys half a position. The goal is an engine that reasons about a
@@ -277,3 +278,41 @@ back to an earlier phase with a new hypothesis.
    the OpenRouter balance.
 4. **Where it runs live:** inside halabot (recommended: event log, beliefs,
    shadow-first already exist) rather than extending the legacy reactor.
+
+## Outcome (2026-10-10/11)
+
+**Defaults taken for §6** (the decisions were not answered): every liquid halal name as the primary
+universe with Technology reported as a subgroup (Technology alone had too few events); intraday and
+up to three sessions both tested; no LLM budget (H1 uses rules only); the engine in `src/halabot`.
+
+**Phase 0: done, every gate passed.** Built: a batched minute-bar store (164,041 symbol-sessions,
+60M bars), the 2016-2027 market calendar, the story builder (`events/stories.py`: entity check,
+duplicates, corrections, followers, time-indexed cards), the rules taxonomy and earnings parser v4,
+renamed and delisted tickers (46 renames, 60 hand-mapped CIKs), EDGAR acceptance times for every 8-K
+since 2016 (a third were stored 4-5 h late), the point-in-time context, trial statistics, the
+minute-level simulator in `src/halabot/playbooks` (market fills on the next bar's VWAP, costs by
+liquidity, A-ratio-adjusted multi-session paths, compliance exits, a window guard), the
+overreaction-bounce playbook, and halal-screen fixes found on the way (method v13). The eleven gates:
+no look-ahead (0 mismatches over 6,253 real and 15,825 synthetic checks), determinism across workers,
+the reactor study reproduced exactly (R0, R1 to 4e-16) and with realistic fills inside its confidence
+interval (R2: −0.32% against −0.30%), and the SUE drift reproduced (S0-S3).
+
+**Phase 1: H1 failed on events, as pre-registered** ([news_engine/H1_PREREGISTRATION.md](news_engine/H1_PREREGISTRATION.md),
+ledger rows 28, 29 and the verdict). Of 4,042 eligible downgrade or earnings-miss stories in train
+(2016-10..2021), 986 dropped far enough to trigger, and 363 reached an entry on 287 dates; in
+validation (2022-24) 164 entries, 55 a year, against the 200 a year required. No return was computed
+in either window.
+
+**The path atlas** (train only, descriptive, `events atlas`) shows the count was not the only problem.
+Run with the family check off, the same machine earns nothing on downgrades (ID −0.03%, se 0.14%;
+MD3 +0.08%, se 0.19%) and loses on earnings misses (ID −0.55%, se 0.14%; MD3 −0.55%, se 0.19%): after a
+miss the drop continues, the post-earnings drift the SUE gate also reproduced. Lows come early (median
+21-35 minutes after the news), and a 50% retrace by the close happens on about two days in three, but
+an entry rule that waits for exhaustion buys the continuation as often as the bounce.
+
+**What this leaves.** By the roadmap's own rule the playbook idea is shelved before Phases 2-5; the
+reactor's entries stay in shadow. What remains reusable: the story builder and taxonomy (a far cleaner
+event record than headlines), the simulator (any intraday rule can be tested honestly on it), the
+minute history, and the halal-screen and data fixes. A different hypothesis is a new pre-registered
+trial; the atlas cannot supply one without first being treated as a train-window finding to test on
+validation once.
