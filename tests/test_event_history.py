@@ -13,6 +13,8 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from halal_trader.data.alpaca_market import NewsArticle
 from halal_trader.events.history import (
     backfill_news,
+    company_symbol,
+    covered_companies,
     eps_rows,
     filing_records,
     insider_records,
@@ -198,3 +200,77 @@ async def test_marks_on_an_open_connection_commit_and_roll_back_with_it(
     await mark_units(engine, "test", {"a": 5})  # a transaction of its own, upserting
     await mark_units(engine, "test", {})
     assert await _units(engine) == {"a": 5, "b": 2}
+
+
+# ── one symbol per company ────────────────────────────────────
+
+TODAY = date(2026, 10, 11)
+
+
+def test_a_company_screened_as_often_under_its_old_ticker_takes_the_current_one() -> None:
+    assert company_symbol({"IAC": 29, "PPLI": 29}, on=TODAY) == "PPLI"
+    assert company_symbol({"PPLI": 29, "IAC": 29}, on=TODAY) == "PPLI"
+
+
+def test_the_current_ticker_wins_even_when_screened_less_often() -> None:
+    assert company_symbol({"DWDP": 43, "DD": 8}, on=TODAY) == "DD"
+
+
+def test_the_newest_of_several_tickers_wins() -> None:
+    assert company_symbol({"SWHC": 3, "AOBC": 5, "SWBI": 1}, on=TODAY) == "SWBI"
+
+
+def test_a_ticker_taken_over_at_once_belongs_to_the_company_that_took_it() -> None:
+    # Gardner Denver's GDI became IR when Ingersoll-Rand plc's IR became TT.
+    assert company_symbol({"GDI": 5, "IR": 5}, on=TODAY) == "IR"
+    assert company_symbol({"IR": 9, "TT": 3}, on=TODAY) == "TT"
+
+
+def test_a_rename_counts_only_once_the_old_ticker_named_the_company() -> None:
+    # IAC was the old IAC (now Match Group) to 2020-06-30.
+    assert company_symbol({"IAC": 29, "PPLI": 29}, on=date(2020, 6, 30)) == "IAC"
+    assert company_symbol({"IAC": 29, "PPLI": 29}, on=date(2020, 7, 1)) == "PPLI"
+
+
+def test_unrelated_symbols_take_the_most_screened_then_the_first_alphabetically() -> None:
+    assert company_symbol({"UA": 23, "UAA": 36}, on=TODAY) == "UAA"
+    assert company_symbol({"GOOGL": 43, "GOOG": 43}, on=TODAY) == "GOOG"
+    assert company_symbol({"AAPL": 1}, on=TODAY) == "AAPL"
+
+
+async def _screen(engine: AsyncEngine, rows: list[tuple[int, str, int]]) -> None:
+    """(cik, symbol, n): n quarterly screens of ``symbol`` under ``cik``."""
+    quarters_ends = [date(2016, 9, 30), date(2016, 12, 31), date(2017, 3, 31)]
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO halal_screen_results (as_of, symbol, cik, sic_description, "
+                "verdict, reasons, metrics, method, screened_at) "
+                "VALUES (:a, :s, :c, '', 'halal', '[]', '{}', 't', now())"
+            ),
+            [{"a": a, "s": s, "c": c} for c, s, n in rows for a in quarters_ends[:n]],
+        )
+
+
+async def test_covered_companies_give_a_renamed_company_its_current_ticker(
+    engine: AsyncEngine,
+) -> None:
+    await _screen(
+        engine,
+        [
+            (1800227, "IAC", 3),
+            (1800227, "PPLI", 3),
+            (1652044, "GOOG", 3),
+            (1652044, "GOOGL", 3),
+            (1336917, "UA", 2),
+            (1336917, "UAA", 3),
+            (320193, "AAPL", 1),
+        ],
+    )
+    assert await covered_companies(engine) == {
+        1800227: "PPLI",
+        1652044: "GOOG",
+        1336917: "UAA",
+        320193: "AAPL",
+    }
+    assert (await covered_companies(engine, on=date(2020, 6, 30)))[1800227] == "IAC"
