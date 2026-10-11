@@ -33,18 +33,16 @@ exclusion stands here as well.
   the last session under it, plus the grace sessions, never past its
   handover). A reused ticker therefore never counts for its former owner
   after the switch: IR in a 2020 holding is Gardner Denver, not Trane.
-
-Follow-up, not yet done: **today's ticker is matched without a date.** A
-reused ticker in holdings dated before its handover counts for the company
-that holds it today (IR in a 2019 holding would count for Gardner Denver,
-and Gardner Denver's CUSIP, recovered as IR there, would count for Trane
-through ``held_as``). No stored holding triggers it (checked 2026-10-11):
-the only ones dated before today's owner took their ticker are SPUS's
-2021-22 holdings of Meta and Revvity, their tickers recovered from their
-own CUSIPs, which carry the newest ticker seen for them. That is also why
-date-checking ``symbol in view.tickers`` alone would break the veto. The
-fix is to date-check only the tickers a filing reports itself and give the
-recovered ones to the match by today's ticker only.
+* **Today's ticker**, as a filing reports it, counts for the company
+  trading under it today only from the day that company took it
+  (``renames.held_since``): IR in a 2019 holding is Ingersoll-Rand plc
+  (Trane today), not Gardner Denver. An undated view is dated by its
+  filing, which its holdings precede. A ticker recovered from a CUSIP is
+  the newest any filing reports for that security, so it counts for the
+  company trading under it today at any date, but never as an old ticker
+  (``held_as``). SPUS's ticker-less filings of 2021-22 hold Meta and
+  Revvity only through their CUSIPs, recovered as META and RVTY; Gardner
+  Denver's CUSIP, recovered as IR in a 2019 holding, is not Trane's IR.
 """
 
 from __future__ import annotations
@@ -80,18 +78,36 @@ def name_key(name: str) -> str:
 class IndexView:
     etf: str
     filed: date
-    tickers: frozenset[str]
+    tickers: frozenset[str]  # as the filing reports them
     names: frozenset[str]
     # The day the holdings are as of (N-PORT's period end). Without it an
     # old ticker cannot be dated, and none counts.
     period_end: date | None = None
+    # Tickers recovered from a holding's CUSIP where the filing gave none.
+    recovered: frozenset[str] = frozenset()
+
+
+def held_by_ticker(view: IndexView, symbol: str) -> bool:
+    """Whether the view holds the company trading as ``symbol`` today by that ticker.
+
+    A reported ticker counts from the day that company took it
+    (``renames.held_since``), the view dated by its holdings, else by its
+    filing; a recovered one at any date.
+    """
+    if symbol in view.recovered:
+        return True
+    if symbol not in view.tickers:
+        return False
+    since = ticker_history().since.get(symbol)
+    return since is None or (view.period_end or view.filed) >= since
 
 
 def held_as(view: IndexView, symbol: str) -> str | None:
     """The old ticker the view holds ``symbol``'s company under, if any.
 
-    One of the company's former tickers is among the view's, and the
-    holdings are dated within the days it named the company.
+    One of the company's former tickers is among those the filing reports
+    (never a recovered one), and the holdings are dated within the days it
+    named the company.
     """
     if view.period_end is None:
         return None
@@ -105,8 +121,9 @@ def held_as(view: IndexView, symbol: str) -> str | None:
 
 def held(view: IndexView, symbol: str, title: str) -> bool:
     """Whether the view holds the company trading as ``symbol``, SEC name ``title``:
-    by ticker, by an old ticker of its own day (``held_as``), or by name."""
-    if symbol in view.tickers or held_as(view, symbol) is not None:
+    by today's ticker (``held_by_ticker``), by an old ticker of its own day
+    (``held_as``), or by name."""
+    if held_by_ticker(view, symbol) or held_as(view, symbol) is not None:
         return True
     key = name_key(title)
     return bool(key) and key in view.names
@@ -137,12 +154,15 @@ async def views_at(engine: AsyncEngine, as_of: date) -> list[IndexView]:
             ),
             {"d": as_of, "oldest": as_of - MAX_AGE},
         )
-        grouped: dict[tuple[str, date], tuple[set[str], set[str], set[date]]] = {}
+        grouped: dict[tuple[str, date], tuple[set[str], set[str], set[str], set[date]]] = {}
         for r in rows:
-            tickers, names, periods = grouped.setdefault((r.etf, r.filed), (set(), set(), set()))
-            ticker = r.ticker or known.get(r.cusip)
-            if ticker:
-                tickers.add(str(ticker).upper())
+            tickers, recovered, names, periods = grouped.setdefault(
+                (r.etf, r.filed), (set(), set(), set(), set())
+            )
+            if r.ticker:
+                tickers.add(str(r.ticker).upper())
+            elif found := known.get(r.cusip):
+                recovered.add(found)
             if key := name_key(str(r.name)):
                 names.add(key)
             periods.add(r.period_end)
@@ -151,8 +171,15 @@ async def views_at(engine: AsyncEngine, as_of: date) -> list[IndexView]:
     # counts no old ticker rather than date every holding by the latest (IAC
     # would then count for PPLI in holdings of before 2020-07-01).
     return [
-        IndexView(etf, filed, frozenset(t), frozenset(n), next(iter(p)) if len(p) == 1 else None)
-        for (etf, filed), (t, n, p) in sorted(grouped.items())
+        IndexView(
+            etf,
+            filed,
+            frozenset(t),
+            frozenset(n),
+            next(iter(p)) if len(p) == 1 else None,
+            recovered=frozenset(c),
+        )
+        for (etf, filed), (t, c, n, p) in sorted(grouped.items())
     ]
 
 

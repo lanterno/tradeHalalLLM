@@ -156,7 +156,7 @@ async def weekly_check(engine: Any, today: Any) -> Validation:
     from halal_trader.compliance.index_veto import views_at
 
     views = await views_at(engine, today)
-    tickers = set().union(*(v.tickers for v in views)) if views else set()
+    tickers = set().union(*(v.tickers | v.recovered for v in views)) if views else set()
     async with engine.connect() as conn:
         rows = await conn.execute(
             text(
