@@ -33,7 +33,7 @@ import io
 import logging
 import zipfile
 from collections import Counter
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Any, Final
@@ -44,7 +44,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 from halal_trader.compliance.sec import SecClient, accession_dashed, filed_at
 from halal_trader.core.num import to_float
 from halal_trader.events.store import EventRecord, EventRecorder
-from halal_trader.market_hours import MARKET_TZ
+from halal_trader.market_hours import MARKET_TZ, today_eastern
 
 logger = logging.getLogger(__name__)
 
@@ -112,18 +112,44 @@ async def covered_symbols(engine: AsyncEngine) -> set[str]:
         return {r.symbol for r in rows}
 
 
-async def covered_companies(engine: AsyncEngine) -> dict[int, str]:
-    """CIK -> the symbol the screen covered it under most often (one per company)."""
+def company_symbol(screened: Mapping[str, int], *, on: date) -> str:
+    """The one symbol of a company the screen covered under each of ``screened``'s
+    symbols (symbol -> its screens): the one that is a later ticker
+    (``renames.later_tickers`` on ``on``) of the most of the others, so the
+    newest of several (SWHC, AOBC, SWBI: SWBI); then the most screened; then
+    the first alphabetically.
+
+    The screen can hold a renamed company under its old and its current ticker
+    equally often (IAC and PPLI, 29 screens each). Its filings and Form 4s
+    belong under the current one, where ``renames.owner`` keeps its news and
+    stories, and where the SUE observations find its earnings releases.
+    """
+    from halal_trader.events.renames import later_tickers
+
+    def renamed_from(symbol: str) -> int:
+        return sum(symbol in later_tickers(other, on=on) for other in screened if other != symbol)
+
+    return min(screened, key=lambda s: (-renamed_from(s), -screened[s], s))
+
+
+async def covered_companies(engine: AsyncEngine, *, on: date | None = None) -> dict[int, str]:
+    """CIK -> the one symbol the screen covered the company under (:func:`company_symbol`).
+
+    ``on`` dates the renames: by default today in New York, since the evening
+    refresh stores the new filings and Form 4s under these symbols.
+    """
+    on = on or today_eastern()
+    screened: dict[int, dict[str, int]] = {}
     async with engine.connect() as conn:
         rows = await conn.execute(
             text(
-                "SELECT DISTINCT ON (cik) cik, symbol FROM ("
-                "  SELECT cik, symbol, count(*) AS n FROM halal_screen_current "
-                "  WHERE cik IS NOT NULL GROUP BY cik, symbol"
-                ") c ORDER BY cik, n DESC, symbol"
+                "SELECT cik, symbol, count(*) AS n FROM halal_screen_current "
+                "WHERE cik IS NOT NULL GROUP BY cik, symbol"
             )
         )
-        return {int(r.cik): r.symbol for r in rows}
+        for r in rows:
+            screened.setdefault(int(r.cik), {})[r.symbol] = int(r.n)
+    return {cik: company_symbol(symbols, on=on) for cik, symbols in screened.items()}
 
 
 # ── news ──────────────────────────────────────────────────────
