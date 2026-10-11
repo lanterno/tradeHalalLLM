@@ -61,6 +61,9 @@ registration, Stage A (entry counts only), train (eligible cells), validation (t
 verdict, then the implementability trial (delayed-feed fills), sensitivities and the path atlas
 (descriptive, train window only). Every step checks that the code and data are the registered ones; a
 change after registration is a logged amendment reported with the old result, never a silent rerun.
+Before registration, an upstream data fix (aliases, stories) that changes a gate's unit set re-pins it
+only with a stated reason (`events sim-gate <group> --repin "<reason>"`, a ledger row naming the pin it
+supersedes), and a gate counts only when its latest row passed on its gate's current pin.
 
 ## Data fixed before registration
 
@@ -105,9 +108,10 @@ share class settled before bars, `no_daily` reading S's bar, absent names as `no
 descriptives, the 380-day history load.
 
 **Simulator (`src/halabot/playbooks`).** The run takes a context view; a fill-model hook carries the
-gate-only legacy fills; one pin per gate unit set, checked against the plan; a spare session after each
-path for close fallbacks; visible bars are read-only views of the bars already visible; the daily book
-compounds each trade's stake; a SPY bar defect sets aside only the headlines at or after it.
+gate-only legacy fills; one pin per gate unit set, checked against the plan (superseded only by a logged
+re-pin with a reason); a spare session after each path for close fallbacks; visible bars are read-only
+views of the bars already visible; the daily book compounds each trade's stake; a SPY bar defect sets
+aside only the headlines at or after it.
 
 **Playbook (`bounce.py`).** The entry cutoff is a timer at close − 60 min; an equal low also disarms;
 at the start, already-visible bars only set the state; an "in" story with no stock bar before the news
