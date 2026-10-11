@@ -472,19 +472,33 @@ async def _holdings_reported(engine: AsyncEngine, sec: Any, screened: datetime) 
     held = await _core_holdings(engine)
     if not held:
         return []
-    companies = {c: s for c, s in (await covered_companies(engine)).items() if s in held}
+    # A holding is matched to its company by CIK, so a held second share class
+    # (GOOGL beside GOOG, UA beside UAA) counts; filings are recorded under the
+    # company's one symbol (covered_companies), as the filings refresh does.
+    async with engine.connect() as conn:
+        rows = await conn.execute(
+            text(
+                "SELECT DISTINCT ON (symbol) symbol, cik FROM halal_screen_current "
+                "WHERE cik IS NOT NULL AND symbol = ANY(:s) ORDER BY symbol, as_of DESC"
+            ),
+            {"s": sorted(held)},
+        )
+        holders: dict[int, list[str]] = {}
+        for r in rows:
+            holders.setdefault(int(r.cik), []).append(str(r.symbol))
+    canonical = await covered_companies(engine)
     recorder = EventRecorder(engine, raise_errors=True)
     out: set[str] = set()
-    for cik, symbol in sorted(companies.items()):
+    for cik, symbols in sorted(holders.items()):
         subs = await sec.submissions(cik)
         if not subs:
             continue
         recent = subs["filings"]["recent"]
-        await recorder.record(filing_records(recent, symbol))
+        await recorder.record(filing_records(recent, canonical.get(cik, symbols[0])))
         for i, form in enumerate(recent.get("form") or []):
             accepted = _accepted(recent, i) if form in SCREEN_FORMS else None
             if accepted is not None and accepted > screened:
-                out.add(symbol)
+                out.update(symbols)
                 break
     return sorted(out)
 
