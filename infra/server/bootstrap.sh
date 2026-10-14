@@ -7,9 +7,9 @@
 #   bash bootstrap.sh
 #
 # Knobs (environment): HALABOT_USER (halabot), HALABOT_DIR (/opt/halabot),
-# HALABOT_REPO (the GitHub repo), TAILSCALE_AUTHKEY (optional: joins the
-# tailnet unattended). What it does, and what is left to the operator after
-# it, is in docs/DEPLOY.md.
+# HALABOT_REPO (the GitHub repo), CLOUDFLARE_TUNNEL_TOKEN (optional: runs
+# the dashboard's Cloudflare Tunnel as a service). What it does, and what is
+# left to the operator after it, is in docs/DEPLOY.md.
 set -euo pipefail
 
 HALABOT_USER=${HALABOT_USER:-halabot}
@@ -147,15 +147,22 @@ for timer in "$HALABOT_DIR"/infra/server/systemd/*.timer; do
     if [ -e "$timer" ]; then systemctl enable --now "$(basename "$timer")"; fi
 done
 
-say "tailscale"
-if ! command -v tailscale >/dev/null; then
-    curl -fsSL https://tailscale.com/install.sh | sh
+say "cloudflared"
+# The dashboard's only public way in: an outbound Cloudflare Tunnel, so no
+# inbound port opens. Its public hostname and target are set in Cloudflare.
+if ! command -v cloudflared >/dev/null; then
+    install -m 0755 -d /usr/share/keyrings
+    curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg -o /usr/share/keyrings/cloudflare-main.gpg
+    echo "deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main" \
+        > /etc/apt/sources.list.d/cloudflared.list
+    apt-get update -q
+    apt-get install -yq cloudflared
 fi
-ufw allow in on tailscale0
-if [ -n "${TAILSCALE_AUTHKEY:-}" ]; then
-    tailscale up --authkey "$TAILSCALE_AUTHKEY" --hostname halabot
+if [ -n "${CLOUDFLARE_TUNNEL_TOKEN:-}" ] && ! systemctl is-enabled cloudflared >/dev/null 2>&1; then
+    cloudflared service install "$CLOUDFLARE_TUNNEL_TOKEN"
 fi
-tailscale status >/dev/null 2>&1 || echo "not on the tailnet yet: run 'tailscale up --hostname halabot'"
+systemctl is-active cloudflared >/dev/null 2>&1 \
+    || echo "no tunnel yet: run 'cloudflared service install <token>' with the tunnel's token"
 
 cat <<EOF
 
@@ -164,5 +171,5 @@ Done. Next (docs/DEPLOY.md has the detail):
   2. Configure off-site backup:  nano ${ETC_DIR}/server.env, then
                                  sudo -u ${HALABOT_USER} ${HALABOT_DIR}/infra/server/backup.sh --init
   3. Start the fleet:            sudo -iu ${HALABOT_USER}; cd ${HALABOT_DIR}; just build && just up && just health
-  4. Dashboard on the tailnet:   tailscale serve --bg 8082
+  4. Dashboard tunnel:           cloudflared service install <token>
 EOF
