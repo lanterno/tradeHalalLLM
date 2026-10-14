@@ -48,8 +48,8 @@ just docker-logs              # follow the bot
 ```
 
 On a server, [docs/DEPLOY.md](docs/DEPLOY.md) is the whole procedure:
-bootstrap, secrets, off-site backups, health alerts, the dashboard over
-Tailscale.
+bootstrap, secrets, off-site backups, health alerts, the dashboard through
+a Cloudflare Tunnel.
 
 The dashboard listens on `127.0.0.1:8082`. Its only control is the
 kill-switch; operations go through the CLI:

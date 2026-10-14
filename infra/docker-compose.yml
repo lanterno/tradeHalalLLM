@@ -5,8 +5,9 @@
 #
 # Every published port is bound to 127.0.0.1. On a public server Docker's
 # port rules bypass the host firewall (ufw), so a port published on 0.0.0.0
-# is open to the internet whatever ufw says. Reach the dashboard through
-# Tailscale (`tailscale serve`) or an SSH tunnel; see docs/DEPLOY.md.
+# is open to the internet whatever ufw says. The dashboard is reached through
+# a Cloudflare Tunnel (cloudflared on the host) or an SSH tunnel; see
+# docs/DEPLOY.md.
 #
 # Services:
 #   * postgres        — Postgres 16 + pgvector for the canonical DB.

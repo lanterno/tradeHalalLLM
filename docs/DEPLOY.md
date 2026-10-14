@@ -30,7 +30,7 @@ Hetzner Cloud → Add server:
 - **SSH key:** add yours. Bootstrap turns off password logins only once a
   key is in place.
 - **Firewall (optional, a second layer):** a Hetzner Cloud Firewall that
-  allows inbound TCP 22 only. Tailscale needs no inbound port.
+  allows inbound TCP 22 only. The Cloudflare Tunnel needs no inbound port.
 
 ## 2. Bootstrap
 
@@ -38,7 +38,7 @@ Hetzner Cloud → Add server:
 ssh root@<server-ip>
 curl -fsSL https://raw.githubusercontent.com/lanterno/tradeHalalLLM/main/infra/server/bootstrap.sh -o bootstrap.sh
 less bootstrap.sh       # read it: it runs as root
-bash bootstrap.sh       # TAILSCALE_AUTHKEY=tskey-... bash bootstrap.sh joins the tailnet unattended
+bash bootstrap.sh       # CLOUDFLARE_TUNNEL_TOKEN=... bash bootstrap.sh also starts the dashboard's tunnel
 ```
 
 What it does, idempotently: updates the system and enables security
@@ -49,9 +49,9 @@ creates the `halabot` user (in the `docker` group, with root's SSH key);
 clones the repo to `/opt/halabot`; writes `.env` from `.env.example` with a
 fresh `POSTGRES_PASSWORD` (also in `DATABASE_URL`) and `WEB_API_TOKEN`;
 writes `/etc/halabot/server.env` from `infra/server/server.env.example`;
-installs and starts the systemd timers; installs Tailscale. Without
-`TAILSCALE_AUTHKEY`, join the tailnet now with
-`tailscale up --hostname halabot` (it prints a login URL).
+installs and starts the systemd timers; installs `cloudflared`, and runs
+the tunnel as a service when `CLOUDFLARE_TUNNEL_TOKEN` is set (step 6
+otherwise).
 
 Before you log out, check from a second terminal that
 `ssh halabot@<server-ip>` and `ssh root@<server-ip>` still let you in.
@@ -150,14 +150,22 @@ when the pings stop.
 
 ## 6. The dashboard
 
-The dashboard listens on `127.0.0.1:8082` only. Reach it over:
+The dashboard listens on `127.0.0.1:8082` only. It is reached at
+`https://trading.home.elghareeb.space` through a Cloudflare Tunnel:
+`cloudflared` on the host dials out to Cloudflare, so no inbound port
+opens. In Cloudflare Zero Trust → Networks → Tunnels, the tunnel's public
+hostname `trading.home.elghareeb.space` points to `http://localhost:8082`.
+Copy the tunnel's token from there and, on the server:
 
-- **Tailscale (recommended):** `sudo tailscale serve --bg 8082`, then
-  `https://halabot.<tailnet>.ts.net` from any device on the tailnet,
-  phone included. The first time, it prints a link to turn on Serve and
-  HTTPS certificates for the tailnet in the admin console.
-- **An SSH tunnel:** `ssh -L 8082:127.0.0.1:8082 halabot@<server>`, then
-  http://localhost:8082.
+```bash
+sudo cloudflared service install <token>
+systemctl status cloudflared
+```
+
+Stop the tunnel on any old machine: a tunnel with two connectors sends
+each request to either one.
+Without the tunnel, an SSH tunnel works:
+`ssh -L 8082:127.0.0.1:8082 halabot@<server>`, then http://localhost:8082.
 
 State-changing endpoints need `WEB_API_TOKEN` (generated in `.env`).
 
