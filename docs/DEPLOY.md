@@ -151,10 +151,10 @@ when the pings stop.
 ## 6. The dashboard
 
 The dashboard listens on `127.0.0.1:8082` only. It is reached at
-`https://trading.home.elghareeb.space` through a Cloudflare Tunnel:
+`https://trading.elghareeb.space` through a Cloudflare Tunnel:
 `cloudflared` on the host dials out to Cloudflare, so no inbound port
 opens. In Cloudflare Zero Trust → Networks → Tunnels, the tunnel's public
-hostname `trading.home.elghareeb.space` points to `http://localhost:8082`.
+hostname `trading.elghareeb.space` points to `http://localhost:8082`.
 Copy the tunnel's token from there and, on the server:
 
 ```bash
