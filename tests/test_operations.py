@@ -261,6 +261,7 @@ async def test_backups_freshness_database_and_deploy(engine) -> None:
 
     backups = body["backups"]
     assert backups["nightly"]["status"] == "ok" and backups["nightly"]["detail"]["dump_mb"] == 434
+    assert backups["offsite"]["status"] == "ok"
     assert backups["drill"]["status"] == "missing"
     assert backups["next_nightly"] == "2026-10-09T07:00:00+00:00"
     assert backups["next_drill"] == "2026-11-01T07:00:00+00:00"
@@ -348,3 +349,16 @@ async def test_a_low_llm_credit_is_a_problem_on_the_page(engine) -> None:
     credits = body["llm"]["credits"]
     assert credits["available_usd"] == pytest.approx(0.1) and credits["low"] is True
     assert any(p.startswith("LLM credit low: $0.10") for p in body["fleet"]["problems"])
+
+
+async def test_no_off_site_copy_is_off_not_a_problem(engine) -> None:
+    """The operator runs without an off-site copy: never recorded is not a fault."""
+    await _seed(engine)
+    async with engine.begin() as conn:
+        await conn.execute(
+            text("DELETE FROM heartbeats WHERE component = :c"), {"c": hb.BACKUP_OFFSITE}
+        )
+    body = await build(engine, get_settings(), now=NOW)
+
+    assert body["backups"]["offsite"]["status"] == "off"
+    assert not any("off-site" in p for p in body["fleet"]["problems"])
