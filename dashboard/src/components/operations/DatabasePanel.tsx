@@ -22,7 +22,7 @@ function Row({ k, v, tone }: { k: string; v: ReactNode; tone?: string }) {
   );
 }
 
-const backupTone = (b: OpsBackup) => (b.status === "ok" ? undefined : "text-loss");
+const backupTone = (b: OpsBackup) => (b.status === "ok" || b.status === "off" ? undefined : "text-loss");
 
 export function DatabasePanel({ data }: { data: OperationsStatus }) {
   const db = data.database;
@@ -131,7 +131,7 @@ export function DatabasePanel({ data }: { data: OperationsStatus }) {
           {liveKb != null && <Row k="live events" v={formatBytes(liveKb * 1024)} />}
           <Row
             k="off-site"
-            v={b.offsite.at ? `${ago(b.offsite.at, data.now)} · ${String(b.offsite.detail?.snapshot ?? "")}` : "never recorded"}
+            v={b.offsite.at ? `${ago(b.offsite.at, data.now)} · ${String(b.offsite.detail?.snapshot ?? "")}` : "not configured"}
             tone={backupTone(b.offsite)}
           />
           <Row k="next" v={`${formatDayTime(b.next_nightly)} ET · ${until(b.next_nightly, data.now)}`} />

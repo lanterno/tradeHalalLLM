@@ -859,7 +859,8 @@ export interface OpsConsumer {
 export interface OpsBackup {
   at: string | null;
   detail: Record<string, unknown> | null;
-  status: "ok" | "stale" | "missing";
+  /** "off": an optional copy (off-site) the operator runs without. */
+  status: "ok" | "stale" | "missing" | "off";
 }
 
 export interface OpsFreshness {

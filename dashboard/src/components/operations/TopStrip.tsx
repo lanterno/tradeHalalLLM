@@ -145,9 +145,9 @@ export function OpsStrip({ data }: { data: OperationsStatus }) {
         ) : (
           <Big className="text-loss">None</Big>
         )}
-        <p className={data.backups.offsite.status === "ok" ? undefined : "text-loss"}>
+        <p className={data.backups.offsite.status === "stale" ? "text-loss" : undefined}>
           off-site:{" "}
-          {data.backups.offsite.at ? ago(data.backups.offsite.at, data.now) : "never recorded"}
+          {data.backups.offsite.at ? ago(data.backups.offsite.at, data.now) : "not configured"}
         </p>
         <p>
           next {formatDayTime(data.backups.next_nightly)} ET ({until(data.backups.next_nightly, data.now)})
