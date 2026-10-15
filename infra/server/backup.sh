@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Nightly backup: `just backup` dumps and verifies the database into a dated
-# local directory, then restic ships it, encrypted, to the off-site
-# repository in /etc/halabot/server.env. The previous machine kept its dumps
-# on the same hardware and lost them with it; a backup only counts once it
-# is off this server, so the `backup.offsite` heartbeat is written only after
-# the upload succeeds, and the evening run alerts when it goes stale.
+# local directory, then, if /etc/halabot/server.env names a repository,
+# restic ships it, encrypted, off-site. The off-site copy is the operator's
+# choice: without a repository the local dumps are the only copies, and they
+# go with the server. With one, the `backup.offsite` heartbeat is written
+# only after the upload succeeds, and the evening run alerts when it goes
+# stale.
 #
 #   backup.sh            nightly run (halabot-backup.timer)
 #   backup.sh --init     create the restic repository, once
@@ -21,11 +22,17 @@ set -a
 # shellcheck disable=SC1090
 . "$SERVER_ENV"
 set +a
-: "${RESTIC_REPOSITORY:?set RESTIC_REPOSITORY in $SERVER_ENV}"
-: "${RESTIC_PASSWORD:?set RESTIC_PASSWORD in $SERVER_ENV}"
+require_repo() {
+    : "${RESTIC_REPOSITORY:?set RESTIC_REPOSITORY in $SERVER_ENV}"
+    : "${RESTIC_PASSWORD:?set RESTIC_PASSWORD in $SERVER_ENV}"
+}
+prune_local() {
+    find "$BACKUP_DIR" -mindepth 1 -maxdepth 1 -type d -mtime "+${KEEP_LOCAL_DAYS:-7}" -exec rm -rf {} +
+}
 
 case "${1:-}" in
     --init)
+        require_repo
         if $RESTIC cat config >/dev/null 2>&1; then
             echo "restic repository already initialised"
         else
@@ -34,6 +41,7 @@ case "${1:-}" in
         exit 0
         ;;
     --list)
+        require_repo
         exec $RESTIC snapshots --tag halabot
         ;;
     "") ;;
@@ -47,6 +55,13 @@ dest="$BACKUP_DIR/$(date -u +%F)"
 mkdir -p "$dest"
 just backup "$dest"
 
+if [ -z "${RESTIC_REPOSITORY:-}" ]; then
+    prune_local
+    echo "local dump in $dest; no off-site repository configured"
+    exit 0
+fi
+require_repo
+
 snapshot=$($RESTIC backup --json --tag halabot --host halabot "$dest" \
     | jq -r 'select(.message_type == "summary") | .snapshot_id')
 [ -n "$snapshot" ] || { echo "restic backup reported no snapshot" >&2; exit 1; }
@@ -57,7 +72,7 @@ if [ "$(date -u +%u)" = 7 ]; then
 fi
 
 # The upload is done: old local copies can go whatever the heartbeat does.
-find "$BACKUP_DIR" -mindepth 1 -maxdepth 1 -type d -mtime "+${KEEP_LOCAL_DAYS:-7}" -exec rm -rf {} +
+prune_local
 
 # Fails only if the database went away since `just backup` read it. The
 # snapshot is safe; the unit still fails (OnFailure alerts) because the

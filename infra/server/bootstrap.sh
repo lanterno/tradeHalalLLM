@@ -133,7 +133,7 @@ install -d -m 750 -o "$HALABOT_USER" -g "$HALABOT_USER" "$BACKUP_DIR"
 install -d -m 750 -o root -g "$HALABOT_USER" "$ETC_DIR"
 if [ ! -f "$ETC_DIR/server.env" ]; then
     install -m 640 -o root -g "$HALABOT_USER" "$HALABOT_DIR/infra/server/server.env.example" "$ETC_DIR/server.env"
-    echo "wrote $ETC_DIR/server.env from the example; set the backup repository and password"
+    echo "wrote $ETC_DIR/server.env from the example; set a backup repository to copy dumps off-site"
 fi
 
 say "systemd units"
@@ -168,8 +168,9 @@ cat <<EOF
 
 Done. Next (docs/DEPLOY.md has the detail):
   1. Fill in the API keys:      sudo -u ${HALABOT_USER} nano ${env_file}
-  2. Configure off-site backup:  nano ${ETC_DIR}/server.env, then
+  2. Off-site backup, optional:  nano ${ETC_DIR}/server.env, then
                                  sudo -u ${HALABOT_USER} ${HALABOT_DIR}/infra/server/backup.sh --init
+                                 (without it the nightly dump stays on this server)
   3. Start the fleet:            sudo -iu ${HALABOT_USER}; cd ${HALABOT_DIR}; just build && just up && just health
   4. Dashboard tunnel:           cloudflared service install <token>
 EOF

@@ -1,6 +1,6 @@
 # Installed by infra/server/bootstrap.sh (placeholders filled in there).
 [Unit]
-Description=halabot nightly database backup, shipped off-site
+Description=halabot nightly database backup (shipped off-site when configured)
 After=docker.service network-online.target
 Wants=network-online.target
 OnFailure=halabot-alert@%n.service
