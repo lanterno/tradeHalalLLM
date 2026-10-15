@@ -188,10 +188,10 @@ def _processes(
 def _backups(beats: dict[str, hb.Beat], now: datetime) -> dict[str, Any]:
     from halal_trader.research.daily import BACKUP_MAX_AGE_H, RESTORE_DRILL_MAX_AGE_D
 
-    def row(component: str, max_age: timedelta) -> dict[str, Any]:
+    def row(component: str, max_age: timedelta, *, optional: bool = False) -> dict[str, Any]:
         b = beats.get(component)
         if b is None:
-            return {"at": None, "detail": None, "status": "missing"}
+            return {"at": None, "detail": None, "status": "off" if optional else "missing"}
         return {
             "at": b.beat_at.isoformat(),
             "detail": b.detail,
@@ -208,7 +208,8 @@ def _backups(beats: dict[str, hb.Beat], now: datetime) -> dict[str, Any]:
     )
     return {
         "nightly": row(hb.BACKUP_NIGHTLY, timedelta(hours=BACKUP_MAX_AGE_H)),
-        "offsite": row(hb.BACKUP_OFFSITE, timedelta(hours=BACKUP_MAX_AGE_H)),
+        # Optional: never recorded means the operator runs without one.
+        "offsite": row(hb.BACKUP_OFFSITE, timedelta(hours=BACKUP_MAX_AGE_H), optional=True),
         "drill": row(hb.BACKUP_RESTORE_DRILL, timedelta(days=RESTORE_DRILL_MAX_AGE_D)),
         "max_age_hours": BACKUP_MAX_AGE_H,
         "drill_max_age_days": RESTORE_DRILL_MAX_AGE_D,
@@ -633,7 +634,7 @@ async def build(
             ("nightly backup", backups["nightly"]),
             ("off-site copy", backups["offsite"]),
         )
-        if b["status"] != "ok"
+        if b["status"] not in ("ok", "off")
     ]
     # The evening run's reading of what the LLM account can still pay for,
     # judged by the same rule its alert uses.

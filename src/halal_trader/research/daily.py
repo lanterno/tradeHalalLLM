@@ -327,8 +327,9 @@ async def _backup_health(engine: AsyncEngine) -> list[str]:
     off-site copy in infra/server/backup.sh once restic has stored it. A
     missing or stale one is reported through the evening run's alert, so a
     backup that stopped is noticed within a day rather than when it is needed.
-    A dump that never leaves the server counts as a problem: the last machine
-    took its backups with it.
+    The off-site copy is optional (the operator runs without one): it is
+    judged only once one has been recorded, and from then on a stale one is
+    a problem.
     """
     from datetime import UTC, datetime
 
@@ -348,7 +349,8 @@ async def _backup_health(engine: AsyncEngine) -> list[str]:
     ):
         last = beats.get(component)
         if last is None:
-            problems.append(f"backup: no {what} recorded yet")
+            if component == BACKUP_NIGHTLY:
+                problems.append(f"backup: no {what} recorded yet")
         elif (now - last.beat_at).total_seconds() > BACKUP_MAX_AGE_H * 3600:
             problems.append(f"backup: no {what} in the last 36 h")
     drill = beats.get(BACKUP_RESTORE_DRILL)

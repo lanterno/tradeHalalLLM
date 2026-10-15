@@ -149,7 +149,7 @@ async def build(engine: AsyncEngine, settings: Any, *, today: date) -> str:
             + (
                 f"off-site {when[BACKUP_OFFSITE]:%a %d %b}; "
                 if offsite is not None
-                else "NOT off-site; "
+                else "kept on the server only; "
             )
             + (
                 f"last restore drill {when[BACKUP_RESTORE_DRILL]:%d %b}"
