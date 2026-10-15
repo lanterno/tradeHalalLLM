@@ -2,13 +2,14 @@
 
 ## What actually runs today (2026-10-07)
 
-- **Nightly dump, shipped off-site.** `halabot-backup.timer` (07:00 UTC)
+- **Nightly dump, shipped off-site if configured.** `halabot-backup.timer` (07:00 UTC)
   runs `infra/server/backup.sh`: `just backup <dir>` writes a verified
   `pg_dump -Fc` (minus the rebuildable rows), `live_events.jsonl.gz` and
-  `playbook_runs.jsonl.gz` into `/var/backups/halabot/<date>`, then restic
-  uploads it, encrypted, to the repository in `/etc/halabot/server.env`
-  (R2, Hetzner Object Storage or a Storage Box). Setup:
-  [`docs/DEPLOY.md`](../DEPLOY.md) step 4.
+  `playbook_runs.jsonl.gz` into `/var/backups/halabot/<date>`, then, if
+  `/etc/halabot/server.env` names a repository (R2, Hetzner Object Storage
+  or a Storage Box), restic uploads it, encrypted. Setup:
+  [`docs/DEPLOY.md`](../DEPLOY.md) step 4. Since 2026-10-14 the operator
+  runs without one: the dumps stay on the server and go with it.
 - **What the dump leaves out.** Rows that can be rebuilt: bars and
   assets, the event store with its scores, fundamentals and ETF holdings,
   `news_stories` (rebuilt from the event store) and the playbook
@@ -21,10 +22,11 @@
   runs with their stories and trades (`playbook_runs.jsonl.gz`, one run
   per line). `story_aliases` stays in the dump: it cannot be rebuilt once
   asset names change.
-- **Why off-site.** The previous machine kept its dumps on the Windows side
-  of the same computer and was lost with them in 2026-10. `backup.offsite`
-  is written only after restic succeeds; the evening run alerts when it,
-  or `backup.nightly`, is missing or over 36 h old, and a failed run alerts
+- **Why off-site, when configured.** The previous machine kept its dumps on
+  the Windows side of the same computer and was lost with them in 2026-10.
+  `backup.offsite` is written only after restic succeeds. The evening run
+  alerts when `backup.nightly` is missing or over 36 h old, and when
+  `backup.offsite` is over 36 h old once one exists; a failed run alerts
   on Telegram through `halabot-alert@`.
 - **Restore:** `restic restore latest`, then `just db-restore` (DEPLOY.md,
   "Restore from off-site").

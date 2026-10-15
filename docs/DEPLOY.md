@@ -3,7 +3,8 @@
 The fleet runs on one Linux server: Postgres, a one-shot migrate, the stock
 bot, the shadow engine and the dashboard, all in Docker (`infra/docker-compose.yml`),
 plus three systemd units on the host for what Docker cannot do itself: the
-nightly off-site backup, a health check that alerts, and a failure alert.
+nightly backup (copied off-site if you set that up), a health check that
+alerts, and a failure alert.
 
 The previous machine (WSL2, 2026-07 to 2026-10) was lost with its database
 and its `.env`, because both, and the nightly dumps, lived only on that one
@@ -12,8 +13,10 @@ computer. Two rules come from that:
 - **Every secret also lives in a password manager.** `.env` and
   `/etc/halabot/server.env` (above all `RESTIC_PASSWORD`) are on the server
   only, and the server can go the same way.
-- **A backup counts once it is off the server.** The evening run alerts
-  when the off-site copy is missing or more than 36 h old.
+- **A backup that stays on the server goes with it.** The nightly dump is
+  always made; copying it off-site (step 4) is optional. The current
+  deployment runs without one, by the operator's choice. Once an off-site
+  copy has been made, the evening run alerts when it is more than 36 h old.
 
 ## 1. Create the server
 
@@ -82,9 +85,10 @@ show up as reconcile drift. Resetting issues new keys.
 
 Then save `.env` in your password manager.
 
-## 4. Off-site backups
+## 4. Off-site backups (optional)
 
-Pick a repository and fill in `/etc/halabot/server.env` (`sudo nano`). The
+Skip this step to keep the nightly dumps on the server only (the current
+deployment does). Otherwise pick a repository and fill in `/etc/halabot/server.env` (`sudo nano`). The
 file has the forms for Cloudflare R2, Hetzner Object Storage and a Hetzner
 Storage Box. Write the values bare (no quotes). Generate the password with
 `openssl rand -base64 32` and **save it in your password manager now**:
@@ -118,11 +122,12 @@ sudo -u halabot /opt/halabot/infra/server/backup.sh --list
 `just backup` runs inside it every night. It writes the dump and two
 exports, `live_events.jsonl.gz` and `playbook_runs.jsonl.gz`, and verifies
 the dump. On the 1st of the month it also runs the restore drill into a
-scratch database. Then restic uploads it (14 daily, 8 weekly and 12
-monthly snapshots kept; a 5% read-back check on Sundays), and local copies
-older than `KEEP_LOCAL_DAYS` are deleted. A failure sends a Telegram alert
-(`halabot-alert@`), and the evening run reports a stale `backup.nightly`
-or `backup.offsite` heartbeat.
+scratch database. Then, if a repository is set, restic uploads it (14
+daily, 8 weekly and 12 monthly snapshots kept; a 5% read-back check on
+Sundays). Local copies older than `KEEP_LOCAL_DAYS` are deleted. A failure
+sends a Telegram alert (`halabot-alert@`), and the evening run reports a
+stale `backup.nightly` heartbeat, or a stale `backup.offsite` once one has
+been written.
 
 ## 5. Start the fleet
 
