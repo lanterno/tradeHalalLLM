@@ -152,3 +152,22 @@ async def test_the_client_asks_for_another_feed_only_when_told() -> None:
     finally:
         await client.aclose()
     assert feeds == ["sip", "iex"] and len(iex["AAPL"]) == 1
+
+
+async def test_the_client_asks_for_coarser_bars_only_when_told() -> None:
+    frames: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        frames.append(request.url.params["timeframe"])
+        return httpx.Response(200, json={"bars": {"AAPL": [_raw(MON, 9, 30)]}})
+
+    client = AlpacaMarketData(
+        "k", "s", client=httpx.AsyncClient(transport=httpx.MockTransport(handler)), min_interval_s=0
+    )
+    lo, hi = minutes.session_bounds(MON)
+    try:
+        await client.minute_bars("AAPL", start=lo, end=hi)
+        await client.minute_bars_many(["AAPL"], start=lo, end=hi, timeframe="15Min")
+    finally:
+        await client.aclose()
+    assert frames == ["1Min", "15Min"]
