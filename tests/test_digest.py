@@ -59,3 +59,28 @@ async def test_the_digest_says_how_each_exit_did(engine: AsyncEngine) -> None:
         "Day-trader exits (7 days): eod_close_all 1, avg +2.00% · "
         "llm_sell 1, avg -1.00% (1 in the first hour, -1.00%)"
     ) in message
+
+
+async def test_the_digest_says_how_the_day_trader_did_against_spy(engine: AsyncEngine) -> None:
+    from halal_trader.core.heartbeat import beat
+    from halal_trader.trading.decision_quality import BEAT
+
+    await beat(
+        engine,
+        BEAT,
+        {
+            "trips": 104,
+            "entry_edge": {"mean": -0.0021, "t": -1.43},
+            "exit_edge": {"mean": 0.0021, "t": None},
+        },
+    )
+    settings = SimpleNamespace(
+        zakat=SimpleNamespace(hawl_hijri=""),
+        llm=SimpleNamespace(monthly_live_usd=25.0, monthly_research_usd=15.0),
+        core=SimpleNamespace(paper=True),
+    )
+    message = await build(engine, settings, today=date(2026, 10, 16))
+    assert (
+        "Day-trader vs SPY (30 days, 104 trips): buys -0.21% (t -1.4) to the close, "
+        "sells +0.21% saved"
+    ) in message
