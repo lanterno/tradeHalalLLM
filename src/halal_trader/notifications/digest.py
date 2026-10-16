@@ -96,6 +96,23 @@ async def build(engine: AsyncEngine, settings: Any, *, today: date) -> str:
             parts.append(part)
         lines.append("Day-trader exits (7 days): " + " · ".join(parts))
 
+    from halal_trader.trading.decision_quality import BEAT as DECISIONS
+
+    decisions = beats.get(DECISIONS, {})
+    if decisions.get("trips"):
+        entry, exit_ = decisions.get("entry_edge") or {}, decisions.get("exit_edge") or {}
+
+        def edge(stat: dict[str, Any]) -> str:
+            mean, t = stat.get("mean"), stat.get("t")
+            if mean is None:
+                return "n/a"
+            return f"{mean:+.2%}" + (f" (t {t:+.1f})" if t is not None else "")
+
+        lines.append(
+            f"Day-trader vs SPY (30 days, {decisions['trips']} trips): "
+            f"buys {edge(entry)} to the close, sells {edge(exit_)} saved"
+        )
+
     validation = beats.get("screen.validation", {})
     if validation:
         lines.append(
