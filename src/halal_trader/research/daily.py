@@ -213,6 +213,12 @@ async def run_research(engine: AsyncEngine, settings: Settings, *, today: date) 
         run.errors.append(f"execution quality: {exc!r}"[:300])
 
     try:
+        await _decision_quality(engine, settings, today)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("research: decision quality failed: %r", exc)
+        run.errors.append(f"decision quality: {exc!r}"[:300])
+
+    try:
         run.zakat = await _zakat(engine, settings, today)
     except Exception as exc:  # noqa: BLE001
         logger.error("research: zakat failed: %r", exc)
@@ -526,3 +532,17 @@ async def _execution_quality(
             f"core: {len(unfilled)} order(s) unfilled after the close: {', '.join(unfilled[:8])}"
         ]
     return []
+
+
+async def _decision_quality(engine: AsyncEngine, settings: Settings, today: date) -> None:
+    """The day-trader's round trips of the last 30 days scored against SPY, kept
+    in the ``stock.decisions`` heartbeat for the Decisions page and the digest."""
+    from halal_trader.core.heartbeat import beat
+    from halal_trader.trading.decision_quality import BEAT, report
+
+    market = AlpacaMarketData.from_settings(settings)
+    try:
+        recent = await report(engine, market, today)
+    finally:
+        await market.aclose()
+    await beat(engine, BEAT, recent.summary())
