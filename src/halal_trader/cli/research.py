@@ -510,3 +510,74 @@ def core_backtest_cmd(top: int, cost_bps: float, since: Any, sector: str) -> Non
             f"vs SPUS {sb.cagr if sb else float('nan'):+.2%}, tracking error {te:.2%}, "
             f"avg turnover {r.avg_turnover:.1%}/month, maxDD {s.max_drawdown:.1%}"
         )
+
+
+@research.command("intraday-entry")
+def intraday_entry_cmd() -> None:
+    """The day-trader's entry rule (intraday momentum), pre-registered on 15-minute bars.
+
+    research/intraday_entry.py holds the rule; the result is recorded in
+    quant_trials. Fetches about 800 pages of bars: run it outside market hours.
+    """
+    from halal_trader.research import intraday_entry as ie
+
+    async def _run(engine: Any, settings: Any) -> tuple[Any, Any]:
+        from halal_trader.data.alpaca_market import AlpacaMarketData
+        from halal_trader.db.repos.quant_trials import QuantTrialRepoImpl
+
+        market = AlpacaMarketData.from_settings(settings)
+        try:
+            bars, universe = await ie.load(engine, market, start=ie.TRAIN[0], end=ie.HOLDOUT[1])
+        finally:
+            await market.aclose()
+        obs = ie.observations(bars, universe)
+        table = {
+            (label, group): ie.summarise(ie.window(obs, span), group)
+            for label, span in (("train", ie.TRAIN), ("holdout", ie.HOLDOUT))
+            for group in ie.GROUPS
+        }
+        result = ie.verdict(table["train", "CHASE"], table["holdout", "CHASE"])
+        await QuantTrialRepoImpl(engine).record_trial(
+            name="research.intraday.chase",
+            kind="verdict",
+            config={
+                "universe": ie.UNIVERSE,
+                "move": ie.MOVE,
+                "volume_lookback": ie.VOLUME_LOOKBACK,
+                "cost": ie.COST,
+                "decisions": [ie.FIRST_DECISION, ie.LAST_DECISION],
+                "bars": "15Min sip raw",
+            },
+            window=(
+                f"train {ie.TRAIN[0]}..{ie.TRAIN[1]} | holdout {ie.HOLDOUT[0]}..{ie.HOLDOUT[1]}"
+                " | 2025-01-01.. untouched"
+            ),
+            metrics={
+                f"{label}.{group}": {
+                    "n": s.observations,
+                    "sessions": s.sessions,
+                    "mean": s.mean,
+                    "t": s.t,
+                }
+                for (label, group), s in table.items()
+            },
+            criterion=(
+                "CHASE (move > +0.5% and relative volume > 1 at a 09:45-15:30 cycle, entered "
+                "at T, out at the close, vs SPY, net of 10 bps): refuted if net mean < 0 with "
+                "session-clustered t <= -2 in train and holdout; supported if > 0 with t >= 2 "
+                "in both; else inconclusive"
+            ),
+            verdict=result,
+        )
+        return table, result
+
+    table, result = run_db(_run)
+    console.print(
+        "entry at a cycle, out at the close: net excess vs SPY, mean of session means (t)"
+    )
+    for (label, group), s in table.items():
+        console.print(
+            f"  {label:<8} {group:<6} {s.mean:+.3%} (t {s.t:+.2f})  "
+            f"{s.observations} entries over {s.sessions} sessions"
+        )
+    console.print(f"[bold]CHASE: {result}[/bold] (recorded in quant_trials)")
