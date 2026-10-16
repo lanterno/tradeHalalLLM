@@ -167,6 +167,13 @@ sudo cloudflared service install <token>
 systemctl status cloudflared
 ```
 
+Then put a login in front of it: Zero Trust → Access controls →
+Applications → a self-hosted application for `trading.elghareeb.space`
+with an Allow policy for the operator's email (login by a one-time code
+sent to that address; 24 h sessions). Without it, anyone who knows the
+address can read the positions and trades. The host's own health checks
+call `127.0.0.1:8082` and are not affected.
+
 Stop the tunnel on any old machine: a tunnel with two connectors sends
 each request to either one.
 Without the tunnel, an SSH tunnel works:
