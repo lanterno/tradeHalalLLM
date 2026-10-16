@@ -33,6 +33,7 @@ logger = logging.getLogger(__name__)
 
 Adjustment = Literal["raw", "all"]
 MinuteFeed = Literal["sip", "iex"]
+IntradayFrame = Literal["1Min", "5Min", "15Min"]
 
 _SYMBOLS_PER_REQUEST = 100
 _PAGE_LIMIT = 10_000
@@ -212,22 +213,24 @@ class AlpacaMarketData:
         start: datetime,
         end: datetime,
         feed: MinuteFeed = "sip",
+        timeframe: IntradayFrame = "1Min",
     ) -> dict[str, list[dict[str, Any]]]:
         """Raw minute bars of several symbols in [start, end], by symbol.
 
         ``feed`` is SIP (the consolidated tape research stores) unless asked
         otherwise; ``"iex"`` is only probed (the news engine's D8), never
-        stored as history. One request carries up to ``_SYMBOLS_PER_REQUEST``
-        symbols and a page holds ``_PAGE_LIMIT`` bars across them, so a
-        session of a hundred names takes about four requests instead of a
-        hundred.
+        stored as history. ``timeframe`` asks for coarser intraday bars (the
+        day-trader's 15-minute cadence) at a fraction of the pages. One
+        request carries up to ``_SYMBOLS_PER_REQUEST`` symbols and a page
+        holds ``_PAGE_LIMIT`` bars across them, so a session of a hundred
+        names takes about four requests instead of a hundred.
         """
         wanted = sorted({s.upper() for s in symbols})
         out: dict[str, list[dict[str, Any]]] = {}
         for i in range(0, len(wanted), _SYMBOLS_PER_REQUEST):
             params: dict[str, Any] = {
                 "symbols": ",".join(wanted[i : i + _SYMBOLS_PER_REQUEST]),
-                "timeframe": "1Min",
+                "timeframe": timeframe,
                 "start": iso_z(start),
                 "end": iso_z(min(end, datetime.now(UTC) - SIP_EMBARGO)),
                 "feed": feed,
