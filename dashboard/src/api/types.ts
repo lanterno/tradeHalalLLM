@@ -957,3 +957,27 @@ export interface OperationsStatus {
   };
   config: { core: [string, string][]; llm: [string, string][]; day_trader: [string, string][] };
 }
+
+/** A mean of session means and its t across sessions (trading/decision_quality.py). */
+export interface EdgeStat {
+  trips: number;
+  sessions: number;
+  mean: number | null;
+  t: number | null;
+}
+
+/** GET /api/decisions/quality: the last 30 days' round trips scored against SPY. */
+export interface DecisionQuality {
+  computed_at: string;
+  start: string;
+  end: string;
+  trips: number;
+  unscored: number;
+  pnl_usd: number;
+  entry_edge: EdgeStat;
+  exit_edge: EdgeStat;
+  excess: EdgeStat;
+  by_hour: Record<string, EdgeStat>;
+  by_exit: Record<string, EdgeStat>;
+  days: { day: string; trips: number; entry_edge: number | null; pnl_usd: number }[];
+}

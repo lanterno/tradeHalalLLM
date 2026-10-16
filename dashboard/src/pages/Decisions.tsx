@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useDecisions, useAdjustments } from "../hooks/useDecisions";
 import { ErrorState } from "../components/ErrorState";
+import { DecisionQuality } from "../components/DecisionQuality";
 import { GuardRejections } from "../components/GuardRejections";
 import { formatTime, relativeTime } from "../lib/utils";
 
@@ -35,9 +36,13 @@ export default function Decisions() {
       <div>
         <h1 className="text-2xl font-bold text-white">Day-trader decisions</h1>
         <p className="mt-1 text-xs text-muted">
-          The day-trader's LLM calls, guard rejections and self-review.
+          The day-trader's decisions scored against SPY, its LLM calls, guard
+          rejections and self-review.
         </p>
       </div>
+
+      {/* Did the decisions beat holding SPY? (scored nightly) */}
+      <DecisionQuality />
 
       {/* Guard rejections — why the bot didn't trade */}
       <GuardRejections />
