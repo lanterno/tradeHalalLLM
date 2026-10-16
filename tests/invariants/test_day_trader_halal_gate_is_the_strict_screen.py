@@ -146,10 +146,16 @@ async def test_the_order_boundary_refuses_a_name_the_strict_screen_fails(
     assert await executor._check_halal("AAPL") is None
 
 
-async def test_the_recommendation_universe_is_the_strict_screen(screened: AsyncEngine) -> None:
+async def test_the_recommendation_universe_is_the_strict_screen(
+    screened: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from unittest.mock import MagicMock
 
+    from halal_trader.recommendation import engine as rec
     from halal_trader.recommendation.engine import DailyRecommendationEngine
+
+    # The screen is dated near TODAY; the real clock would make it stale.
+    monkeypatch.setattr(rec, "today_eastern", lambda: TODAY)
 
     eng = DailyRecommendationEngine(
         broker=MagicMock(), repo=MagicMock(), settings=MagicMock(), llm=MagicMock(), engine=screened
