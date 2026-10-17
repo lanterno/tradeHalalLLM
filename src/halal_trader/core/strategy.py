@@ -50,7 +50,6 @@ class BaseStrategy:
         llm_provider_name: str,
         max_position_pct: float,
         daily_loss_limit: float,
-        daily_return_target: float,
         max_simultaneous_positions: int,
     ) -> None:
         self._llm = llm
@@ -58,7 +57,6 @@ class BaseStrategy:
         self._llm_provider_name = llm_provider_name
         self._max_position_pct = max_position_pct
         self._daily_loss_limit = daily_loss_limit
-        self._daily_return_target = daily_return_target
         self._max_simultaneous_positions = max_simultaneous_positions
         # Optional operator alerter (AlertSink) — attached by the
         # composition root after construction.

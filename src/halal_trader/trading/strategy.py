@@ -638,7 +638,6 @@ class TradingStrategy(BaseStrategy):
         llm_provider_name: str,
         max_position_pct: float,
         daily_loss_limit: float,
-        daily_return_target: float,
         max_simultaneous_positions: int,
         max_sector_pct: float = 0.40,
         sectors: Callable[[list[str]], Awaitable[dict[str, str]]] | None = None,
@@ -649,7 +648,6 @@ class TradingStrategy(BaseStrategy):
             llm_provider_name=llm_provider_name,
             max_position_pct=max_position_pct,
             daily_loss_limit=daily_loss_limit,
-            daily_return_target=daily_return_target,
             max_simultaneous_positions=max_simultaneous_positions,
         )
         # Mirrors the executor's TradeExecutor.max_sector_pct so the
@@ -689,7 +687,6 @@ class TradingStrategy(BaseStrategy):
         system = SYSTEM_PROMPT.format(
             max_position_pct=self._max_position_pct,
             daily_loss_limit=self._daily_loss_limit,
-            daily_return_target=self._daily_return_target,
             max_positions=self._max_simultaneous_positions,
         )
 

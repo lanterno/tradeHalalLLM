@@ -562,7 +562,6 @@ def _config(settings: Any, *, core_enabled: bool) -> dict[str, Any]:
             ["Largest position", f"{s.max_position_pct:.0%} of equity"],
             ["Positions at once", str(s.max_simultaneous_positions)],
             ["Daily loss limit", f"{s.daily_loss_limit:.0%} from the day's first equity"],
-            ["Daily return target", f"{s.daily_return_target:.0%}"],
             ["Max drawdown", f"{s.max_drawdown_pct:.0%}"],
             ["Monitor", f"every {s.monitor_interval_seconds:.0f} s: stops, targets, trailing"],
             [

@@ -274,7 +274,6 @@ class TradingBot:
             llm_provider_name="glm",
             max_position_pct=self.settings.stocks.max_position_pct,
             daily_loss_limit=self.settings.stocks.daily_loss_limit,
-            daily_return_target=self.settings.stocks.daily_return_target,
             max_simultaneous_positions=self.settings.stocks.max_simultaneous_positions,
             sectors=self.screener.sectors,
         )
@@ -1717,9 +1716,8 @@ class TradingBot:
                 ),
             )
             logger.info(
-                "Trading bot started — interval: %d min, target: %.1f%%, loss limit: %.1f%%",
+                "Trading bot started — interval: %d min, loss limit: %.1f%%",
                 interval,
-                self.settings.stocks.daily_return_target * 100,
                 self.settings.stocks.daily_loss_limit * 100,
             )
 

@@ -22,7 +22,6 @@ def print_config() -> None:
     table.add_row("LLM Provider", "glm")
     table.add_row("LLM Model", settings.llm.model)
     table.add_row("Trading Interval", f"{settings.stocks.trading_interval_minutes} min")
-    table.add_row("Daily Return Target", f"{settings.stocks.daily_return_target:.1%}")
     table.add_row("Max Position Size", f"{settings.stocks.max_position_pct:.0%}")
     table.add_row("Daily Loss Limit", f"{settings.stocks.daily_loss_limit:.1%}")
     table.add_row("Max Positions", str(settings.stocks.max_simultaneous_positions))

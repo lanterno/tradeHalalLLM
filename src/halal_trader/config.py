@@ -213,7 +213,6 @@ class StockSettings(_Group):
     model_config = SettingsConfigDict(**_BASE_CONFIG)
 
     trading_interval_minutes: int = 15
-    daily_return_target: float = Field(default=0.01, gt=0, le=0.5)
     max_position_pct: float = Field(default=0.20, gt=0, le=1.0)
     daily_loss_limit: float = Field(default=0.02, ge=0, le=0.5)
     max_simultaneous_positions: int = Field(default=5, ge=1)
