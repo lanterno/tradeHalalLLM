@@ -120,10 +120,6 @@ An empty decisions list is the right answer whenever no setup clears rule 3. \
 Do not fill a cycle with a trade to have traded.
 """
 
-# The ML SIGNALS block is fixed text: the stage that could fill it (anomaly
-# detector + signal classifier) never had a model wired and was deleted on
-# 2026-10-01. The line stays so the prompt the model sees did not change with
-# the deletion; drop it with the next deliberate prompt revision.
 USER_PROMPT_TEMPLATE = """\
 === PORTFOLIO STATUS ===
 Buying Power: ${buying_power:,.2f}
@@ -175,9 +171,6 @@ Today's P&L: ${today_pnl:+,.2f} ({today_pnl_pct:+.2%})
 
 === MARKET REGIME ===
 {regime_text}
-
-=== ML SIGNALS ===
-No ML signals available.
 
 === MULTI-TIMEFRAME ANALYSIS ===
 {timeframe_text}
