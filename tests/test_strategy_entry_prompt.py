@@ -9,9 +9,7 @@ from __future__ import annotations
 
 from halal_trader.trading.strategy import SYSTEM_PROMPT
 
-PROMPT = SYSTEM_PROMPT.format(
-    max_position_pct=0.2, daily_loss_limit=0.02, max_positions=5, daily_return_target=0.01
-)
+PROMPT = SYSTEM_PROMPT.format(max_position_pct=0.2, daily_loss_limit=0.02, max_positions=5)
 
 
 def test_the_prompt_sets_no_entry_quota() -> None:

@@ -45,7 +45,6 @@ class TestSettings:
         # cycle latency + cost.
         assert settings.llm.glm.thinking is False
         assert settings.alpaca.paper_trade is True
-        assert settings.stocks.daily_return_target == 0.01
         assert settings.stocks.max_position_pct == 0.20
         assert settings.stocks.daily_loss_limit == 0.02
         assert settings.stocks.trading_interval_minutes == 15
@@ -65,11 +64,9 @@ class TestSettings:
             ),
             stocks=StockSettings(
                 _env_file=None,
-                daily_return_target=0.02,
                 max_position_pct=0.10,
             ),
         )
         assert settings.llm.model == "glm-5.2"
         assert settings.llm.glm.base_url == "https://api.z.ai/api/paas/v4"
-        assert settings.stocks.daily_return_target == 0.02
         assert settings.stocks.max_position_pct == 0.10

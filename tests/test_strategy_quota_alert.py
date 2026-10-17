@@ -56,7 +56,6 @@ def _strategy(llm: _FailingLLM, repo: _FakeRepo) -> BaseStrategy:
         llm_provider_name="glm",
         max_position_pct=0.2,
         daily_loss_limit=0.02,
-        daily_return_target=0.01,
         max_simultaneous_positions=5,
     )
 

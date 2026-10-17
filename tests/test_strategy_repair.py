@@ -50,7 +50,6 @@ def _strategy(llm: BaseLLM, repo: Repository) -> _NoopStrategy:
         llm_provider_name="stub",
         max_position_pct=0.25,
         daily_loss_limit=0.03,
-        daily_return_target=0.01,
         max_simultaneous_positions=3,
     )
 
