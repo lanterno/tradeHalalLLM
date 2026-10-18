@@ -33,8 +33,8 @@ throughput, not review.
 
 - **Halal stock trading is the product and is being developed full-time**;
   the refactor aims to *improve* it (edge, universe, execution), not only
-  harden it. The roadmap and the decisions behind it are in the local-only
-  `docs/MODERNIZATION_PLAN.md` (§9); see CLAUDE.md for why it isn't committed.
+  harden it. Open work is tracked in Linear (team Halalbot, `HAL`, synced
+  with this repo's GitHub Issues); see CLAUDE.md.
 - **Crypto trading is abandoned**; its code is deleted and, since 2026-10-08,
   its tables dropped.
 - **Real capital only through staged, pre-signed gates** (paper → small live →

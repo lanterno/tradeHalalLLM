@@ -10,7 +10,7 @@ LLM-powered halal day-trading bot for **US stocks** (Alpaca paper trading via MC
 
 **Read `docs/OPERATOR_CONTEXT.md` first.** It holds the non-code-derivable context: the working agreement, the stocks strategy intent (**fast in, slow out**), why the sole LLM provider is GLM-5.2 via OpenRouter (don't undo it; the bot won't start without `GLM_API_KEY`), operator-gated issues you can't fix in code (reconcile drift and the destructive fix-drift tool; don't touch `_aggregate_stocks_positions`), and the `src/halabot` engineering lessons (validate every edge with `halabot backtest` on disjoint OOS windows; the engine is shadow-only and never trades).
 
-The roadmap is `docs/MODERNIZATION_PLAN.md`, **kept local on purpose and git-ignored**: the repo is public and it maps open weaknesses. Read it and update it; never force-add it. The previous plan and its evidence (`docs/assessment/`) were lost with the WSL machine on 2026-10-07; the plan restarted on 2026-10-08.
+**Issues live in Linear**: team Halalbot (key `HAL`), project [Halalbot](https://linear.app/elghareeb/project/halalbot-e07cf9f9ab96). The team syncs two-way with this repo's GitHub Issues: a new HAL issue gets a GitHub copy, a new GitHub issue gets a HAL one, and updates and comments flow both ways. **Every HAL issue is therefore public**: write it as such (no hosts, addresses, credentials or access details). Open work goes there, not in a file; reference the issue in the commit message (`Fixes HAL-12`, `Part of HAL-12`). `docs/MODERNIZATION_PLAN.md` stays local and git-ignored (never force-add it) as the log of past findings and decisions.
 
 ## Common commands
 
