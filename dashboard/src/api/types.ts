@@ -979,5 +979,7 @@ export interface DecisionQuality {
   excess: EdgeStat;
   by_hour: Record<string, EdgeStat>;
   by_exit: Record<string, EdgeStat>;
+  /** Buys by their stop and target against the fill (absent before 2026-10-22). */
+  by_plan?: Record<string, EdgeStat>;
   days: { day: string; trips: number; entry_edge: number | null; pnl_usd: number }[];
 }
