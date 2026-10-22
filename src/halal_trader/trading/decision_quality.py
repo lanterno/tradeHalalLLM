@@ -10,6 +10,10 @@ buy makes money. Each round trip is scored against SPY instead:
   the name's. Positive: after it was sold the name did worse than the
   market, so selling was right. A sale at the close scores about zero.
 * **excess:** from the fill to the sale, the name's return minus SPY's.
+* **plan:** the buy's stop and target as stored, read against the fill:
+  reward at least twice the risk (the prompt's rule), below that, a stop
+  at or above the fill, no target, or no stop. Entry edge by plan says
+  whether the buys that kept the rule did better.
 
 Trips in one session move together, so means and t-statistics treat each
 session's mean as one draw. SPY's price at a fill or a sale is the close of
@@ -38,6 +42,8 @@ WINDOW_DAYS = 30
 BEAT = "stock.decisions"
 # Entry-time buckets (New York): the open's first hour has done worst so far.
 HOURS = (("09:30-10:30", time(9, 30)), ("10:30-13:00", time(10, 30)), ("13:00-16:00", time(13)))
+REWARD_RISK = 2.0  # the prompt's rule 3: a target at least twice as far as the stop
+PLANS = ("2:1 or better", "below 2:1", "stop at or above fill", "no target", "no stop")
 
 
 class MinuteSource(Protocol):
@@ -56,6 +62,8 @@ class Trip:
     quantity: float
     exit_reason: str
     entry_type: str
+    stop_loss: float | None = None
+    target: float | None = None
 
     @property
     def session(self) -> date:
@@ -77,6 +85,19 @@ class Trip:
     @property
     def pnl(self) -> float:
         return (self.exit - self.fill) * self.quantity
+
+    @property
+    def plan(self) -> str:
+        """Which of ``PLANS`` the buy's stop and target make against its fill (a zero is
+        none, as the monitor reads it)."""
+        if not self.stop_loss:
+            return PLANS[4]
+        if not self.target:
+            return PLANS[3]
+        risk = self.fill - self.stop_loss
+        if risk <= 0:
+            return PLANS[2]
+        return PLANS[0] if self.target - self.fill >= REWARD_RISK * risk else PLANS[1]
 
 
 @dataclass(frozen=True, slots=True)
@@ -190,6 +211,12 @@ class Report:
                 reason: clustered((x.trip.session, x.exit_edge) for x in xs).as_dict()
                 for reason, xs in sorted(by_reason.items())
             },
+            "by_plan": {
+                plan: clustered(
+                    (x.trip.session, x.entry_edge) for x in s if x.trip.plan == plan
+                ).as_dict()
+                for plan in PLANS
+            },
             "days": [
                 {
                     "day": d.isoformat(),
@@ -218,7 +245,7 @@ async def closed_trips(engine: AsyncEngine, start: date, end: date) -> list[Trip
             text(
                 "SELECT symbol, filled_at, closed_at, filled_price, exit_price, "
                 "coalesce(filled_quantity, quantity) AS qty, coalesce(exit_reason, '') AS why, "
-                "coalesce(entry_type, 'cycle') AS kind FROM trades "
+                "coalesce(entry_type, 'cycle') AS kind, stop_loss, target_price FROM trades "
                 "WHERE side = 'buy' AND filled_price > 0 AND exit_price > 0 "
                 "AND filled_at >= :lo AND filled_at < :hi AND closed_at IS NOT NULL "
                 "ORDER BY filled_at"
@@ -235,6 +262,8 @@ async def closed_trips(engine: AsyncEngine, start: date, end: date) -> list[Trip
                 float(r.qty),
                 r.why,
                 r.kind,
+                None if r.stop_loss is None else float(r.stop_loss),
+                None if r.target_price is None else float(r.target_price),
             )
             for r in rows
         ]
