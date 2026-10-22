@@ -23,8 +23,12 @@ def _trip(
     fill: float = 100.0,
     exit_price: float = 101.0,
     reason: str = "llm_sell",
+    stop: float | None = None,
+    target: float | None = None,
 ) -> dq.Trip:
-    return dq.Trip(symbol, OPEN + at, OPEN + at + held, fill, exit_price, 10, reason, "cycle")
+    return dq.Trip(
+        symbol, OPEN + at, OPEN + at + held, fill, exit_price, 10, reason, "cycle", stop, target
+    )
 
 
 def _spy(*points: tuple[timedelta, float]) -> list[tuple[datetime, float]]:
@@ -100,13 +104,40 @@ def test_the_summary_splits_by_hour_and_exit_and_leaves_closing_exits_out_of_sel
     assert days == [{"day": "2026-10-14", "trips": 2, "entry_edge": 0.01, "pnl_usd": 10.0}]
 
 
+def test_a_buys_plan_reads_its_stop_and_target_against_the_fill() -> None:
+    assert _trip(stop=98.0, target=104.0).plan == "2:1 or better"  # exactly 2:1
+    assert _trip(stop=98.0, target=103.9).plan == "below 2:1"
+    assert _trip(stop=100.0, target=110.0).plan == "stop at or above fill"
+    assert _trip(stop=98.0).plan == "no target"
+    assert _trip(target=104.0).plan == "no stop"
+    assert _trip(stop=0.0, target=104.0).plan == "no stop"  # the monitor reads a zero as none
+
+
+def test_the_summary_splits_buys_by_plan() -> None:
+    spy = _spy(*((timedelta(minutes=m), 500.0) for m in range(391)))
+    closes = {("AAA", DAY): 103.0, ("BBB", DAY): 99.0, ("SPY", DAY): 500.0}
+    scores = dq.score(
+        [_trip("AAA", stop=99.0, target=103.0), _trip("BBB", stop=99.0, target=101.0), _trip()],
+        closes,
+        spy,
+    )
+    by_plan: Any = dq.Report(DAY - timedelta(days=29), DAY, scores).summary()["by_plan"]
+    assert list(by_plan) == list(dq.PLANS)
+    assert by_plan["2:1 or better"]["trips"] == 1
+    assert by_plan["2:1 or better"]["mean"] == pytest.approx(0.03)
+    assert by_plan["below 2:1"]["mean"] == pytest.approx(-0.01)
+    assert by_plan["no stop"]["trips"] == 1
+    assert by_plan["no target"]["trips"] == 0
+
+
 async def _insert_trip(engine: AsyncEngine, trip: dq.Trip, *, closed: bool = True) -> None:
     async with engine.begin() as conn:
         await conn.execute(
             text(
                 "INSERT INTO trades (symbol, side, quantity, status, timestamp, filled_at, "
-                "filled_price, filled_quantity, exit_price, exit_reason, closed_at) VALUES "
-                "(:s, 'buy', :q, 'closed', :t, :t, :f, :q, :x, :r, :c)"
+                "filled_price, filled_quantity, exit_price, exit_reason, closed_at, stop_loss, "
+                "target_price) VALUES (:s, 'buy', :q, 'closed', :t, :t, :f, :q, :x, :r, :c, :sl, "
+                ":tp)"
             ),
             {
                 "s": trip.symbol,
@@ -116,6 +147,8 @@ async def _insert_trip(engine: AsyncEngine, trip: dq.Trip, *, closed: bool = Tru
                 "x": trip.exit,
                 "r": trip.exit_reason,
                 "c": trip.closed_at if closed else None,
+                "sl": trip.stop_loss,
+                "tp": trip.target,
             },
         )
 
@@ -146,7 +179,7 @@ class _Minutes:
 
 
 async def test_the_report_reads_closed_trips_and_stored_closes(engine: AsyncEngine) -> None:
-    await _insert_trip(engine, _trip("AAA"))
+    await _insert_trip(engine, _trip("AAA", stop=99.0, target=103.0))
     await _insert_trip(engine, _trip("BBB"), closed=False)  # still open: not scored
     await _insert_trip(engine, _trip("OLD", at=timedelta(days=-40)))  # outside 30 days
     await _insert_close(engine, "AAA", 102.0)
@@ -157,6 +190,7 @@ async def test_the_report_reads_closed_trips_and_stored_closes(engine: AsyncEngi
 
     assert [s.trip.symbol for s in r.scores] == ["AAA"]
     assert r.scores[0].entry_edge == pytest.approx(0.02)
+    assert r.scores[0].trip.plan == "2:1 or better"
     assert r.unscored == 0
     assert market.asked[0][0] == "SPY"
 
