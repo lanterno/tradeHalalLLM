@@ -121,8 +121,9 @@ def test_the_summary_splits_buys_by_plan() -> None:
         closes,
         spy,
     )
-    by_plan: Any = dq.Report(DAY - timedelta(days=29), DAY, scores).summary()["by_plan"]
-    assert list(by_plan) == list(dq.PLANS)
+    rows: Any = dq.Report(DAY - timedelta(days=29), DAY, scores).summary()["by_plan"]
+    assert [r["plan"] for r in rows] == list(dq.PLANS)  # a list: JSONB keeps its order
+    by_plan = {r["plan"]: r for r in rows}
     assert by_plan["2:1 or better"]["trips"] == 1
     assert by_plan["2:1 or better"]["mean"] == pytest.approx(0.03)
     assert by_plan["below 2:1"]["mean"] == pytest.approx(-0.01)
