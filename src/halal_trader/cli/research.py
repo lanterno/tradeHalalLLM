@@ -581,3 +581,84 @@ def intraday_entry_cmd() -> None:
             f"{s.observations} entries over {s.sessions} sessions"
         )
     console.print(f"[bold]CHASE: {result}[/bold] (recorded in quant_trials)")
+
+
+@research.command("default-stop")
+def default_stop_cmd() -> None:
+    """A default stop below the fill (HAL-2), pre-registered on 15-minute bars.
+
+    research/intraday_stop.py holds the rule; each depth's result is recorded
+    in quant_trials. Fetches the same bars as intraday-entry: run it outside
+    market hours.
+    """
+    from halal_trader.research import intraday_entry as ie
+    from halal_trader.research import intraday_stop as st
+
+    windows = (("train", ie.TRAIN), ("holdout", ie.HOLDOUT))
+
+    async def _run(engine: Any, settings: Any) -> tuple[Any, Any]:
+        from halal_trader.data.alpaca_market import AlpacaMarketData
+        from halal_trader.db.repos.quant_trials import QuantTrialRepoImpl
+
+        market = AlpacaMarketData.from_settings(settings)
+        try:
+            bars, universe = await ie.load(engine, market, start=ie.TRAIN[0], end=ie.HOLDOUT[1])
+        finally:
+            await market.aclose()
+        obs = ie.observations(bars, universe)
+        split = {label: ie.window(obs, span) for label, span in windows}
+        table = {
+            (depth, label, group): st.summarise(split[label], bars, group, depth)
+            for depth in st.DEPTHS
+            for label, _ in windows
+            for group in ie.GROUPS
+        }
+        results = {}
+        for depth in st.DEPTHS:
+            results[depth] = st.verdict(
+                table[depth, "train", "ALL"].value, table[depth, "holdout", "ALL"].value
+            )
+            await QuantTrialRepoImpl(engine).record_trial(
+                name="research.intraday.default_stop",
+                kind="verdict",
+                config={
+                    "depth": depth,
+                    "slippage": st.SLIPPAGE,
+                    "universe": ie.UNIVERSE,
+                    "decisions": [ie.FIRST_DECISION, ie.LAST_DECISION],
+                    "bars": "15Min sip raw",
+                },
+                window=(
+                    f"train {ie.TRAIN[0]}..{ie.TRAIN[1]} | holdout {ie.HOLDOUT[0]}..{ie.HOLDOUT[1]}"
+                    " | 2025-01-01.. untouched"
+                ),
+                metrics={
+                    f"{label}.{group}": {
+                        **s.value.as_dict(),
+                        "stopped": round(s.stopped, 6),
+                        "when_stopped": s.when_stopped.as_dict(),
+                    }
+                    for (d, label, group), s in table.items()
+                    if d == depth
+                },
+                criterion=(
+                    f"a stop {depth:.0%} below an entry at a 09:45-15:30 cycle (sold at the stop, "
+                    "or the open after a gap, less 5 bps) against holding to the close, per unit "
+                    "bought, over every entry: supported if the mean of session means > 0 with "
+                    "t >= 2 in train and holdout; refuted if < 0 with t <= -2 in both; else "
+                    "inconclusive"
+                ),
+                verdict=results[depth],
+            )
+        return table, results
+
+    table, results = run_db(_run)
+    console.print("a stop instead of the close: value per unit bought, mean of session means (t)")
+    for (depth, label, group), s in table.items():
+        t = "n/a" if s.value.t is None else f"{s.value.t:+.2f}"
+        console.print(
+            f"  {depth:.0%} {label:<8} {group:<6} {s.value.mean or 0.0:+.3%} (t {t})  "
+            f"stopped {s.stopped:.0%} of {s.value.trips} entries over {s.value.sessions} sessions"
+        )
+    for depth, result in results.items():
+        console.print(f"[bold]stop {depth:.0%}: {result}[/bold] (recorded in quant_trials)")
