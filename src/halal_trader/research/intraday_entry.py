@@ -78,6 +78,7 @@ class Session:
     open: tuple[float, ...]
     close: tuple[float, ...]
     cumvol: tuple[float, ...]  # volume through the end of each bar
+    low: tuple[float, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,7 +112,7 @@ def bar_index(ts: datetime) -> int | None:
 
 def sessions_of(raw: Iterable[Mapping[str, object]]) -> dict[date, Session]:
     """Alpaca's raw bars of one symbol, as complete sessions by New York date."""
-    by_day: dict[date, dict[int, tuple[float, float, float]]] = defaultdict(dict)
+    by_day: dict[date, dict[int, tuple[float, float, float, float]]] = defaultdict(dict)
     for b in raw:
         ts = datetime.fromisoformat(str(b["t"]).replace("Z", "+00:00"))
         k = bar_index(ts)
@@ -121,20 +122,22 @@ def sessions_of(raw: Iterable[Mapping[str, object]]) -> dict[date, Session]:
             float(str(b["o"])),
             float(str(b["c"])),
             float(str(b["v"])),
+            float(str(b["l"])),
         )
     out: dict[date, Session] = {}
     for day, bars in by_day.items():
         if len(bars) != BARS:
             continue
-        opens, closes, cum = [], [], []
+        opens, closes, cum, lows = [], [], [], []
         total = 0.0
         for k in range(BARS):
-            o, c, v = bars[k]
+            o, c, v, low = bars[k]
             total += v
             opens.append(o)
             closes.append(c)
             cum.append(total)
-        out[day] = Session(tuple(opens), tuple(closes), tuple(cum))
+            lows.append(low)
+        out[day] = Session(tuple(opens), tuple(closes), tuple(cum), tuple(lows))
     return out
 
 
