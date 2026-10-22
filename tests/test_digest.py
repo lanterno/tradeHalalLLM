@@ -84,3 +84,39 @@ async def test_the_digest_says_how_the_day_trader_did_against_spy(engine: AsyncE
         "Day-trader vs SPY (30 days, 104 trips): buys -0.21% (t -1.4) to the close, "
         "sells +0.21% saved"
     ) in message
+    assert "Day-trader plans" not in message  # a summary from before the plan split
+
+
+async def test_the_digest_says_how_many_buys_kept_the_plan(engine: AsyncEngine) -> None:
+    from halal_trader.core.heartbeat import beat
+    from halal_trader.trading.decision_quality import BEAT
+
+    def stat(plan: str, trips: int, mean: float | None) -> dict[str, object]:
+        return {"plan": plan, "trips": trips, "sessions": 3, "mean": mean, "t": None}
+
+    await beat(
+        engine,
+        BEAT,
+        {
+            "trips": 20,
+            "entry_edge": {"mean": -0.001, "t": None},
+            "exit_edge": {"mean": 0.001, "t": None},
+            "by_plan": [
+                stat("2:1 or better", 5, 0.0012),
+                stat("below 2:1", 6, -0.002),
+                stat("stop at or above fill", 0, None),
+                stat("no target", 1, 0.0),
+                stat("no stop", 8, -0.001),
+            ],
+        },
+    )
+    settings = SimpleNamespace(
+        zakat=SimpleNamespace(hawl_hijri=""),
+        llm=SimpleNamespace(monthly_live_usd=25.0, monthly_research_usd=15.0),
+        core=SimpleNamespace(paper=True),
+    )
+    message = await build(engine, settings, today=date(2026, 10, 22))
+    assert (
+        "Day-trader plans: 5 of 20 buys at 2:1 or better (+0.12% to the close); "
+        "below 2:1 6, no target 1, no stop 8"
+    ) in message
