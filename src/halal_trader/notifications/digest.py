@@ -97,6 +97,7 @@ async def build(engine: AsyncEngine, settings: Any, *, today: date) -> str:
         lines.append("Day-trader exits (7 days): " + " · ".join(parts))
 
     from halal_trader.trading.decision_quality import BEAT as DECISIONS
+    from halal_trader.trading.decision_quality import PLANS
 
     decisions = beats.get(DECISIONS, {})
     if decisions.get("trips"):
@@ -112,6 +113,18 @@ async def build(engine: AsyncEngine, settings: Any, *, today: date) -> str:
             f"Day-trader vs SPY (30 days, {decisions['trips']} trips): "
             f"buys {edge(entry)} to the close, sells {edge(exit_)} saved"
         )
+        plans = decisions.get("by_plan") or []
+        if plans:
+            kept: dict[str, Any] = next((p for p in plans if p.get("plan") == PLANS[0]), {})
+            rest = ", ".join(
+                f"{p['plan']} {p['trips']}"
+                for p in plans
+                if p.get("plan") != PLANS[0] and p.get("trips")
+            )
+            lines.append(
+                f"Day-trader plans: {kept.get('trips', 0)} of {decisions['trips']} buys at "
+                f"{PLANS[0]} ({edge(kept)} to the close)" + (f"; {rest}" if rest else "")
+            )
 
     validation = beats.get("screen.validation", {})
     if validation:
