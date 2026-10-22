@@ -14,7 +14,13 @@ MON = date(2018, 3, 5)  # EST: 09:30 New York = 14:30 UTC
 
 def _raw(day: date, k: int, o: float, c: float, v: float = 100.0) -> dict[str, object]:
     ts = datetime(day.year, day.month, day.day, 14, 30, tzinfo=UTC) + timedelta(minutes=15 * k)
-    return {"t": ts.isoformat().replace("+00:00", "Z"), "o": o, "c": c, "v": v}
+    return {
+        "t": ts.isoformat().replace("+00:00", "Z"),
+        "o": o,
+        "c": c,
+        "v": v,
+        "l": min(o, c) - 0.5,
+    }
 
 
 def _flat(price: float = 100.0, volume: float = 100.0) -> ie.Session:
@@ -22,6 +28,7 @@ def _flat(price: float = 100.0, volume: float = 100.0) -> ie.Session:
         (price,) * ie.BARS,
         (price,) * ie.BARS,
         tuple(volume * (k + 1) for k in range(ie.BARS)),
+        (price,) * ie.BARS,
     )
 
 
@@ -43,6 +50,7 @@ def test_sessions_keep_only_complete_days_and_accumulate_volume() -> None:
     s = got[MON]
     assert s.open[0] == 10.0 and s.close[-1] == 11.0 + 25
     assert s.cumvol[0] == 2.0 and s.cumvol[-1] == 2.0 * ie.BARS
+    assert s.low[0] == 9.5 and s.low[-1] == 9.5 + 25
 
 
 def test_universe_is_the_largest_halal_names_on_the_screen_dated_before_the_day() -> None:
@@ -62,9 +70,12 @@ def test_observations_need_a_volume_baseline_and_measure_against_spy() -> None:
     # The traded day: up 1% by 09:45 on double volume, then 2% higher at the close.
     opens = [100.0] + [101.0] * (ie.BARS - 1)
     closes = [101.0] * (ie.BARS - 1) + [103.02]
-    traded = ie.Session(tuple(opens), tuple(closes), tuple(200.0 * (k + 1) for k in range(ie.BARS)))
+    volume = tuple(200.0 * (k + 1) for k in range(ie.BARS))
+    traded = ie.Session(tuple(opens), tuple(closes), volume, tuple(opens))
     stock = {d: _flat() for d in days[:-1]} | {last: traded}
-    spy_last = ie.Session((100.0,) * ie.BARS, (100.0,) * (ie.BARS - 1) + (100.5,), _flat().cumvol)
+    spy_last = ie.Session(
+        (100.0,) * ie.BARS, (100.0,) * (ie.BARS - 1) + (100.5,), _flat().cumvol, (100.0,) * ie.BARS
+    )
     spy = {d: _flat() for d in days[:-1]} | {last: spy_last}
     obs = ie.observations({"AAA": stock, "SPY": spy}, {d: ["AAA"] for d in days})
 
