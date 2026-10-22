@@ -211,12 +211,16 @@ class Report:
                 reason: clustered((x.trip.session, x.exit_edge) for x in xs).as_dict()
                 for reason, xs in sorted(by_reason.items())
             },
-            "by_plan": {
-                plan: clustered(
-                    (x.trip.session, x.entry_edge) for x in s if x.trip.plan == plan
-                ).as_dict()
+            # A list, in PLANS order: the heartbeat's JSONB reorders an object's keys.
+            "by_plan": [
+                {
+                    "plan": plan,
+                    **clustered(
+                        (x.trip.session, x.entry_edge) for x in s if x.trip.plan == plan
+                    ).as_dict(),
+                }
                 for plan in PLANS
-            },
+            ],
             "days": [
                 {
                     "day": d.isoformat(),
