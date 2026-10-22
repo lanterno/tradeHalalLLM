@@ -31,20 +31,20 @@ function evidence(stat: EdgeStat): string {
   return `t ${stat.t >= 0 ? "+" : "−"}${Math.abs(stat.t).toFixed(1)} over ${stat.sessions} sessions, ${strength}`;
 }
 
-/** One row per bucket: its trips and their mean edge. */
+/** One row per bucket, in the order given: its trips and their mean edge. */
 function EdgeTable({
   caption,
   rows,
 }: {
   caption: string;
-  rows: Record<string, EdgeStat>;
+  rows: [string, EdgeStat][];
 }) {
   return (
     <div className="overflow-x-auto">
       <p className="mb-1 text-xs text-muted">{caption}</p>
       <table className="w-full text-sm tabular-nums">
         <tbody>
-          {Object.entries(rows).map(([name, s]) => (
+          {rows.map(([name, s]) => (
             <tr key={name} className="border-t border-border/50">
               <td className="py-1 pr-3 text-muted">{name}</td>
               <td className="py-1 pr-3 text-right">{s.trips} trips</td>
@@ -119,12 +119,12 @@ export function DecisionQuality() {
         <div className="space-y-4">
           <EdgeTable
             caption="Buys by time of entry (New York)"
-            rows={data.by_hour}
+            rows={Object.entries(data.by_hour)}
           />
           {data.by_plan && (
             <EdgeTable
               caption="Buys by plan: target vs stop, from the fill"
-              rows={data.by_plan}
+              rows={data.by_plan.map((p) => [p.plan, p])}
             />
           )}
         </div>
