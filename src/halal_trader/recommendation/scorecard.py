@@ -32,7 +32,7 @@ from halal_trader.core.sample_guard import SampleGate
 from halal_trader.core.signal_eval import information_coefficient
 from halal_trader.market_hours import today_eastern
 from halal_trader.quant.diagnostics import SPLIT_GAP_THRESHOLD
-from halal_trader.trading.bars import bar_field
+from halal_trader.trading.bars import bar_field, extract_bar_dicts
 
 logger = logging.getLogger(__name__)
 
@@ -51,27 +51,15 @@ _AUDIT_MAX_LOOKBACK_DAYS = 730
 def _ohlc_by_date(bars: Any) -> list[tuple[str, float, float, float, float]]:
     """Extract ascending ``(YYYY-MM-DD, open, high, low, close)`` per bar.
 
-    Unlike ``bars_to_klines`` (which synthesises monotonic timestamps and so
+    Any ``get_stock_bars`` envelope (``extract_bar_dicts``). Unlike
+    ``bars_to_klines`` (which synthesises monotonic timestamps and so
     loses real dates), this preserves the real session date — required to
     align forward outcomes to the recommendation date. Missing open/high/low
     fall back to the close (degraded but defined); bad prints are sanitized
     so ``low <= open/close <= high`` always holds.
     """
-    raw = bars
-    if isinstance(bars, dict):
-        raw = bars.get("bars") or bars.get("data") or []
-        if isinstance(raw, dict):  # symbol-keyed {"bars": {"NVDA": [...]}}
-            flat: list[Any] = []
-            for v in raw.values():
-                if isinstance(v, list):
-                    flat.extend(v)
-            raw = flat
-    if not isinstance(raw, list):
-        return []
     out: list[tuple[str, float, float, float, float]] = []
-    for bar in raw:
-        if not isinstance(bar, dict):
-            continue
+    for bar in extract_bar_dicts(bars):
         t = bar.get("t") or bar.get("timestamp") or bar.get("time")
         c = bar.get("c", bar.get("close"))
         if t is None or c is None:
