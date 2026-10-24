@@ -8,9 +8,11 @@ Strategy
   initializes its DB once per session under a per-DB Postgres
   advisory lock so concurrent invocations of the same worker id
   block instead of corrupting state.
-* Per-test fixtures (`database_url`, `engine`) take a fresh slate by
-  TRUNCATEing every table (except ``alembic_version``) before each
-  test. TRUNCATE on an empty schema is microseconds.
+* Per-test fixtures (`database_url`, `engine`) take a fresh slate before
+  each test: one statement TRUNCATEs the tables that hold rows (every
+  table but ``alembic_version`` is checked) and restarts the sequences
+  that were used. TRUNCATE costs about 2 ms a table even when empty, so
+  truncating only what a test wrote keeps the reset near 2 ms, not 110.
 
 Tests that previously did
 ``monkeypatch.setenv("DATABASE_URL", "sqlite+aiosqlite://...")`` should
@@ -96,8 +98,6 @@ if os.environ.get("TEST_ALLOW_NETWORK") != "1":
 
 import psycopg  # noqa: E402
 import pytest  # noqa: E402
-import sqlalchemy as sa  # noqa: E402
-from sqlalchemy import create_engine  # noqa: E402
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine  # noqa: E402
 
 # Touch every model so SQLModel.metadata is fully populated for the
@@ -237,22 +237,39 @@ def _pg_test_db_ready() -> Iterator[str]:
         lock_conn.close()
 
 
-def _truncate_all_tables(sync_url: str) -> None:
-    eng = create_engine(sync_url)
-    try:
-        with eng.begin() as conn:
-            rows = conn.execute(
-                sa.text(
-                    "SELECT tablename FROM pg_tables "
-                    "WHERE schemaname = 'public' AND tablename != 'alembic_version'"
-                )
-            ).fetchall()
-            tables = [r[0] for r in rows]
-            if tables:
-                qnames = ", ".join(f'"{t}"' for t in tables)
-                conn.execute(sa.text(f"TRUNCATE {qnames} RESTART IDENTITY CASCADE"))
-    finally:
-        eng.dispose()
+# One round trip: truncate the tables a test left rows in, restart the
+# sequences it used (an insert rolled back still advances one).
+_RESET = """
+DO $$
+DECLARE
+  name text;
+  nonempty boolean;
+  dirty text[] := '{}';
+BEGIN
+  FOR name IN SELECT format('%I.%I', schemaname, tablename) FROM pg_tables
+              WHERE schemaname = 'public' AND tablename <> 'alembic_version' LOOP
+    EXECUTE format('SELECT EXISTS (SELECT 1 FROM %s)', name) INTO nonempty;
+    IF nonempty THEN
+      dirty := dirty || name;
+    END IF;
+  END LOOP;
+  IF cardinality(dirty) > 0 THEN
+    EXECUTE 'TRUNCATE ' || array_to_string(dirty, ', ') || ' RESTART IDENTITY CASCADE';
+  END IF;
+  FOR name IN SELECT format('%I.%I', schemaname, sequencename) FROM pg_sequences
+              WHERE schemaname = 'public' AND last_value IS NOT NULL LOOP
+    EXECUTE format('ALTER SEQUENCE %s RESTART', name);
+  END LOOP;
+END $$
+"""
+
+
+@pytest.fixture(scope="session")
+def _pg_reset(_pg_test_db_ready: str) -> Iterator[psycopg.Connection]:
+    """One connection per session that resets the worker DB before each test."""
+    dsn = f"postgresql://{PG_USER}:{PG_PASS}@{PG_HOST}:{PG_PORT}/{_worker_dbname()}"
+    with psycopg.connect(dsn, autocommit=True) as conn:
+        yield conn
 
 
 @pytest.fixture
@@ -260,8 +277,9 @@ def database_url(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     _pg_test_db_ready: str,
+    _pg_reset: psycopg.Connection,
 ) -> Iterator[str]:
-    """Set ``DATABASE_URL`` to a freshly-truncated test DB.
+    """Set ``DATABASE_URL`` to a freshly-reset test DB.
 
     Also points ``DATA_DIR`` at ``tmp_path`` so any test that touches
     ``settings.resolve_data_dir()`` (round-trip purification, replay,
@@ -272,7 +290,7 @@ def database_url(
     we also bust the singleton cache.
     """
     url = _pg_test_db_ready
-    _truncate_all_tables(_sync_url(_worker_dbname()))
+    _pg_reset.execute(_RESET)
     monkeypatch.setenv("DATABASE_URL", url)
     monkeypatch.setenv("DATA_DIR", str(tmp_path / "data"))
     import halal_trader.config as _config
