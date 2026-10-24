@@ -134,8 +134,9 @@ class AlpacaMCPClient:
 
         A result the server flags ``isError`` is always logged at ERROR. With
         ``raise_on_error`` it raises :class:`MCPToolError` instead of being
-        returned as if it were a payload; the position-closing wrappers use
-        it, because their callers cannot tell a refusal from a success.
+        returned as if it were a payload; the position-closing wrappers and
+        the account and positions reads use it, because their callers cannot
+        tell a refusal from a success, an empty account or a flat book.
 
         Times every call and emits the ``halal_trader_broker_call_ms``
         histogram with ``broker="alpaca"`` + the tool name as ``method``,
@@ -175,7 +176,9 @@ class AlpacaMCPClient:
     # ── Convenience wrappers ────────────────────────────────────
 
     async def get_account_info(self) -> Account:
-        raw = await self.call_tool("get_account_info")
+        # A refusal raises: read as an account, its error text gave all-zero
+        # equity, which the loss limit took for a $100k baseline.
+        raw = await self.call_tool("get_account_info", raise_on_error=True)
         logger.debug(
             "get_account_info() raw response type=%s keys=%s",
             type(raw).__name__,
@@ -295,7 +298,9 @@ class AlpacaMCPClient:
         return await self.call_tool("get_calendar", {"start": start_value, "end": end_value})
 
     async def get_all_positions(self) -> list[Position]:
-        raw = await self.call_tool("get_all_positions")
+        # A refusal raises: read as a book, its error text was an empty one,
+        # which let every position cap pass and the monitor close trades flat.
+        raw = await self.call_tool("get_all_positions", raise_on_error=True)
         logger.debug(
             "get_all_positions() raw response type=%s len=%s",
             type(raw).__name__,
