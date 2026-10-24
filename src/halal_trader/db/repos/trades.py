@@ -8,7 +8,7 @@ Protocol lives in ``protocols.py``.
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -94,8 +94,40 @@ class TradeRepoImpl:
             return [r.model_dump() for r in results.all()]
 
     async def get_recent_trades(self, limit: int = 50) -> list[dict[str, Any]]:
+        return await self.find_trades(limit=limit)
+
+    async def find_trades(
+        self,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+        symbol: str | None = None,
+        side: str | None = None,
+        status: str | None = None,
+        first_day: date | None = None,
+        last_day: date | None = None,
+    ) -> list[dict[str, Any]]:
+        """A page of trades, newest first, filtered before the page is cut.
+
+        ``first_day``/``last_day`` are Eastern trading days, both inclusive.
+        """
+        statement = select(Trade)
+        if symbol:
+            statement = statement.where(Trade.symbol == symbol)
+        if side:
+            statement = statement.where(Trade.side == side)
+        if status:
+            statement = statement.where(Trade.status == status)
+        if first_day is not None:
+            statement = statement.where(Trade.timestamp >= trading_day_start_utc(first_day))
+        if last_day is not None:
+            statement = statement.where(Trade.timestamp < trading_day_end_utc(last_day))
+        statement = (
+            statement.order_by(col(Trade.timestamp).desc(), col(Trade.id).desc())
+            .offset(offset)
+            .limit(limit)
+        )
         async with AsyncSession(self._engine) as session:
-            statement = select(Trade).order_by(col(Trade.timestamp).desc()).limit(limit)
             results = await session.exec(statement)
             return [r.model_dump() for r in results.all()]
 

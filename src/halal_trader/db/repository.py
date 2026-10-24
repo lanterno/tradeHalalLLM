@@ -87,6 +87,27 @@ class Repository:
     async def get_recent_trades(self, limit: int = 50) -> list[dict[str, Any]]:
         return await self._trades.get_recent_trades(limit)
 
+    async def find_trades(
+        self,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+        symbol: str | None = None,
+        side: str | None = None,
+        status: str | None = None,
+        first_day: date | None = None,
+        last_day: date | None = None,
+    ) -> list[dict[str, Any]]:
+        return await self._trades.find_trades(
+            limit=limit,
+            offset=offset,
+            symbol=symbol,
+            side=side,
+            status=status,
+            first_day=first_day,
+            last_day=last_day,
+        )
+
     async def get_open_trades(self) -> list[Trade]:
         return await self._trades.get_open_trades()
 
