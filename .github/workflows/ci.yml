@@ -73,11 +73,11 @@ jobs:
 
       - name: Lint
         if: success() || failure()
-        run: uv run ruff check src/ tests/
+        run: uv run ruff check src/ tests/ alembic/ scripts/
 
       - name: Format check
         if: success() || failure()
-        run: uv run ruff format --check src/ tests/
+        run: uv run ruff format --check src/ tests/ alembic/ scripts/
 
       - name: Type check (strict gate in pyproject)
         if: success() || failure()

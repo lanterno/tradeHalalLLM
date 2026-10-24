@@ -89,12 +89,12 @@ predeploy: lint test stress
 
 # Run linter
 lint:
-    uv run ruff check src/ tests/
+    uv run ruff check src/ tests/ alembic/ scripts/
 
 # Auto-format code
 format:
-    uv run ruff format src/ tests/
-    uv run ruff check --fix src/ tests/
+    uv run ruff format src/ tests/ alembic/ scripts/
+    uv run ruff check --fix src/ tests/ alembic/ scripts/
 
 # Type-check all of src (strict)
 typecheck:
