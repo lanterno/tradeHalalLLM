@@ -9,6 +9,7 @@ to keep ``--help`` fast — same pattern the rest of the CLI uses.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import click
@@ -122,7 +123,7 @@ def catalysts_cmd(symbols: tuple[str, ...], lookahead: int) -> None:
                 except Exception:  # noqa: BLE001
                     pass
 
-    run_db(_run)
+    asyncio.run(_run())  # no database: the sources are the live feeds
 
 
 @insights.command("rag")
