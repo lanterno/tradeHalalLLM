@@ -499,6 +499,12 @@ class TradeExecutor:
 
         snapshot = await self._broker.get_stock_snapshot(decision.symbol)
         estimated_price = self._extract_price(snapshot, decision.symbol)
+        if estimated_price <= 0:
+            # A zero cost passes the buying-power, per-name and sector caps
+            # alike: without a price there is nothing to check them against.
+            msg = f"No usable price for {decision.symbol}: the position caps cannot be checked"
+            logger.warning(msg)
+            return {"symbol": decision.symbol, "action": "buy", "status": "rejected", "reason": msg}
         estimated_cost = estimated_price * decision.quantity
 
         if estimated_cost > account.buying_power:
