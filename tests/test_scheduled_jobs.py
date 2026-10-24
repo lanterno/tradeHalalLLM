@@ -153,3 +153,33 @@ def test_a_jobs_log_records_carry_its_job_id(caplog: pytest.LogCaptureFixture) -
         logger.info("inside")
     assert jid.startswith("end_of_day-") and caplog.records[-1].job_id == jid
     assert job_id_var.get() == ""
+
+
+async def test_the_evening_run_logs_what_it_alerts_on(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    from types import SimpleNamespace
+
+    from halal_trader.research import daily
+
+    problem = "screen: passes whose interest expense implies debt over 30% of market cap: XYZ"
+    run = SimpleNamespace(
+        errors=[problem],
+        core_ready_now=False,
+        zakat={},
+        books={},
+        screened=1,
+        rescreen_for=[],
+        event_labels=0,
+        event_refresh={},
+    )
+    monkeypatch.setattr(daily, "run_research", AsyncMock(return_value=run))
+    bot = _bot(MagicMock())
+    bot.settings = MagicMock()
+
+    with caplog.at_level(logging.WARNING, logger=sched.__name__):
+        detail = await bot._research_daily(NORMAL)
+
+    assert detail["errors"] == 1
+    assert any(problem in r.getMessage() for r in caplog.records)
+    bot._alerts.notify.assert_awaited_once_with("research.failed", problem)
