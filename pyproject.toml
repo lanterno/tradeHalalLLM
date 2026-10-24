@@ -109,16 +109,13 @@ filterwarnings = [
 ]
 
 [tool.coverage.run]
-# Coverage gates the safety / lifecycle surface. The pure HTTP wrapper
-# under core/llm/ (glm.py, base.py, factory.py) and the asyncio
-# scheduler are exercised end-to-end by the live bot run rather than
-# in pytest, so excluding them keeps the gate honest.
+# The pure HTTP wrapper under core/llm/ (glm.py, base.py, factory.py) is
+# exercised end-to-end by the live bot run rather than in pytest, so
+# leaving it out keeps the report honest.
 omit = [
     "src/halal_trader/core/llm/base.py",
     "src/halal_trader/core/llm/factory.py",
     "src/halal_trader/core/llm/glm.py",
-    "src/halal_trader/core/portfolio.py",
-    "src/halal_trader/core/scheduler.py",
 ]
 
 [tool.coverage.report]
@@ -129,11 +126,6 @@ exclude_lines = [
 ]
 
 # ── mypy ────────────────────────────────────────────────────────
-# CI gates on the contract / lifecycle layer (`domain` Protocols +
-# `core` base classes) plus the data-access layer (`db/repository.py`)
-# where correctness drift is most expensive. Other packages are
-# intentionally NOT in `files` — run `mypy src/` ad-hoc to survey
-# and tighten incrementally.
 [tool.mypy]
 python_version = "3.14"
 # All of src, strict: every package was brought clean on 2026-10-24, so a new
