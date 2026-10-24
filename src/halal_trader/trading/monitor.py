@@ -125,14 +125,23 @@ class StockPositionMonitor:
                     continue
 
                 open_trades = await self._repo.get_open_trades()
+                failed = 0
                 for trade in open_trades:
                     if not trade.stop_loss and not trade.target_price:
                         continue
-                    price = await self._latest_price(trade.symbol)
-                    if price is None:
-                        continue
-                    await self._check_trade(trade, price)
-                await self._tick_done({"market_open": True, "open_trades": len(open_trades)})
+                    # One trade that fails to check must not leave every
+                    # trade after it without its stop for the whole tick.
+                    try:
+                        price = await self._latest_price(trade.symbol)
+                        if price is None:
+                            continue
+                        await self._check_trade(trade, price)
+                    except Exception as e:  # noqa: BLE001 — checked again on the next tick
+                        failed += 1
+                        logger.warning("Stock monitor check failed for %s: %r", trade.symbol, e)
+                await self._tick_done(
+                    {"market_open": True, "open_trades": len(open_trades), "failed": failed}
+                )
             except asyncio.CancelledError:
                 break
             except Exception as e:  # noqa: BLE001 — never let monitor crash the bot
