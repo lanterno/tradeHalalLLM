@@ -656,6 +656,26 @@ async def test_buy_with_valid_response_unchanged_path():
     assert kwargs["filled_quantity"] == 10.0
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("snapshot", [{}, {"latest_trade": {"price": 0}}, "upstream error"])
+async def test_buy_without_a_usable_price_places_nothing(snapshot: object):
+    """No price means a cost of 0, which every cap would pass: refuse before the broker."""
+    broker = _broker(place_order_return={"id": "x", "status": "filled"})
+    broker.get_stock_snapshot = AsyncMock(return_value=snapshot)
+    repo = MagicMock()
+    repo.get_open_trades = AsyncMock(return_value=[])
+    repo.record_trade = AsyncMock(return_value=1)
+    executor = TradeExecutor(
+        broker, repo, max_position_pct=0.20, max_simultaneous_positions=10, max_sector_pct=0
+    )
+
+    result = await executor._execute_buy(_decision("AAPL", quantity=5_000), positions=[])
+
+    assert result["status"] == "rejected"
+    assert "No usable price" in result["reason"]
+    broker.place_order.assert_not_called()
+
+
 # ── cumulative per-name position cap ────────────────────────────
 #
 # The per-name cap (max_position_pct) must count the EXISTING holding plus
