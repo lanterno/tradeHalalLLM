@@ -121,11 +121,27 @@ async def test_should_halt_trading_ignores_gains():
 
 
 @pytest.mark.asyncio
-async def test_should_halt_trading_falls_back_to_default_equity_before_day_start():
-    """Before record_day_start is called, the loss percentage is
-    computed against the safe `_DEFAULT_EQUITY` constant rather than
-    raising on the `None` starting equity."""
+async def test_should_halt_trading_sets_the_baseline_before_day_start():
+    """Before record_day_start ran, the first check records today's baseline
+    (the equity it reads) and measures against it."""
     p = _StubPortfolio(equity=99_000.0, daily_loss_limit=0.05)
-    # No record_day_start — _starting_equity is None.
-    # Loss = 99_000 - None? get_current_pnl returns 0 (uses equity for both).
     assert await p.should_halt_trading() is False
+    assert p.persisted_start == 99_000.0
+
+
+@pytest.mark.asyncio
+async def test_equity_the_broker_cannot_report_is_never_a_baseline():
+    """An all-zero account (a refused read) raises; it never becomes a $100k baseline."""
+    from unittest.mock import AsyncMock
+
+    from halal_trader.domain.models import Account
+
+    broker = MagicMock(get_account_info=AsyncMock(return_value=Account(status="")))
+    repo = MagicMock(start_day=AsyncMock(return_value=None))
+    p = PortfolioTracker(broker, repo, daily_loss_limit=0.02)
+    with pytest.raises(RuntimeError, match="no equity"):
+        await p.record_day_start()
+    with pytest.raises(RuntimeError, match="no equity"):
+        await p.should_halt_trading()
+    repo.start_day.assert_not_awaited()
+    assert p._starting_equity is None
