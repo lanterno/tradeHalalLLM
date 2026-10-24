@@ -7,6 +7,7 @@ import signal
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
+from time import monotonic
 from typing import Any
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -880,11 +881,16 @@ class TradingBot:
         """
         with job_context(name):
             logger.info("job %s started", name, extra={"event": events.JOB_START, "job": name})
+            started = monotonic()
             try:
                 outcome = await body()
             except Exception as exc:  # see the docstring
+                elapsed = round(monotonic() - started, 1)
                 logger.exception(
-                    "job %s failed", name, extra={"event": events.JOB_FAILED, "job": name}
+                    "job %s failed after %.1f s",
+                    name,
+                    elapsed,
+                    extra={"event": events.JOB_FAILED, "job": name, "elapsed_s": elapsed},
                 )
                 if alert is not None:
                     await self._alerts.notify(alert, f"{name}: {exc!r}", severity="error")
@@ -899,7 +905,13 @@ class TradingBot:
                 return True
             if beat_as is not None and self._engine is not None:
                 await beat(self._engine, beat_as, outcome)
-            logger.info("job %s finished", name, extra={"event": events.JOB_COMPLETE, "job": name})
+            elapsed = round(monotonic() - started, 1)
+            logger.info(
+                "job %s finished in %.1f s",
+                name,
+                elapsed,
+                extra={"event": events.JOB_COMPLETE, "job": name, "elapsed_s": elapsed},
+            )
             return True
 
     async def pre_market(self) -> None:
