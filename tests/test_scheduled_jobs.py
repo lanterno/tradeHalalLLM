@@ -56,6 +56,17 @@ async def test_a_failed_job_alerts_and_leaves_no_beat(engine: AsyncEngine) -> No
     assert key == "x.failed" and "broker down" in details
 
 
+async def test_a_job_logs_how_long_it_ran(caplog: pytest.LogCaptureFixture) -> None:
+    bot = _bot()
+    with caplog.at_level(logging.INFO, logger=sched.__name__):
+        assert await bot._job("x", AsyncMock(return_value={}), alert=None)
+        assert not await bot._job("y", AsyncMock(side_effect=RuntimeError("down")), alert=None)
+    done = {r.getMessage().split(" ")[1]: r for r in caplog.records if hasattr(r, "elapsed_s")}
+    assert set(done) == {"x", "y"}
+    assert "finished in" in done["x"].getMessage() and "failed after" in done["y"].getMessage()
+    assert all(isinstance(r.elapsed_s, float) and r.elapsed_s >= 0 for r in done.values())
+
+
 async def test_a_skipped_job_leaves_no_beat(engine: AsyncEngine) -> None:
     bot = _bot(engine)
     assert await bot._job(
