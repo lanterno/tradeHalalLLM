@@ -1019,6 +1019,9 @@ class TradingBot:
             return Skipped("no database")
         run = await run_research(self._engine, self.settings, today=day)
         if run.errors:
+            # Some steps report a problem without logging it (the screen's
+            # validation, the backup check): the log keeps what the alert said.
+            logger.warning("research run: %d problem(s): %s", len(run.errors), run.errors)
             await self._alerts.notify("research.failed", "; ".join(run.errors))
         if run.core_ready_now:
             await self._alerts.notify(
