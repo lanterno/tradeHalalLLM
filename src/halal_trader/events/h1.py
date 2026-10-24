@@ -1337,7 +1337,7 @@ async def check_edits_d7(engine: AsyncEngine, market: MarketProbe | None) -> Che
                 edited += 1
                 if len(examples) < 20:
                     examples.append({"event": r.id, "stored": r.headline, "now": match.headline})
-    except Exception as exc:  # reported only: a probe that fails is recorded, never fatal
+    except Exception as exc:  # noqa: BLE001 — reported only: a probe that fails is recorded, never fatal
         return _not_measured("D7", f"the refetch failed ({exc!s})")
     data = {
         "measured": True,
@@ -1387,7 +1387,7 @@ async def probe_iex_d8(
                     "sip_bars": stored.get((symbol, day), 0),
                 }
             )
-    except Exception as exc:  # recorded only: a probe that fails is recorded, never fatal
+    except Exception as exc:  # noqa: BLE001 — recorded only: a probe that fails is recorded, never fatal
         return _not_measured("D8", f"the IEX request failed ({exc!s})")
     available = sum(1 for p in probes if p["iex_bars"])
     data = {"measured": True, "year": D8_YEAR, "units": probes, "available": available}

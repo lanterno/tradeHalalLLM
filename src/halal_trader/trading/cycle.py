@@ -444,13 +444,13 @@ class TradingCycleService(BaseCycleService):
             try:
                 snap = await self._broker.get_stock_snapshot(sym)
                 snapshots[sym] = snap
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 — one symbol's data gap leaves the rest
                 logger.debug("Failed to get snapshot for %s: %r", sym, e)
             try:
                 bar = await self._broker.get_stock_bars(
                     sym, days=_BARS_LOOKBACK_DAYS, timeframe="1Day"
                 )
                 bars[sym] = bar
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 — one symbol's data gap leaves the rest
                 logger.debug("Failed to get bars for %s: %r", sym, e)
         return snapshots, bars

@@ -882,7 +882,7 @@ class TradingBot:
             logger.info("job %s started", name, extra={"event": events.JOB_START, "job": name})
             try:
                 outcome = await body()
-            except Exception as exc:  # noqa: BLE001 -- see the docstring
+            except Exception as exc:  # see the docstring
                 logger.exception(
                     "job %s failed", name, extra={"event": events.JOB_FAILED, "job": name}
                 )
@@ -1604,7 +1604,7 @@ class TradingBot:
                 reason = "returned unexpectedly"
             except asyncio.CancelledError:
                 raise
-            except Exception as exc:  # noqa: BLE001 -- the whole point is to survive it
+            except Exception as exc:  # the whole point is to survive it
                 reason = f"crashed: {type(exc).__name__}: {exc}"
                 logger.exception("%s %s -- restarting in %.0fs", name, reason, backoff_s)
             else:
@@ -1748,7 +1748,7 @@ class TradingBot:
             # initialized even if the scheduled job was missed (e.g. system sleep).
             try:
                 await self.pre_market()
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 — retried at the scheduled time
                 logger.warning("Startup pre-market failed (will retry at scheduled time): %r", e)
 
             # Then any daily job this (re)start skipped and may still run.

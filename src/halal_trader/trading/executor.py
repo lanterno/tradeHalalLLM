@@ -661,7 +661,7 @@ class TradeExecutor:
                 "filled_quantity": fill.filled_quantity,
                 "order_id": order_id,
             }
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — any broker failure becomes this decision's error result
             logger.error("Failed to place BUY order for %s: %s", decision.symbol, e)
             return {
                 "symbol": decision.symbol,
@@ -869,7 +869,7 @@ class TradeExecutor:
                 "filled_quantity": fill.filled_quantity,
                 "order_id": order_id,
             }
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — any broker failure becomes this decision's error result
             logger.error("Failed to place SELL order for %s: %s", decision.symbol, e)
             return {
                 "symbol": decision.symbol,

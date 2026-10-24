@@ -76,7 +76,7 @@ class TelegramNotifier:
                 logger.warning("Telegram API returned %d: %s", resp.status_code, resp.text)
                 return False
             return False
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — an alert that fails to send never breaks the caller
             logger.warning("Telegram send failed: %r", e)
             return False
 

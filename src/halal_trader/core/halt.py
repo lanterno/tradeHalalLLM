@@ -59,7 +59,7 @@ async def set_halt(engine: AsyncEngine, *, reason: str, set_by: str | None = Non
     if set_by is None:
         try:
             set_by = getpass.getuser()
-        except Exception:
+        except OSError, KeyError:
             set_by = "unknown"
 
     set_at = datetime.now(UTC)

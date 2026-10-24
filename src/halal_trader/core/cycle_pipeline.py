@@ -164,7 +164,7 @@ async def stage(
             pass
     try:
         yield outcome
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         outcome.error = repr(exc)
         if not swallow:
             raise

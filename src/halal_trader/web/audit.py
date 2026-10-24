@@ -55,7 +55,7 @@ async def audit_middleware(
     body_bytes = b""
     try:
         body_bytes = await request.body()
-    except Exception:
+    except Exception:  # noqa: BLE001 — the audit trail never fails the request
         body_bytes = b""
 
     payload = _truncate_payload(body_bytes)
@@ -70,7 +70,7 @@ async def audit_middleware(
                 path=request.url.path,
                 payload=payload,
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — the audit trail never fails the request
             logger.debug("audit begin_web_action failed: %r", e)
 
     # Re-inject the body so downstream handlers can still read it.
@@ -85,14 +85,14 @@ async def audit_middleware(
         response = await call_next(request)
         status = response.status_code
         return response
-    except Exception as e:  # noqa: BLE001 — recorded then re-raised
+    except Exception as e:  # recorded then re-raised
         error = repr(e)
         raise
     finally:
         if repo is not None and action_id is not None:
             try:
                 await repo.complete_web_action(action_id, status_code=status, error=error)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 — the audit trail never fails the request
                 logger.debug("audit complete_web_action failed: %r", e)
 
 

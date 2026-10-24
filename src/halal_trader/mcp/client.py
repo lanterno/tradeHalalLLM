@@ -115,7 +115,7 @@ class AlpacaMCPClient:
         """Cleanly shut down the MCP session and subprocess."""
         try:
             await self._exit_stack.aclose()
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — shutdown cleanup only
             logger.debug("MCP exit stack cleanup error (safe to ignore): %r", e)
         self.session = None
         self._tools = {}

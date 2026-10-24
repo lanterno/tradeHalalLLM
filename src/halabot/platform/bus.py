@@ -138,7 +138,7 @@ class InProcessEventBus:
         # event is not dispatched and the caller learns about it.
         try:
             await self._log.append(event)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.error(
                 "event_log append failed for DURABLE event %s (%s) — NOT dispatched: %r",
                 event.type,

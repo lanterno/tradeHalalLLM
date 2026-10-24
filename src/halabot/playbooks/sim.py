@@ -1481,7 +1481,7 @@ def _unpicklable(shared: _Shared) -> list[str]:
     for name, obj in parts.items():
         try:
             ForkingPickler.dumps(obj)
-        except Exception:
+        except Exception:  # noqa: BLE001 — any pickling failure marks the part unshippable
             bad.append(name)
     return bad
 

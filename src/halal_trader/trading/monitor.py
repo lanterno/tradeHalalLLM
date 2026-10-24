@@ -155,7 +155,7 @@ class StockPositionMonitor:
         """Pull the latest snapshot price for ``symbol``, or None on failure."""
         try:
             snap = await self._mcp.get_stock_snapshot(symbol)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — retried on the next pass
             logger.debug("Snapshot fetch failed for %s: %r", symbol, e)
             return None
         return _extract_last_price(snap, symbol)
@@ -362,7 +362,7 @@ class StockPositionMonitor:
                 order_type="market",
                 time_in_force="day",
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — retried on the next pass
             logger.warning("Stock exit failed for %s (%s): %r", trade.symbol, reason, e)
             return None
         return result if isinstance(result, dict) else {"_raw": result}

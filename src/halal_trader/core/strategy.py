@@ -161,7 +161,7 @@ class BaseStrategy:
             self._on_llm_success()
             return plan
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — a failed LLM call is recorded and yields an empty plan
             elapsed_ms = int((time.monotonic() - t0) * 1000)
             self._on_llm_failure(e, elapsed_ms, log_prefix)
             await self._repo.record_decision(

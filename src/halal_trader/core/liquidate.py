@@ -28,7 +28,7 @@ async def liquidate_stocks(broker: Any) -> list[LiquidationResult]:
     """Close every open Alpaca position via the broker's batch endpoint."""
     try:
         await broker.close_all_positions()
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — a broker failure is reported per result
         return [
             LiquidationResult(
                 market="stocks",
@@ -41,7 +41,7 @@ async def liquidate_stocks(broker: Any) -> list[LiquidationResult]:
 
     try:
         positions = await broker.get_all_positions()
-    except Exception:
+    except Exception:  # noqa: BLE001 — a broker failure is reported per result
         positions = []
 
     return [

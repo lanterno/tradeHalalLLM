@@ -93,7 +93,7 @@ def bars_to_klines(bars_for_symbol: Any) -> list[Kline]:
             low = bar_field(bar, "l", "low")
             c = bar_field(bar, "c", "close")
             v = bar_field(bar, "v", "volume")
-        except Exception:
+        except TypeError, ValueError:
             continue
         if c <= 0:
             continue

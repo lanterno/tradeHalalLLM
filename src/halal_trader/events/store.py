@@ -96,7 +96,7 @@ class EventRecorder:
                                 "at": datetime.now(UTC),
                             },
                         )
-        except Exception as exc:  # noqa: BLE001 -- recording must never block the reactor
+        except Exception as exc:  # recording must never block the reactor
             if self._raise:
                 raise
             logger.warning("event store: %d record(s) dropped: %r", len(records), exc)

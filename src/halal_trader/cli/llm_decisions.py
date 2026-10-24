@@ -143,7 +143,7 @@ def show_cmd(decision_id: int) -> None:
             # if it parses, otherwise dump the raw text so we never hide it.
             try:
                 console.print_json(row.raw_response)
-            except Exception:
+            except ValueError, TypeError:
                 console.print(row.raw_response)
 
         if row.thinking:

@@ -173,7 +173,7 @@ class StockTradeSelfReview:
                         "Loaded %d strategy adjustments from DB", len(self._active_adjustments)
                     )
                     self._apply_to_strategy()
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — the bot runs on the defaults
             logger.debug("Failed to load strategy adjustments from DB: %r", e)
 
     @property
@@ -313,7 +313,7 @@ Analyze these trades and execution failures, and suggest improvements.
 
             return result
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — logged; the next review retries
             # Mirror the strategy's insufficient_quota handling: this
             # error is non-transient, every retry burns another API
             # call. Push the next-eligible review out by 1 hour

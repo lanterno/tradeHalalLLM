@@ -71,7 +71,7 @@ def register(app: FastAPI) -> None:
                 broker=own_broker, repo=ctx.repo, settings=ctx.settings
             )
             rec = await engine.generate()
-        except Exception as exc:  # noqa: BLE001 — surface as a structured 502
+        except Exception as exc:  # surface as a structured 502
             raise HTTPException(
                 status_code=502, detail=f"recommendation generation failed: {exc}"
             ) from exc

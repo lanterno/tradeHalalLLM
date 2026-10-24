@@ -120,7 +120,7 @@ class FallbackLLM(BaseLLM):
                 result = await provider.generate(prompt, system)
                 self._on_provider_success(provider)
                 return result
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 — any provider failure moves to the next one
                 last_error = e
                 self._on_provider_failure(provider, e)
         self._arm_chain_backoff()
@@ -135,7 +135,7 @@ class FallbackLLM(BaseLLM):
                 result = await provider.generate_json(prompt, system)
                 self._on_provider_success(provider)
                 return result
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 — any provider failure moves to the next one
                 last_error = e
                 self._on_provider_failure(provider, e)
         self._arm_chain_backoff()
@@ -185,7 +185,7 @@ class FallbackLLM(BaseLLM):
                 )
                 self._on_provider_success(provider)
                 return result
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 — any provider failure moves to the next one
                 last_error = e
                 self._on_provider_failure(provider, e)
         self._arm_chain_backoff()

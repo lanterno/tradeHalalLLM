@@ -46,7 +46,7 @@ class TimeframeAnalyzer:
                     "per_tf": {tf: self._summarize_tf(ind) for tf, ind in tf_data.items()},
                     "support_resistance": sr_levels,
                 }
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 — one symbol's data gap leaves the rest
                 logger.debug("Multi-timeframe analysis failed for %s: %r", symbol, e)
 
         return results
@@ -70,7 +70,7 @@ class TimeframeAnalyzer:
                     indicators = compute_all(klines)
                     tf_indicators[interval] = indicators
                     self._cache[cache_key] = (now, indicators)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 — one symbol's data gap leaves the rest
                 logger.debug("Failed to get %s klines for %s: %r", interval, symbol, e)
 
         return tf_indicators

@@ -161,7 +161,7 @@ class LiveModeChecker:
                     reason=f"live-mode safeguard ({self.market})",
                     set_by="LiveModeChecker",
                 )
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 — logged; the alert below still goes out
                 logger.error("Failed to engage kill-switch from safeguard: %r", e)
 
         if alerts is not None:

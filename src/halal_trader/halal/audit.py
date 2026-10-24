@@ -53,7 +53,7 @@ def _serialize_screening(screening: HalalScreening) -> dict[str, Any]:
     if data.get("criteria"):
         try:
             data["criteria"] = json.loads(data["criteria"])
-        except Exception:
+        except ValueError, TypeError:
             pass
     return data
 
