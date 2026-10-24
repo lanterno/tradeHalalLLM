@@ -29,7 +29,7 @@ repos:
     hooks:
       # Use the project's own mypy via uv so the hook agrees with CI on
       # version + dependencies. Defers to [tool.mypy] `files` in
-      # pyproject.toml (strict on `domain/` + `core/`).
+      # pyproject.toml (strict on all of src).
       - id: mypy
         name: mypy
         entry: uv run mypy

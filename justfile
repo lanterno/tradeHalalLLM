@@ -96,7 +96,7 @@ format:
     uv run ruff format src/ tests/
     uv run ruff check --fix src/ tests/
 
-# Type-check (domain + core, strict)
+# Type-check all of src (strict)
 typecheck:
     uv run mypy
 
