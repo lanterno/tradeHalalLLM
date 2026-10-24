@@ -9,7 +9,7 @@ Create Date: 2026-10-05 23:30:00.000000
 from collections.abc import Sequence
 
 import sqlalchemy as sa
-import sqlmodel.sql.sqltypes  # noqa: F401
+import sqlmodel.sql.sqltypes
 from sqlalchemy.dialects.postgresql import JSONB
 
 from alembic import op

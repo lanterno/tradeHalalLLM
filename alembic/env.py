@@ -43,7 +43,7 @@ def _resolve_url() -> str:
 
         settings = get_settings()
         return settings.database_url
-    except Exception:
+    except Exception:  # noqa: BLE001 — settings that can't load fall back to alembic.ini
         return config.get_main_option("sqlalchemy.url") or ""
 
 
@@ -63,7 +63,7 @@ def run_migrations_offline() -> None:
 
 
 # ── Online mode (async engine) ──────────────────────────────────
-def do_run_migrations(connection) -> None:  # noqa: ANN001
+def do_run_migrations(connection) -> None:
     """Configure context with a live connection and run migrations."""
     context.configure(
         connection=connection,
