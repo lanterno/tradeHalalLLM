@@ -18,7 +18,7 @@ LLM-powered halal day-trading bot for **US stocks** (Alpaca paper trading via MC
 just dev                # uv sync --extra dev --extra all
 just test               # pytest (needs Postgres on localhost:5433; see Database)
 just lint / just format # ruff (one version: the lock's, also used by the pre-commit hook)
-just typecheck          # mypy strict over the gated packages (pyproject [tool.mypy] files)
+just typecheck          # mypy strict over all of src/
 just precommit          # every pre-commit hook over every tracked file
 
 # The deployed fleet (the Hetzner server `halabot`; docs/DEPLOY.md)

@@ -18,7 +18,7 @@ throughput, not review.
 - **Be autonomous.** "Always keep going." Keep building through the roadmap on
   your own judgment; make the required decisions yourself.
 - **The test gate is the quality bar**: `just lint` (ruff), `just typecheck`
-  (mypy strict on `core/` + `domain/` + all of `src/halabot`), `just test`
+  (mypy strict over all of `src/`), `just test`
   (pytest, real Postgres on :5433). All green before every commit.
 - **Surface a decision only when it's genuinely operator-only**: spending real
   money, choosing a model/provider, or a destructive/irreversible op. Otherwise
