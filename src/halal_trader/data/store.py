@@ -7,6 +7,8 @@
   can fill.
 * :func:`store_bars` / :func:`update_bars` -- daily bars, idempotent upserts,
   incremental from each symbol's last stored session.
+* :func:`refetch_history` -- a symbol's whole adjusted history again, after
+  Alpaca re-adjusted it (a split or a dividend rewrites every bar before it).
 
 Known limitation, stated so nobody forgets it: the universe is built from
 names listed *today*. Backtests over it are survivorship-biased (delisted
@@ -17,6 +19,7 @@ a later Phase 3 item.
 from __future__ import annotations
 
 import logging
+import math
 import statistics
 from collections import defaultdict
 from collections.abc import Sequence
@@ -35,6 +38,10 @@ logger = logging.getLogger(__name__)
 BENCHMARKS: tuple[str, ...] = ("SPY", "QQQ", "SPUS", "HLAL")
 _STOCK_EXCHANGES = ("NYSE", "NASDAQ")
 _CHUNK = 2000
+# A re-fetched adjusted close this far from the stored one was re-adjusted:
+# far above float noise, far below the smallest dividend that matters.
+_REWRITTEN = 1e-6
+_REFETCH_SYMBOLS = 100  # per history request, so ten years of bars stay small in memory
 
 
 @dataclass(frozen=True, slots=True)
@@ -190,8 +197,11 @@ async def update_bars(
 
     Grouped by start date so a fresh backfill and a daily top-up both batch
     100 symbols per request. Adjusted bars are re-fetched for the last 5
-    sessions on each top-up, so a dividend's retroactive adjustment of the
-    most recent bars is picked up.
+    sessions on each top-up. A split or a dividend re-adjusts every bar
+    before it, so when one of those comes back different from the stored
+    row, the symbol's whole adjusted history is fetched again: topping up
+    only the recent bars would leave the older ones on the old basis, a
+    fake jump in the series (a 2:1 split read as a halving a week early).
     """
     stored: dict[str, int] = {}
     for adjustment in adjustments:
@@ -209,11 +219,74 @@ async def update_bars(
         for sym in symbols:
             groups[last[sym] - overlap if sym in last else since].append(sym)
         total = 0
+        rewritten: set[str] = set()
         for start, syms in sorted(groups.items()):
             bars = await client.daily_bars(syms, start=start, adjustment=adjustment)
+            if adjustment == "all":
+                rewritten |= await _rewritten(engine, bars, syms, start)
             total += await store_bars(engine, bars, adjustment)
+        if rewritten:
+            logger.info(
+                "daily bars (all): %d symbols re-adjusted since the last top-up, history "
+                "fetched again: %s",
+                len(rewritten),
+                ", ".join(sorted(rewritten)[:20]),
+            )
+            total += await refetch_history(engine, client, sorted(rewritten))
         stored[adjustment] = total
         logger.info(
             "daily bars (%s): %d rows stored for %d symbols", adjustment, total, len(symbols)
         )
     return stored
+
+
+async def _rewritten(
+    engine: AsyncEngine, bars: Sequence[DailyBar], symbols: Sequence[str], start: date
+) -> set[str]:
+    """The symbols whose freshly fetched adjusted bars differ from the stored ones."""
+    async with engine.connect() as conn:
+        rows = await conn.execute(
+            text(
+                "SELECT symbol, day, close FROM daily_bars WHERE adjustment = 'all' "
+                "AND symbol = ANY(:s) AND day >= :d"
+            ),
+            {"s": list(symbols), "d": start},
+        )
+        old = {(r.symbol, r.day): float(r.close) for r in rows}
+    return {
+        b.symbol
+        for b in bars
+        if (close := old.get((b.symbol, b.day))) is not None
+        and not math.isclose(b.close, close, rel_tol=_REWRITTEN)
+    }
+
+
+async def refetch_history(
+    engine: AsyncEngine, client: AlpacaMarketData, symbols: Sequence[str] | None = None
+) -> int:
+    """Fetch the adjusted bars of ``symbols`` again, each from its first stored
+    session, so every stored row is the current vintage.
+
+    Without ``symbols``: every symbol whose adjusted rows came from more than
+    one fetch. A series fetched once is one vintage; one topped up since may
+    mix two.
+    """
+    sql = "SELECT symbol, min(day) AS first FROM daily_bars WHERE adjustment = 'all' "
+    params: dict[str, object] = {}
+    if symbols is not None:
+        sql += "AND symbol = ANY(:s) "
+        params["s"] = list(symbols)
+    sql += "GROUP BY symbol"
+    if symbols is None:
+        sql += " HAVING max(fetched_at) - min(fetched_at) > INTERVAL '1 hour'"
+    groups: dict[date, list[str]] = defaultdict(list)
+    async with engine.connect() as conn:
+        for r in await conn.execute(text(sql), params):
+            groups[r.first].append(r.symbol)
+    total = 0
+    for start, syms in sorted(groups.items()):
+        for i in range(0, len(syms), _REFETCH_SYMBOLS):
+            batch = syms[i : i + _REFETCH_SYMBOLS]
+            bars = await client.daily_bars(batch, start=start, adjustment="all")
+            total += await store_bars(engine, bars, "all")
+    return total
