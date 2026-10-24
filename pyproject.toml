@@ -73,7 +73,9 @@ target-version = "py314"
 line-length = 100
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "W", "UP", "B", "C4", "PIE", "PERF"]
+# BLE: an `except Exception` that swallows names why (noqa: BLE001 — why).
+# RUF100: a noqa that suppresses nothing goes.
+select = ["E", "F", "I", "W", "UP", "B", "C4", "PIE", "PERF", "BLE", "RUF100"]
 # B905: zip(strict=) would turn a silent length mismatch into a crash on a
 # live path; adding it is a behaviour change, made case by case, not by lint.
 ignore = [
@@ -89,8 +91,9 @@ ignore = [
 extend-immutable-calls = ["fastapi.Depends", "fastapi.Query", "fastapi.Header", "fastapi.Path", "fastapi.Body"]
 
 [tool.ruff.lint.per-file-ignores]
-# pytest.raises(Exception) is deliberate where any failure is the contract.
-"tests/**" = ["B017"]
+# pytest.raises(Exception) is deliberate where any failure is the contract,
+# and a test may catch whatever it provokes.
+"tests/**" = ["B017", "BLE001"]
 "src/halal_trader/web/app.py" = ["E501"]
 # Email renderer has a multi-line HTML template f-string where
 # wrapping each inline-styled tag would hurt readability without
