@@ -362,3 +362,27 @@ async def test_no_off_site_copy_is_off_not_a_problem(engine) -> None:
 
     assert body["backups"]["offsite"]["status"] == "off"
     assert not any("off-site" in p for p in body["fleet"]["problems"])
+
+
+async def test_minute_bars_are_as_of_the_newest_bar_of_any_symbol(engine) -> None:
+    async def minute_bars() -> dict:
+        body = await build(engine, get_settings(), now=NOW)
+        return {f["name"]: f for f in body["freshness"]}["Minute bars"]
+
+    assert (await minute_bars())["as_of"] is None  # nothing stored
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO minute_bars (symbol, ts, open, high, low, close, volume) "
+                "VALUES (:s, :t, 1, 1, 1, 1, 1)"
+            ),
+            [
+                {"s": "AAPL", "t": datetime(2026, 9, 1, 14, 30, tzinfo=MARKET_TZ)},
+                {"s": "MSFT", "t": datetime(2026, 9, 3, 15, 59, tzinfo=MARKET_TZ)},
+                {"s": "MSFT", "t": datetime(2026, 9, 2, 10, 0, tzinfo=MARKET_TZ)},
+                {"s": "ZS", "t": datetime(2026, 8, 28, 9, 30, tzinfo=MARKET_TZ)},
+            ],
+        )
+
+    as_of = datetime.fromisoformat((await minute_bars())["as_of"])
+    assert as_of == datetime(2026, 9, 3, 15, 59, tzinfo=MARKET_TZ)
