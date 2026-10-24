@@ -41,6 +41,9 @@ def test_ohlc_by_date_handles_envelopes():
     # symbol-keyed envelope
     wrapped = {"bars": {"NVDA": _bars(50.0, 0.0, ["2026-05-01"])}}
     assert _ohlc_by_date(wrapped) == [("2026-05-01", 50.0, 50.0, 50.0, 50.0)]
+    # the MCP server's envelope around it
+    mcp = {"data": {"bars": {"NVDA": _bars(50.0, 0.0, ["2026-05-01"])}}}
+    assert _ohlc_by_date(mcp) == [("2026-05-01", 50.0, 50.0, 50.0, 50.0)]
     # long-key 'close' variant; missing h/l falls back to close
     assert _ohlc_by_date([{"timestamp": "2026-05-01", "close": 7.0}]) == [
         ("2026-05-01", 7.0, 7.0, 7.0, 7.0)
