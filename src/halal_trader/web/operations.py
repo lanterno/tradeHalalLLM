@@ -77,6 +77,17 @@ NOT_DUMPED = frozenset(
 BIGGEST = 8
 LLM_DAYS = 14
 
+# The newest minute bar, one probe per symbol down the (symbol, ts) key. A
+# plain max(ts) can't use that key and read all 60M rows on every load of
+# the page (about 4.5 s); this walks the symbols instead.
+_NEWEST_MINUTE = text(
+    "WITH RECURSIVE s AS (SELECT min(symbol) AS symbol FROM minute_bars "
+    "UNION ALL SELECT (SELECT min(symbol) FROM minute_bars m WHERE m.symbol > s.symbol) "
+    "FROM s WHERE s.symbol IS NOT NULL) "
+    "SELECT max((SELECT max(ts) FROM minute_bars m WHERE m.symbol = s.symbol)) "
+    "FROM s WHERE s.symbol IS NOT NULL"
+)
+
 
 def _usd(v: float) -> float:
     """LLM spend: cents are too coarse for a day of a few cents."""
@@ -364,7 +375,7 @@ async def _freshness(engine: AsyncEngine, now: datetime) -> list[dict[str, Any]]
                 )
             )
         ).all()
-        minute = (await conn.execute(text("SELECT max(ts) FROM minute_bars"))).scalar()
+        minute = (await conn.execute(_NEWEST_MINUTE)).scalar()
 
     def status(ok: bool | None) -> str:
         return "unknown" if ok is None else "ok" if ok else "stale"
