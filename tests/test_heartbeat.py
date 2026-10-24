@@ -128,7 +128,7 @@ async def test_monitor_reports_each_completed_tick(monkeypatch: pytest.MonkeyPat
     mon._running = True
     await mon._run_loop()
 
-    assert ticks == [{"market_open": True, "open_trades": 0}]
+    assert ticks == [{"market_open": True, "open_trades": 0, "failed": 0}]
 
 
 # ── the liveness verdict ──────────────────────────────────────────────

@@ -753,3 +753,34 @@ async def test_a_restarted_monitor_exits_at_a_ratcheted_stop_instead_of_lowering
 
     assert restarted._mcp.place_order.await_count == 1  # exited, profit locked
     assert tr.stop_loss == 205.0  # not lowered
+
+
+async def test_one_failing_trade_does_not_skip_the_stops_after_it(monkeypatch):
+    from halal_trader.trading import monitor as monitor_mod
+
+    monkeypatch.setattr(monitor_mod, "is_market_open_local", lambda: True)
+    repo = MagicMock()
+    repo.get_open_trades = AsyncMock(
+        return_value=[_trade(id_=1, symbol="AAPL"), _trade(id_=2, symbol="MSFT")]
+    )
+    mcp = MagicMock()
+    mcp.get_stock_snapshot = AsyncMock(return_value={"latestTrade": {"p": 185.0}})
+    ticks: list[dict] = []
+    checked: list[str] = []
+
+    async def on_tick(detail: dict) -> None:
+        ticks.append(detail)
+        mon._running = False  # one tick is enough
+
+    async def check(trade, price):
+        if trade.symbol == "AAPL":
+            raise RuntimeError("boom")
+        checked.append(trade.symbol)
+
+    mon = StockPositionMonitor(mcp=mcp, repo=repo, check_interval=0, on_tick=on_tick)
+    monkeypatch.setattr(mon, "_check_trade", check)
+    mon._running = True
+    await mon._run_loop()
+
+    assert checked == ["MSFT"]
+    assert ticks == [{"market_open": True, "open_trades": 2, "failed": 1}]
