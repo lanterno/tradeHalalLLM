@@ -88,6 +88,24 @@ async def test_post_cycle_no_op_when_no_engine():
     await svc._post_cycle()
 
 
+@pytest.mark.asyncio
+async def test_a_failed_post_cycle_reconcile_is_a_warning(monkeypatch, caplog):
+    """Drift detection that fails every cycle must show in the log, not at DEBUG."""
+    from halal_trader.core import reconcile
+
+    async def broken(**_):
+        raise RuntimeError("broker unreachable")
+
+    monkeypatch.setattr(reconcile, "reconcile_stocks", broken)
+    svc = _make_service()
+    svc._engine = MagicMock()
+    with caplog.at_level("WARNING", logger="halal_trader.trading.cycle"):
+        await svc._post_cycle()
+    assert any(
+        r.levelname == "WARNING" and "broker unreachable" in r.getMessage() for r in caplog.records
+    )
+
+
 def test_constructor_threads_through_optional_kwargs():
     """The kwargs added across recent parity work all stick."""
     notifier = MagicMock()
