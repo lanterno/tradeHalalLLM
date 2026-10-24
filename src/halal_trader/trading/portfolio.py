@@ -14,8 +14,6 @@ logger = logging.getLogger(__name__)
 class PortfolioTracker:
     """Tracks stock portfolio state and daily P&L via broker + local DB."""
 
-    _DEFAULT_EQUITY: float = 100_000.0
-
     def __init__(
         self,
         broker: Broker,
@@ -39,8 +37,16 @@ class PortfolioTracker:
     # ── Broker / DB access ─────────────────────────────────────
 
     async def _get_equity(self) -> float:
+        """The account's equity; raises when the broker reports none.
+
+        A made-up figure in its place became the loss limit's baseline for
+        the whole day (the first one recorded is kept), or the day's end.
+        """
         account = await self._broker.get_account_info()
-        return account.effective_equity or self._DEFAULT_EQUITY
+        equity = account.effective_equity
+        if equity <= 0:
+            raise RuntimeError(f"the broker reported no equity ({account.status or 'no status'})")
+        return equity
 
     async def _get_today_trades(self) -> list[dict[str, Any]]:
         return await self._repo.get_today_trades()
@@ -149,8 +155,10 @@ class PortfolioTracker:
 
     async def should_halt_trading(self) -> bool:
         """Check if daily loss limit has been breached."""
-        pnl = await self.get_current_pnl()
-        starting = self._starting_equity or self._DEFAULT_EQUITY
+        pnl = await self.get_current_pnl()  # sets today's baseline, or raises
+        starting = self._starting_equity
+        if not starting:
+            return True  # nothing to measure the loss against: fail closed
         loss_pct = abs(pnl) / starting if pnl < 0 else 0
 
         if loss_pct >= self._daily_loss_limit:
