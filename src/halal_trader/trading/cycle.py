@@ -133,10 +133,8 @@ class TradingCycleService(BaseCycleService):
                 broker=self._broker,
                 alerts=self._alerts,
             )
-        except Exception as exc:
-            import logging as _logging
-
-            _logging.getLogger(__name__).debug("Stock reconcile failed: %s", exc)
+        except Exception as exc:  # noqa: BLE001 — the cycle is done; the next one reconciles again
+            logger.warning("Stock reconcile failed: %r", exc)
 
     async def _run_cycle_impl(self) -> None:
         account = await self._broker.get_account_info()
