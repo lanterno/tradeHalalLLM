@@ -94,6 +94,25 @@ def update_cmd() -> None:
     )
 
 
+@data.command("refetch-adjusted")
+@click.argument("symbols", nargs=-1)
+def refetch_adjusted_cmd(symbols: tuple[str, ...]) -> None:
+    """Fetch whole adjusted histories again: SYMBOLS, or every one topped up since its backfill.
+
+    The nightly top-up does this for each symbol Alpaca re-adjusted since the
+    last run. Run it once to repair histories topped up before it did: a split
+    or dividend since then left their older bars on the old basis.
+    """
+    from halal_trader.data.store import refetch_history
+
+    async def work(engine: Any, client: Any) -> int:
+        return await refetch_history(
+            engine, client, [s.upper() for s in symbols] if symbols else None
+        )
+
+    console.print(f"adjusted rows stored again: {_with_store(work)}")
+
+
 @data.command("pit-universe")
 @click.option("--top", default=1000, show_default=True, help="Names in the universe each month.")
 @click.option(
