@@ -62,6 +62,15 @@ def extract_bar_dicts(bars_payload: Any) -> list[dict[str, Any]]:
     return [b for b in raw_bars if isinstance(b, dict)]
 
 
+def bar_field(bar: dict[str, Any], short: str, long: str, default: float = 0.0) -> float:
+    """``bar[short]``, else ``bar[long]``, else ``default``, as a float.
+
+    Alpaca names a bar's fields ``o/h/l/c/v``, some SDK versions
+    ``open/high/low/close/volume``. A value that is no number raises.
+    """
+    return float(bar[short] if short in bar else bar.get(long, default))
+
+
 def bars_to_klines(bars_for_symbol: Any) -> list[Kline]:
     """Coerce Alpaca's ``get_stock_bars`` response into ``Kline`` objects.
 
@@ -79,11 +88,11 @@ def bars_to_klines(bars_for_symbol: Any) -> list[Kline]:
         if not isinstance(bar, dict):
             continue
         try:
-            o = float(bar.get("o", bar.get("open", 0)))
-            h = float(bar.get("h", bar.get("high", 0)))
-            low = float(bar.get("l", bar.get("low", 0)))
-            c = float(bar.get("c", bar.get("close", 0)))
-            v = float(bar.get("v", bar.get("volume", 0)))
+            o = bar_field(bar, "o", "open")
+            h = bar_field(bar, "h", "high")
+            low = bar_field(bar, "l", "low")
+            c = bar_field(bar, "c", "close")
+            v = bar_field(bar, "v", "volume")
         except Exception:
             continue
         if c <= 0:

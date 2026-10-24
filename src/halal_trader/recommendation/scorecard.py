@@ -32,6 +32,7 @@ from halal_trader.core.sample_guard import SampleGate
 from halal_trader.core.signal_eval import information_coefficient
 from halal_trader.market_hours import today_eastern
 from halal_trader.quant.diagnostics import SPLIT_GAP_THRESHOLD
+from halal_trader.trading.bars import bar_field
 
 logger = logging.getLogger(__name__)
 
@@ -77,9 +78,9 @@ def _ohlc_by_date(bars: Any) -> list[tuple[str, float, float, float, float]]:
             continue
         try:
             close = float(c)
-            open_ = float(bar.get("o", bar.get("open", close)))
-            high = float(bar.get("h", bar.get("high", close)))
-            low = float(bar.get("l", bar.get("low", close)))
+            open_ = bar_field(bar, "o", "open", close)
+            high = bar_field(bar, "h", "high", close)
+            low = bar_field(bar, "l", "low", close)
         except TypeError, ValueError:
             continue
         if close <= 0 or open_ <= 0:

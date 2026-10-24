@@ -24,7 +24,7 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from halal_trader.core import events
 from halal_trader.db.repos import TradeRepo
@@ -33,6 +33,9 @@ from halal_trader.domain.status import EntryType
 from halal_trader.market_hours import is_market_open_local
 from halal_trader.trading.bars import bars_to_klines
 from halal_trader.trading.bars import extract_last_price as _extract_last_price
+
+if TYPE_CHECKING:
+    from halal_trader.core.post_close import CloseRecorders
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +65,7 @@ class StockPositionMonitor:
         trend_break_enabled: bool = True,
         trend_break_ma_period: int = 20,
         trend_break_timeframe: str = "1Hour",
-        close_recorders: object | None = None,
+        close_recorders: CloseRecorders | None = None,
         notifier: Any = None,
         on_tick: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
     ) -> None:

@@ -34,7 +34,10 @@ import time
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from halal_trader.trading.catalysts import Catalyst
 
 logger = logging.getLogger(__name__)
 
@@ -363,7 +366,7 @@ def _extract_speaker(title: str) -> str:
 # ── Sequence helper for the catalyst feed ────────────────────────
 
 
-def fed_speak_to_catalysts(signal: FedSpeakSignal, symbols: Sequence[str]) -> list:
+def fed_speak_to_catalysts(signal: FedSpeakSignal, symbols: Sequence[str]) -> list[Catalyst]:
     """Convert a ``FedSpeakSignal`` into Catalyst rows the stock feed
     can consume.
 

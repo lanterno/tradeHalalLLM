@@ -79,7 +79,8 @@ def simulate(
         if point is not None and point[0] >= first:
             entries[point].append(c)
     schedule = sorted(eligible_from.items())
-    cash, positions = 1.0, []
+    cash = 1.0
+    positions: list[_Position] = []
     nav_prev = 1.0
     returns, holdings, invested = [], [], []
     trades = full = ineligible = 0

@@ -1,5 +1,10 @@
 """SQLModel table definitions and database initialization."""
 
+# SQLModel types Field(sa_type=) as a class, but a timezone-aware or sized
+# column needs an instance (sa.DateTime(timezone=True), sa.Numeric(14, 6)),
+# which no Field overload accepts. SQLAlchemy takes either.
+# mypy: disable-error-code="call-overload"
+
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -120,10 +125,12 @@ class LlmDecision(SQLModel, table=True):
     model: str
     prompt_summary: str | None = None
     raw_response: str | None = None
-    parsed_action: dict | None = Field(
+    parsed_action: dict[str, Any] | None = Field(
         default=None, sa_column=sa.Column("parsed_action", JSONB, nullable=True)
     )
-    symbols: list | None = Field(default=None, sa_column=sa.Column("symbols", JSONB, nullable=True))
+    symbols: list[Any] | None = Field(
+        default=None, sa_column=sa.Column("symbols", JSONB, nullable=True)
+    )
     execution_ms: int | None = None
     thinking: str | None = None  # reasoning chain from thinking-mode LLMs
 
@@ -199,7 +206,7 @@ class DailyRecommendation(SQLModel, table=True):
     prompt_version: str | None = None
     # Per-symbol context the model weighed (price/trend/indicator summary),
     # kept for transparency on the dashboard.
-    candidates: dict | None = Field(
+    candidates: dict[str, Any] | None = Field(
         default=None, sa_column=sa.Column("candidates", JSONB, nullable=True)
     )
     # ── Outcome tracking (forward-return labeling; advisory track record) ──
@@ -252,9 +259,13 @@ class QuantTrial(SQLModel, table=True):
     name: str = Field(index=True)  # e.g. "levels.swing_zones.touch_hold_5d"
     kind: str  # level_family | band_calibration | backtest | signal
     config_hash: str  # short digest of the config dict (dedup/count aid)
-    config: dict | None = Field(default=None, sa_column=sa.Column("config", JSONB, nullable=True))
+    config: dict[str, Any] | None = Field(
+        default=None, sa_column=sa.Column("config", JSONB, nullable=True)
+    )
     window: str = ""  # human description of the data window
-    metrics: dict | None = Field(default=None, sa_column=sa.Column("metrics", JSONB, nullable=True))
+    metrics: dict[str, Any] | None = Field(
+        default=None, sa_column=sa.Column("metrics", JSONB, nullable=True)
+    )
     # Success criterion decided BEFORE looking at results (pre-registration).
     criterion: str | None = None
     verdict: str | None = None  # pass | fail | inconclusive
@@ -305,7 +316,7 @@ class HalalScreening(SQLModel, table=True):
     asset_class: str  # 'stock'
     source: str  # 'override' | 'cache' | …
     decision: str  # 'halal' | 'not_halal' | 'doubtful'
-    criteria: dict | None = Field(
+    criteria: dict[str, Any] | None = Field(
         default=None, sa_column=sa.Column("criteria", JSONB, nullable=True)
     )
     cache_hit: bool = Field(default=False)
@@ -714,7 +725,9 @@ class Event(SQLModel, table=True):
     symbol: str
     published_at: datetime = Field(sa_type=sa.DateTime(timezone=True))
     seen_at: datetime = Field(sa_type=sa.DateTime(timezone=True))
-    payload: dict | None = Field(default=None, sa_column=sa.Column("payload", JSONB, nullable=True))
+    payload: dict[str, Any] | None = Field(
+        default=None, sa_column=sa.Column("payload", JSONB, nullable=True)
+    )
 
 
 class EventScore(SQLModel, table=True):
@@ -752,7 +765,7 @@ class EventFact(SQLModel, table=True):
     )
     extractor: str
     kind: str
-    fields: dict = Field(sa_column=sa.Column("fields", JSONB, nullable=False))
+    fields: dict[str, Any] = Field(sa_column=sa.Column("fields", JSONB, nullable=False))
 
 
 class EventLabel(SQLModel, table=True):
@@ -875,7 +888,7 @@ class ZakatAssessment(SQLModel, table=True):
     income_zakat: float
     chosen: str
     amount: float
-    holdings: dict | None = Field(
+    holdings: dict[str, Any] | None = Field(
         default=None, sa_column=sa.Column("holdings", JSONB, nullable=True)
     )
     source: str
@@ -905,7 +918,7 @@ class CoreOrder(SQLModel, table=True):
     screen_method: str | None = None
     status: str
     broker_order_id: str | None = None
-    response: dict | None = Field(
+    response: dict[str, Any] | None = Field(
         default=None, sa_column=sa.Column("response", JSONB, nullable=True)
     )
 
@@ -951,7 +964,7 @@ class CoreRun(SQLModel, table=True):
     orders: int
     halted: str | None = None
     screen_as_of: date | None = None
-    notes: list = Field(
+    notes: list[Any] = Field(
         default_factory=list,
         sa_column=sa.Column("notes", JSONB, nullable=False, server_default=sa.text("'[]'::jsonb")),
     )
@@ -1062,7 +1075,7 @@ class AccountSnapshot(SQLModel, table=True):
     equity: float
     cash: float
     last_equity: float | None = None
-    positions: list = Field(
+    positions: list[Any] = Field(
         default_factory=list, sa_column=sa.Column("positions", JSONB, nullable=False)
     )
 

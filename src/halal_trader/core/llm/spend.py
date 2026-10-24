@@ -39,7 +39,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 logger = logging.getLogger(__name__)
 
-Alert = Callable[[str, str], Awaitable[None]]
+Alert = Callable[[str, str], Awaitable[object]]  # AlertSink.notify returns whether it sent
 
 _WARN_FRACTION = Decimal("0.8")
 

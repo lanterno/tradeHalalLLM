@@ -22,7 +22,7 @@ from datetime import datetime
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncEngine
-from sqlmodel import select
+from sqlmodel import col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from halal_trader.db.models import HalalScreening, Trade
@@ -124,17 +124,19 @@ async def export_for_symbol(
     """
     receipts: list[Receipt] = []
     async with AsyncSession(engine) as session:
-        stmt = select(Trade).where(Trade.symbol == symbol).order_by(Trade.id.desc()).limit(limit)
+        stmt = (
+            select(Trade).where(Trade.symbol == symbol).order_by(col(Trade.id).desc()).limit(limit)
+        )
         trades = (await session.exec(stmt)).all()
         screening_ids = [t.halal_screening_id for t in trades if t.halal_screening_id is not None]
         screenings: dict[int, HalalScreening] = {}
         if screening_ids:
             screen_rows = (
                 await session.exec(
-                    select(HalalScreening).where(HalalScreening.id.in_(screening_ids))
+                    select(HalalScreening).where(col(HalalScreening.id).in_(screening_ids))
                 )
             ).all()
-            screenings = {s.id: s for s in screen_rows}
+            screenings = {s.id: s for s in screen_rows if s.id is not None}
 
         for trade in trades:
             scr = (

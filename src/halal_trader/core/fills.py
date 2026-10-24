@@ -13,8 +13,9 @@ poll ``get_orders`` until the order is ``filled``, ``partially_filled``,
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -56,7 +57,7 @@ _TERMINAL_STATES = {
 
 
 async def confirm_alpaca(
-    poll: Callable[[], asyncio.Future[dict[str, Any]] | dict[str, Any]],
+    poll: Callable[[], Awaitable[dict[str, Any]] | dict[str, Any]],
     *,
     order_id: str,
     submitted_at: datetime,
@@ -81,10 +82,7 @@ async def confirm_alpaca(
     last: dict[str, Any] = {}
     while True:
         result = poll()
-        if asyncio.iscoroutine(result):
-            last = await result  # type: ignore[assignment]
-        else:
-            last = result  # type: ignore[assignment]
+        last = await result if inspect.isawaitable(result) else result
         status = str(last.get("status", "")).lower() or "pending"
         if status in _TERMINAL_STATES:
             return _build_alpaca_result(order_id, status, last, submitted_at)

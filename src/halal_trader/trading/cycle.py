@@ -1,7 +1,7 @@
 """Intraday trading cycle — gathers market data, analyzes, and executes."""
 
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from halal_trader.core.cycle import BaseCycleService
 from halal_trader.domain.ports import Broker, ComplianceScreener
@@ -9,6 +9,12 @@ from halal_trader.market_hours import is_market_open_local, now_eastern
 from halal_trader.trading.executor import TradeExecutor
 from halal_trader.trading.portfolio import PortfolioTracker
 from halal_trader.trading.strategy import TradingStrategy
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncEngine
+
+    from halal_trader.core.safeguards import LiveModeChecker
+    from halal_trader.notifications.telegram import AlertSink
 
 logger = logging.getLogger(__name__)
 
@@ -39,9 +45,9 @@ class TradingCycleService(BaseCycleService):
         executor: TradeExecutor,
         portfolio: PortfolioTracker,
         catalyst_feed: Any = None,
-        alerts=None,
-        engine=None,
-        live_mode_checker=None,
+        alerts: AlertSink | None = None,
+        engine: AsyncEngine | None = None,
+        live_mode_checker: LiveModeChecker | None = None,
         timeframe_analyzer: Any = None,
         notifier: Any = None,
         analytics: Any = None,
@@ -324,7 +330,7 @@ class TradingCycleService(BaseCycleService):
         except Exception as exc:  # noqa: BLE001
             logger.debug("prompt-context fetch failed: %r", exc)
 
-        analyze_kwargs = dict(
+        plan = await self._strategy.analyze(
             account=account,
             positions=positions,
             halal_symbols=halal_symbols,
@@ -343,7 +349,6 @@ class TradingCycleService(BaseCycleService):
             learnings_text=learnings_text,
             holding_minutes_by_symbol=holding_minutes_by_symbol,
         )
-        plan = await self._strategy.analyze(**analyze_kwargs)
 
         logger.info(
             "Trading plan: %s | %d buys, %d sells",

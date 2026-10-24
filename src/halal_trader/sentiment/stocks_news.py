@@ -126,7 +126,7 @@ class StockNewsCollector:
             return []
 
         client = await self._http()
-        params = {
+        params: dict[str, str | int] = {
             "q": sym,
             "newsCount": self._news_per_symbol,
             "quotesCount": 0,

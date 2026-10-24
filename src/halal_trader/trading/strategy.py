@@ -729,7 +729,7 @@ class TradingStrategy(BaseStrategy):
 
         from halal_trader.core.llm.tools import SUBMIT_DECISIONS_TOOL
 
-        return await self._run_llm_analysis(
+        plan: TradingPlan = await self._run_llm_analysis(
             system,
             user_prompt,
             prompt_summary=(
@@ -750,3 +750,4 @@ class TradingStrategy(BaseStrategy):
             prompt_version=PROMPT_VERSION.short,
             tool=SUBMIT_DECISIONS_TOOL,
         )
+        return plan

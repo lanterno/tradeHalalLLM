@@ -72,12 +72,13 @@ def catalysts_cmd(symbols: tuple[str, ...], lookahead: int) -> None:
         from halal_trader.config import get_settings
         from halal_trader.logging import console
         from halal_trader.trading.catalysts import (
+            CatalystSource,
             StockCatalystFeed,
             format_catalysts_for_prompt,
         )
 
         settings = get_settings()
-        sources: list = []
+        sources: list[CatalystSource] = []
 
         if settings.fred.api_key:
             from halal_trader.trading.fred_catalysts import (
@@ -145,14 +146,14 @@ def rag_cmd(query: str, k: int) -> None:
         if not query:
             console.print(f"[bold]RAG store:[/] {size} rationale(s)")
             from sqlalchemy.ext.asyncio import async_sessionmaker
-            from sqlmodel import select
+            from sqlmodel import col, select
 
             from halal_trader.db.models import RationaleRow as _Row
 
             sm = async_sessionmaker(engine, expire_on_commit=False)
             async with sm() as s:
                 rows = (
-                    (await s.execute(select(_Row).order_by(_Row.timestamp.desc()).limit(10)))
+                    (await s.execute(select(_Row).order_by(col(_Row.timestamp).desc()).limit(10)))
                     .scalars()
                     .all()
                 )

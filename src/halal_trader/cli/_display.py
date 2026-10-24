@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
@@ -100,7 +102,7 @@ def print_clock(clock: object) -> None:
         console.print(Panel(str(clock), title="Market Clock"))
 
 
-def print_trades(trades: list) -> None:
+def print_trades(trades: list[Any]) -> None:
     """Print stock trade history."""
     if not trades:
         console.print("[dim]No trades recorded yet.[/dim]")
@@ -128,7 +130,7 @@ def print_trades(trades: list) -> None:
     console.print(table)
 
 
-def print_pnl(pnl_history: list) -> None:
+def print_pnl(pnl_history: list[Any]) -> None:
     """Print stock daily P&L history."""
     if not pnl_history:
         console.print("[dim]No P&L history yet.[/dim]")
@@ -156,7 +158,7 @@ def print_pnl(pnl_history: list) -> None:
     console.print(table)
 
 
-def print_liquidation(results: list) -> None:
+def print_liquidation(results: list[Any]) -> None:
     """Print a liquidation result table from `halt --close-all`."""
     if not results:
         console.print("[dim]No positions to close.[/dim]")

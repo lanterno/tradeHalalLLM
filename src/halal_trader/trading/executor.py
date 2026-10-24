@@ -1418,7 +1418,7 @@ class TradeExecutor:
             str(getattr(t, "symbol", "") or "").upper()
             for t in opens
             if str(getattr(t, "entry_type", "") or "") == EntryType.REACTOR_MOMENTUM
-            and getattr(t, "symbol", "")
+            and getattr(t, "symbol", None)
         }
         holding_reactor = bool(reactor_syms)
 

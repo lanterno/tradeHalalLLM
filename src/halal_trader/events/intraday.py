@@ -22,6 +22,7 @@ import logging
 import math
 import random
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from typing import Any
@@ -165,7 +166,10 @@ async def run(
         i = sessions.index(day)
         later: list[float | None] = []
         for k in (1, 5):
-            d = sessions[i + k] if i + k < len(sessions) else None
+            if i + k >= len(sessions):
+                later.append(None)
+                continue
+            d = sessions[i + k]
             p, q = closes.get(h.symbol, {}).get(d), closes["SPY"].get(d)
             if not p or not q or not _PLAUSIBLE[0] < p / e < _PLAUSIBLE[1]:
                 later.append(None)
@@ -188,7 +192,7 @@ class Bucket:
 
 
 def summarise(outcomes: list[Outcome]) -> list[Bucket]:
-    groups = {
+    groups: dict[str, Callable[[float], bool]] = {
         f"score >= {STRONG}": lambda s: s >= STRONG,
         "neutral (control)": lambda s: abs(s) < STRONG,
         f"score <= -{STRONG}": lambda s: s <= -STRONG,

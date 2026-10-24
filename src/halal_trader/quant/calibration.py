@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -254,7 +255,7 @@ def walk_forward_observations(
 
 
 def run_pooled_calibration(
-    ohlc_by_symbol: dict[str, tuple[FloatArray, FloatArray, FloatArray, FloatArray]],
+    ohlc_by_symbol: Mapping[str, tuple[FloatArray, FloatArray, FloatArray, FloatArray]],
     *,
     horizons: tuple[int, ...] = (1, 5),
     target_coverage: float = 0.8,

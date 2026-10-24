@@ -60,9 +60,9 @@ def list_cmd(limit: int, prompt_version: str | None, provider: str | None) -> No
     from rich.table import Table
 
     async def _run(engine: Any, settings: Any) -> None:
-        from sqlmodel import select
+        from sqlmodel import col, select
 
-        stmt = select(LlmDecision).order_by(LlmDecision.id.desc()).limit(limit)
+        stmt = select(LlmDecision).order_by(col(LlmDecision.id).desc()).limit(limit)
         if prompt_version:
             stmt = stmt.where(LlmDecision.prompt_version == prompt_version)
         if provider:

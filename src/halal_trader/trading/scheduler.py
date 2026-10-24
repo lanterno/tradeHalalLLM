@@ -394,8 +394,7 @@ class TradingBot:
         # back to Yahoo's `query2.finance.yahoo.com/v1/finance/search`
         # which has its own circuit breaker for the now-typical 429
         # storms. Operator drops `FINNHUB_API_KEY=…` in `.env` to switch.
-        finnhub_key = getattr(self.settings, "finnhub", None)
-        finnhub_key = getattr(finnhub_key, "api_key", "") if finnhub_key else ""
+        finnhub_key = self.settings.finnhub.api_key
         if finnhub_key:
             self._stocks_news = FinnhubNewsCollector(api_key=finnhub_key)
             logger.info("StockNews backend: Finnhub")
@@ -426,8 +425,7 @@ class TradingBot:
         # places a half-size, price-confirmed paper entry (the "fast in"
         # side); the position
         # monitor then manages the slow-out exit.
-        finnhub_cfg = getattr(self.settings, "finnhub", None)
-        finnhub_key = getattr(finnhub_cfg, "api_key", "") if finnhub_cfg else ""
+        finnhub_key = self.settings.finnhub.api_key
         stocks_cfg = self.settings.stocks
         use_alpaca = bool(self.settings.alpaca.api_key and self.settings.alpaca.secret_key)
         if finnhub_key or use_alpaca:
@@ -461,11 +459,6 @@ class TradingBot:
                     alert_sink=self._alerts,
                     daily_classify_cap=self.settings.stocks.reactor_daily_classify_cap,
                 )
-                # Gate the reactor's sweep on the kill-switch so it stops
-                # burning classifier/Finnhub calls while halted (entries are
-                # blocked downstream regardless).
-                from halal_trader.core.halt import is_halted
-
                 # News feed: Alpaca (the feed event research is backtested on),
                 # Finnhub for the trading watchlist if Alpaca fails.
                 source: Any
@@ -492,7 +485,9 @@ class TradingBot:
                     symbols=watchlist,
                     classifier=classifier,
                     state_path=self.settings.resolve_data_dir() / "reactor_state.json",
-                    halt_check=lambda: is_halted(self._engine),
+                    # No sweep while halted: it would only spend classifier and
+                    # news calls (entries are blocked downstream regardless).
+                    halt_check=self._halted,
                     source=source,
                     recorder=recorder,
                     observe_provider=observe,
@@ -542,7 +537,7 @@ class TradingBot:
         from halal_trader.recommendation.engine import DailyRecommendationEngine
 
         self._recommendation = DailyRecommendationEngine(
-            broker=self.broker, repo=self._repo, settings=self.settings, engine=self._engine
+            broker=self.broker, repo=repo, settings=self.settings, engine=self._engine
         )
 
         logger.info("Trading bot initialized successfully")
@@ -681,6 +676,14 @@ class TradingBot:
             self._engine = None
         logger.info("Trading bot shut down")
 
+    async def _halted(self) -> bool:
+        """The kill-switch; raises once shutdown has dropped the engine."""
+        from halal_trader.core.halt import is_halted
+
+        if self._engine is None:
+            raise RuntimeError("no database engine: the kill-switch cannot be read")
+        return await is_halted(self._engine)
+
     async def _observe_symbols(self) -> list[str]:
         """The largest halal names of the newest in-house screen: the reactor
         scores and records their news for research, and never trades them."""
@@ -758,10 +761,8 @@ class TradingBot:
             return None, "Observation only — executor not initialized"
 
         # Kill-switch: never open new risk while halted.
-        from halal_trader.core.halt import is_halted
-
         try:
-            if await is_halted(self._engine):
+            if await self._halted():
                 return None, "Observation only — kill-switch engaged"
         except Exception as exc:  # noqa: BLE001
             logger.debug("reactor entry halt check failed: %r", exc)

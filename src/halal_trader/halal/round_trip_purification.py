@@ -28,7 +28,7 @@ from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
-from sqlmodel import select
+from sqlmodel import col, select
 
 from halal_trader.db.models import RoundTripPurificationRow
 
@@ -145,14 +145,14 @@ class RoundTripLedger:
                 (
                     await s.execute(
                         select(RoundTripPurificationRow).where(
-                            RoundTripPurificationRow.disbursed.is_(False)
+                            col(RoundTripPurificationRow.disbursed).is_(False)
                         )
                     )
                 )
                 .scalars()
                 .all()
             )
-            return sum(r.purification_due_usd for r in rows)
+            return float(sum(r.purification_due_usd for r in rows))
 
     async def disbursed_total(self) -> float:
         async with self._sm() as s:
@@ -160,14 +160,14 @@ class RoundTripLedger:
                 (
                     await s.execute(
                         select(RoundTripPurificationRow).where(
-                            RoundTripPurificationRow.disbursed.is_(True)
+                            col(RoundTripPurificationRow.disbursed).is_(True)
                         )
                     )
                 )
                 .scalars()
                 .all()
             )
-            return sum(r.purification_due_usd for r in rows)
+            return float(sum(r.purification_due_usd for r in rows))
 
     async def by_symbol(self) -> dict[str, float]:
         async with self._sm() as s:
@@ -175,7 +175,7 @@ class RoundTripLedger:
                 (
                     await s.execute(
                         select(RoundTripPurificationRow).where(
-                            RoundTripPurificationRow.disbursed.is_(False)
+                            col(RoundTripPurificationRow.disbursed).is_(False)
                         )
                     )
                 )

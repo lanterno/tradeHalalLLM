@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from alembic.config import Config
 
 logger = logging.getLogger(__name__)
 
 
-def _alembic_config():
+def _alembic_config() -> Config:
     """Build an Alembic Config pointed at the project's alembic.ini."""
     from alembic.config import Config
 
