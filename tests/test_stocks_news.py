@@ -117,7 +117,7 @@ async def test_fetch_for_symbols_sorts_newest_first(monkeypatch):
     LLM prompt's ``limit=6`` keeps the most relevant headlines."""
     collector = StockNewsCollector()
 
-    async def fake_fetch(self, symbol):  # noqa: ARG001
+    async def fake_fetch(self, symbol):
         return {
             "AAPL": [
                 NewsEvent(
@@ -152,7 +152,7 @@ async def test_fetch_for_symbols_swallows_per_symbol_failure(monkeypatch):
     other symbols' results still flow through."""
     collector = StockNewsCollector()
 
-    async def fake_fetch(self, symbol):  # noqa: ARG001
+    async def fake_fetch(self, symbol):
         if symbol == "AAPL":
             raise RuntimeError("Yahoo 503")
         return [

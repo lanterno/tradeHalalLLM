@@ -61,8 +61,8 @@ os.environ["HALAL_TRADER_ENV_FILE"] = str(Path(tempfile.gettempdir()) / "halal-t
 # Finnhub or Telegram is either flaky or spending/trading for real; stub the
 # client instead. Loopback (the Postgres the suite needs) and Unix sockets
 # stay allowed. Set TEST_ALLOW_NETWORK=1 to opt out for a one-off run.
-import ipaddress  # noqa: E402
-import socket  # noqa: E402
+import ipaddress
+import socket
 
 _real_connect = socket.socket.connect
 _real_connect_ex = socket.socket.connect_ex

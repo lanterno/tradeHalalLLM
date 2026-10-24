@@ -139,7 +139,7 @@ async def test_run_stages_short_circuits_on_halt():
     class _Halt:
         name = "halt_setter"
 
-        async def run(self, state):  # noqa: ANN001
+        async def run(self, state):
             state.halt = True
             return state
 
@@ -149,7 +149,7 @@ async def test_run_stages_short_circuits_on_halt():
         def __init__(self):
             self.ran = False
 
-        async def run(self, state):  # noqa: ANN001
+        async def run(self, state):
             self.ran = True
             return state
 
@@ -168,7 +168,7 @@ async def test_run_stages_runs_all_when_stop_on_halt_default():
     class _Halt:
         name = "halt_setter"
 
-        async def run(self, state):  # noqa: ANN001
+        async def run(self, state):
             state.halt = True
             return state
 
@@ -178,7 +178,7 @@ async def test_run_stages_runs_all_when_stop_on_halt_default():
         def __init__(self):
             self.ran = False
 
-        async def run(self, state):  # noqa: ANN001
+        async def run(self, state):
             self.ran = True
             return state
 
