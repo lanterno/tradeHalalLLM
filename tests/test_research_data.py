@@ -13,6 +13,7 @@ from halal_trader.data.alpaca_market import AlpacaMarketData, Asset, DailyBar, p
 from halal_trader.data.store import (
     BENCHMARKS,
     liquid_universe,
+    refetch_history,
     store_bars,
     sync_assets,
     update_bars,
@@ -134,3 +135,74 @@ async def test_bars_upsert_and_update_resumes_from_the_last_session(engine: Asyn
 
 def test_benchmarks_include_the_halal_etfs() -> None:
     assert {"SPUS", "HLAL"} <= set(BENCHMARKS)
+
+
+async def _adjusted_closes(engine: AsyncEngine) -> dict[tuple[str, date], float]:
+    async with engine.connect() as conn:
+        rows = await conn.execute(
+            text("SELECT symbol, day, close FROM daily_bars WHERE adjustment = 'all'")
+        )
+        return {(r.symbol, r.day): r.close for r in rows}
+
+
+async def test_a_history_alpaca_re_adjusted_is_fetched_again_whole(engine: AsyncEngine) -> None:
+    week = [date(2026, 9, d) for d in range(21, 26)]
+    old = [_bar("AAPL", date(2016, 1, 4), 100.0, 1.0)] + [_bar("AAPL", d, 300.0, 1.0) for d in week]
+    # A 2:1 split on 09-28 halves every adjusted bar before it, the oldest included.
+    new = [_bar("AAPL", date(2016, 1, 4), 50.0, 1.0)] + [_bar("AAPL", d, 150.0, 1.0) for d in week]
+    new.append(_bar("AAPL", date(2026, 9, 28), 151.0, 1.0))
+    await store_bars(engine, old, "all")
+    fake = FakeMarket([], {"AAPL": new})
+
+    await update_bars(engine, fake, ["AAPL"], since=date(2016, 1, 1), adjustments=("all",))  # type: ignore[arg-type]
+
+    assert fake.requests == [
+        (("AAPL",), date(2026, 9, 18), "all"),  # the top-up: last session - 7 days
+        (("AAPL",), date(2016, 1, 4), "all"),  # its bars changed: the whole history again
+    ]
+    assert await _adjusted_closes(engine) == {(b.symbol, b.day): b.close for b in new}
+
+
+async def test_an_unchanged_history_is_only_topped_up(engine: AsyncEngine) -> None:
+    bars = [_bar("AAPL", date(2016, 1, 4), 100.0, 1.0)] + [
+        _bar("AAPL", date(2026, 9, d), 300.0, 1.0) for d in range(21, 26)
+    ]
+    await store_bars(engine, bars, "all")
+    fake = FakeMarket([], {"AAPL": [*bars, _bar("AAPL", date(2026, 9, 28), 301.0, 1.0)]})
+
+    await update_bars(engine, fake, ["AAPL"], since=date(2016, 1, 1), adjustments=("all",))  # type: ignore[arg-type]
+
+    assert fake.requests == [(("AAPL",), date(2026, 9, 18), "all")]
+
+
+async def test_a_raw_top_up_never_fetches_history_again(engine: AsyncEngine) -> None:
+    await store_bars(engine, [_bar("AAPL", date(2026, 9, 25), 300.0, 1.0)], "raw")
+    fake = FakeMarket([], {"AAPL": [_bar("AAPL", date(2026, 9, 25), 299.0, 1.0)]})
+
+    await update_bars(engine, fake, ["AAPL"], since=date(2016, 1, 1), adjustments=("raw",))  # type: ignore[arg-type]
+
+    assert fake.requests == [(("AAPL",), date(2026, 9, 24), "raw")]
+
+
+async def test_the_repair_fetches_again_only_histories_topped_up_since_their_backfill(
+    engine: AsyncEngine,
+) -> None:
+    for sym in ("AAPL", "MSFT"):
+        await store_bars(
+            engine,
+            [_bar(sym, date(2016, 1, 4), 100.0, 1.0), _bar(sym, date(2026, 9, 25), 300.0, 1.0)],
+            "all",
+        )
+    async with engine.begin() as conn:  # AAPL's first bar came from an older fetch
+        await conn.execute(
+            text(
+                "UPDATE daily_bars SET fetched_at = fetched_at - INTERVAL '2 days' "
+                "WHERE symbol = 'AAPL' AND day = '2016-01-04'"
+            )
+        )
+    fake = FakeMarket([], {"AAPL": [_bar("AAPL", date(2016, 1, 4), 50.0, 1.0)]})
+
+    assert await refetch_history(engine, fake) == 1  # type: ignore[arg-type]
+
+    assert fake.requests == [(("AAPL",), date(2016, 1, 4), "all")]
+    assert (await _adjusted_closes(engine))["AAPL", date(2016, 1, 4)] == 50.0
