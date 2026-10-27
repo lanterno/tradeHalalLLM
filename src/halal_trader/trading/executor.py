@@ -226,6 +226,9 @@ class TradeExecutor:
         # hard floor at entry so the position is never unprotected even
         # before the monitor's first tick.
         self._reactor_trailing_stop_distance_pct = reactor_trailing_stop_distance_pct
+        # The risk meter's level, read by the cycle at its start and recorded
+        # on each buy (core/risk_meter.py). None: not read yet, or unreadable.
+        self.risk_level: int | None = None
 
     async def execute_reactor_entry(
         self,
@@ -594,6 +597,7 @@ class TradeExecutor:
                     filled_price=None,
                     filled_quantity=0.0,
                     entry_type=entry_type,
+                    risk_level=self.risk_level,
                 )
                 return {
                     "symbol": decision.symbol,
@@ -652,6 +656,7 @@ class TradeExecutor:
                 entry_type=entry_type,
                 stop_loss=safe_stop,
                 target_price=safe_target,
+                risk_level=self.risk_level,
             )
 
             return {

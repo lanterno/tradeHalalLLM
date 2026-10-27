@@ -53,6 +53,7 @@ class TradeRepoImpl:
         target_price: float | None = None,
         paper_slippage_pct: float | None = None,
         entry_type: str | None = None,
+        risk_level: int | None = None,
     ) -> int:
         trade = Trade(
             symbol=symbol,
@@ -71,6 +72,7 @@ class TradeRepoImpl:
             target_price=target_price,
             paper_slippage_pct=paper_slippage_pct,
             entry_type=entry_type,
+            risk_level=risk_level,
         )
         async with AsyncSession(self._engine) as session:
             session.add(trade)

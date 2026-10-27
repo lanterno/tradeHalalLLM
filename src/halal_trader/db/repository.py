@@ -61,6 +61,7 @@ class Repository:
         target_price: float | None = None,
         paper_slippage_pct: float | None = None,
         entry_type: str | None = None,
+        risk_level: int | None = None,
     ) -> int:
         return await self._trades.record_trade(
             symbol,
@@ -79,6 +80,7 @@ class Repository:
             target_price=target_price,
             paper_slippage_pct=paper_slippage_pct,
             entry_type=entry_type,
+            risk_level=risk_level,
         )
 
     async def get_today_trades(self) -> list[dict[str, Any]]:

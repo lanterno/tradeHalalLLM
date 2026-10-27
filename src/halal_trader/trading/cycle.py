@@ -136,7 +136,23 @@ class TradingCycleService(BaseCycleService):
         except Exception as exc:  # noqa: BLE001 — the cycle is done; the next one reconciles again
             logger.warning("Stock reconcile failed: %r", exc)
 
+    async def _read_risk_level(self) -> int | None:
+        """The risk meter's level for this cycle, which each buy records.
+
+        The cycle doesn't apply the level yet (HAL-14): it only records it.
+        """
+        if self._engine is None:
+            return None
+        from halal_trader.core.risk_meter import get_status
+
+        try:
+            return (await get_status(self._engine)).level
+        except Exception as e:  # noqa: BLE001 -- the buy is recorded without its level
+            logger.warning("Risk meter unreadable: %r", e)
+            return None
+
     async def _run_cycle_impl(self) -> None:
+        self._executor.risk_level = await self._read_risk_level()
         account = await self._broker.get_account_info()
 
         if self._live_mode_checker is not None and self._live_mode_checker.active:

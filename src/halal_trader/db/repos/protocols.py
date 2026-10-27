@@ -31,6 +31,7 @@ class TradeRepo(Protocol):
         target_price: float | None = ...,
         paper_slippage_pct: float | None = ...,
         entry_type: str | None = ...,
+        risk_level: int | None = ...,
     ) -> int: ...
 
     async def get_today_trades(self) -> list[dict[str, Any]]: ...

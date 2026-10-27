@@ -67,6 +67,9 @@ class Trade(SQLModel, table=True):
     # rule-based exit can close them. None = legacy / "scheduled"
     # (default for cron-cycle entries).
     entry_type: str | None = None
+    # The risk meter's level a buy was placed under (core/risk_meter.py),
+    # so results can be read level by level. Sells and older rows: None.
+    risk_level: int | None = None
     # Highest price seen since entry, persisted whenever the trailing stop
     # ratchets. The monitor's bogus-stop repair compares it with stop_loss;
     # held only in memory, a restart made a ratcheted, profit-locking stop
