@@ -269,6 +269,40 @@ export interface HaltStatus {
   set_at: string | null;
 }
 
+/** What one risk meter level sets (core/risk_meter.py). Fractions of equity. */
+export interface RiskLimits {
+  level: number;
+  name: string;
+  max_position_pct: number;
+  typical_position_pct: [number, number];
+  max_positions: number;
+  daily_loss_limit: number;
+  max_drawdown_pct: number;
+  max_portfolio_heat_pct: number;
+  /** null: the model chooses whether and where to set a stop. */
+  max_stop_distance_pct: number | null;
+}
+
+export interface RiskMeterLevel extends RiskLimits {
+  /** Why the level can't be chosen now; null when it can. */
+  refusal: string | null;
+}
+
+export interface RiskMeterStatus {
+  /** The level in effect today. */
+  level: number;
+  name: string;
+  /** The level last chosen: above `level` while a raise waits. */
+  chosen: number;
+  /** When `chosen` takes effect, while a raise waits. */
+  effective_from: string | null;
+  reason: string | null;
+  set_by: string | null;
+  set_at: string | null;
+  limits: RiskLimits;
+  levels: RiskMeterLevel[];
+}
+
 export interface ReconcileLogRow {
   id: number;
   timestamp: string;

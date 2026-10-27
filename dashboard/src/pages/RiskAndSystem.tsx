@@ -5,12 +5,14 @@ import {
   useCoreRisk,
   useHaltStatus,
   useReconcileRecent,
+  useRiskMeter,
   useRiskState,
   useSetHalt,
+  useSetRiskMeter,
 } from "../hooks/useRisk";
 import { StatCard } from "../components/StatCard";
 import { ErrorState } from "../components/ErrorState";
-import type { CoreRisk, RiskState } from "../api/types";
+import type { CoreRisk, RiskLimits, RiskState } from "../api/types";
 import { cn, formatDate, formatDuration, formatPct, formatTime, formatUsd } from "../lib/utils";
 
 const SECTORS_SHOWN = 5;
@@ -144,6 +146,159 @@ function DayTraderRisk({ data, fetchedAt }: { data: RiskState; fetchedAt: number
   );
 }
 
+const METER_ROWS: { label: string; show: (l: RiskLimits) => string }[] = [
+  { label: "Largest position", show: (l) => formatPct(l.max_position_pct, 0) },
+  {
+    label: "Typical position",
+    show: (l) => `${formatPct(l.typical_position_pct[0], 0)}–${formatPct(l.typical_position_pct[1], 0)}`,
+  },
+  { label: "Open positions", show: (l) => String(l.max_positions) },
+  { label: "Daily loss limit", show: (l) => formatPct(l.daily_loss_limit, 1) },
+  { label: "Drawdown limit", show: (l) => formatPct(l.max_drawdown_pct, 0) },
+  { label: "Total open risk", show: (l) => formatPct(l.max_portfolio_heat_pct, 1) },
+  {
+    label: "Stop-loss",
+    show: (l) =>
+      l.max_stop_distance_pct == null
+        ? "Model's choice"
+        : `Required, ≤ ${formatPct(l.max_stop_distance_pct, 0)} below`,
+  },
+];
+
+function RiskMeter() {
+  const meter = useRiskMeter();
+  const setMut = useSetRiskMeter();
+  const [picked, setPicked] = useState<number | null>(null);
+  const [reason, setReason] = useState("");
+
+  if (meter.isError) return <ErrorState compact error={meter.error} onRetry={meter.refetch} />;
+  if (!meter.data) return <p className="text-sm text-muted">Loading…</p>;
+
+  const m = meter.data;
+  const choice = picked ?? m.level;
+  const chosen = m.levels.find((l) => l.level === choice);
+  const canSet = chosen != null && chosen.refusal == null && choice !== m.chosen;
+
+  const onSet = () => {
+    if (!chosen) return;
+    const why = reason.trim() || "set via dashboard";
+    const when = choice > m.level ? "from the next trading day" : "from the next cycle";
+    if (!confirm(`Set the day trader's risk meter to level ${choice} (${chosen.name}) ${when}?\n\nReason: "${why}"`))
+      return;
+    setMut.mutate(
+      { level: choice, reason: why },
+      {
+        onSuccess: () => {
+          setPicked(null);
+          setReason("");
+        },
+      },
+    );
+  };
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <p className="text-lg font-bold text-white">
+          Level {m.level} · {m.name}
+        </p>
+        {m.effective_from && (
+          <p className="text-xs text-warning">
+            Level {m.chosen} ({m.levels.find((l) => l.level === m.chosen)?.name}) from {formatDate(m.effective_from)}
+          </p>
+        )}
+        {m.set_by && (
+          <p className="text-xs text-muted">
+            Set by {m.set_by} at {formatTime(m.set_at)}
+            {m.reason ? ` — ${m.reason}` : ""}
+          </p>
+        )}
+      </div>
+
+      <div className="grid grid-cols-5 gap-1" role="radiogroup" aria-label="Risk level">
+        {m.levels.map((l) => (
+          <button
+            key={l.level}
+            role="radio"
+            aria-checked={l.level === choice}
+            onClick={() => setPicked(l.level)}
+            title={l.refusal ?? undefined}
+            className={cn(
+              "rounded-md border px-1 py-2 text-center text-xs transition-colors",
+              l.level === choice ? "border-accent bg-accent/10 text-white" : "border-border text-muted hover:bg-surface-hover",
+              l.refusal != null && "opacity-60",
+            )}
+          >
+            <span className="block text-base font-bold">{l.level}</span>
+            <span className="block truncate">{l.name}</span>
+            {l.level === m.level ? (
+              <span className="block text-[10px] text-accent">in effect</span>
+            ) : (
+              l.refusal != null && <span className="block text-[10px]">not open yet</span>
+            )}
+          </button>
+        ))}
+      </div>
+      {chosen?.refusal && <p className="text-xs text-muted">{chosen.refusal}</p>}
+
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[560px] text-sm">
+          <thead>
+            <tr className="border-b border-border text-left text-xs uppercase tracking-wider text-muted">
+              <th className="px-2 py-2">Setting</th>
+              {m.levels.map((l) => (
+                <th key={l.level} className={cn("px-2 py-2", l.level === choice && "text-accent")}>
+                  {l.level} {l.name}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {METER_ROWS.map((row) => (
+              <tr key={row.label} className="border-b border-border/50">
+                <td className="px-2 py-1.5 text-xs text-muted">{row.label}</td>
+                {m.levels.map((l) => (
+                  <td
+                    key={l.level}
+                    className={cn("px-2 py-1.5 font-mono text-xs", l.level === choice && "bg-accent/5 text-white")}
+                  >
+                    {row.show(l)}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <input
+          type="text"
+          value={reason}
+          onChange={(e) => setReason(e.target.value)}
+          placeholder="Reason (audit trail)"
+          className="w-full min-w-0 rounded-md border border-border bg-surface-hover px-3 py-2 text-sm focus:border-accent focus:outline-none sm:w-56"
+        />
+        <button
+          onClick={onSet}
+          disabled={!canSet || setMut.isPending}
+          className="rounded-md bg-accent/10 px-4 py-2 text-sm font-medium text-accent hover:bg-accent/20 disabled:opacity-50"
+        >
+          {setMut.isPending ? "Setting..." : `Set level ${choice}`}
+        </button>
+        {setMut.isError && <span className="text-xs text-loss">{String(setMut.error)}</span>}
+      </div>
+
+      <p className="text-xs text-muted">
+        Covers the day trader only; the core is the baseline it has to beat. A cut applies from the next cycle, a raise
+        from the next trading day, and lowering the level sells nothing. Every buy records the level it was placed
+        under. The bot doesn't apply the level yet: that comes after the 11-02 review, so the meter holds at level 3
+        until then.
+      </p>
+    </div>
+  );
+}
+
 export default function RiskAndSystem() {
   const risk = useRiskState();
   const core = useCoreRisk();
@@ -235,6 +390,12 @@ export default function RiskAndSystem() {
           keep running. <code className="font-mono">halal-trader halt --close-all stocks</code> also
           liquidates the day-trader's account (not the core's).
         </p>
+      </section>
+
+      {/* The day trader's risk meter */}
+      <section className="rounded-xl border border-border bg-surface p-4">
+        <h2 className="mb-3 text-sm font-medium uppercase tracking-wider text-muted">Risk meter · day trader</h2>
+        <RiskMeter />
       </section>
 
       {/* The core: the product */}

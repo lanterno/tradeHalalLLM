@@ -4,8 +4,10 @@ import {
   fetchCoreRisk,
   fetchHaltStatus,
   fetchReconcileRecent,
+  fetchRiskMeter,
   fetchRiskState,
   setHalt,
+  setRiskMeter,
 } from "../api/risk";
 
 export function useRiskState() {
@@ -48,6 +50,24 @@ export function useClearHalt() {
     mutationFn: clearHalt,
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["halt", "status"] });
+    },
+  });
+}
+
+export function useRiskMeter() {
+  return useQuery({
+    queryKey: ["risk", "meter"],
+    queryFn: fetchRiskMeter,
+    refetchInterval: 30_000,
+  });
+}
+
+export function useSetRiskMeter() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: setRiskMeter,
+    onSuccess: (status) => {
+      qc.setQueryData(["risk", "meter"], status);
     },
   });
 }
