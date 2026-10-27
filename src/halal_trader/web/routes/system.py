@@ -1,4 +1,4 @@
-"""System endpoints: /api/health, /api/system/{halt,reconcile}.
+"""System endpoints: /api/health, /api/system/{halt,risk-meter,reconcile}.
 
 The Operations page reads /api/operations (web/operations.py).
 """
@@ -10,11 +10,17 @@ from typing import Any
 
 from fastapi import Body, Depends, FastAPI
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
 from halal_trader import __version__
 from halal_trader.core.context import DashboardContext
 from halal_trader.web.dependencies import get_ctx
 from halal_trader.web.middleware.confirm import require_confirmation
+
+
+class RiskMeterChange(BaseModel):
+    level: int
+    reason: str = ""
 
 
 async def _bot_liveness(ctx: DashboardContext) -> tuple[bool, dict[str, Any] | None]:
@@ -96,6 +102,28 @@ def register(app: FastAPI) -> None:
         from halal_trader.core.halt import clear_halt
 
         return JSONResponse((await clear_halt(ctx.engine)).to_json())
+
+    @app.get("/api/system/risk-meter")
+    async def api_get_risk_meter(ctx: DashboardContext = Depends(get_ctx)) -> JSONResponse:
+        from halal_trader.core.risk_meter import get_status, levels_json
+
+        return JSONResponse({**(await get_status(ctx.engine)).to_json(), "levels": levels_json()})
+
+    # Changing the day trader's risk level: confirmed like the kill-switch,
+    # recorded by the audit trail, and announced on Telegram.
+    @app.put("/api/system/risk-meter", dependencies=[Depends(require_confirmation)])
+    async def api_set_risk_meter(
+        body: RiskMeterChange, ctx: DashboardContext = Depends(get_ctx)
+    ) -> JSONResponse:
+        from halal_trader.core.risk_meter import MeterRefused, announce, levels_json, set_level
+
+        reason = body.reason.strip() or "dashboard"
+        try:
+            s = await set_level(ctx.engine, body.level, reason=reason, set_by="dashboard")
+        except MeterRefused as e:
+            return JSONResponse({"detail": str(e)}, status_code=409)
+        await announce(ctx.settings, s)
+        return JSONResponse({**s.to_json(), "levels": levels_json()})
 
     @app.get("/api/system/reconcile/recent")
     async def api_reconcile_recent(
