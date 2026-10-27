@@ -235,7 +235,7 @@ class Report:
         }
 
 
-def _bounds(start: date, end: date) -> tuple[datetime, datetime]:
+def session_bounds(start: date, end: date) -> tuple[datetime, datetime]:
     lo = datetime.combine(start, time(), MARKET_TZ).astimezone(UTC)
     hi = datetime.combine(end + timedelta(days=1), time(), MARKET_TZ).astimezone(UTC)
     return lo, hi
@@ -243,7 +243,7 @@ def _bounds(start: date, end: date) -> tuple[datetime, datetime]:
 
 async def closed_trips(engine: AsyncEngine, start: date, end: date) -> list[Trip]:
     """The day-trader's round trips bought in [start, end] (New York dates) and closed."""
-    lo, hi = _bounds(start, end)
+    lo, hi = session_bounds(start, end)
     async with engine.connect() as conn:
         rows = await conn.execute(
             text(
@@ -297,7 +297,7 @@ async def report(
         return Report(start, today)
     last = max(t.exit_session for t in trips)
     closes = await _closes(engine, sorted({t.symbol for t in trips} | {BENCHMARK}), start, last)
-    lo, hi = _bounds(start, last)
+    lo, hi = session_bounds(start, last)
     raw = await market.minute_bars(BENCHMARK, start=lo, end=hi)
     spy = sorted(
         (datetime.fromisoformat(str(b["t"]).replace("Z", "+00:00")), float(b["c"])) for b in raw
