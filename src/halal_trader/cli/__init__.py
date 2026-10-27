@@ -28,6 +28,7 @@ from halal_trader.cli import quant as quant_cmd
 from halal_trader.cli import recommend as recommend_cmd
 from halal_trader.cli import reconcile as reconcile_cmd
 from halal_trader.cli import research as research_cmd
+from halal_trader.cli import risk as risk_cmd
 from halal_trader.cli import stocks as stocks_cmd
 from halal_trader.cli import zakat as zakat_cmd
 
@@ -60,6 +61,9 @@ cli.add_command(db_cmd.db_group)
 cli.add_command(halt_cmd.halt)
 cli.add_command(halt_cmd.resume)
 cli.add_command(halt_cmd.halt_status)
+
+# ── Operator (the day trader's risk meter) ─────────────────────
+cli.add_command(risk_cmd.risk)
 
 # ── In-house Shariah screen (research-grade until validated) ──
 cli.add_command(compliance_cmd.compliance)
