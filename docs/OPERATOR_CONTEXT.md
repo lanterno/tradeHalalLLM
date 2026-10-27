@@ -123,6 +123,33 @@ churn kills this bot.
   holds them, since their alcohol, tobacco or pork revenue is not in SEC
   data; otherwise doubtful. Bars and tobacco stores are excluded.
 
+## Operator decisions of 2026-10-27: the day trader's risk meter
+
+The operator wants one control over how much risk the day trader takes
+(HAL-13 to HAL-16; the levels are `core/risk_meter.py:LEVELS`).
+
+- **Day trader only.** The core keeps its own rules; the meter never touches
+  it, the reactor (in shadow) or the shadow engine.
+- **Five levels, 1 Cautious to 5 Max; level 3 is the bot's settings as they
+  were** (largest position 20%, five positions, 2% daily loss). Every level is
+  long-only and halal-gated; no level adds leverage or a new kind of order.
+- **Rolled out in phases.** Phase 1 (done): the level is stored, shown on the
+  dashboard and `halal-trader risk status`, set with `risk set` or the
+  dashboard, announced on Telegram, and recorded on every buy
+  (`trades.risk_level`). It changes no trade. Phase 2 (HAL-14, after the
+  HAL-1 review of ~11-02) applies levels 1–3: the prompt takes the level's
+  numbers, oversized buys shrink to the level's cap, and the self-review stops
+  overriding the limits. Phase 3 opens levels 4–5, still on paper.
+- **Level 3 until the 11-02 review**; levels 1–2 open with phase 2.
+- **Levels 4–5 unlock only on evidence** (HAL-16): the day trader's entry edge
+  over SPY above zero with t ≥ 2 over at least 20 sessions on the decision
+  scorecard, and the day trader ahead of the core over the same window.
+- **A raise takes effect the next trading day; a cut at the next cycle.** A
+  raise can't be a reaction to the day's tape.
+- **Drawdown (HAL-12):** the peak is the highest end-of-day equity of the last
+  20 trading days, persisted so a restart can't reset it. After a trip, new
+  buys stay off until the operator resumes; exits still run.
+
 ## Decisions taken under the operator's delegation (2026-10-04)
 
 The operator asked the agent to take the open decisions itself and to

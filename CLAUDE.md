@@ -29,6 +29,7 @@ just docker-logs [svc]  # follow one service (default trader-stocks)
 # Operator
 halal-trader halt --reason "..."   # kill-switch: bots refuse new entries (monitor still exits)
 halal-trader resume / halt-status
+halal-trader risk status | set N --reason "..."   # the day trader's risk meter (records only, until HAL-14)
 halal-trader db migrate | current | stamp head | revision -m "..."
 halal-trader recommend [--show|--scorecard]   # advisory daily pick, never trades
 halabot backtest ... / halabot ab-report      # shadow engine research tools

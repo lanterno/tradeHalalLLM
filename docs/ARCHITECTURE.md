@@ -109,8 +109,9 @@ from the same universe, refreshed hourly. See `docs/REARCHITECTURE.md`.
 
 ## The dashboard (`web/`, `dashboard/`)
 
-FastAPI routes read the database through `DashboardContext`; the only
-mutation the SPA makes is Halt/Resume (`/api/system/halt`). Fields that
+FastAPI routes read the database through `DashboardContext`; the SPA's
+mutations are Halt/Resume (`/api/system/halt`) and the day trader's risk
+meter (`/api/system/risk-meter`, `core/risk_meter.py`). Fields that
 assumed the bot shared the web's process (`RuntimeView`) are empty in this
 deployment and are being replaced by database reads.
 
