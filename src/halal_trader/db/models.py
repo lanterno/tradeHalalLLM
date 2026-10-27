@@ -482,6 +482,24 @@ class KillSwitch(SQLModel, table=True):
     set_at: datetime | None = Field(default=None, sa_type=sa.DateTime(timezone=True))
 
 
+class RiskMeter(SQLModel, table=True):
+    """Single-row operator risk meter for the day trader (core/risk_meter.py).
+
+    ``level`` is the level last chosen. A raise waits for the next trading
+    day: until ``effective_from``, ``previous_level`` stays in effect.
+    """
+
+    __tablename__ = "risk_meter"
+
+    id: int = Field(default=1, primary_key=True)
+    level: int
+    previous_level: int
+    effective_from: date | None = None
+    reason: str | None = None
+    set_by: str | None = None
+    set_at: datetime | None = Field(default=None, sa_type=sa.DateTime(timezone=True))
+
+
 # ── Schema authority ────────────────────────────────────────────
 #
 # Alembic is the single source of truth for schema. `init_db` opens the
