@@ -662,3 +662,48 @@ def default_stop_cmd() -> None:
         )
     for depth, result in results.items():
         console.print(f"[bold]stop {depth:.0%}: {result}[/bold] (recorded in quant_trials)")
+
+
+@research.command("replay-trips")
+def replay_trips_cmd() -> None:
+    """Three rules on the day-trader's buys of 2026-10-08..26 (HAL-15), pre-registered.
+
+    research/trip_replay.py holds the rules. Each is registered in
+    quant_trials before any data is read, then its result recorded; the
+    replay runs once. It changes no trading, and fetches a few pages of bars.
+    """
+    from halal_trader.research import trip_replay as tr
+
+    async def _run(engine: Any, settings: Any) -> tuple[Any, list[Any]]:
+        from halal_trader.data.alpaca_market import AlpacaMarketData
+
+        ids = await tr.register(engine)
+        market = AlpacaMarketData.from_settings(settings)
+        try:
+            report, splits = await tr.run(engine, market)
+        finally:
+            await market.aclose()
+        await tr.record(engine, report, splits, ids)
+        return report, splits
+
+    try:
+        report, splits = run_db(_run)
+    except tr.AlreadyJudged as e:
+        fail(str(e))
+
+    def stat(s: Any) -> str:
+        t = "n/a" if s.t is None else f"{s.t:+.2f}"
+        mean = "n/a" if s.mean is None else f"{s.mean:+.3%}"
+        return f"{mean} (t {t}), {s.trips} trips over {s.sessions} sessions"
+
+    console.print(
+        f"{len(report.scores)} trips scored ({report.unscored} unscored); "
+        "entry edge, mean of session means"
+    )
+    for sp in splits:
+        diff = "n/a" if sp.difference is None else f"{sp.difference:+.3%}"
+        t = "n/a" if sp.t is None else f"{sp.t:+.2f}"
+        console.print(f"[bold]{sp.rule}[/bold]: {sp.verdict} (recorded in quant_trials)")
+        console.print(f"  kept     {stat(sp.kept)}")
+        console.print(f"  dropped  {stat(sp.dropped)}")
+        console.print(f"  dropped - kept {diff} (Welch t {t}); {sp.unjudged} trips unjudged")
